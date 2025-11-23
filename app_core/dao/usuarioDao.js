@@ -30,5 +30,29 @@ function getPwUsuario(numIdentificacion){
     })
 }
 
+/**
+ * Función para crear usuarios
+ * @param {*} usuario Información completa del usuario
+ * @param {*} t transacción de la bd
+ * @returns 
+ */
+async function createUsuario(usuario, t){
+    const usuarioRegister = await Models.GenerUsuario.create(usuario, { transaction: t});
+
+    return usuarioRegister.id_usuario;
+}
+
+/**
+ * Función para ligar el usuario al negocio que pertenece
+ * @param {*} usuario 
+ * @param {*} t 
+ * @returns 
+ */
+function createUsuarioNegocio(usuarioNegocio, t){
+    return Models.GenerNegocioUsuario.create(usuarioNegocio, { transaction: t});
+}
+
 module.exports.getInfoUsuario = getInfoUsuario;
 module.exports.getPwUsuario = getPwUsuario;
+module.exports.createUsuario = createUsuario;
+module.exports.createUsuarioNegocio = createUsuarioNegocio;
