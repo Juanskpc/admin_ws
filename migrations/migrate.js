@@ -10,10 +10,13 @@
  * 5.  Agrega columnas id_tipo_negocio, fecha_creacion, fecha_actualizacion a gener_rol con FK
  * 6.  Inserta roles por defecto según tipo de negocio
  * 7.  Crea tabla gener_rol_nivel (permisos de rol por nivel/vista)
- * 8.  Crea tabla gener_negocio_usuario (relación usuario-negocio)
- * 9.  Crea tabla gener_usuario_rol (relación usuario-rol-negocio)
- * 10. Migra datos existentes de id_rol en gener_usuario a la nueva tabla
- * 11. Elimina columna id_rol de gener_usuario
+ * 8.  Crea tabla gener_tipo_nivel (tipos de nivel: MODULO, SUBMODULO, VISTA, ACCION)
+ * 9.  Altera gener_nivel: agrega id_tipo_negocio + FKs a tipo_negocio y tipo_nivel
+ * 10. Inserta niveles para todos los tipos de negocio (ver migrate_niveles.js)
+ * 11. Crea tabla gener_negocio_usuario (relación usuario-negocio)
+ * 12. Crea tabla gener_usuario_rol (relación usuario-rol-negocio)
+ * 13. Migra datos existentes de id_rol en gener_usuario a la nueva tabla
+ * 14. Elimina columna id_rol de gener_usuario
  */
 require('dotenv').config();
 const db = require('../app_core/models/conection');

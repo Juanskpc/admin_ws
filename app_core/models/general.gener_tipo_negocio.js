@@ -21,6 +21,10 @@ module.exports = (sequelize, DataTypes) => {
             foreignKey: 'id_tipo_negocio',
             as: 'roles'
         });
+        GenerTipoNegocio.hasMany(models.GenerNivel, {
+            foreignKey: 'id_tipo_negocio',
+            as: 'niveles'
+        });
     };
 
     return GenerTipoNegocio;
