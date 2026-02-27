@@ -28,6 +28,10 @@ module.exports = (sequelize, DataTypes) => {
         GenerNivel.hasMany(models.GenerNivelUsuario, {
             foreignKey: 'id_nivel'
         });
+        GenerNivel.hasMany(models.GenerRolNivel, {
+            foreignKey: 'id_nivel',
+            as: 'rolesNivel'
+        });
     };
 
     return GenerNivel;

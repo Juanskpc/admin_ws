@@ -5,6 +5,7 @@ module.exports = (sequelize, DataTypes) => {
         nit: { type: DataTypes.STRING(50), unique: true },
         email_contacto: DataTypes.STRING,
         telefono: DataTypes.STRING,
+        id_tipo_negocio: { type: DataTypes.INTEGER },
         estado: { type: DataTypes.CHAR(1), defaultValue: 'A' },
         fecha_registro: { type: DataTypes.DATE, defaultValue: DataTypes.NOW }
     }, {
@@ -14,6 +15,10 @@ module.exports = (sequelize, DataTypes) => {
     });
 
     GenerNegocio.associate = (models) => {
+        GenerNegocio.belongsTo(models.GenerTipoNegocio, {
+            foreignKey: 'id_tipo_negocio',
+            as: 'tipoNegocio'
+        });
         GenerNegocio.hasMany(models.GenerNegocioPlan, {
             foreignKey: 'id_negocio'
         });

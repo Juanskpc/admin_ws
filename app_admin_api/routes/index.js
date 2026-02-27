@@ -5,6 +5,7 @@ const router = express.Router();
 const UsuarioController = require('../controllers/usuarioController');
 const NegocioController = require('../controllers/negocioController');
 const PlanController = require('../controllers/planController');
+const RolController = require('../controllers/rolController');
 const { verificarToken } = require('../../app_core/middleware/auth');
 
 // ============================================================
@@ -49,6 +50,24 @@ router.post('/usuarios', [
 
 router.get('/usuarios/perfil', UsuarioController.getPerfil);
 router.get('/roles', UsuarioController.getListaRoles);
+
+// --- Roles ---
+router.get('/roles/lista', RolController.getListaRoles);
+router.get('/roles/:id', [
+    param('id').isInt({ min: 1 }).withMessage('ID de rol inválido')
+], RolController.getRolById);
+router.post('/roles', [
+    body('descripcion')
+        .trim()
+        .notEmpty().withMessage('La descripción del rol es requerida')
+        .isLength({ max: 255 }).withMessage('Máximo 255 caracteres'),
+    body('id_tipo_negocio')
+        .optional({ nullable: true })
+        .isInt({ min: 1 }).withMessage('ID de tipo de negocio inválido')
+], RolController.createRol);
+router.patch('/roles/:id/inactivar', [
+    param('id').isInt({ min: 1 }).withMessage('ID de rol inválido')
+], RolController.inactivarRol);
 
 // --- Negocios ---
 router.get('/negocios', NegocioController.getListaNegocios);
