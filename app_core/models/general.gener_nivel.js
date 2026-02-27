@@ -6,6 +6,7 @@ module.exports = (sequelize, DataTypes) => {
         icono: DataTypes.STRING,
         estado: { type: DataTypes.CHAR(1), defaultValue: 'A' },
         id_tipo_nivel: DataTypes.INTEGER,
+        id_tipo_negocio: DataTypes.INTEGER,
         url: DataTypes.STRING,
         fecha_creacion: { type: DataTypes.DATE, defaultValue: DataTypes.NOW }
     }, {
@@ -23,6 +24,16 @@ module.exports = (sequelize, DataTypes) => {
         GenerNivel.hasMany(models.GenerNivel, {
             as: 'SubNiveles',
             foreignKey: 'id_nivel_padre'
+        });
+
+        GenerNivel.belongsTo(models.GenerTipoNivel, {
+            foreignKey: 'id_tipo_nivel',
+            as: 'tipoNivel'
+        });
+
+        GenerNivel.belongsTo(models.GenerTipoNegocio, {
+            foreignKey: 'id_tipo_negocio',
+            as: 'tipoNegocio'
         });
 
         GenerNivel.hasMany(models.GenerNivelUsuario, {
