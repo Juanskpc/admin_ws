@@ -1,55 +1,43 @@
-const sequelize = require('./../models/conection');
-const Models = sequelize.sequelize;
+const Models = require('../models/conection');
 
 /**
- * Función para obtener los planes activos a los que se puede ligar un negocio
- * @returns { Array } Lista de planes activos para negocio
+ * Obtiene los planes activos.
+ * @returns {Array} Lista de planes activos
  */
 function getListaPlanes() {
     return Models.GenerPlan.findAll({
-        where: {
-            estado: 'A'
-        }
-    })
+        where: { estado: 'A' }
+    });
 }
 
 /**
- * Función para crear nuevo plan
- * @param { Object } plan Datos requeridos para crear un nuevo plan
+ * Crea un nuevo plan.
+ * @param {Object} plan Datos del plan
  */
 function createPlan(plan) {
-    return Models.GenerPlan.create(plan)
+    return Models.GenerPlan.create(plan);
 }
 
 /**
- * Función para dar de baja un plan
- * @param {*} idPlan Identificador único del plan
+ * Inactiva un plan (cambio lógico, no se elimina).
+ * @param {number} idPlan
  */
 function inactivarPlan(idPlan) {
-    return Models.GenerPlan.update({
-        estado: 'I'
-    }, {
-        where: {
-            id_plan: idPlan
-        }
-    })
+    return Models.GenerPlan.update(
+        { estado: 'I' },
+        { where: { id_plan: idPlan } }
+    );
 }
 
 /**
- * Función para actualizar los datos de un plan
- * @param {*} plan Objeto con los datos del plan
+ * Actualiza los datos de un plan.
+ * @param {Object} plan Datos actualizados (debe incluir id_plan)
  */
 function updatePlan(plan) {
-    return Models.GenerPlan.update({
-        plan
-    }, {
-        where: {
-            id_plan: plan.idPlan
-        }
-    })
+    const { id_plan, ...datosActualizados } = plan;
+    return Models.GenerPlan.update(datosActualizados, {
+        where: { id_plan }
+    });
 }
 
-module.exports.getListaPlanes = getListaPlanes;
-module.exports.createPlan = createPlan;
-module.exports.inactivarPlan = inactivarPlan;
-module.exports.updatePlan = updatePlan;
+module.exports = { getListaPlanes, createPlan, inactivarPlan, updatePlan };

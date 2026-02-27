@@ -1,58 +1,82 @@
-const Models = require('./../models/conection');
-
+const Models = require('../models/conection');
+const { Op } = require('sequelize');
 
 /**
- * Función para obtener información del usuario
- * @param {*} idUsuario Identificador único del usuario
- * @returns { Objetc } Información del usuario logeado
+ * Obtiene información del usuario por ID (sin contraseña).
+ * @param {number} idUsuario
+ * @returns {Object} Información del usuario
  */
-function getInfoUsuario(idUsuario){
+function getInfoUsuario(idUsuario) {
     return Models.GenerUsuario.findOne({
-        where: {
-            id_usuario: idUsuario,
-            estado: 'A'
-        }
-    })
+        where: { id_usuario: idUsuario, estado: 'A' },
+        attributes: { exclude: ['password'] }
+    });
 }
 
 /**
- * Función para obtener información del usuario
- * @param {*} numIdentificacion Identificador único del usuario
- * @returns { Objetc } Información del usuario logeado
+ * Verifica si ya existe un usuario con el mismo email o número de identificación.
+ * @param {string} email
+ * @param {string} numIdentificacion
+ * @returns {Object|null} Usuario existente o null
  */
-function getPwUsuario(numIdentificacion){
+function verificarUsuarioExistente(email, numIdentificacion) {
     return Models.GenerUsuario.findOne({
         where: {
-            num_identificacion: numIdentificacion,
-            estado: 'A'
+            [Op.or]: [
+                { email },
+                { num_identificacion: numIdentificacion }
+            ]
         },
-        attributes: ['password']
-    })
+        attributes: ['id_usuario', 'email', 'num_identificacion']
+    });
 }
 
 /**
- * Función para crear usuarios
- * @param {*} usuario Información completa del usuario
- * @param {*} t transacción de la bd
- * @returns 
+ * Crea un nuevo usuario.
+ * La contraseña se hashea automáticamente por el hook del modelo.
+ * @param {Object} usuario Datos del usuario
+ * @param {Object} t Transacción de Sequelize
+ * @returns {number} ID del usuario creado
  */
-async function createUsuario(usuario, t){
-    const usuarioRegister = await Models.GenerUsuario.create(usuario, { transaction: t});
-
-    return usuarioRegister.id_usuario;
+async function createUsuario(usuario, t) {
+    const nuevoUsuario = await Models.GenerUsuario.create(usuario, { transaction: t });
+    return nuevoUsuario.id_usuario;
 }
 
 /**
- * Función para ligar el usuario al negocio que pertenece
- * @param {*} usuario 
- * @param {*} t 
- * @returns 
+ * Liga un usuario a un negocio.
+ * @param {Object} usuarioNegocio { id_usuario, id_negocio }
+ * @param {Object} t Transacción
  */
-function createUsuarioNegocio(usuarioNegocio, t){
-    return Models.GenerNegocioUsuario.create(usuarioNegocio, { transaction: t});
+function createUsuarioNegocio(usuarioNegocio, t) {
+    return Models.GenerNegocioUsuario.create(usuarioNegocio, { transaction: t });
 }
 
-module.exports.getInfoUsuario = getInfoUsuario;
-module.exports.getPwUsuario = getPwUsuario;
-module.exports.createUsuario = createUsuario;
-module.exports.createUsuarioNegocio = createUsuarioNegocio;
+/**
+ * Asigna un rol a un usuario, opcionalmente dentro de un negocio.
+ * @param {Object} usuarioRol { id_usuario, id_rol, id_negocio }
+ * @param {Object} t Transacción
+ */
+function createUsuarioRol(usuarioRol, t) {
+    return Models.GenerUsuarioRol.create(usuarioRol, { transaction: t });
+}
+
+/**
+ * Obtiene la lista de roles activos.
+ * @returns {Array} Lista de roles
+ */
+function getListaRoles() {
+    return Models.GenerRol.findAll({
+        where: { estado: 'A' },
+        attributes: ['id_rol', 'descripcion']
+    });
+}
+
+module.exports = {
+    getInfoUsuario,
+    verificarUsuarioExistente,
+    createUsuario,
+    createUsuarioNegocio,
+    createUsuarioRol,
+    getListaRoles
+};
