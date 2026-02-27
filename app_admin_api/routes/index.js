@@ -6,6 +6,7 @@ const UsuarioController = require('../controllers/usuarioController');
 const NegocioController = require('../controllers/negocioController');
 const PlanController = require('../controllers/planController');
 const RolController = require('../controllers/rolController');
+const TipoNegocioController = require('../controllers/tipoNegocioController');
 const { verificarToken } = require('../../app_core/middleware/auth');
 
 // ============================================================
@@ -82,6 +83,12 @@ router.post('/negocios', [
         .optional()
         .isEmail().withMessage('El email de contacto no es válido')
 ], NegocioController.createNegocio);
+
+// --- Tipos de Negocio ---
+router.get('/tipos-negocio', TipoNegocioController.getListaTiposNegocio);
+router.get('/tipos-negocio/:id', [
+    param('id').isInt({ min: 1 }).withMessage('ID de tipo de negocio inválido')
+], TipoNegocioController.getTipoNegocioById);
 
 // --- Planes ---
 router.get('/planes', PlanController.getListaPlanes);
