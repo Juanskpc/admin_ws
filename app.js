@@ -7,6 +7,7 @@ const rateLimit = require('express-rate-limit');
 
 const db = require('./app_core/models/conection');
 const adminRoutes = require('./app_admin_api/routes/index');
+const restauranteRoutes = require('./app_restaurante_api/routes/index');
 const { errorHandler, notFound } = require('./app_core/middleware/errorHandler');
 
 const app = express();
@@ -46,9 +47,13 @@ const loginLimiter = rateLimit({
 });
 app.use('/admin/auth/login', loginLimiter);
 
-// CORS configurado para el frontend Angular
+// CORS configurado para los frontends Angular (admin + negocio)
+const allowedOrigins = (process.env.CORS_ORIGIN || 'http://localhost:4002,http://localhost:6002')
+    .split(',')
+    .map(o => o.trim());
+
 app.use(cors({
-    origin: process.env.CORS_ORIGIN || 'http://localhost:4200',
+    origin: allowedOrigins,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
     allowedHeaders: ['Content-Type', 'Authorization'],
     credentials: true
@@ -62,6 +67,7 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 // Rutas
 // ========================
 app.use('/admin', adminRoutes);
+app.use('/restaurante', restauranteRoutes);
 
 // Ruta de salud / health check
 app.get('/', (req, res) => {

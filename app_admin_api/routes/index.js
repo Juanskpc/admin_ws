@@ -16,6 +16,7 @@ const {
     verificarCodigo,
     verificarCodigoValidators,
 } = require('../controllers/registroVerificacionController');
+const PaletaColorController = require('../controllers/paletaColorController');
 const { verificarToken } = require('../../app_core/middleware/auth');
 
 // ============================================================
@@ -43,6 +44,11 @@ router.post('/auth/reset-password', resetPasswordValidators, resetPassword);
 // Verificación de email para registro (landing page)
 router.post('/auth/registro/enviar-codigo', enviarCodigoValidators, enviarCodigo);
 router.post('/auth/registro/verificar-codigo', verificarCodigoValidators, verificarCodigo);
+
+// Paletas de colores (públicas — para que la app del negocio cargue los colores)
+router.get('/paletas', PaletaColorController.getListaPaletas);
+router.get('/paletas/:id', PaletaColorController.paletaIdValidators, PaletaColorController.getPaletaById);
+router.get('/negocios/:id/paleta', PaletaColorController.negocioIdValidators, PaletaColorController.getPaletaNegocio);
 
 // ============================================================
 // RUTAS PROTEGIDAS (requieren token JWT)
@@ -128,5 +134,8 @@ router.put('/planes/:id', [
 router.patch('/planes/:id/inactivar', [
     param('id').isInt({ min: 1 }).withMessage('ID de plan inválido')
 ], PlanController.inactivarPlan);
+
+// --- Paletas de colores (asignación, protegida) ---
+router.patch('/negocios/:id/paleta', PaletaColorController.assignPaletaValidators, PaletaColorController.assignPaletaNegocio);
 
 module.exports = router;

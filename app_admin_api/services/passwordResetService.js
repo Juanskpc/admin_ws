@@ -103,7 +103,7 @@ async function createResetToken(email) {
     });
 
     // Construir URL opcional para el correo
-    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:4200';
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:4002';
     const resetUrl    = `${frontendUrl}/auth/reset-password?email=${encodeURIComponent(normalizedEmail)}`;
 
     // Enviar correo (si MAIL_USER/MAIL_PASS no están configurados en dev,
