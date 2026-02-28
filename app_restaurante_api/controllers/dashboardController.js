@@ -32,12 +32,7 @@ async function verificarTokenAcceso(req, res) {
             return Respuesta.error(res, 'No tienes acceso al módulo de restaurante.', 403);
         }
 
-        return Respuesta.success(res, 'Token válido', {
-            valid: true,
-            usuario: acceso.usuario,
-            negocio: acceso.negocio,
-            roles: acceso.roles,
-        });
+        return Respuesta.success(res, 'Token válido', acceso);
     } catch (err) {
         if (err.name === 'TokenExpiredError') {
             return Respuesta.error(res, 'El token ha expirado.', 401);
