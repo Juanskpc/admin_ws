@@ -9,6 +9,12 @@ const RolController = require('../controllers/rolController');
 const TipoNegocioController = require('../controllers/tipoNegocioController');
 const { forgotPassword, forgotPasswordValidators } = require('../controllers/forgotPasswordController');
 const { resetPassword, resetPasswordValidators }   = require('../controllers/resetPasswordController');
+const {
+    enviarCodigo,
+    enviarCodigoValidators,
+    verificarCodigo,
+    verificarCodigoValidators,
+} = require('../controllers/registroVerificacionController');
 const { verificarToken } = require('../../app_core/middleware/auth');
 
 // ============================================================
@@ -29,6 +35,10 @@ router.post('/auth/forgot-password', forgotPasswordValidators, forgotPassword);
 
 // Restablecer contraseña (verifica OTP y actualiza)
 router.post('/auth/reset-password', resetPasswordValidators, resetPassword);
+
+// Verificación de email para registro (landing page)
+router.post('/auth/registro/enviar-codigo', enviarCodigoValidators, enviarCodigo);
+router.post('/auth/registro/verificar-codigo', verificarCodigoValidators, verificarCodigo);
 
 // ============================================================
 // RUTAS PROTEGIDAS (requieren token JWT)

@@ -150,4 +150,110 @@ async function sendPasswordResetEmail(email, nombre, otp, opts = {}) {
     console.info(`✉️  Correo enviado a ${email} — messageId: ${info.messageId}`);
 }
 
-module.exports = { sendPasswordResetEmail };
+// ============================================================
+// Plantilla HTML del correo de verificación de registro
+// ============================================================
+
+/**
+ * @param {string} otp            - Código OTP de 6 dígitos
+ * @param {number} expiresMinutes - Minutos hasta expiración
+ */
+function buildRegistroEmailHtml(otp, expiresMinutes) {
+    return `<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1.0" />
+  <title>Verificación de registro</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; margin: 0; padding: 0; }
+    .container { max-width: 480px; margin: 40px auto; background: #fff; border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,.08); overflow: hidden; }
+    .header { background: #2e7d32; color: #fff; padding: 28px 32px; }
+    .header h1 { margin: 0; font-size: 20px; font-weight: 700; }
+    .body { padding: 32px; }
+    .otp-box { text-align: center; background: #e8f5e9; border: 2px dashed #2e7d32; border-radius: 8px; padding: 20px; margin: 24px 0; }
+    .otp-code { font-size: 40px; font-weight: 700; letter-spacing: 10px; color: #2e7d32; font-family: 'Courier New', monospace; }
+    .otp-expires { font-size: 13px; color: #616161; margin-top: 8px; }
+    .warning { font-size: 12px; color: #9e9e9e; border-top: 1px solid #e0e0e0; margin-top: 24px; padding-top: 16px; }
+    p { color: #424242; font-size: 15px; line-height: 1.6; margin: 0 0 12px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>✅ Verificación de registro</h1>
+    </div>
+    <div class="body">
+      <p>¡Hola!</p>
+      <p>Estás a un paso de crear tu cuenta. Usa el siguiente código de verificación para completar tu registro:</p>
+
+      <div class="otp-box">
+        <div class="otp-code">${otp}</div>
+        <div class="otp-expires">⏱ Válido por <strong>${expiresMinutes} minutos</strong></div>
+      </div>
+
+      <p>Ingresa este código en el formulario de registro para verificar tu correo electrónico y continuar con la creación de tu cuenta.</p>
+
+      <p>Si no solicitaste este código, puedes ignorar este mensaje con total seguridad.</p>
+
+      <div class="warning">
+        <strong>⚠️ Seguridad:</strong> Nunca compartiremos este código con nadie. Si alguien te lo pide, es un intento de fraude.
+        Revisa también tu carpeta de <strong>spam</strong> si no lo encuentras.
+      </div>
+    </div>
+  </div>
+</body>
+</html>`;
+}
+
+/**
+ * Versión de texto plano del correo de registro.
+ */
+function buildRegistroEmailText(otp, expiresMinutes) {
+    return `
+¡Hola!
+
+Tu código de verificación para crear tu cuenta es:
+
+  ${otp}
+
+Válido por ${expiresMinutes} minutos.
+
+Si no solicitaste este código, ignora este mensaje.
+`.trim();
+}
+
+/**
+ * Envía el correo de verificación de registro con el OTP.
+ *
+ * @param {string} email          - Destinatario
+ * @param {string} otp            - Código OTP en texto plano (solo para envío)
+ * @param {object} [opts]         - Opciones adicionales
+ * @param {number} [opts.expiresMinutes=15] - Minutos de expiración
+ * @returns {Promise<void>}
+ */
+async function sendRegistroVerificationEmail(email, otp, opts = {}) {
+    const expiresMinutes = opts.expiresMinutes ?? 15;
+    const from           = process.env.MAIL_FROM || '"Admin App" <noreply@adminapp.com>';
+
+    // Verificación de configuración mínima en desarrollo
+    if (!process.env.MAIL_USER || !process.env.MAIL_PASS) {
+        if (process.env.NODE_ENV !== 'production') {
+            console.warn('⚠️  MAIL_USER/MAIL_PASS no configurados. OTP Registro (solo dev):', otp);
+            return;
+        }
+        throw new Error('Configuración de correo incompleta (MAIL_USER / MAIL_PASS)');
+    }
+
+    const info = await transporter.sendMail({
+        from,
+        to:      email,
+        subject: '✅ Tu código de verificación para registro',
+        text:    buildRegistroEmailText(otp, expiresMinutes),
+        html:    buildRegistroEmailHtml(otp, expiresMinutes),
+    });
+
+    console.info(`✉️  Correo de registro enviado a ${email} — messageId: ${info.messageId}`);
+}
+
+module.exports = { sendPasswordResetEmail, sendRegistroVerificationEmail };

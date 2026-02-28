@@ -11,14 +11,18 @@
  *   - Anti-enumeration: siempre responde OK al solicitar reset.
  *   - Máx OTP_MAX_ATTEMPTS intentos fallidos antes de invalidar el token.
  *   - Expiración configurable con OTP_EXPIRES_MINUTES (default: 15).
+ *
+ * Tabla: general.gener_codigo_verificacion (tipo = 'RESET_PASSWORD')
  */
 
 const crypto = require('crypto');
 const bcrypt = require('bcrypt');
 
-const Models        = require('../../app_core/models/conection');
-const PwResetDao    = require('../../app_core/dao/passwordResetDao');
-const MailService   = require('./mailService');
+const Models          = require('../../app_core/models/conection');
+const CodigoVerifDao  = require('../../app_core/dao/codigoVerificacionDao');
+const MailService     = require('./mailService');
+
+const TIPO = 'RESET_PASSWORD';
 
 const BCRYPT_ROUNDS     = 10;
 const EXPIRES_MINUTES   = parseInt(process.env.OTP_EXPIRES_MINUTES || '15', 10);
@@ -81,8 +85,8 @@ async function createResetToken(email) {
         return;
     }
 
-    // Invalidar todos los tokens activos anteriores del usuario
-    await PwResetDao.invalidateAllForUser(usuario.id_usuario);
+    // Invalidar todos los códigos activos anteriores del usuario para RESET_PASSWORD
+    await CodigoVerifDao.invalidateAllForUserAndTipo(usuario.id_usuario, TIPO);
 
     // Generar OTP y calcular expiración
     const otp       = generateOTP();
@@ -90,7 +94,13 @@ async function createResetToken(email) {
     const expiresAt = new Date(Date.now() + EXPIRES_MINUTES * 60 * 1000);
 
     // Persistir hash (nunca el OTP en texto plano)
-    await PwResetDao.createToken(usuario.id_usuario, tokenHash, expiresAt);
+    await CodigoVerifDao.createCodigo({
+        email:     normalizedEmail,
+        tokenHash,
+        expiresAt,
+        tipo:      TIPO,
+        idUsuario: usuario.id_usuario,
+    });
 
     // Construir URL opcional para el correo
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:4200';
@@ -126,15 +136,15 @@ async function verifyAndReset(email, code, newPassword) {
         return { ok: false, error: 'Código inválido o expirado.' };
     }
 
-    // 2. Buscar token activo (no usado, no expirado)
-    const tokenRecord = await PwResetDao.findActiveTokenByUserId(usuario.id_usuario);
+    // 2. Buscar código activo (no usado, no expirado) para RESET_PASSWORD
+    const tokenRecord = await CodigoVerifDao.findActiveByUserIdAndTipo(usuario.id_usuario, TIPO);
     if (!tokenRecord) {
         return { ok: false, error: 'Código inválido o expirado.' };
     }
 
     // 3. Verificar límite de intentos
     if (tokenRecord.attempts >= MAX_ATTEMPTS) {
-        await PwResetDao.markUsed(tokenRecord.id);
+        await CodigoVerifDao.markUsed(tokenRecord.id);
         console.warn(`[PasswordReset] Token agotado (max intentos) para id_usuario=${usuario.id_usuario}`);
         return { ok: false, error: `Superaste el máximo de ${MAX_ATTEMPTS} intentos. Solicita un nuevo código.` };
     }
@@ -142,7 +152,7 @@ async function verifyAndReset(email, code, newPassword) {
     // 4. Comparar código con hash
     const isValid = await bcrypt.compare(String(code), tokenRecord.token_hash);
     if (!isValid) {
-        await PwResetDao.incrementAttempts(tokenRecord.id);
+        await CodigoVerifDao.incrementAttempts(tokenRecord.id);
         const remaining = MAX_ATTEMPTS - (tokenRecord.attempts + 1);
         return { ok: false, error: `Código incorrecto. ${remaining > 0 ? `Te quedan ${remaining} intentos.` : 'Token invalidado.'}` };
     }
@@ -154,8 +164,8 @@ async function verifyAndReset(email, code, newPassword) {
         { where: { id_usuario: usuario.id_usuario }, individualHooks: true },
     );
 
-    // 6. Marcar token como usado (single-use)
-    await PwResetDao.markUsed(tokenRecord.id);
+    // 6. Marcar código como usado (single-use)
+    await CodigoVerifDao.markUsed(tokenRecord.id);
 
     console.info(`[PasswordReset] Contraseña actualizada para id_usuario=${usuario.id_usuario}`);
     return { ok: true };
