@@ -171,4 +171,44 @@ async function verifyAndReset(email, code, newPassword) {
     return { ok: true };
 }
 
-module.exports = { createResetToken, verifyAndReset };
+/**
+ * Verifica el OTP sin cambiar la contraseña (usado en el paso 1 del formulario).
+ * Incrementa intentos en caso de código incorrecto.
+ * NO marca el token como usado (eso ocurre en verifyAndReset).
+ *
+ * @param {string} email - Email del usuario
+ * @param {string} code  - OTP introducido por el usuario
+ * @returns {Promise<{ ok: boolean, error?: string }>}
+ */
+async function verifyOTPOnly(email, code) {
+    const normalizedEmail = email.toLowerCase().trim();
+
+    const usuario = await findUserByEmail(normalizedEmail);
+    if (!usuario) {
+        return { ok: false, error: 'Código inválido o expirado.' };
+    }
+
+    const tokenRecord = await CodigoVerifDao.findActiveByUserIdAndTipo(usuario.id_usuario, TIPO);
+    if (!tokenRecord) {
+        return { ok: false, error: 'Código inválido o expirado.' };
+    }
+
+    if (tokenRecord.attempts >= MAX_ATTEMPTS) {
+        await CodigoVerifDao.markUsed(tokenRecord.id);
+        return { ok: false, error: `Superaste el máximo de ${MAX_ATTEMPTS} intentos. Solicita un nuevo código.` };
+    }
+
+    const isValid = await bcrypt.compare(String(code), tokenRecord.token_hash);
+    if (!isValid) {
+        await CodigoVerifDao.incrementAttempts(tokenRecord.id);
+        const remaining = MAX_ATTEMPTS - (tokenRecord.attempts + 1);
+        return {
+            ok: false,
+            error: `Código incorrecto. ${remaining > 0 ? `Te quedan ${remaining} intentos.` : 'Token invalidado.'}`,
+        };
+    }
+
+    return { ok: true };
+}
+
+module.exports = { createResetToken, verifyAndReset, verifyOTPOnly };

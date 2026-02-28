@@ -19,10 +19,10 @@ module.exports = (sequelize, DataTypes) => {
             type: DataTypes.INTEGER,
             allowNull: true,
         },
-        /** Email destino del código (siempre presente). */
+        /** Email destino del código (nullable solo en casos legacy). */
         email: {
             type: DataTypes.STRING(255),
-            allowNull: false,
+            allowNull: true,
         },
         /** Tipo de verificación: RESET_PASSWORD | REGISTRO */
         tipo: {

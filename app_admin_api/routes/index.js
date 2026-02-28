@@ -9,6 +9,7 @@ const RolController = require('../controllers/rolController');
 const TipoNegocioController = require('../controllers/tipoNegocioController');
 const { forgotPassword, forgotPasswordValidators } = require('../controllers/forgotPasswordController');
 const { resetPassword, resetPasswordValidators }   = require('../controllers/resetPasswordController');
+const { verifyOtp, verifyOtpValidators }           = require('../controllers/verifyOtpController');
 const {
     enviarCodigo,
     enviarCodigoValidators,
@@ -32,6 +33,9 @@ router.post('/auth/login', [
 
 // Recuperar contraseña (genera OTP)
 router.post('/auth/forgot-password', forgotPasswordValidators, forgotPassword);
+
+// Verificar OTP (sin consumir el token — paso 1 del formulario de reset)
+router.post('/auth/verify-otp', verifyOtpValidators, verifyOtp);
 
 // Restablecer contraseña (verifica OTP y actualiza)
 router.post('/auth/reset-password', resetPasswordValidators, resetPassword);

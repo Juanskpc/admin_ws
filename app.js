@@ -89,6 +89,12 @@ app.use(errorHandler);
         app.listen(PORT, () => {
             console.log(`Servidor corriendo en: http://localhost:${PORT}`);
             console.log(`Entorno: ${process.env.NODE_ENV || 'development'}`);
+
+            // Verificar SMTP al arrancar (solo en development)
+            if (process.env.NODE_ENV !== 'production' && process.env.MAIL_USER) {
+                const { verifyTransport } = require('./app_admin_api/services/mailService');
+                verifyTransport();
+            }
         });
     } catch (error) {
         console.error('Error al iniciar el servidor:', error.message);
