@@ -55,7 +55,28 @@ async function createNegocio(req, res) {
     }
 }
 
-module.exports = { getListaNegocios, getNegocioById, createNegocio };
+/**
+ * Obtener los negocios del usuario autenticado filtrados por tipo.
+ * GET /admin/mis-negocios?id_tipo_negocio=2
+ */
+async function getMisNegocios(req, res) {
+    try {
+        const idUsuario = req.usuario.id_usuario;
+        const idTipoNegocio = parseInt(req.query.id_tipo_negocio, 10);
+
+        if (!idTipoNegocio || isNaN(idTipoNegocio)) {
+            return Respuesta.error(res, 'El parámetro id_tipo_negocio es requerido y debe ser un número', 400);
+        }
+
+        const negocios = await NegocioDao.getNegociosByUsuarioAndTipo(idUsuario, idTipoNegocio);
+        return Respuesta.success(res, 'Negocios del usuario obtenidos', negocios);
+    } catch (error) {
+        console.error('Error en getMisNegocios:', error);
+        return Respuesta.error(res, 'Error al obtener los negocios del usuario');
+    }
+}
+
+module.exports = { getListaNegocios, getNegocioById, createNegocio, getMisNegocios };
 
 
 

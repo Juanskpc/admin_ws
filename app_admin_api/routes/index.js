@@ -99,6 +99,7 @@ router.patch('/roles/:id/inactivar', [
 ], RolController.inactivarRol);
 
 // --- Negocios ---
+router.get('/mis-negocios', NegocioController.getMisNegocios);
 router.get('/negocios', NegocioController.getListaNegocios);
 router.get('/negocios/:id', [
     param('id').isInt({ min: 1 }).withMessage('ID de negocio inválido')
