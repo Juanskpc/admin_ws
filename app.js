@@ -28,10 +28,26 @@ if (process.env.NODE_ENV !== 'production') {
     app.use(morgan('combined'));
 }
 
-// Rate limiting global: máx 100 peticiones por IP cada 15 min
+// ⚠️  CORS debe ir ANTES del rate limiter para que los headers
+// Access-Control-Allow-Origin se incluyan incluso en respuestas 429.
+const allowedOrigins = (process.env.CORS_ORIGIN || 'http://localhost:4002,http://localhost:6002,http://localhost:4003')
+    .split(',')
+    .map(o => o.trim());
+
+app.use(cors({
+    origin: allowedOrigins,
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+    credentials: true
+}));
+
+// Rate limiting global:
+//   - Producción: 200 peticiones por IP cada 15 min
+//   - Desarrollo:  2 000 peticiones por IP cada 15 min (SSR + HMR generan muchas)
+const isDev = process.env.NODE_ENV !== 'production';
 const limiter = rateLimit({
     windowMs: 15 * 60 * 1000,
-    max: 100,
+    max: isDev ? 2000 : 200,
     standardHeaders: true,
     legacyHeaders: false,
     message: { success: false, message: 'Demasiadas peticiones, intente más tarde' }
@@ -47,18 +63,6 @@ const loginLimiter = rateLimit({
     message: { success: false, message: 'Demasiados intentos de login, intente más tarde' }
 });
 app.use('/admin/auth/login', loginLimiter);
-
-// CORS configurado para los frontends Angular (admin + negocio)
-const allowedOrigins = (process.env.CORS_ORIGIN || 'http://localhost:4002,http://localhost:6002,http://localhost:4003')
-    .split(',')
-    .map(o => o.trim());
-
-app.use(cors({
-    origin: allowedOrigins,
-    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
-    credentials: true
-}));
 
 // Parser JSON con límite de tamaño
 app.use(express.json({ limit: '10mb' }));
