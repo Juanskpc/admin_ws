@@ -37,6 +37,64 @@ async function registrarSalida(req, res) {
   }
 }
 
+async function buscarVehiculo(req, res) {
+  try {
+    const placa    = String(req.query.placa    || '').toUpperCase().trim();
+    const idNegocio = parseInt(req.query.id_negocio, 10);
+    if (!placa || !idNegocio) return Respuesta.error(res, 'placa e id_negocio requeridos', 400);
+    const vehiculo = await ParqService.getVehiculoActivoPorPlaca(placa, idNegocio);
+    if (!vehiculo) return Respuesta.error(res, 'No hay un vehículo activo con esa placa', 404);
+    return Respuesta.success(res, 'Vehículo encontrado', vehiculo);
+  } catch (err) {
+    console.error('Error en buscarVehiculo:', err);
+    return Respuesta.error(res, 'Error al buscar vehículo');
+  }
+}
+
+async function getFactura(req, res) {
+  try {
+    const { id } = req.params;
+    const idNegocio = parseInt(req.query.id_negocio, 10);
+    if (!idNegocio) return Respuesta.error(res, 'id_negocio requerido', 400);
+    const factura = await ParqService.getFactura(parseInt(id, 10), idNegocio);
+    if (!factura) return Respuesta.error(res, 'Factura no encontrada', 404);
+    return Respuesta.success(res, 'Factura obtenida', factura);
+  } catch (err) {
+    console.error('Error en getFactura:', err);
+    return Respuesta.error(res, 'Error al obtener la factura');
+  }
+}
+
+async function getFacturaPdf(req, res) {
+  try {
+    const { id } = req.params;
+    const idNegocio  = parseInt(req.query.id_negocio, 10);
+    const conSalida  = req.query.con_salida === 'true';
+    if (!idNegocio) return Respuesta.error(res, 'id_negocio requerido', 400);
+    const html = await ParqService.getFacturaHtml(parseInt(id, 10), idNegocio, conSalida);
+    if (!html) return Respuesta.error(res, 'Factura no encontrada', 404);
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    return res.send(html);
+  } catch (err) {
+    console.error('Error en getFacturaPdf:', err);
+    return Respuesta.error(res, 'Error al generar el recibo');
+  }
+}
+
+async function calcularCosto(req, res) {
+  try {
+    const { id } = req.params;
+    const idNegocio = parseInt(req.query.id_negocio, 10);
+    if (!idNegocio) return Respuesta.error(res, 'id_negocio requerido', 400);
+    const result = await ParqService.calcularCostoActual(parseInt(id, 10), idNegocio);
+    if (!result) return Respuesta.error(res, 'Vehículo no encontrado', 404);
+    return Respuesta.success(res, 'Costo calculado', result);
+  } catch (err) {
+    console.error('Error en calcularCosto:', err);
+    return Respuesta.error(res, 'Error al calcular el costo');
+  }
+}
+
 async function getVehiculosActuales(req, res) {
   try {
     const idNegocio = parseInt(req.query.id_negocio, 10);
@@ -319,11 +377,13 @@ async function registrarMovimientoCaja(req, res) {
 }
 
 module.exports = {
-  registrarEntrada, registrarSalida, getVehiculosActuales, getHistorialVehiculos,
+  registrarEntrada, registrarSalida, buscarVehiculo,
+  getVehiculosActuales, getHistorialVehiculos,
   getTarifas, createTarifa, updateTarifa, deleteTarifa,
   getTiposVehiculo, createTipoVehiculo, updateTipoVehiculo,
   getCapacidad, upsertCapacidad,
   getConfiguracion, upsertConfiguracion,
   getAbonados, createAbonado, updateAbonado,
   abrirCaja, cerrarCaja, getCajaAbierta, getMovimientosCaja, registrarMovimientoCaja,
+  getFactura, getFacturaPdf, calcularCosto,
 };

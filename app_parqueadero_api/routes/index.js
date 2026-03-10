@@ -29,6 +29,7 @@ router.get('/dashboard/resumen', DashboardController.getResumenDashboard);
 router.get('/perfil', DashboardController.getPerfilParqueadero);
 
 // ── Vehículos ──
+router.get('/vehiculos/buscar', ParqueaderoController.buscarVehiculo); // ?placa=&id_negocio=
 router.post('/vehiculos/entrada', [
   body('placa').notEmpty().withMessage('Placa requerida'),
   body('id_tipo_vehiculo').isInt().withMessage('Tipo de vehículo requerido'),
@@ -41,8 +42,13 @@ router.put('/vehiculos/:id/salida', [
   body('valor_cobrado').isNumeric().withMessage('Valor cobrado requerido'),
 ], ParqueaderoController.registrarSalida);
 
-router.get('/vehiculos/actuales', ParqueaderoController.getVehiculosActuales);
+router.get('/vehiculos/:id/calcular-costo', ParqueaderoController.calcularCosto);
+router.get('/vehiculos/actuales',  ParqueaderoController.getVehiculosActuales);
 router.get('/vehiculos/historial', ParqueaderoController.getHistorialVehiculos);
+
+// ── Facturas ──
+router.get('/facturas/:id',      ParqueaderoController.getFactura);    // ?id_negocio=
+router.get('/facturas/:id/html', ParqueaderoController.getFacturaPdf); // ?id_negocio=&con_salida=true
 
 // ── Tarifas ──
 router.get('/tarifas', ParqueaderoController.getTarifas);
