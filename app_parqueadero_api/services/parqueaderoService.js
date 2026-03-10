@@ -83,6 +83,21 @@ async function getTarifas(idNegocio) {
 }
 
 async function createTarifa(data) {
+  // Validar que no exista ya una tarifa activa para este tipo de vehículo + negocio
+  const existe = await Models.ParqTarifa.findOne({
+    where: {
+      id_tipo_vehiculo: data.id_tipo_vehiculo,
+      id_negocio: data.id_negocio,
+      estado: 'A'
+    }
+  });
+  
+  if (existe) {
+    const err = new Error('Ya existe una tarifa para este tipo de vehículo en este negocio');
+    err.statusCode = 409; // Conflict
+    throw err;
+  }
+  
   return Models.ParqTarifa.create(data);
 }
 

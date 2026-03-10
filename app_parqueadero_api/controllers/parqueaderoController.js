@@ -93,6 +93,9 @@ async function createTarifa(req, res) {
     return Respuesta.success(res, 'Tarifa creada', tarifa, 201);
   } catch (err) {
     console.error('Error en createTarifa:', err);
+    if (err.statusCode === 409) {
+      return Respuesta.error(res, err.message, 409);
+    }
     return Respuesta.error(res, 'Error al crear la tarifa');
   }
 }
