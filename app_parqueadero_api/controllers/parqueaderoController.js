@@ -1,5 +1,6 @@
 const { validationResult } = require('express-validator');
-const ParqService = require('../services/parqueaderoService');
+const ParqService    = require('../services/parqueaderoService');
+const ImpresionSvc   = require('../services/impresionService');
 const Respuesta = require('../../app_core/helpers/respuesta');
 
 // ──── VEHÍCULOS ────
@@ -376,6 +377,44 @@ async function registrarMovimientoCaja(req, res) {
   }
 }
 
+// ──── IMPRESIÓN ────
+
+/**
+ * POST /imprimir/recibo
+ * Body: { vehiculoData: {...}, esSalida: bool, id_negocio: number }
+ * Imprime el recibo directamente en la impresora configurada del negocio (sin diálogo).
+ */
+async function imprimirRecibo(req, res) {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return Respuesta.error(res, 'Datos inválidos', 400, errors.array());
+
+    const { vehiculoData, esSalida, id_negocio } = req.body;
+    // Disparar en background para no bloquear la respuesta HTTP
+    ImpresionSvc.imprimirRecibo(vehiculoData, !!esSalida, parseInt(id_negocio, 10))
+      .catch(err => console.error('Error al imprimir recibo:', err));
+
+    return Respuesta.success(res, 'Recibo enviado a la impresora');
+  } catch (err) {
+    console.error('Error en imprimirRecibo:', err);
+    return Respuesta.error(res, 'Error al imprimir el recibo');
+  }
+}
+
+/**
+ * GET /imprimir/impresoras
+ * Retorna la lista de impresoras disponibles en el sistema.
+ */
+async function listarImpresoras(req, res) {
+  try {
+    const impresoras = await ImpresionSvc.listarImpresoras();
+    return Respuesta.success(res, 'Impresoras disponibles', impresoras);
+  } catch (err) {
+    console.error('Error en listarImpresoras:', err);
+    return Respuesta.error(res, 'Error al listar impresoras');
+  }
+}
+
 module.exports = {
   registrarEntrada, registrarSalida, buscarVehiculo,
   getVehiculosActuales, getHistorialVehiculos,
@@ -386,4 +425,5 @@ module.exports = {
   getAbonados, createAbonado, updateAbonado,
   abrirCaja, cerrarCaja, getCajaAbierta, getMovimientosCaja, registrarMovimientoCaja,
   getFactura, getFacturaPdf, calcularCosto,
+  imprimirRecibo, listarImpresoras,
 };

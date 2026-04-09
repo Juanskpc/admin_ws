@@ -21,15 +21,24 @@ async function getNumeroFactura(idNegocio) {
  */
 function calcularCosto(fechaEntrada, tarifa, fechaSalida = new Date()) {
   if (!tarifa) return 0;
-  const diffMs  = Math.max(0, fechaSalida.getTime() - new Date(fechaEntrada).getTime());
-  const mins    = Math.max(1, Math.floor(diffMs / 60000));
-  const valor   = Number(tarifa.valor);
+  const diffMs   = Math.max(0, fechaSalida.getTime() - new Date(fechaEntrada).getTime());
+  const mins     = Math.max(1, Math.floor(diffMs / 60000));
+  const valor    = Number(tarifa.valor);
+  const adicional = tarifa.valor_adicional != null ? Number(tarifa.valor_adicional) : null;
   switch (tarifa.tipo_cobro) {
-    case 'HORA':     return Math.ceil(mins / 60)         * valor;
-    case 'FRACCION': return Math.ceil(mins / 30)         * valor;
-    case 'DIA':      return Math.ceil(mins / (60 * 24))  * valor;
-    case 'MES':      return valor;
-    default:         return 0;
+    case 'HORA': {
+      const periodos = Math.ceil(mins / 60);
+      if (adicional != null && periodos > 1) return valor + adicional * (periodos - 1);
+      return periodos * valor;
+    }
+    case 'FRACCION': {
+      const periodos = Math.ceil(mins / 30);
+      if (adicional != null && periodos > 1) return valor + adicional * (periodos - 1);
+      return periodos * valor;
+    }
+    case 'DIA':  return Math.ceil(mins / (60 * 24)) * valor;
+    case 'MES':  return valor;
+    default:     return 0;
   }
 }
 
@@ -109,7 +118,7 @@ async function registrarEntrada(data) {
   // Obtener tarifa para embed en factura
   let tarifa = null;
   if (data.id_tarifa) {
-    tarifa = await Models.ParqTarifa.findOne({ where: { id_tarifa: data.id_tarifa }, attributes: ['tipo_cobro', 'valor'] });
+    tarifa = await Models.ParqTarifa.findOne({ where: { id_tarifa: data.id_tarifa }, attributes: ['tipo_cobro', 'valor', 'valor_adicional'] });
   }
 
   const numero = await getNumeroFactura(data.id_negocio);
@@ -131,7 +140,7 @@ async function registrarEntrada(data) {
     where: { id_vehiculo: vehiculo.id_vehiculo },
     include: [
       { model: Models.ParqTipoVehiculo, as: 'tipoVehiculo', attributes: ['nombre'] },
-      { model: Models.ParqTarifa,       as: 'tarifa',       attributes: ['tipo_cobro', 'valor'] },
+      { model: Models.ParqTarifa,       as: 'tarifa',       attributes: ['tipo_cobro', 'valor', 'valor_adicional'] },
     ],
   });
 
@@ -168,7 +177,7 @@ async function registrarSalida(idVehiculo, idNegocio, idUsuario, valorCobrado) {
     where: { id_vehiculo: idVehiculo },
     include: [
       { model: Models.ParqTipoVehiculo, as: 'tipoVehiculo', attributes: ['nombre'] },
-      { model: Models.ParqTarifa,       as: 'tarifa',       attributes: ['tipo_cobro', 'valor'] },
+      { model: Models.ParqTarifa,       as: 'tarifa',       attributes: ['tipo_cobro', 'valor', 'valor_adicional'] },
     ],
   });
 
@@ -180,7 +189,7 @@ async function getVehiculoActivoPorPlaca(placa, idNegocio) {
     where: { placa: placa.toUpperCase().trim(), id_negocio: idNegocio, estado: 'A' },
     include: [
       { model: Models.ParqTipoVehiculo, as: 'tipoVehiculo', attributes: ['nombre'] },
-      { model: Models.ParqTarifa,       as: 'tarifa',       attributes: ['tipo_cobro', 'valor'] },
+      { model: Models.ParqTarifa,       as: 'tarifa',       attributes: ['tipo_cobro', 'valor', 'valor_adicional'] },
     ],
   });
 }
@@ -201,7 +210,7 @@ async function getFacturaDeVehiculo(idVehiculo, idNegocio) {
 async function calcularCostoActual(idVehiculo, idNegocio) {
   const vehiculo = await Models.ParqVehiculo.findOne({
     where: { id_vehiculo: idVehiculo, id_negocio: idNegocio, estado: 'A' },
-    include: [{ model: Models.ParqTarifa, as: 'tarifa', attributes: ['tipo_cobro', 'valor'] }],
+    include: [{ model: Models.ParqTarifa, as: 'tarifa', attributes: ['tipo_cobro', 'valor', 'valor_adicional'] }],
   });
   if (!vehiculo) return null;
   const costo = calcularCosto(vehiculo.fecha_entrada, vehiculo.tarifa);
@@ -229,7 +238,7 @@ async function getVehiculosActuales(idNegocio, { page = 1, limit = 20, placa } =
     where,
     include: [
       { model: Models.ParqTipoVehiculo, as: 'tipoVehiculo', attributes: ['nombre'] },
-      { model: Models.ParqTarifa, as: 'tarifa', attributes: ['tipo_cobro', 'valor'] },
+      { model: Models.ParqTarifa, as: 'tarifa', attributes: ['tipo_cobro', 'valor', 'valor_adicional'] },
     ],
     order: [['fecha_entrada', 'DESC']],
     limit,

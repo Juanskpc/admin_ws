@@ -8,6 +8,8 @@ module.exports = (sequelize, DataTypes) => {
     horario_apertura:    DataTypes.TIME,
     horario_cierre:      DataTypes.TIME,
     logo_url:            DataTypes.STRING(500),
+    // Nombre de la impresora del sistema (vacío = impresora predeterminada)
+    nombre_impresora:    DataTypes.STRING(255),
     estado:              { type: DataTypes.CHAR(1), defaultValue: 'A' },
     fecha_creacion:      { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
     fecha_actualizacion: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
