@@ -6,6 +6,7 @@ const UsuarioController = require('../controllers/usuarioController');
 const NegocioController = require('../controllers/negocioController');
 const PlanController = require('../controllers/planController');
 const RolController = require('../controllers/rolController');
+const UsuarioAdminController = require('../controllers/usuarioAdminController');
 const TipoNegocioController = require('../controllers/tipoNegocioController');
 const { forgotPassword, forgotPasswordValidators } = require('../controllers/forgotPasswordController');
 const { resetPassword, resetPasswordValidators }   = require('../controllers/resetPasswordController');
@@ -79,6 +80,18 @@ router.post('/usuarios', [
 
 router.get('/usuarios/perfil', UsuarioController.getPerfil);
 router.get('/roles', UsuarioController.getListaRoles);
+
+// --- Administración de usuarios y permisos ---
+router.get('/usuarios/admin', UsuarioAdminController.usuarioAdminValidators.list, UsuarioAdminController.listUsuarios);
+router.post('/usuarios/admin', UsuarioAdminController.usuarioAdminValidators.create, UsuarioAdminController.createUsuario);
+router.put('/usuarios/admin/:id', UsuarioAdminController.usuarioAdminValidators.update, UsuarioAdminController.updateUsuario);
+router.patch('/usuarios/admin/:id/estado', UsuarioAdminController.usuarioAdminValidators.setEstado, UsuarioAdminController.setEstadoUsuario);
+router.delete('/usuarios/admin/:id', UsuarioAdminController.usuarioAdminValidators.remove, UsuarioAdminController.deleteUsuario);
+router.get('/usuarios/admin/:id/permisos', UsuarioAdminController.usuarioAdminValidators.getPermisosUsuario, UsuarioAdminController.getPermisosUsuario);
+
+router.get('/roles/admin/lista', UsuarioAdminController.getRoles);
+router.get('/roles/admin/:id/permisos', UsuarioAdminController.usuarioAdminValidators.getPermisosRol, UsuarioAdminController.getPermisosRol);
+router.put('/roles/admin/:id/permisos', UsuarioAdminController.usuarioAdminValidators.savePermisosRol, UsuarioAdminController.savePermisosRol);
 
 // --- Roles ---
 router.get('/roles/lista', RolController.getListaRoles);

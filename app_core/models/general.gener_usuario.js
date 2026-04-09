@@ -12,6 +12,11 @@ module.exports = (sequelize, DataTypes) => {
         email: { type: DataTypes.STRING(255), unique: true, allowNull: false },
         password: { type: DataTypes.STRING(255), allowNull: false },
         fecha_nacimiento: DataTypes.DATEONLY,
+        es_admin_principal: {
+            type: DataTypes.BOOLEAN,
+            allowNull: false,
+            defaultValue: false
+        },
         estado: {
             type: DataTypes.CHAR(1),
             defaultValue: 'A',
