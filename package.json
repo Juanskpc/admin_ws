@@ -8,7 +8,8 @@
   "scripts": {
     "start": "node app.js",
     "dev": "nodemon app.js",
-    "migrate": "node migrations/migrate.js"
+    "migrate": "node migrations/migrate.js",
+    "migrate:admin-principal": "node migrations/migrate_usuario_admin_principal.js"
   },
   "keywords": [],
   "author": "",

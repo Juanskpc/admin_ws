@@ -53,7 +53,8 @@ async function verificarTokenAcceso(req, res) {
 async function getResumenDashboard(req, res) {
     try {
         const idUsuario = req.usuario.id_usuario;
-        const resumen = await DashboardService.getResumenDashboard(idUsuario);
+        const idNegocio = req.query.id_negocio ? Number(req.query.id_negocio) : null;
+        const resumen = await DashboardService.getResumenDashboard(idUsuario, idNegocio);
         return Respuesta.success(res, 'Resumen del dashboard', resumen);
     } catch (err) {
         console.error('[Restaurante] Error dashboard:', err.message);
