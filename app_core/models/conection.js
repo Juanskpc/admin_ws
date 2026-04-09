@@ -1,6 +1,23 @@
 const { Sequelize, DataTypes } = require('sequelize');
-const fs = require('fs');
+const fs   = require('fs');
 const path = require('path');
+const pg   = require('pg');
+
+// ── FIX CRÍTICO DE TIMEZONE ──────────────────────────────────────────────────
+// pg v8+ interpreta TIMESTAMP WITHOUT TIME ZONE como hora LOCAL del proceso
+// (en este caso Colombia UTC-5), añadiendo 5 horas al leer desde la BD que
+// está en UTC. Forzamos lectura como UTC añadiendo 'Z' al string crudo.
+// OID 1114 = timestamp, OID 1115 = timestamp[] (arrays)
+pg.types.setTypeParser(1114, (val) => (val == null ? null : new Date(val + 'Z')));
+pg.types.setTypeParser(1115, (val) => {
+  if (!val) return val;
+  // Desempaquetar array PostgreSQL "{2026-01-01 10:00:00,...}"
+  return val.slice(1, -1).split(',').map((v) => {
+    const s = v.trim().replace(/^"|"$/g, '');
+    return s === 'NULL' ? null : new Date(s + 'Z');
+  });
+});
+// ────────────────────────────────────────────────────────────────────────────
 
 const isSSL = process.env.DB_SSL === 'true';
 
