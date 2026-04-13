@@ -19,14 +19,128 @@ async function getIngredientes(idNegocio) {
 
 /** Crea un ingrediente base nuevo. */
 async function crearIngrediente(idNegocio, nombre, defaults = {}) {
+    const nombreNormalizado = String(nombre || '').trim();
+    const existente = await Models.CartaIngrediente.findOne({
+        where: {
+            id_negocio: idNegocio,
+            estado: 'A',
+            [Models.Sequelize.Op.and]: [
+                Models.Sequelize.where(
+                    Models.Sequelize.fn('LOWER', Models.Sequelize.col('nombre')),
+                    nombreNormalizado.toLowerCase()
+                ),
+            ],
+        },
+        attributes: ['id_ingrediente'],
+    });
+
+    if (existente) {
+        const err = new Error('Ya existe un insumo con ese nombre.');
+        err.code = 'INGREDIENTE_DUPLICADO';
+        throw err;
+    }
+
     return Models.CartaIngrediente.create({
         id_negocio: idNegocio,
-        nombre,
+        nombre: nombreNormalizado,
         unidad_medida: defaults.unidad_medida || 'g',
         stock_actual: defaults.stock_actual ?? 0,
         stock_minimo: defaults.stock_minimo ?? 0,
         stock_maximo: defaults.stock_maximo ?? 0,
     });
+}
+
+async function buildProductoIngredientesRows(idProducto, ingredientes, transaction) {
+    if (!Array.isArray(ingredientes) || ingredientes.length === 0) {
+        return [];
+    }
+
+    const ingredientesUnicos = new Map();
+    for (const ing of ingredientes) {
+        const idIngrediente = Number(ing?.id_ingrediente);
+        if (!Number.isInteger(idIngrediente) || idIngrediente <= 0) {
+            continue;
+        }
+        ingredientesUnicos.set(idIngrediente, ing);
+    }
+
+    if (ingredientesUnicos.size === 0) {
+        return [];
+    }
+
+    const idsIngredientes = Array.from(ingredientesUnicos.keys());
+    const ingredientesBase = await Models.CartaIngrediente.findAll({
+        where: {
+            id_ingrediente: idsIngredientes,
+            estado: 'A',
+        },
+        attributes: ['id_ingrediente', 'unidad_medida'],
+        transaction,
+    });
+
+    const unidadPorIngrediente = new Map(
+        ingredientesBase.map((ing) => [
+            Number(ing.id_ingrediente),
+            ing.unidad_medida || 'g',
+        ])
+    );
+
+    return Array.from(ingredientesUnicos.entries()).map(([idIngrediente, ing]) => ({
+        id_producto: idProducto,
+        id_ingrediente: idIngrediente,
+        porcion: ing.porcion || 0,
+        unidad_medida: ing.unidad_medida || unidadPorIngrediente.get(idIngrediente) || 'g',
+        es_removible: ing.es_removible !== undefined ? ing.es_removible : true,
+    }));
+}
+
+async function syncProductoIngredientes(idProducto, ingredientes, transaction) {
+    const rows = await buildProductoIngredientesRows(idProducto, ingredientes, transaction);
+
+    const relacionesExistentes = await Models.CartaProductoIngred.findAll({
+        where: { id_producto: idProducto },
+        attributes: ['id_producto_ingred', 'id_ingrediente', 'estado'],
+        transaction,
+    });
+
+    const relacionPorIngrediente = new Map(
+        relacionesExistentes.map((rel) => [Number(rel.id_ingrediente), rel])
+    );
+    const idsEntrantes = new Set(rows.map((row) => Number(row.id_ingrediente)));
+
+    for (const row of rows) {
+        const idIngrediente = Number(row.id_ingrediente);
+        const existente = relacionPorIngrediente.get(idIngrediente);
+
+        if (existente) {
+            await existente.update({
+                porcion: row.porcion,
+                unidad_medida: row.unidad_medida,
+                es_removible: row.es_removible,
+                estado: 'A',
+            }, { transaction });
+            continue;
+        }
+
+        await Models.CartaProductoIngred.create({
+            ...row,
+            estado: 'A',
+        }, { transaction });
+    }
+
+    const idsADesactivar = relacionesExistentes
+        .filter((rel) => rel.estado === 'A' && !idsEntrantes.has(Number(rel.id_ingrediente)))
+        .map((rel) => rel.id_producto_ingred);
+
+    if (idsADesactivar.length > 0) {
+        await Models.CartaProductoIngred.update(
+            { estado: 'I' },
+            {
+                where: { id_producto_ingred: idsADesactivar },
+                transaction,
+            }
+        );
+    }
 }
 
 // ================================================================
@@ -109,7 +223,7 @@ async function getProductosAdmin(idNegocio, idCategoria) {
                 as: 'ingrediente',
                 attributes: ['id_ingrediente', 'nombre'],
             }],
-            attributes: ['id_producto_ingred', 'porcion', 'unidad_medida', 'es_removible'],
+            attributes: ['id_producto_ingred', 'id_ingrediente', 'porcion', 'unidad_medida', 'es_removible'],
         }],
         order: [['es_popular', 'DESC'], ['nombre', 'ASC']],
     });
@@ -132,13 +246,7 @@ async function crearProducto({ id_negocio, id_categoria, nombre, descripcion, pr
         }, { transaction: t });
 
         if (Array.isArray(ingredientes) && ingredientes.length > 0) {
-            const rows = ingredientes.map(i => ({
-                id_producto:    prod.id_producto,
-                id_ingrediente: i.id_ingrediente,
-                porcion:        i.porcion || 0,
-                unidad_medida:  i.unidad_medida || 'g',
-                es_removible:   i.es_removible !== undefined ? i.es_removible : true,
-            }));
+            const rows = await buildProductoIngredientesRows(prod.id_producto, ingredientes, t);
             await Models.CartaProductoIngred.bulkCreate(rows, { transaction: t });
         }
 
@@ -168,22 +276,10 @@ async function editarProducto(idProducto, { id_categoria, nombre, descripcion, p
             disponible:   disponible   !== undefined ? disponible   : prod.disponible,
         }, { transaction: t });
 
-        // Sync ingredientes (soft-delete los viejos, re-insert)
+        // Sync ingredientes: actualiza existentes, reactiva eliminados lógicos,
+        // crea sólo nuevos y desactiva los removidos.
         if (Array.isArray(ingredientes)) {
-            await Models.CartaProductoIngred.update(
-                { estado: 'I' },
-                { where: { id_producto: idProducto }, transaction: t }
-            );
-            if (ingredientes.length > 0) {
-                const rows = ingredientes.map(i => ({
-                    id_producto:    idProducto,
-                    id_ingrediente: i.id_ingrediente,
-                    porcion:        i.porcion || 0,
-                    unidad_medida:  i.unidad_medida || 'g',
-                    es_removible:   i.es_removible !== undefined ? i.es_removible : true,
-                }));
-                await Models.CartaProductoIngred.bulkCreate(rows, { transaction: t });
-            }
+            await syncProductoIngredientes(idProducto, ingredientes, t);
         }
 
         await t.commit();

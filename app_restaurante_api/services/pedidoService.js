@@ -4,6 +4,14 @@ const Models = require('../../app_core/models/conection');
  * pedidoService — Lógica de negocio para órdenes / pedidos del restaurante.
  */
 
+function buildStockInsuficienteError(faltantes) {
+    const error = new Error('No hay stock suficiente para uno o más ingredientes.');
+    error.code = 'STOCK_INSUFICIENTE';
+    error.statusCode = 409;
+    error.faltantes = faltantes;
+    return error;
+}
+
 /**
  * Genera el siguiente número de orden para un negocio.
  */
@@ -20,7 +28,7 @@ async function generarNumeroOrden(idNegocio) {
     return `ORD-${num}`;
 }
 
-async function consumirIngredientesPorItems({ idNegocio, items, transaction }) {
+async function consumirIngredientesPorItems({ idNegocio, items, permitirStockNegativo = false, transaction }) {
     const ingredientesNecesarios = new Map();
 
     for (const item of items) {
@@ -81,21 +89,32 @@ async function consumirIngredientesPorItems({ idNegocio, items, transaction }) {
         Number(i.stock_actual ?? 0),
     ]));
 
+    const faltantes = [];
     for (const reqIng of ingredientesNecesarios.values()) {
         const stock = stockMap.get(reqIng.id_ingrediente);
         if (stock === undefined) {
             throw new Error(`Ingrediente no encontrado en inventario: ${reqIng.nombre}`);
         }
         if (stock < reqIng.consumo) {
-            throw new Error(`Stock insuficiente para ${reqIng.nombre}`);
+            faltantes.push({
+                id_ingrediente: reqIng.id_ingrediente,
+                nombre: reqIng.nombre,
+                stock_actual: stock,
+                requerido: reqIng.consumo,
+                faltante: reqIng.consumo - stock,
+            });
         }
+    }
+
+    if (faltantes.length > 0 && !permitirStockNegativo) {
+        throw buildStockInsuficienteError(faltantes);
     }
 
     for (const ing of ingredientesStock) {
         const consumo = ingredientesNecesarios.get(ing.id_ingrediente)?.consumo || 0;
         if (consumo <= 0) continue;
 
-        const nuevoStock = Math.max(Number(ing.stock_actual ?? 0) - consumo, 0);
+        const nuevoStock = Number(ing.stock_actual ?? 0) - consumo;
         await ing.update({ stock_actual: nuevoStock }, { transaction });
     }
 }
@@ -148,7 +167,7 @@ async function recalcularTotalesOrden({ idOrden, porcentajeImpuesto = 0, transac
  * @param {Array}  params.items — [{ id_producto, cantidad, precio_unitario, nota, exclusiones: [id_ingrediente] }]
  * @param {number} params.porcentajeImpuesto — ej: 0.19
  */
-async function crearOrden({ idNegocio, idUsuario, idMesa, nota, items, porcentajeImpuesto = 0 }) {
+async function crearOrden({ idNegocio, idUsuario, idMesa, nota, items, porcentajeImpuesto = 0, permitirStockNegativo = false }) {
     const t = await Models.sequelize.transaction();
     try {
         const numeroOrden = await generarNumeroOrden(idNegocio);
@@ -156,6 +175,7 @@ async function crearOrden({ idNegocio, idUsuario, idMesa, nota, items, porcentaj
         await consumirIngredientesPorItems({
             idNegocio,
             items,
+            permitirStockNegativo,
             transaction: t,
         });
 
@@ -199,7 +219,7 @@ async function crearOrden({ idNegocio, idUsuario, idMesa, nota, items, porcentaj
 /**
  * Agrega items a una orden ABIERTA existente (flujo de ajuste POS por mesa).
  */
-async function agregarItemsOrden({ idOrden, idNegocio, nota, items, porcentajeImpuesto = 0 }) {
+async function agregarItemsOrden({ idOrden, idNegocio, nota, items, porcentajeImpuesto = 0, permitirStockNegativo = false }) {
     const t = await Models.sequelize.transaction();
     try {
         const orden = await Models.PedidOrden.findOne({
@@ -219,6 +239,7 @@ async function agregarItemsOrden({ idOrden, idNegocio, nota, items, porcentajeIm
         await consumirIngredientesPorItems({
             idNegocio,
             items,
+            permitirStockNegativo,
             transaction: t,
         });
 

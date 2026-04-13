@@ -5,6 +5,165 @@ const { Op } = Models.Sequelize;
  * dashboardService — Lógica de negocio para el módulo restaurante.
  */
 
+function normalizeRoutePath(url) {
+    if (!url) return '/';
+    const raw = String(url).split('?')[0].split('#')[0].trim();
+    if (!raw) return '/';
+
+    const withLeadingSlash = raw.startsWith('/') ? raw : `/${raw}`;
+    const normalized = withLeadingSlash.replace(/\/+/g, '/').replace(/\/+$/, '');
+    return normalized || '/';
+}
+
+async function getPermisosVistaNegocio({ idUsuario, idNegocio, idTipoNegocio, rolesNegocio }) {
+    const roleIds = [...new Set((rolesNegocio || []).map((r) => Number(r.id_rol)).filter(Number.isInteger))];
+
+    let rolePermisos = [];
+    if (roleIds.length > 0 && idNegocio) {
+        rolePermisos = await Models.GenerNivelNegocio.findAll({
+            where: {
+                id_negocio: idNegocio,
+                id_rol: roleIds,
+                estado: 'A',
+                puede_ver: true,
+            },
+            attributes: ['id_rol', 'id_nivel', 'puede_ver'],
+            include: [
+                {
+                    model: Models.GenerNivel,
+                    as: 'nivel',
+                    required: true,
+                    where: {
+                        estado: 'A',
+                        id_tipo_negocio: idTipoNegocio,
+                        id_tipo_nivel: 1,
+                        url: { [Op.ne]: null },
+                    },
+                    attributes: ['id_nivel', 'descripcion', 'url'],
+                },
+                {
+                    model: Models.GenerRol,
+                    as: 'rol',
+                    required: false,
+                    attributes: ['descripcion'],
+                },
+            ],
+        });
+    }
+
+    // Compatibilidad: si no hay parametrización en gener_nivel_negocio,
+    // usa la matriz global por rol para no bloquear accesos existentes.
+    if (rolePermisos.length === 0 && roleIds.length > 0) {
+        rolePermisos = await Models.GenerRolNivel.findAll({
+            where: {
+                id_rol: roleIds,
+                estado: 'A',
+                puede_ver: true,
+            },
+            attributes: ['id_rol', 'id_nivel', 'puede_ver', 'puede_crear', 'puede_editar', 'puede_eliminar'],
+            include: [
+                {
+                    model: Models.GenerNivel,
+                    as: 'nivel',
+                    required: true,
+                    where: {
+                        estado: 'A',
+                        id_tipo_negocio: idTipoNegocio,
+                        id_tipo_nivel: 1,
+                        url: { [Op.ne]: null },
+                    },
+                    attributes: ['id_nivel', 'descripcion', 'url'],
+                },
+                {
+                    model: Models.GenerRol,
+                    as: 'rol',
+                    required: false,
+                    attributes: ['descripcion'],
+                },
+            ],
+        });
+    }
+
+    const permisosUsuarioDirectos = await Models.GenerNivelUsuario.findAll({
+        where: { id_usuario: idUsuario },
+        attributes: ['id_nivel'],
+        include: [
+            {
+                model: Models.GenerNivel,
+                required: true,
+                where: {
+                    estado: 'A',
+                    id_tipo_negocio: idTipoNegocio,
+                    url: { [Op.ne]: null },
+                },
+                attributes: ['id_nivel', 'descripcion', 'url'],
+            },
+        ],
+    });
+
+    const groupedByUrl = new Map();
+
+    rolePermisos.forEach((permiso) => {
+        const urlRaw = permiso.nivel?.url;
+        const normalizedUrl = normalizeRoutePath(urlRaw);
+        if (!normalizedUrl || normalizedUrl === '/auth') return;
+
+        const current = groupedByUrl.get(normalizedUrl) || {
+            id_nivel: permiso.nivel?.id_nivel,
+            vista: permiso.nivel?.descripcion || 'Vista',
+            url: normalizedUrl,
+            roles: new Set(),
+            puede_ver: false,
+            puede_crear: false,
+            puede_editar: false,
+            puede_eliminar: false,
+        };
+
+        if (permiso.rol?.descripcion) {
+            current.roles.add(permiso.rol.descripcion);
+        }
+        current.puede_ver = current.puede_ver || Boolean(permiso.puede_ver);
+        current.puede_crear = current.puede_crear || Boolean(permiso.puede_crear);
+        current.puede_editar = current.puede_editar || Boolean(permiso.puede_editar);
+        current.puede_eliminar = current.puede_eliminar || Boolean(permiso.puede_eliminar);
+
+        groupedByUrl.set(normalizedUrl, current);
+    });
+
+    permisosUsuarioDirectos.forEach((permisoDirecto) => {
+        const nivel = permisoDirecto.GenerNivel;
+        const normalizedUrl = normalizeRoutePath(nivel?.url);
+        if (!normalizedUrl || normalizedUrl === '/auth') return;
+
+        const current = groupedByUrl.get(normalizedUrl) || {
+            id_nivel: nivel?.id_nivel,
+            vista: nivel?.descripcion || 'Vista',
+            url: normalizedUrl,
+            roles: new Set(),
+            puede_ver: false,
+            puede_crear: false,
+            puede_editar: false,
+            puede_eliminar: false,
+        };
+
+        current.puede_ver = true;
+        groupedByUrl.set(normalizedUrl, current);
+    });
+
+    return [...groupedByUrl.values()]
+        .map((permiso) => ({
+            id_nivel: permiso.id_nivel,
+            vista: permiso.vista,
+            url: permiso.url,
+            roles: [...permiso.roles].sort(),
+            puede_ver: permiso.puede_ver,
+            puede_crear: permiso.puede_crear,
+            puede_editar: permiso.puede_editar,
+            puede_eliminar: permiso.puede_eliminar,
+        }))
+        .sort((a, b) => a.url.localeCompare(b.url));
+}
+
 /**
  * Verifica que el usuario tenga acceso a al menos un negocio de tipo restaurante.
  * Retorna los datos del usuario, su negocio(s) de restaurante y roles.
@@ -61,12 +220,30 @@ async function verificarAccesoRestaurante(idUsuario) {
         }],
     });
 
+    // Roles globales (sin negocio asociado, ej: Super Admin)
+    const rolesGlobales = await Models.GenerUsuarioRol.findAll({
+        where: { id_usuario: idUsuario, estado: 'A', id_negocio: null },
+        include: [{ model: Models.GenerRol, as: 'rol', attributes: ['id_rol', 'descripcion'] }],
+    });
+
+    const rolesGlobalesMap = rolesGlobales.map(r => ({
+        id_rol: r.rol.id_rol,
+        descripcion: r.rol.descripcion,
+    }));
+
     // Agrupar por negocio
-    const negocios = negociosUsuario.map(nu => {
+    const negocios = await Promise.all(negociosUsuario.map(async (nu) => {
         const negocio = nu.negocio;
         const roles = rolesUsuario
             .filter(r => r.id_negocio === negocio.id_negocio)
             .map(r => ({ id_rol: r.rol.id_rol, descripcion: r.rol.descripcion }));
+
+        const permisosVista = await getPermisosVistaNegocio({
+            idUsuario,
+            idNegocio: negocio.id_negocio,
+            idTipoNegocio: negocio.id_tipo_negocio,
+            rolesNegocio: [...roles, ...rolesGlobalesMap],
+        });
 
         return {
             id_negocio: negocio.id_negocio,
@@ -76,14 +253,9 @@ async function verificarAccesoRestaurante(idUsuario) {
                 : null,
             paleta: negocio.paletaColor || null,
             roles,
+            permisos_vista: permisosVista,
         };
-    });
-
-    // Roles globales (sin negocio asociado, ej: Super Admin)
-    const rolesGlobales = await Models.GenerUsuarioRol.findAll({
-        where: { id_usuario: idUsuario, estado: 'A', id_negocio: null },
-        include: [{ model: Models.GenerRol, as: 'rol', attributes: ['id_rol', 'descripcion'] }],
-    });
+    }));
 
     return {
         usuario: {
@@ -93,13 +265,12 @@ async function verificarAccesoRestaurante(idUsuario) {
             primer_apellido: usuario.primer_apellido,
             email: usuario.email,
         },
+        permisos_cargados: true,
         negocios,
         negocio: negocios[0] || null, // Negocio principal (el primero)
         roles: negocios[0]?.roles || [],
-        roles_globales: rolesGlobales.map(r => ({
-            id_rol: r.rol.id_rol,
-            descripcion: r.rol.descripcion,
-        })),
+        permisos_vista: negocios[0]?.permisos_vista || [],
+        roles_globales: rolesGlobalesMap,
     };
 }
 

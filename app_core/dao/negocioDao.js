@@ -33,6 +33,32 @@ function createNegocio(negocio, t) {
 }
 
 /**
+ * Obtiene todos los negocios activos asociados a un usuario.
+ * JOIN con gener_negocio_usuario para verificar membresía.
+ * @param {number} idUsuario
+ * @returns {Array}
+ */
+function getNegociosByUsuario(idUsuario) {
+    return Models.GenerNegocio.findAll({
+        where: { estado: 'A' },
+        include: [{
+            model: Models.GenerNegocioUsuario,
+            as: 'usuarios',
+            where: { id_usuario: idUsuario, estado: 'A' },
+            attributes: [],
+            required: true,
+        }],
+        attributes: [
+            'id_negocio', 'nombre', 'nit',
+            'email_contacto', 'telefono',
+            'id_tipo_negocio', 'id_paleta',
+            'estado', 'fecha_registro',
+        ],
+        order: [['nombre', 'ASC']],
+    });
+}
+
+/**
  * Obtiene los negocios a los que un usuario tiene acceso, filtrados por tipo de negocio.
  * JOIN con gener_negocio_usuario para verificar membresía.
  * @param {number} idUsuario
@@ -59,4 +85,10 @@ function getNegociosByUsuarioAndTipo(idUsuario, idTipoNegocio) {
     });
 }
 
-module.exports = { getListaNegocios, getNegocioById, createNegocio, getNegociosByUsuarioAndTipo };
+module.exports = {
+    getListaNegocios,
+    getNegocioById,
+    createNegocio,
+    getNegociosByUsuario,
+    getNegociosByUsuarioAndTipo,
+};

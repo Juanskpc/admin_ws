@@ -3,21 +3,30 @@ const fs   = require('fs');
 const path = require('path');
 const pg   = require('pg');
 
-// ── FIX CRÍTICO DE TIMEZONE ──────────────────────────────────────────────────
-// pg v8+ interpreta TIMESTAMP WITHOUT TIME ZONE como hora LOCAL del proceso
-// (en este caso Colombia UTC-5), añadiendo 5 horas al leer desde la BD que
-// está en UTC. Forzamos lectura como UTC añadiendo 'Z' al string crudo.
+const appTimezone = process.env.APP_TIMEZONE || 'America/Bogota';
+const appTimezoneOffset = process.env.APP_TIMEZONE_OFFSET || '-05:00';
+const dbTimestampsAreUtc = process.env.DB_TIMESTAMPS_ARE_UTC === 'true';
+
+function normalizePgTimestamp(raw) {
+  return String(raw).replace(' ', 'T');
+}
+
+function parsePgTimestamp(raw) {
+  if (raw == null) return null;
+  const normalized = normalizePgTimestamp(raw);
+  const value = dbTimestampsAreUtc ? `${normalized}Z` : normalized;
+  return new Date(value);
+}
+
 // OID 1114 = timestamp, OID 1115 = timestamp[] (arrays)
-pg.types.setTypeParser(1114, (val) => (val == null ? null : new Date(val + 'Z')));
+pg.types.setTypeParser(1114, (val) => parsePgTimestamp(val));
 pg.types.setTypeParser(1115, (val) => {
   if (!val) return val;
-  // Desempaquetar array PostgreSQL "{2026-01-01 10:00:00,...}"
   return val.slice(1, -1).split(',').map((v) => {
     const s = v.trim().replace(/^"|"$/g, '');
-    return s === 'NULL' ? null : new Date(s + 'Z');
+    return s === 'NULL' ? null : parsePgTimestamp(s);
   });
 });
-// ────────────────────────────────────────────────────────────────────────────
 
 const isSSL = process.env.DB_SSL === 'true';
 
@@ -29,6 +38,7 @@ const sequelize = new Sequelize(
     host: process.env.DB_HOST,
     port: process.env.DB_PORT || 5432,
     dialect: 'postgres',
+    timezone: appTimezoneOffset,
     logging: process.env.NODE_ENV === 'development' ? console.log : false,
     dialectOptions: isSSL ? {
       ssl: {
@@ -44,6 +54,10 @@ const sequelize = new Sequelize(
     }
   }
 );
+
+sequelize.addHook('afterConnect', async (connection) => {
+  await connection.query(`SET TIME ZONE '${appTimezone}'`);
+});
 
 const db = {};
 const modelsPath = __dirname;
