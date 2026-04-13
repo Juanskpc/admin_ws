@@ -15,6 +15,14 @@ function normalizeRoutePath(url) {
     return normalized || '/';
 }
 
+function normalizeSubnivelCode(rawCode) {
+    return String(rawCode || '')
+        .trim()
+        .toLowerCase()
+        .replace(/^\/+/, '')
+        .replace(/\//g, '_');
+}
+
 async function getPermisosVistaNegocio({ idUsuario, idNegocio, idTipoNegocio, rolesNegocio }) {
     const roleIds = [...new Set((rolesNegocio || []).map((r) => Number(r.id_rol)).filter(Number.isInteger))];
 
@@ -94,6 +102,7 @@ async function getPermisosVistaNegocio({ idUsuario, idNegocio, idTipoNegocio, ro
                 where: {
                     estado: 'A',
                     id_tipo_negocio: idTipoNegocio,
+                    id_tipo_nivel: 1,
                     url: { [Op.ne]: null },
                 },
                 attributes: ['id_nivel', 'descripcion', 'url'],
@@ -162,6 +171,129 @@ async function getPermisosVistaNegocio({ idUsuario, idNegocio, idTipoNegocio, ro
             puede_eliminar: permiso.puede_eliminar,
         }))
         .sort((a, b) => a.url.localeCompare(b.url));
+}
+
+async function getPermisosSubnivelNegocio({ idNegocio, idTipoNegocio, rolesNegocio }) {
+    const roleIds = [...new Set((rolesNegocio || []).map((r) => Number(r.id_rol)).filter(Number.isInteger))];
+
+    if (roleIds.length === 0) {
+        return [];
+    }
+
+    let rolePermisos = [];
+
+    if (idNegocio) {
+        rolePermisos = await Models.GenerNivelNegocio.findAll({
+            where: {
+                id_negocio: idNegocio,
+                id_rol: roleIds,
+                estado: 'A',
+                puede_ver: true,
+            },
+            attributes: ['id_rol', 'id_nivel', 'puede_ver'],
+            include: [
+                {
+                    model: Models.GenerNivel,
+                    as: 'nivel',
+                    required: true,
+                    where: {
+                        estado: 'A',
+                        id_tipo_negocio: idTipoNegocio,
+                        id_tipo_nivel: 4,
+                        url: { [Op.ne]: null },
+                    },
+                    attributes: ['id_nivel', 'descripcion', 'url', 'id_nivel_padre'],
+                    include: [
+                        {
+                            model: Models.GenerNivel,
+                            as: 'NivelPadre',
+                            required: false,
+                            attributes: ['id_nivel', 'url', 'descripcion'],
+                        },
+                    ],
+                },
+                {
+                    model: Models.GenerRol,
+                    as: 'rol',
+                    required: false,
+                    attributes: ['descripcion'],
+                },
+            ],
+        });
+    }
+
+    if (rolePermisos.length === 0) {
+        rolePermisos = await Models.GenerRolNivel.findAll({
+            where: {
+                id_rol: roleIds,
+                estado: 'A',
+                puede_ver: true,
+            },
+            attributes: ['id_rol', 'id_nivel', 'puede_ver'],
+            include: [
+                {
+                    model: Models.GenerNivel,
+                    as: 'nivel',
+                    required: true,
+                    where: {
+                        estado: 'A',
+                        id_tipo_negocio: idTipoNegocio,
+                        id_tipo_nivel: 4,
+                        url: { [Op.ne]: null },
+                    },
+                    attributes: ['id_nivel', 'descripcion', 'url', 'id_nivel_padre'],
+                    include: [
+                        {
+                            model: Models.GenerNivel,
+                            as: 'NivelPadre',
+                            required: false,
+                            attributes: ['id_nivel', 'url', 'descripcion'],
+                        },
+                    ],
+                },
+                {
+                    model: Models.GenerRol,
+                    as: 'rol',
+                    required: false,
+                    attributes: ['descripcion'],
+                },
+            ],
+        });
+    }
+
+    const groupedByCode = new Map();
+
+    rolePermisos.forEach((permiso) => {
+        const code = normalizeSubnivelCode(permiso.nivel?.url);
+        if (!code) return;
+
+        const current = groupedByCode.get(code) || {
+            id_nivel: permiso.nivel?.id_nivel,
+            codigo: code,
+            accion: permiso.nivel?.descripcion || 'Accion',
+            modulo_url: normalizeRoutePath(permiso.nivel?.NivelPadre?.url || ''),
+            roles: new Set(),
+            puede_ver: false,
+        };
+
+        if (permiso.rol?.descripcion) {
+            current.roles.add(permiso.rol.descripcion);
+        }
+
+        current.puede_ver = current.puede_ver || Boolean(permiso.puede_ver);
+        groupedByCode.set(code, current);
+    });
+
+    return [...groupedByCode.values()]
+        .map((permiso) => ({
+            id_nivel: permiso.id_nivel,
+            codigo: permiso.codigo,
+            accion: permiso.accion,
+            modulo_url: permiso.modulo_url,
+            roles: [...permiso.roles].sort(),
+            puede_ver: permiso.puede_ver,
+        }))
+        .sort((a, b) => a.codigo.localeCompare(b.codigo));
 }
 
 /**
@@ -238,11 +370,19 @@ async function verificarAccesoRestaurante(idUsuario) {
             .filter(r => r.id_negocio === negocio.id_negocio)
             .map(r => ({ id_rol: r.rol.id_rol, descripcion: r.rol.descripcion }));
 
+        const rolesContexto = [...roles, ...rolesGlobalesMap];
+
         const permisosVista = await getPermisosVistaNegocio({
             idUsuario,
             idNegocio: negocio.id_negocio,
             idTipoNegocio: negocio.id_tipo_negocio,
-            rolesNegocio: [...roles, ...rolesGlobalesMap],
+            rolesNegocio: rolesContexto,
+        });
+
+        const permisosSubnivel = await getPermisosSubnivelNegocio({
+            idNegocio: negocio.id_negocio,
+            idTipoNegocio: negocio.id_tipo_negocio,
+            rolesNegocio: rolesContexto,
         });
 
         return {
@@ -254,6 +394,7 @@ async function verificarAccesoRestaurante(idUsuario) {
             paleta: negocio.paletaColor || null,
             roles,
             permisos_vista: permisosVista,
+            permisos_subnivel: permisosSubnivel,
         };
     }));
 
@@ -270,6 +411,7 @@ async function verificarAccesoRestaurante(idUsuario) {
         negocio: negocios[0] || null, // Negocio principal (el primero)
         roles: negocios[0]?.roles || [],
         permisos_vista: negocios[0]?.permisos_vista || [],
+        permisos_subnivel: negocios[0]?.permisos_subnivel || [],
         roles_globales: rolesGlobalesMap,
     };
 }

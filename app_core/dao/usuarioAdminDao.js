@@ -5,6 +5,29 @@ function isAdminRoleName(nombreRol = '') {
     return nombreRol.toUpperCase().includes('ADMINISTRADOR');
 }
 
+function isMeseroRoleName(nombreRol = '') {
+    return nombreRol.toUpperCase().includes('MESERO');
+}
+
+function normalizePermissionCode(rawCode = '') {
+    return String(rawCode)
+        .trim()
+        .toLowerCase()
+        .replace(/^\/+/, '')
+        .replace(/\//g, '_');
+}
+
+function resolveDefaultSubnivelPermission({ codigo, rolDescripcion, modulePermission }) {
+    if (isAdminRoleName(rolDescripcion)) return true;
+    if (!modulePermission) return false;
+
+    if (codigo === 'pedidos_cobrar' && isMeseroRoleName(rolDescripcion)) {
+        return false;
+    }
+
+    return true;
+}
+
 function buildNombreCompleto(usuario) {
     return [
         usuario.primer_nombre,
@@ -505,13 +528,42 @@ async function getPermisosMatrizRol(payload = {}) {
 
     const niveles = await Models.GenerNivel.findAll({
         where: nivelesWhere,
-        attributes: ['id_nivel', 'descripcion', 'id_tipo_negocio'],
+        attributes: ['id_nivel', 'descripcion', 'id_tipo_negocio', 'url'],
         order: [['descripcion', 'ASC']],
     });
 
-    const nivelIds = niveles
+    const moduloIds = niveles
         .map((item) => Number(item.id_nivel))
         .filter((idNivel) => Number.isInteger(idNivel) && idNivel > 0);
+
+    const subniveles = moduloIds.length > 0
+        ? await Models.GenerNivel.findAll({
+            where: {
+                estado: 'A',
+                id_tipo_nivel: 4,
+                id_nivel_padre: moduloIds,
+                ...(tipoNegocioMatriz ? { id_tipo_negocio: tipoNegocioMatriz } : {}),
+            },
+            attributes: ['id_nivel', 'id_nivel_padre', 'descripcion', 'url'],
+            order: [['descripcion', 'ASC']],
+        })
+        : [];
+
+    const subnivelesByModulo = new Map();
+    subniveles.forEach((subnivel) => {
+        const idPadre = Number(subnivel.id_nivel_padre);
+        if (!Number.isInteger(idPadre) || idPadre <= 0) return;
+
+        const current = subnivelesByModulo.get(idPadre) || [];
+        current.push(subnivel);
+        subnivelesByModulo.set(idPadre, current);
+    });
+
+    const subnivelIds = subniveles
+        .map((item) => Number(item.id_nivel))
+        .filter((idNivel) => Number.isInteger(idNivel) && idNivel > 0);
+
+    const nivelIds = [...new Set([...moduloIds, ...subnivelIds])];
 
     const permisosFallback = await Models.GenerRolNivel.findAll({
         where: {
@@ -536,30 +588,70 @@ async function getPermisosMatrizRol(payload = {}) {
             attributes: ['id_nivel', 'puede_ver'],
         });
 
-        if (permisosNegocio.length === 0 && niveles.length > 0) {
-            const seedRows = niveles.map((nivel) => ({
-                id_negocio: idNegocio,
-                id_rol: idRol,
-                id_nivel: nivel.id_nivel,
-                puede_ver: Boolean(fallbackByNivel.get(Number(nivel.id_nivel))?.puede_ver),
-                estado: 'A',
-                fecha_creacion: new Date(),
-                fecha_actualizacion: new Date(),
-            }));
+        const permisosNegocioMap = new Map(
+            permisosNegocio.map((permiso) => [Number(permiso.id_nivel), permiso])
+        );
 
-            await Models.GenerNivelNegocio.bulkCreate(seedRows, {
-                ignoreDuplicates: true,
-            });
+        const missingNivelIds = nivelIds.filter((idNivel) => !permisosNegocioMap.has(Number(idNivel)));
 
-            permisosNegocio = await Models.GenerNivelNegocio.findAll({
-                where: {
+        if (missingNivelIds.length > 0) {
+            const seedRows = [];
+
+            for (const idNivel of missingNivelIds) {
+                const modulo = niveles.find((item) => Number(item.id_nivel) === Number(idNivel));
+
+                if (modulo) {
+                    seedRows.push({
+                        id_negocio: idNegocio,
+                        id_rol: idRol,
+                        id_nivel: modulo.id_nivel,
+                        puede_ver: Boolean(fallbackByNivel.get(Number(modulo.id_nivel))?.puede_ver),
+                        estado: 'A',
+                        fecha_creacion: new Date(),
+                        fecha_actualizacion: new Date(),
+                    });
+                    continue;
+                }
+
+                const subnivel = subniveles.find((item) => Number(item.id_nivel) === Number(idNivel));
+                if (!subnivel) continue;
+
+                const parentId = Number(subnivel.id_nivel_padre);
+                const parentPermission = Boolean(
+                    permisosNegocioMap.get(parentId)?.puede_ver
+                    ?? fallbackByNivel.get(parentId)?.puede_ver
+                );
+
+                seedRows.push({
                     id_negocio: idNegocio,
                     id_rol: idRol,
+                    id_nivel: subnivel.id_nivel,
+                    puede_ver: resolveDefaultSubnivelPermission({
+                        codigo: normalizePermissionCode(subnivel.url),
+                        rolDescripcion: rol.descripcion,
+                        modulePermission: parentPermission,
+                    }),
                     estado: 'A',
-                    id_nivel: nivelIds,
-                },
-                attributes: ['id_nivel', 'puede_ver'],
-            });
+                    fecha_creacion: new Date(),
+                    fecha_actualizacion: new Date(),
+                });
+            }
+
+            if (seedRows.length > 0) {
+                await Models.GenerNivelNegocio.bulkCreate(seedRows, {
+                    ignoreDuplicates: true,
+                });
+
+                permisosNegocio = await Models.GenerNivelNegocio.findAll({
+                    where: {
+                        id_negocio: idNegocio,
+                        id_rol: idRol,
+                        estado: 'A',
+                        id_nivel: nivelIds,
+                    },
+                    attributes: ['id_nivel', 'puede_ver'],
+                });
+            }
         }
 
         permisosByNivel = new Map(permisosNegocio.map((permiso) => [Number(permiso.id_nivel), permiso]));
@@ -567,14 +659,26 @@ async function getPermisosMatrizRol(payload = {}) {
 
     const modulos = niveles.map((nivel) => {
         const permiso = permisosByNivel.get(Number(nivel.id_nivel));
+        const subnivelesModulo = (subnivelesByModulo.get(Number(nivel.id_nivel)) || []).map((subnivel) => {
+            const subPermiso = permisosByNivel.get(Number(subnivel.id_nivel));
+
+            return {
+                id_nivel: subnivel.id_nivel,
+                codigo: normalizePermissionCode(subnivel.url),
+                accion: subnivel.descripcion,
+                puede_ver: Boolean(subPermiso?.puede_ver),
+            };
+        });
 
         return {
             id_nivel: nivel.id_nivel,
             modulo: nivel.descripcion,
+            url: nivel.url,
             puede_ver: Boolean(permiso?.puede_ver),
             puede_crear: false,
             puede_editar: false,
             puede_eliminar: false,
+            subniveles: subnivelesModulo,
         };
     });
 
@@ -621,13 +725,74 @@ async function savePermisosRol(idRol, modulos, transaction, { idNegocio = null }
         const idNivel = Number(modulo?.id_nivel);
         if (!Number.isInteger(idNivel) || idNivel <= 0) continue;
 
+        const puedeVerModulo = Boolean(modulo?.puede_ver);
+
         normalizedByNivel.set(idNivel, {
             id_nivel: idNivel,
-            puede_ver: Boolean(modulo?.puede_ver),
+            puede_ver: puedeVerModulo,
         });
+
+        if (!Array.isArray(modulo?.subniveles)) continue;
+
+        for (const subnivel of modulo.subniveles) {
+            const idSubnivel = Number(subnivel?.id_nivel);
+            if (!Number.isInteger(idSubnivel) || idSubnivel <= 0) continue;
+
+            normalizedByNivel.set(idSubnivel, {
+                id_nivel: idSubnivel,
+                puede_ver: puedeVerModulo && Boolean(subnivel?.puede_ver),
+            });
+        }
     }
 
-    const normalized = [...normalizedByNivel.values()];
+    let normalized = [...normalizedByNivel.values()];
+    if (normalized.length === 0) return;
+
+    const rol = await Models.GenerRol.findByPk(idRol, {
+        attributes: ['id_rol', 'id_tipo_negocio'],
+        transaction,
+    });
+
+    if (!rol) return;
+
+    let tipoNegocio = Number(rol.id_tipo_negocio || 0) || null;
+
+    if (idNegocio) {
+        const negocio = await Models.GenerNegocio.findByPk(idNegocio, {
+            attributes: ['id_negocio', 'id_tipo_negocio'],
+            transaction,
+        });
+
+        if (!negocio) return;
+
+        const tipoNegocioNegocio = Number(negocio.id_tipo_negocio || 0) || null;
+        if (tipoNegocio && tipoNegocioNegocio && tipoNegocio !== tipoNegocioNegocio) {
+            return;
+        }
+
+        if (!tipoNegocio) {
+            tipoNegocio = tipoNegocioNegocio;
+        }
+    }
+
+    const validNiveles = await Models.GenerNivel.findAll({
+        where: {
+            estado: 'A',
+            id_nivel: normalized.map((item) => item.id_nivel),
+            ...(tipoNegocio ? { id_tipo_negocio: tipoNegocio } : {}),
+        },
+        attributes: ['id_nivel'],
+        transaction,
+    });
+
+    const validIds = new Set(
+        validNiveles
+            .map((nivel) => Number(nivel.id_nivel))
+            .filter((idNivel) => Number.isInteger(idNivel) && idNivel > 0)
+    );
+
+    normalized = normalized.filter((item) => validIds.has(Number(item.id_nivel)));
+    if (normalized.length === 0) return;
 
     if (idNegocio) {
         for (const modulo of normalized) {

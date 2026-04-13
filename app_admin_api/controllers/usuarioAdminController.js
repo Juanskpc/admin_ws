@@ -57,6 +57,9 @@ const usuarioAdminValidators = {
         body('modulos.*.puede_crear').isBoolean(),
         body('modulos.*.puede_editar').isBoolean(),
         body('modulos.*.puede_eliminar').isBoolean(),
+        body('modulos.*.subniveles').optional().isArray(),
+        body('modulos.*.subniveles.*.id_nivel').optional().isInt({ min: 1 }),
+        body('modulos.*.subniveles.*.puede_ver').optional().isBoolean(),
     ],
 };
 
