@@ -5,6 +5,29 @@ function isAdminRoleName(nombreRol = '') {
     return nombreRol.toUpperCase().includes('ADMINISTRADOR');
 }
 
+function isMeseroRoleName(nombreRol = '') {
+    return nombreRol.toUpperCase().includes('MESERO');
+}
+
+function normalizePermissionCode(rawCode = '') {
+    return String(rawCode)
+        .trim()
+        .toLowerCase()
+        .replace(/^\/+/, '')
+        .replace(/\//g, '_');
+}
+
+function resolveDefaultSubnivelPermission({ codigo, rolDescripcion, modulePermission }) {
+    if (isAdminRoleName(rolDescripcion)) return true;
+    if (!modulePermission) return false;
+
+    if (codigo === 'pedidos_cobrar' && isMeseroRoleName(rolDescripcion)) {
+        return false;
+    }
+
+    return true;
+}
+
 function buildNombreCompleto(usuario) {
     return [
         usuario.primer_nombre,
@@ -14,7 +37,7 @@ function buildNombreCompleto(usuario) {
     ].filter(Boolean).join(' ').trim();
 }
 
-async function getUsuarios({ search = '', idRol = null, estado = null } = {}) {
+async function getUsuarios({ search = '', idRol = null, idNegocio = null, estado = null } = {}) {
     const where = {};
 
     if (estado === 'A' || estado === 'I') {
@@ -31,6 +54,11 @@ async function getUsuarios({ search = '', idRol = null, estado = null } = {}) {
             { email: { [Op.iLike]: term } },
             { num_identificacion: { [Op.iLike]: term } },
         ];
+    }
+
+    const rolesWhere = { estado: 'A' };
+    if (idNegocio) {
+        rolesWhere.id_negocio = Number(idNegocio);
     }
 
     const usuarios = await Models.GenerUsuario.findAll({
@@ -51,8 +79,8 @@ async function getUsuarios({ search = '', idRol = null, estado = null } = {}) {
             {
                 model: Models.GenerUsuarioRol,
                 as: 'roles',
-                where: { estado: 'A' },
-                required: false,
+                where: rolesWhere,
+                required: Boolean(idNegocio),
                 attributes: ['id_usuario_rol', 'id_rol', 'id_negocio', 'fecha_creacion'],
                 include: [
                     {
@@ -147,9 +175,28 @@ function findUsuarioDuplicado({ email, num_identificacion, excludeId = null }) {
     });
 }
 
-function getRolesActivos() {
+async function getRolesActivos({ idNegocio = null, idTipoNegocio = null } = {}) {
+    let tipoNegocioFiltro = idTipoNegocio ? Number(idTipoNegocio) : null;
+
+    if (!tipoNegocioFiltro && idNegocio) {
+        const negocio = await Models.GenerNegocio.findByPk(idNegocio, {
+            attributes: ['id_negocio', 'id_tipo_negocio'],
+        });
+
+        if (!negocio) {
+            return [];
+        }
+
+        tipoNegocioFiltro = Number(negocio.id_tipo_negocio || 0) || null;
+    }
+
+    const where = { estado: 'A' };
+    if (tipoNegocioFiltro) {
+        where.id_tipo_negocio = tipoNegocioFiltro;
+    }
+
     return Models.GenerRol.findAll({
-        where: { estado: 'A' },
+        where,
         attributes: ['id_rol', 'descripcion', 'id_tipo_negocio'],
         include: [
             {
@@ -192,6 +239,147 @@ async function countAdminsActivos(excludeUserId = null) {
     return rows?.[0]?.total || 0;
 }
 
+async function getNivelIdsPlantillaRol({ idRol, idNegocio = null, idTipoNegocio = null, transaction }) {
+    let tipoNegocio = idTipoNegocio ? Number(idTipoNegocio) : null;
+
+    if (!tipoNegocio && idNegocio) {
+        const negocio = await Models.GenerNegocio.findByPk(idNegocio, {
+            attributes: ['id_negocio', 'id_tipo_negocio'],
+            transaction,
+        });
+
+        tipoNegocio = Number(negocio?.id_tipo_negocio || 0) || null;
+    }
+
+    if (idNegocio) {
+        const nivelesNegocio = await Models.GenerNivelNegocio.findAll({
+            where: {
+                id_negocio: idNegocio,
+                id_rol: idRol,
+                estado: 'A',
+                puede_ver: true,
+            },
+            attributes: ['id_nivel'],
+            include: [
+                {
+                    model: Models.GenerNivel,
+                    as: 'nivel',
+                    required: true,
+                    where: {
+                        estado: 'A',
+                        id_tipo_nivel: 1,
+                        ...(tipoNegocio ? { id_tipo_negocio: tipoNegocio } : {}),
+                    },
+                    attributes: ['id_nivel'],
+                },
+            ],
+            transaction,
+        });
+
+        if (nivelesNegocio.length > 0) {
+            return [...new Set(
+                nivelesNegocio
+                    .map((item) => Number(item.id_nivel))
+                    .filter((idNivel) => Number.isInteger(idNivel) && idNivel > 0)
+            )];
+        }
+    }
+
+    const nivelesWhere = {
+        estado: 'A',
+        id_tipo_nivel: 1,
+        ...(tipoNegocio ? { id_tipo_negocio: tipoNegocio } : {}),
+    };
+
+    const fallback = await Models.GenerRolNivel.findAll({
+        where: {
+            id_rol: idRol,
+            estado: 'A',
+            puede_ver: true,
+        },
+        attributes: ['id_nivel'],
+        include: [
+            {
+                model: Models.GenerNivel,
+                as: 'nivel',
+                required: true,
+                where: nivelesWhere,
+                attributes: ['id_nivel'],
+            },
+        ],
+        transaction,
+    });
+
+    return [...new Set(
+        fallback
+            .map((item) => Number(item.id_nivel))
+            .filter((idNivel) => Number.isInteger(idNivel) && idNivel > 0)
+    )];
+}
+
+async function rebuildNivelesUsuario(idUsuario, transaction) {
+    const asignacionesActivas = await Models.GenerUsuarioRol.findAll({
+        where: {
+            id_usuario: idUsuario,
+            estado: 'A',
+        },
+        attributes: ['id_usuario', 'id_rol', 'id_negocio'],
+        include: [
+            {
+                model: Models.GenerRol,
+                as: 'rol',
+                required: false,
+                attributes: ['id_rol', 'id_tipo_negocio'],
+            },
+            {
+                model: Models.GenerNegocio,
+                as: 'negocio',
+                required: false,
+                attributes: ['id_negocio', 'id_tipo_negocio'],
+            },
+        ],
+        transaction,
+    });
+
+    const nivelesAsignados = new Set();
+
+    for (const asignacion of asignacionesActivas) {
+        const idRol = Number(asignacion.id_rol);
+        const idNegocio = Number(asignacion.id_negocio || 0) || null;
+        const idTipoNegocio = Number(
+            asignacion.negocio?.id_tipo_negocio
+            || asignacion.rol?.id_tipo_negocio
+            || 0
+        ) || null;
+
+        const nivelesRol = await getNivelIdsPlantillaRol({
+            idRol,
+            idNegocio,
+            idTipoNegocio,
+            transaction,
+        });
+
+        nivelesRol.forEach((idNivel) => nivelesAsignados.add(idNivel));
+    }
+
+    await Models.GenerNivelUsuario.destroy({
+        where: { id_usuario: idUsuario },
+        transaction,
+    });
+
+    if (nivelesAsignados.size === 0) {
+        return;
+    }
+
+    const rows = [...nivelesAsignados].map((idNivel) => ({
+        id_usuario: idUsuario,
+        id_nivel: idNivel,
+        fecha: new Date(),
+    }));
+
+    await Models.GenerNivelUsuario.bulkCreate(rows, { transaction });
+}
+
 async function createUsuario(payload, transaction) {
     const nuevoUsuario = await Models.GenerUsuario.create(
         {
@@ -218,6 +406,8 @@ async function createUsuario(payload, transaction) {
         },
         { transaction }
     );
+
+    await rebuildNivelesUsuario(nuevoUsuario.id_usuario, transaction);
 
     return nuevoUsuario.id_usuario;
 }
@@ -262,6 +452,8 @@ async function updateUsuario(idUsuario, payload, transaction) {
         { transaction }
     );
 
+    await rebuildNivelesUsuario(idUsuario, transaction);
+
     return idUsuario;
 }
 
@@ -297,48 +489,196 @@ async function softDeleteUsuario(idUsuario, transaction) {
     return affectedRows;
 }
 
-async function getPermisosMatrizRol(idRol) {
+async function getPermisosMatrizRol(payload = {}) {
+    const args = typeof payload === 'number'
+        ? { idRol: payload, idNegocio: null }
+        : payload;
+
+    const idRol = Number(args.idRol);
+    const idNegocio = Number(args.idNegocio || 0) || null;
+    if (!idRol) return null;
+
     const rol = await Models.GenerRol.findByPk(idRol, {
         attributes: ['id_rol', 'descripcion', 'id_tipo_negocio'],
     });
     if (!rol) return null;
 
+    let tipoNegocioMatriz = Number(rol.id_tipo_negocio || 0) || null;
+    if (idNegocio) {
+        const negocio = await Models.GenerNegocio.findByPk(idNegocio, {
+            attributes: ['id_negocio', 'id_tipo_negocio'],
+        });
+        if (!negocio) return null;
+
+        const tipoNegocioNegocio = Number(negocio.id_tipo_negocio || 0) || null;
+        if (tipoNegocioMatriz && tipoNegocioNegocio && tipoNegocioMatriz !== tipoNegocioNegocio) {
+            return null;
+        }
+
+        if (!tipoNegocioMatriz) {
+            tipoNegocioMatriz = tipoNegocioNegocio;
+        }
+    }
+
     const nivelesWhere = {
         estado: 'A',
         id_tipo_nivel: 1,
+        ...(tipoNegocioMatriz ? { id_tipo_negocio: tipoNegocioMatriz } : {}),
     };
-
-    if (rol.id_tipo_negocio) {
-        nivelesWhere.id_tipo_negocio = rol.id_tipo_negocio;
-    }
 
     const niveles = await Models.GenerNivel.findAll({
         where: nivelesWhere,
-        attributes: ['id_nivel', 'descripcion', 'id_tipo_negocio'],
+        attributes: ['id_nivel', 'descripcion', 'id_tipo_negocio', 'url'],
         order: [['descripcion', 'ASC']],
     });
 
-    const permisos = await Models.GenerRolNivel.findAll({
+    const moduloIds = niveles
+        .map((item) => Number(item.id_nivel))
+        .filter((idNivel) => Number.isInteger(idNivel) && idNivel > 0);
+
+    const subniveles = moduloIds.length > 0
+        ? await Models.GenerNivel.findAll({
+            where: {
+                estado: 'A',
+                id_tipo_nivel: 4,
+                id_nivel_padre: moduloIds,
+                ...(tipoNegocioMatriz ? { id_tipo_negocio: tipoNegocioMatriz } : {}),
+            },
+            attributes: ['id_nivel', 'id_nivel_padre', 'descripcion', 'url'],
+            order: [['descripcion', 'ASC']],
+        })
+        : [];
+
+    const subnivelesByModulo = new Map();
+    subniveles.forEach((subnivel) => {
+        const idPadre = Number(subnivel.id_nivel_padre);
+        if (!Number.isInteger(idPadre) || idPadre <= 0) return;
+
+        const current = subnivelesByModulo.get(idPadre) || [];
+        current.push(subnivel);
+        subnivelesByModulo.set(idPadre, current);
+    });
+
+    const subnivelIds = subniveles
+        .map((item) => Number(item.id_nivel))
+        .filter((idNivel) => Number.isInteger(idNivel) && idNivel > 0);
+
+    const nivelIds = [...new Set([...moduloIds, ...subnivelIds])];
+
+    const permisosFallback = await Models.GenerRolNivel.findAll({
         where: {
             id_rol: idRol,
             estado: 'A',
-            id_nivel: niveles.map((n) => n.id_nivel),
+            id_nivel: nivelIds,
         },
-        attributes: ['id_nivel', 'puede_ver', 'puede_crear', 'puede_editar', 'puede_eliminar'],
+        attributes: ['id_nivel', 'puede_ver'],
     });
+    const fallbackByNivel = new Map(permisosFallback.map((permiso) => [Number(permiso.id_nivel), permiso]));
 
-    const byNivel = new Map(permisos.map((p) => [p.id_nivel, p]));
+    let permisosByNivel = fallbackByNivel;
+
+    if (idNegocio) {
+        let permisosNegocio = await Models.GenerNivelNegocio.findAll({
+            where: {
+                id_negocio: idNegocio,
+                id_rol: idRol,
+                estado: 'A',
+                id_nivel: nivelIds,
+            },
+            attributes: ['id_nivel', 'puede_ver'],
+        });
+
+        const permisosNegocioMap = new Map(
+            permisosNegocio.map((permiso) => [Number(permiso.id_nivel), permiso])
+        );
+
+        const missingNivelIds = nivelIds.filter((idNivel) => !permisosNegocioMap.has(Number(idNivel)));
+
+        if (missingNivelIds.length > 0) {
+            const seedRows = [];
+
+            for (const idNivel of missingNivelIds) {
+                const modulo = niveles.find((item) => Number(item.id_nivel) === Number(idNivel));
+
+                if (modulo) {
+                    seedRows.push({
+                        id_negocio: idNegocio,
+                        id_rol: idRol,
+                        id_nivel: modulo.id_nivel,
+                        puede_ver: Boolean(fallbackByNivel.get(Number(modulo.id_nivel))?.puede_ver),
+                        estado: 'A',
+                        fecha_creacion: new Date(),
+                        fecha_actualizacion: new Date(),
+                    });
+                    continue;
+                }
+
+                const subnivel = subniveles.find((item) => Number(item.id_nivel) === Number(idNivel));
+                if (!subnivel) continue;
+
+                const parentId = Number(subnivel.id_nivel_padre);
+                const parentPermission = Boolean(
+                    permisosNegocioMap.get(parentId)?.puede_ver
+                    ?? fallbackByNivel.get(parentId)?.puede_ver
+                );
+
+                seedRows.push({
+                    id_negocio: idNegocio,
+                    id_rol: idRol,
+                    id_nivel: subnivel.id_nivel,
+                    puede_ver: resolveDefaultSubnivelPermission({
+                        codigo: normalizePermissionCode(subnivel.url),
+                        rolDescripcion: rol.descripcion,
+                        modulePermission: parentPermission,
+                    }),
+                    estado: 'A',
+                    fecha_creacion: new Date(),
+                    fecha_actualizacion: new Date(),
+                });
+            }
+
+            if (seedRows.length > 0) {
+                await Models.GenerNivelNegocio.bulkCreate(seedRows, {
+                    ignoreDuplicates: true,
+                });
+
+                permisosNegocio = await Models.GenerNivelNegocio.findAll({
+                    where: {
+                        id_negocio: idNegocio,
+                        id_rol: idRol,
+                        estado: 'A',
+                        id_nivel: nivelIds,
+                    },
+                    attributes: ['id_nivel', 'puede_ver'],
+                });
+            }
+        }
+
+        permisosByNivel = new Map(permisosNegocio.map((permiso) => [Number(permiso.id_nivel), permiso]));
+    }
 
     const modulos = niveles.map((nivel) => {
-        const permiso = byNivel.get(nivel.id_nivel);
+        const permiso = permisosByNivel.get(Number(nivel.id_nivel));
+        const subnivelesModulo = (subnivelesByModulo.get(Number(nivel.id_nivel)) || []).map((subnivel) => {
+            const subPermiso = permisosByNivel.get(Number(subnivel.id_nivel));
+
+            return {
+                id_nivel: subnivel.id_nivel,
+                codigo: normalizePermissionCode(subnivel.url),
+                accion: subnivel.descripcion,
+                puede_ver: Boolean(subPermiso?.puede_ver),
+            };
+        });
 
         return {
             id_nivel: nivel.id_nivel,
             modulo: nivel.descripcion,
+            url: nivel.url,
             puede_ver: Boolean(permiso?.puede_ver),
-            puede_crear: Boolean(permiso?.puede_crear),
-            puede_editar: Boolean(permiso?.puede_editar),
-            puede_eliminar: Boolean(permiso?.puede_eliminar),
+            puede_crear: false,
+            puede_editar: false,
+            puede_eliminar: false,
+            subniveles: subnivelesModulo,
         };
     });
 
@@ -346,19 +686,160 @@ async function getPermisosMatrizRol(idRol) {
         id_rol: rol.id_rol,
         descripcion: rol.descripcion,
         id_tipo_negocio: rol.id_tipo_negocio,
+        id_negocio: idNegocio,
         modulos,
     };
 }
 
-async function savePermisosRol(idRol, modulos, transaction) {
-    for (const modulo of modulos) {
+async function syncPermisosUsuariosPorRol({ idRol, idNegocio = null, transaction }) {
+    const where = {
+        id_rol: idRol,
+        estado: 'A',
+    };
+
+    if (idNegocio) {
+        where.id_negocio = idNegocio;
+    }
+
+    const asignacionesRol = await Models.GenerUsuarioRol.findAll({
+        where,
+        attributes: ['id_usuario'],
+        transaction,
+    });
+
+    const userIds = [...new Set(
+        asignacionesRol
+            .map((row) => Number(row.id_usuario))
+            .filter((id) => Number.isInteger(id) && id > 0)
+    )];
+
+    for (const idUsuario of userIds) {
+        await rebuildNivelesUsuario(idUsuario, transaction);
+    }
+}
+
+async function savePermisosRol(idRol, modulos, transaction, { idNegocio = null } = {}) {
+    const normalizedByNivel = new Map();
+
+    for (const modulo of modulos || []) {
+        const idNivel = Number(modulo?.id_nivel);
+        if (!Number.isInteger(idNivel) || idNivel <= 0) continue;
+
+        const puedeVerModulo = Boolean(modulo?.puede_ver);
+
+        normalizedByNivel.set(idNivel, {
+            id_nivel: idNivel,
+            puede_ver: puedeVerModulo,
+        });
+
+        if (!Array.isArray(modulo?.subniveles)) continue;
+
+        for (const subnivel of modulo.subniveles) {
+            const idSubnivel = Number(subnivel?.id_nivel);
+            if (!Number.isInteger(idSubnivel) || idSubnivel <= 0) continue;
+
+            normalizedByNivel.set(idSubnivel, {
+                id_nivel: idSubnivel,
+                puede_ver: puedeVerModulo && Boolean(subnivel?.puede_ver),
+            });
+        }
+    }
+
+    let normalized = [...normalizedByNivel.values()];
+    if (normalized.length === 0) return;
+
+    const rol = await Models.GenerRol.findByPk(idRol, {
+        attributes: ['id_rol', 'id_tipo_negocio'],
+        transaction,
+    });
+
+    if (!rol) return;
+
+    let tipoNegocio = Number(rol.id_tipo_negocio || 0) || null;
+
+    if (idNegocio) {
+        const negocio = await Models.GenerNegocio.findByPk(idNegocio, {
+            attributes: ['id_negocio', 'id_tipo_negocio'],
+            transaction,
+        });
+
+        if (!negocio) return;
+
+        const tipoNegocioNegocio = Number(negocio.id_tipo_negocio || 0) || null;
+        if (tipoNegocio && tipoNegocioNegocio && tipoNegocio !== tipoNegocioNegocio) {
+            return;
+        }
+
+        if (!tipoNegocio) {
+            tipoNegocio = tipoNegocioNegocio;
+        }
+    }
+
+    const validNiveles = await Models.GenerNivel.findAll({
+        where: {
+            estado: 'A',
+            id_nivel: normalized.map((item) => item.id_nivel),
+            ...(tipoNegocio ? { id_tipo_negocio: tipoNegocio } : {}),
+        },
+        attributes: ['id_nivel'],
+        transaction,
+    });
+
+    const validIds = new Set(
+        validNiveles
+            .map((nivel) => Number(nivel.id_nivel))
+            .filter((idNivel) => Number.isInteger(idNivel) && idNivel > 0)
+    );
+
+    normalized = normalized.filter((item) => validIds.has(Number(item.id_nivel)));
+    if (normalized.length === 0) return;
+
+    if (idNegocio) {
+        for (const modulo of normalized) {
+            const values = {
+                id_negocio: idNegocio,
+                id_rol: idRol,
+                id_nivel: modulo.id_nivel,
+                puede_ver: modulo.puede_ver,
+                estado: 'A',
+                fecha_actualizacion: new Date(),
+            };
+
+            const existing = await Models.GenerNivelNegocio.findOne({
+                where: {
+                    id_negocio: idNegocio,
+                    id_rol: idRol,
+                    id_nivel: modulo.id_nivel,
+                },
+                transaction,
+            });
+
+            if (existing) {
+                await existing.update(values, { transaction });
+            } else {
+                await Models.GenerNivelNegocio.create(
+                    {
+                        ...values,
+                        fecha_creacion: new Date(),
+                    },
+                    { transaction }
+                );
+            }
+        }
+
+        await syncPermisosUsuariosPorRol({ idRol, idNegocio, transaction });
+        return;
+    }
+
+    // Compatibilidad legacy: si no llega negocio, actualiza la matriz global por rol.
+    for (const modulo of normalized) {
         const values = {
             id_rol: idRol,
             id_nivel: modulo.id_nivel,
-            puede_ver: Boolean(modulo.puede_ver),
-            puede_crear: Boolean(modulo.puede_crear),
-            puede_editar: Boolean(modulo.puede_editar),
-            puede_eliminar: Boolean(modulo.puede_eliminar),
+            puede_ver: modulo.puede_ver,
+            puede_crear: false,
+            puede_editar: false,
+            puede_eliminar: false,
             estado: 'A',
             fecha_actualizacion: new Date(),
         };
@@ -380,75 +861,58 @@ async function savePermisosRol(idRol, modulos, transaction) {
             );
         }
     }
+
+    await syncPermisosUsuariosPorRol({ idRol, transaction });
 }
 
 async function getPermisosEfectivosUsuario(idUsuario) {
     const usuario = await getUsuarioById(idUsuario);
     if (!usuario) return null;
 
-    const rolesAsignados = (usuario.roles || []).map((r) => r.id_rol);
-    if (rolesAsignados.length === 0) {
-        return {
-            usuario,
-            permisos_vista: [],
-        };
-    }
+    const rolesUsuario = [...new Set(
+        (usuario.roles || [])
+            .map((rol) => rol?.descripcion)
+            .filter(Boolean)
+    )].sort();
 
-    const permisos = await Models.GenerRolNivel.findAll({
+    const permisosUsuario = await Models.GenerNivelUsuario.findAll({
         where: {
-            id_rol: rolesAsignados,
-            estado: 'A',
+            id_usuario: idUsuario,
         },
-        attributes: ['id_rol', 'id_nivel', 'puede_ver', 'puede_crear', 'puede_editar', 'puede_eliminar'],
+        attributes: ['id_nivel'],
         include: [
             {
                 model: Models.GenerNivel,
-                as: 'nivel',
-                where: { estado: 'A', id_tipo_nivel: 3 },
                 required: true,
-                attributes: ['id_nivel', 'descripcion', 'url', 'id_tipo_negocio'],
+                where: {
+                    estado: 'A',
+                    id_tipo_nivel: 1,
+                    url: { [Op.ne]: null },
+                },
+                attributes: ['id_nivel', 'descripcion', 'url'],
             },
-            {
-                model: Models.GenerRol,
-                as: 'rol',
-                required: true,
-                attributes: ['id_rol', 'descripcion'],
-            }
         ],
     });
 
     const grouped = new Map();
+    for (const permiso of permisosUsuario) {
+        const nivel = permiso.GenerNivel;
+        const idNivel = Number(nivel?.id_nivel);
+        if (!idNivel) continue;
 
-    for (const permiso of permisos) {
-        const key = permiso.nivel?.id_nivel;
-        if (!key) continue;
-
-        const existing = grouped.get(key) || {
-            id_nivel: permiso.nivel.id_nivel,
-            vista: permiso.nivel.descripcion,
-            url: permiso.nivel.url,
-            roles: new Set(),
-            puede_ver: false,
+        grouped.set(idNivel, {
+            id_nivel: idNivel,
+            vista: nivel.descripcion,
+            url: nivel.url,
+            roles: rolesUsuario,
+            puede_ver: true,
             puede_crear: false,
             puede_editar: false,
             puede_eliminar: false,
-        };
-
-        existing.roles.add(permiso.rol.descripcion);
-        existing.puede_ver = existing.puede_ver || Boolean(permiso.puede_ver);
-        existing.puede_crear = existing.puede_crear || Boolean(permiso.puede_crear);
-        existing.puede_editar = existing.puede_editar || Boolean(permiso.puede_editar);
-        existing.puede_eliminar = existing.puede_eliminar || Boolean(permiso.puede_eliminar);
-
-        grouped.set(key, existing);
+        });
     }
 
-    const permisosVista = [...grouped.values()]
-        .map((item) => ({
-            ...item,
-            roles: [...item.roles].sort(),
-        }))
-        .sort((a, b) => a.vista.localeCompare(b.vista));
+    const permisosVista = [...grouped.values()].sort((a, b) => a.vista.localeCompare(b.vista));
 
     return {
         usuario,

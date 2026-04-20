@@ -30,6 +30,10 @@ module.exports = (sequelize, DataTypes) => {
         GenerNegocio.hasMany(models.GenerUsuarioRol, {
             foreignKey: 'id_negocio'
         });
+        GenerNegocio.hasMany(models.GenerNivelNegocio, {
+            foreignKey: 'id_negocio',
+            as: 'nivelesNegocio'
+        });
         GenerNegocio.belongsTo(models.GenerPaletaColor, {
             foreignKey: 'id_paleta',
             as: 'paletaColor'

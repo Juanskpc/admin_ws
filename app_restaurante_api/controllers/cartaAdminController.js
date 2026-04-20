@@ -52,6 +52,9 @@ async function crearIngrediente(req, res) {
         }, 201);
     } catch (err) {
         console.error('[CartaAdmin] Error crearIngrediente:', err.message);
+        if (err.code === 'INGREDIENTE_DUPLICADO' || err.name === 'SequelizeUniqueConstraintError') {
+            return Respuesta.error(res, 'Ya existe un insumo con ese nombre.', 409);
+        }
         return Respuesta.error(res, 'Error al crear ingrediente.');
     }
 }
@@ -150,14 +153,20 @@ async function getProductosAdmin(req, res) {
             icono:        p.icono,
             es_popular:   p.es_popular,
             disponible:   p.disponible,
-            ingredientes: (p.ingredientes || []).map(pi => ({
-                id_producto_ingred: pi.id_producto_ingred,
-                id_ingrediente:     pi.ingrediente.id_ingrediente,
-                nombre:             pi.ingrediente.nombre,
-                porcion:            Number(pi.porcion),
-                unidad_medida:      pi.unidad_medida,
-                es_removible:       pi.es_removible,
-            })),
+            ingredientes: (p.ingredientes || [])
+                .map(pi => {
+                    const idIngrediente = pi.ingrediente?.id_ingrediente ?? pi.id_ingrediente;
+                    if (!idIngrediente) return null;
+                    return {
+                        id_producto_ingred: pi.id_producto_ingred,
+                        id_ingrediente:     Number(idIngrediente),
+                        nombre:             pi.ingrediente?.nombre ?? '',
+                        porcion:            Number(pi.porcion),
+                        unidad_medida:      pi.unidad_medida,
+                        es_removible:       pi.es_removible,
+                    };
+                })
+                .filter(Boolean),
         }));
 
         return Respuesta.success(res, 'Productos obtenidos', data);

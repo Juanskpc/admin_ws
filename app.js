@@ -62,7 +62,7 @@ app.use(limiter);
 // Rate limiting específico para login (más restrictivo): máx 10 intentos cada 15 min
 const loginLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
-    max: 10,
+    max: 1000,
     standardHeaders: true,
     legacyHeaders: false,
     message: { success: false, message: 'Demasiados intentos de login, intente más tarde' }

@@ -62,13 +62,19 @@ async function createNegocio(req, res) {
 async function getMisNegocios(req, res) {
     try {
         const idUsuario = req.usuario.id_usuario;
-        const idTipoNegocio = parseInt(req.query.id_tipo_negocio, 10);
+        const hasTipoQuery = Object.prototype.hasOwnProperty.call(req.query, 'id_tipo_negocio');
 
-        if (!idTipoNegocio || isNaN(idTipoNegocio)) {
-            return Respuesta.error(res, 'El parámetro id_tipo_negocio es requerido y debe ser un número', 400);
+        let negocios;
+        if (hasTipoQuery) {
+            const idTipoNegocio = parseInt(req.query.id_tipo_negocio, 10);
+            if (!idTipoNegocio || Number.isNaN(idTipoNegocio)) {
+                return Respuesta.error(res, 'El parámetro id_tipo_negocio debe ser un número válido', 400);
+            }
+            negocios = await NegocioDao.getNegociosByUsuarioAndTipo(idUsuario, idTipoNegocio);
+        } else {
+            negocios = await NegocioDao.getNegociosByUsuario(idUsuario);
         }
 
-        const negocios = await NegocioDao.getNegociosByUsuarioAndTipo(idUsuario, idTipoNegocio);
         return Respuesta.success(res, 'Negocios del usuario obtenidos', negocios);
     } catch (error) {
         console.error('Error en getMisNegocios:', error);

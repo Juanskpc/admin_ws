@@ -8,6 +8,7 @@ const usuarioAdminValidators = {
     list: [
         query('search').optional().isString(),
         query('id_rol').optional().isInt({ min: 1 }),
+        query('id_negocio').optional().isInt({ min: 1 }),
         query('estado').optional().isIn(['A', 'I', 'ALL']),
     ],
     create: [
@@ -45,15 +46,20 @@ const usuarioAdminValidators = {
     ],
     getPermisosRol: [
         param('id').isInt({ min: 1 }),
+        query('id_negocio').optional().isInt({ min: 1 }),
     ],
     savePermisosRol: [
         param('id').isInt({ min: 1 }),
+        body('id_negocio').optional({ nullable: true }).isInt({ min: 1 }),
         body('modulos').isArray({ min: 1 }),
         body('modulos.*.id_nivel').isInt({ min: 1 }),
         body('modulos.*.puede_ver').isBoolean(),
         body('modulos.*.puede_crear').isBoolean(),
         body('modulos.*.puede_editar').isBoolean(),
         body('modulos.*.puede_eliminar').isBoolean(),
+        body('modulos.*.subniveles').optional().isArray(),
+        body('modulos.*.subniveles.*.id_nivel').optional().isInt({ min: 1 }),
+        body('modulos.*.subniveles.*.puede_ver').optional().isBoolean(),
     ],
 };
 
@@ -93,9 +99,11 @@ async function listUsuarios(req, res) {
         if (validationError) return validationError;
 
         const estado = req.query.estado === 'ALL' ? null : req.query.estado;
+        const idNegocio = req.query.id_negocio ? Number(req.query.id_negocio) : null;
         const usuarios = await UsuarioAdminDao.getUsuarios({
             search: req.query.search || '',
             idRol: req.query.id_rol || null,
+            idNegocio,
             estado,
         });
 
@@ -108,7 +116,21 @@ async function listUsuarios(req, res) {
 
 async function getRoles(req, res) {
     try {
-        const roles = await UsuarioAdminDao.getRolesActivos();
+        const idNegocioRaw = req.query.id_negocio;
+        const idTipoNegocioRaw = req.query.id_tipo_negocio;
+
+        const idNegocio = idNegocioRaw ? Number(idNegocioRaw) : null;
+        const idTipoNegocio = idTipoNegocioRaw ? Number(idTipoNegocioRaw) : null;
+
+        if (idNegocioRaw && (!Number.isInteger(idNegocio) || idNegocio <= 0)) {
+            return Respuesta.error(res, 'id_negocio inválido', 400);
+        }
+
+        if (idTipoNegocioRaw && (!Number.isInteger(idTipoNegocio) || idTipoNegocio <= 0)) {
+            return Respuesta.error(res, 'id_tipo_negocio inválido', 400);
+        }
+
+        const roles = await UsuarioAdminDao.getRolesActivos({ idNegocio, idTipoNegocio });
         return Respuesta.success(res, 'Roles obtenidos', roles);
     } catch (error) {
         console.error('Error en getRoles:', error);
@@ -300,7 +322,8 @@ async function getPermisosRol(req, res) {
         if (validationError) return validationError;
 
         const idRol = Number(req.params.id);
-        const result = await UsuarioAdminDao.getPermisosMatrizRol(idRol);
+        const idNegocio = req.query.id_negocio ? Number(req.query.id_negocio) : null;
+        const result = await UsuarioAdminDao.getPermisosMatrizRol({ idRol, idNegocio });
 
         if (!result) {
             return Respuesta.error(res, 'Rol no encontrado', 404);
@@ -320,15 +343,16 @@ async function savePermisosRol(req, res) {
         if (validationError) return validationError;
 
         const idRol = Number(req.params.id);
+        const idNegocio = req.body.id_negocio ? Number(req.body.id_negocio) : null;
         const payload = req.body.modulos;
 
-        const matriz = await UsuarioAdminDao.getPermisosMatrizRol(idRol);
+        const matriz = await UsuarioAdminDao.getPermisosMatrizRol({ idRol, idNegocio });
         if (!matriz) {
-            return Respuesta.error(res, 'Rol no encontrado', 404);
+            return Respuesta.error(res, 'Rol o negocio no válido para la matriz de permisos.', 404);
         }
 
         transaction = await initTransaction();
-        await UsuarioAdminDao.savePermisosRol(idRol, payload, transaction);
+        await UsuarioAdminDao.savePermisosRol(idRol, payload, transaction, { idNegocio });
         await transaction.commit();
 
         return Respuesta.success(res, 'Permisos del rol actualizados correctamente');

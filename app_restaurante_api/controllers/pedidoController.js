@@ -12,6 +12,7 @@ const crearOrdenValidators = [
     body('id_negocio').isInt({ min: 1 }).withMessage('id_negocio inválido'),
     body('id_mesa').optional({ nullable: true }).isInt({ min: 1 }).withMessage('id_mesa inválido'),
     body('nota').optional({ nullable: true }).isString(),
+    body('permitir_stock_negativo').optional().isBoolean().withMessage('permitir_stock_negativo debe ser booleano'),
     body('items').isArray({ min: 1 }).withMessage('Debe haber al menos un item'),
     body('items.*.id_producto').isInt({ min: 1 }).withMessage('id_producto inválido'),
     body('items.*.cantidad').isInt({ min: 1 }).withMessage('Cantidad mínima: 1'),
@@ -23,6 +24,7 @@ const crearOrdenValidators = [
 const agregarItemsOrdenValidators = [
     body('id_negocio').isInt({ min: 1 }).withMessage('id_negocio inválido'),
     body('nota').optional({ nullable: true }).isString(),
+    body('permitir_stock_negativo').optional().isBoolean().withMessage('permitir_stock_negativo debe ser booleano'),
     body('items').isArray({ min: 1 }).withMessage('Debe haber al menos un item'),
     body('items.*.id_producto').isInt({ min: 1 }).withMessage('id_producto inválido'),
     body('items.*.cantidad').isInt({ min: 1 }).withMessage('Cantidad mínima: 1'),
@@ -38,7 +40,7 @@ async function crearOrden(req, res) {
     }
 
     try {
-        const { id_negocio, id_mesa, nota, items, porcentaje_impuesto } = req.body;
+        const { id_negocio, id_mesa, nota, items, porcentaje_impuesto, permitir_stock_negativo } = req.body;
         const orden = await PedidoService.crearOrden({
             idNegocio:  id_negocio,
             idUsuario:  req.usuario.id_usuario,
@@ -46,9 +48,16 @@ async function crearOrden(req, res) {
             nota,
             items,
             porcentajeImpuesto: porcentaje_impuesto || 0,
+            permitirStockNegativo: Boolean(permitir_stock_negativo),
         });
         return Respuesta.success(res, 'Orden creada', orden, 201);
     } catch (err) {
+        if (err.code === 'STOCK_INSUFICIENTE') {
+            return Respuesta.error(res, err.message, err.statusCode || 409, {
+                code: err.code,
+                faltantes: err.faltantes || [],
+            });
+        }
         console.error('[Pedidos] Error crearOrden:', err.message);
         return Respuesta.error(res, 'Error al crear la orden.');
     }
@@ -63,7 +72,7 @@ async function agregarItemsOrden(req, res) {
 
     try {
         const idOrden = Number(req.params.id);
-        const { id_negocio, nota, items, porcentaje_impuesto } = req.body;
+        const { id_negocio, nota, items, porcentaje_impuesto, permitir_stock_negativo } = req.body;
 
         const orden = await PedidoService.agregarItemsOrden({
             idOrden,
@@ -71,12 +80,19 @@ async function agregarItemsOrden(req, res) {
             nota,
             items,
             porcentajeImpuesto: porcentaje_impuesto || 0,
+            permitirStockNegativo: Boolean(permitir_stock_negativo),
         });
 
         return Respuesta.success(res, 'Items agregados a la orden', orden);
     } catch (err) {
         if (err.message === 'ORDEN_NO_ENCONTRADA') {
             return Respuesta.error(res, 'Orden no encontrada o no está abierta', 404);
+        }
+        if (err.code === 'STOCK_INSUFICIENTE') {
+            return Respuesta.error(res, err.message, err.statusCode || 409, {
+                code: err.code,
+                faltantes: err.faltantes || [],
+            });
         }
 
         console.error('[Pedidos] Error agregarItemsOrden:', err.message);

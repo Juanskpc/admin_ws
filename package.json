@@ -9,7 +9,9 @@
     "start": "node app.js",
     "dev": "nodemon app.js",
     "migrate": "node migrations/migrate.js",
-    "migrate:admin-principal": "node migrations/migrate_usuario_admin_principal.js"
+    "migrate:admin-principal": "node migrations/migrate_usuario_admin_principal.js",
+    "migrate:nivel-negocio": "node migrations/migrate_nivel_negocio.js",
+    "migrate:reset-niveles-restaurante": "node migrations/migrate_reset_niveles_restaurante.js"
   },
   "keywords": [],
   "author": "",
