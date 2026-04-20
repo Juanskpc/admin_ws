@@ -44,8 +44,8 @@ async function crearMesa(req, res) {
         const mesa = await MesaService.crearMesa({
             idNegocio: Number(id_negocio),
             nombre: String(nombre).trim(),
-            numero: Number(numero),
-            capacidad: capacidad ? Number(capacidad) : 4,
+            ...(numero ? { numero: Number(numero) } : {}),
+            ...(capacidad ? { capacidad: Number(capacidad) } : {}),
         });
         return Respuesta.success(res, 'Mesa creada', mesa, 201);
     } catch (err) {

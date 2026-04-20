@@ -1,18 +1,17 @@
 const Models = require('../models/conection');
 
 /**
- * Obtiene la contraseña hasheada del usuario por número de identificación.
+ * Obtiene credenciales del usuario por número de identificación.
  * Se usa para verificar credenciales en el login.
  * @param {string} numIdentificacion
- * @returns {Object|null} Usuario con id y password, o null si no existe
+ * @returns {Object|null} Usuario con id, password y estado, o null si no existe
  */
 function getPwUsuario(numIdentificacion) {
     return Models.GenerUsuario.findOne({
         where: {
             num_identificacion: numIdentificacion,
-            estado: 'A'
         },
-        attributes: ['id_usuario', 'password']
+        attributes: ['id_usuario', 'password', 'estado']
     });
 }
 

@@ -81,7 +81,7 @@ router.get('/mesas/dashboard', MesaController.getMesasDashboard);
 router.post('/mesas', [
 	body('id_negocio').isInt({ min: 1 }),
 	body('nombre').isString().isLength({ min: 2, max: 100 }),
-	body('numero').isInt({ min: 1 }),
+	body('numero').optional().isInt({ min: 1 }),
 	body('capacidad').optional().isInt({ min: 1, max: 20 }),
 ], MesaController.crearMesa);
 router.put('/mesas/:id', [

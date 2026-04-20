@@ -30,6 +30,7 @@ async function migrate() {
                 numero          INTEGER NOT NULL,
                 capacidad       INTEGER NOT NULL DEFAULT 4,
                 estado          CHAR(1) NOT NULL DEFAULT 'A',
+                fecha_inicio_servicio TIMESTAMP NULL,
                 fecha_creacion  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(id_negocio, numero)
             );

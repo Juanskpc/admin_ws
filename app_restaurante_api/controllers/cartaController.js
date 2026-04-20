@@ -71,10 +71,12 @@ async function buscarProductos(req, res) {
     try {
         const idNegocio = Number(req.query.id_negocio);
         const termino   = (req.query.q || '').trim();
+        const includeDisabledRaw = String(req.query.include_disabled || '').trim().toLowerCase();
+        const includeDisabled = includeDisabledRaw === '1' || includeDisabledRaw === 'true';
         if (!idNegocio) return Respuesta.error(res, 'id_negocio requerido', 400);
         if (!termino)   return Respuesta.success(res, 'Sin término de búsqueda', []);
 
-        const productos = await CartaService.buscarProductos(idNegocio, termino);
+        const productos = await CartaService.buscarProductos(idNegocio, termino, { includeDisabled });
 
         const data = productos.map(p => ({
             id_producto:  p.id_producto,
@@ -83,6 +85,7 @@ async function buscarProductos(req, res) {
             precio:       Number(p.precio),
             icono:        p.icono,
             es_popular:   p.es_popular,
+            disponible:   p.disponible !== false,
             categoria:    p.categoria ? { nombre: p.categoria.nombre, icono: p.categoria.icono } : null,
             ingredientes: (p.ingredientes || []).map(pi => ({
                 id_producto_ingred: pi.id_producto_ingred,

@@ -73,6 +73,53 @@ function esRolAdministrador(rol) {
     return UsuarioAdminDao.isAdminRoleName(rol?.descripcion || '');
 }
 
+function resolvePersistenceError(error, accion) {
+    if (error?.name === 'SequelizeUniqueConstraintError') {
+        const fields = [...new Set((error.errors || [])
+            .map((item) => item?.path)
+            .filter(Boolean))];
+
+        if (fields.includes('email')) {
+            return {
+                status: 409,
+                message: 'Ya existe un usuario registrado con ese correo electronico.',
+            };
+        }
+
+        if (fields.includes('num_identificacion')) {
+            return {
+                status: 409,
+                message: 'Ya existe un usuario registrado con esa identificacion.',
+            };
+        }
+
+        return {
+            status: 409,
+            message: 'Ya existe un registro con los datos clave del usuario (correo, identificacion o rol-negocio).',
+        };
+    }
+
+    if (error?.name === 'SequelizeForeignKeyConstraintError') {
+        return {
+            status: 400,
+            message: 'No se pudo guardar el usuario porque el rol o negocio seleccionado no existe.',
+        };
+    }
+
+    const safeMessage = String(error?.message || '').trim();
+    if (/^(No se|No puedes|Ya existe|El usuario)/i.test(safeMessage)) {
+        return {
+            status: 409,
+            message: safeMessage,
+        };
+    }
+
+    return {
+        status: 500,
+        message: `No fue posible ${accion} el usuario. Intenta nuevamente.`,
+    };
+}
+
 async function validarReglaAdministradoresActivos(usuarioActual, payload, res) {
     const rolNuevo = (await UsuarioAdminDao.getRolesActivos()).find((r) => r.id_rol === Number(payload.id_rol));
 
@@ -169,7 +216,8 @@ async function createUsuario(req, res) {
     } catch (error) {
         if (transaction) await transaction.rollback();
         console.error('Error en createUsuario:', error);
-        return Respuesta.error(res, 'Error al crear el usuario');
+        const mapped = resolvePersistenceError(error, 'crear');
+        return Respuesta.error(res, mapped.message, mapped.status);
     }
 }
 
@@ -218,7 +266,8 @@ async function updateUsuario(req, res) {
     } catch (error) {
         if (transaction) await transaction.rollback();
         console.error('Error en updateUsuario:', error);
-        return Respuesta.error(res, 'Error al actualizar el usuario');
+        const mapped = resolvePersistenceError(error, 'actualizar');
+        return Respuesta.error(res, mapped.message, mapped.status);
     }
 }
 

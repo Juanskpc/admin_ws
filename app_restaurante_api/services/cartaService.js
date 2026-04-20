@@ -4,6 +4,14 @@ const Models = require('../../app_core/models/conection');
  * cartaService — Lógica de negocio para el menú / carta del restaurante.
  */
 
+function normalizeSearchText(value = '') {
+    return String(value)
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase()
+        .trim();
+}
+
 /**
  * Lista las categorías activas de un negocio con conteo de productos.
  */
@@ -48,16 +56,21 @@ async function getProductosByCategoria(idNegocio, idCategoria) {
 /**
  * Busca productos por nombre dentro de un negocio.
  */
-async function buscarProductos(idNegocio, termino) {
-    const { Op } = Models.Sequelize;
-    return Models.CartaProducto.findAll({
+async function buscarProductos(idNegocio, termino, options = {}) {
+    const includeDisabled = options.includeDisabled === true;
+    const normalizedTerm = normalizeSearchText(termino);
+
+    if (!normalizedTerm) {
+        return [];
+    }
+
+    const productos = await Models.CartaProducto.findAll({
         where: {
             id_negocio: idNegocio,
             estado: 'A',
-            disponible: true,
-            nombre: { [Op.iLike]: `%${termino}%` },
+            ...(includeDisabled ? {} : { disponible: true }),
         },
-        attributes: ['id_producto', 'nombre', 'descripcion', 'precio', 'icono', 'es_popular', 'id_categoria'],
+        attributes: ['id_producto', 'nombre', 'descripcion', 'precio', 'icono', 'es_popular', 'id_categoria', 'disponible'],
         include: [{
             model: Models.CartaCategoria,
             as: 'categoria',
@@ -74,8 +87,16 @@ async function buscarProductos(idNegocio, termino) {
             }],
             attributes: ['id_producto_ingred', 'es_removible'],
         }],
-        limit: 20,
+        order: [['es_popular', 'DESC'], ['nombre', 'ASC']],
     });
+
+    return productos
+        .filter((producto) => {
+            const nombre = normalizeSearchText(producto.nombre);
+            const descripcion = normalizeSearchText(producto.descripcion || '');
+            return nombre.includes(normalizedTerm) || descripcion.includes(normalizedTerm);
+        })
+        .slice(0, 20);
 }
 
 module.exports = {

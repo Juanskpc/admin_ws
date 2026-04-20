@@ -26,6 +26,10 @@ async function loginUsuario(req, res) {
             return Respuesta.error(res, 'Credenciales incorrectas', 401);
         }
 
+        if (usuario.estado !== 'A') {
+            return Respuesta.error(res, 'Usuario inactivo. Comuníquese con un administrador.', 403);
+        }
+
         // Verificar contraseña
         const pwCorrecta = await Bcrypt.compare(password, usuario.password);
         if (!pwCorrecta) {

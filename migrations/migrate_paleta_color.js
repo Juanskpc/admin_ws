@@ -193,6 +193,28 @@ const PALETAS = [
             'color-focus': '#d81b60',
         },
     },
+    {
+        nombre: 'Grafito Nocturno',
+        descripcion: 'Paleta oscura en tonos grafito y azul acero. Ideal para negocios que prefieren una interfaz sobria de bajo brillo.',
+        es_default: false,
+        colores: {
+            'color-primary': '#3b82f6',
+            'color-primary-hover': '#60a5fa',
+            'color-on-primary': '#f8fafc',
+            'color-bg': '#111827',
+            'color-surface': '#1f2937',
+            'color-surface-elevated': '#273449',
+            'color-text-primary': '#f3f4f6',
+            'color-text-secondary': '#cbd5e1',
+            'color-border': '#334155',
+            'color-success': '#34d399',
+            'color-success-bg': '#0f2f29',
+            'color-error': '#f87171',
+            'color-error-bg': '#3b1d24',
+            'color-warning': '#f59e0b',
+            'color-focus': '#3b82f6',
+        },
+    },
 ];
 
 async function migrate() {

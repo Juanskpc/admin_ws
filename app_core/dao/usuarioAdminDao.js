@@ -37,6 +37,93 @@ function buildNombreCompleto(usuario) {
     ].filter(Boolean).join(' ').trim();
 }
 
+function normalizeNegocioId(idNegocio) {
+    const parsed = Number(idNegocio || 0);
+    return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+async function syncUsuarioNegocioActivo(idUsuario, idNegocio, transaction) {
+    const normalizedNegocioId = normalizeNegocioId(idNegocio);
+
+    await Models.GenerNegocioUsuario.update(
+        { estado: 'I' },
+        {
+            where: {
+                id_usuario: idUsuario,
+                estado: 'A',
+            },
+            transaction,
+        }
+    );
+
+    if (!normalizedNegocioId) {
+        return null;
+    }
+
+    const existingRelation = await Models.GenerNegocioUsuario.findOne({
+        where: {
+            id_usuario: idUsuario,
+            id_negocio: normalizedNegocioId,
+        },
+        transaction,
+    });
+
+    if (existingRelation) {
+        await existingRelation.update({ estado: 'A' }, { transaction });
+        return normalizedNegocioId;
+    }
+
+    await Models.GenerNegocioUsuario.create(
+        {
+            id_usuario: idUsuario,
+            id_negocio: normalizedNegocioId,
+            estado: 'A',
+        },
+        { transaction }
+    );
+
+    return normalizedNegocioId;
+}
+
+async function syncUsuarioRolActivo(idUsuario, idRol, idNegocio, transaction) {
+    const normalizedNegocioId = normalizeNegocioId(idNegocio);
+
+    await Models.GenerUsuarioRol.update(
+        { estado: 'I' },
+        {
+            where: {
+                id_usuario: idUsuario,
+                estado: 'A',
+            },
+            transaction,
+        }
+    );
+
+    const where = {
+        id_usuario: idUsuario,
+        id_rol: idRol,
+        id_negocio: normalizedNegocioId,
+    };
+
+    const existingRole = await Models.GenerUsuarioRol.findOne({
+        where,
+        transaction,
+    });
+
+    if (existingRole) {
+        await existingRole.update({ estado: 'A' }, { transaction });
+        return;
+    }
+
+    await Models.GenerUsuarioRol.create(
+        {
+            ...where,
+            estado: 'A',
+        },
+        { transaction }
+    );
+}
+
 async function getUsuarios({ search = '', idRol = null, idNegocio = null, estado = null } = {}) {
     const where = {};
 
@@ -397,14 +484,17 @@ async function createUsuario(payload, transaction) {
         { transaction }
     );
 
-    await Models.GenerUsuarioRol.create(
-        {
-            id_usuario: nuevoUsuario.id_usuario,
-            id_rol: payload.id_rol,
-            id_negocio: payload.id_negocio || null,
-            estado: 'A',
-        },
-        { transaction }
+    const idNegocio = await syncUsuarioNegocioActivo(
+        nuevoUsuario.id_usuario,
+        payload.id_negocio,
+        transaction
+    );
+
+    await syncUsuarioRolActivo(
+        nuevoUsuario.id_usuario,
+        payload.id_rol,
+        idNegocio,
+        transaction
     );
 
     await rebuildNivelesUsuario(nuevoUsuario.id_usuario, transaction);
@@ -434,23 +524,9 @@ async function updateUsuario(idUsuario, payload, transaction) {
 
     await usuario.update(patch, { transaction });
 
-    await Models.GenerUsuarioRol.update(
-        { estado: 'I' },
-        {
-            where: { id_usuario: idUsuario, estado: 'A' },
-            transaction,
-        }
-    );
+    const idNegocio = await syncUsuarioNegocioActivo(idUsuario, payload.id_negocio, transaction);
 
-    await Models.GenerUsuarioRol.create(
-        {
-            id_usuario: idUsuario,
-            id_rol: payload.id_rol,
-            id_negocio: payload.id_negocio || null,
-            estado: 'A',
-        },
-        { transaction }
-    );
+    await syncUsuarioRolActivo(idUsuario, payload.id_rol, idNegocio, transaction);
 
     await rebuildNivelesUsuario(idUsuario, transaction);
 

@@ -4,18 +4,79 @@ const Models = require('../../app_core/models/conection');
  * mesaService — Lógica de negocio para las mesas del restaurante.
  */
 
+function formatElapsedMinutes(minutes) {
+    if (!Number.isFinite(minutes) || minutes < 0) return '';
+    if (minutes >= 60) {
+        return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+    }
+    return `${minutes} min`;
+}
+
+async function inferMesaServiceStart(idMesa, { transaction, allowLastOrderFallback = false } = {}) {
+    const ordenAbierta = await Models.PedidOrden.findOne({
+        where: { id_mesa: idMesa, estado: 'ABIERTA' },
+        attributes: ['fecha_creacion'],
+        order: [['fecha_creacion', 'ASC']],
+        transaction,
+    });
+
+    if (ordenAbierta?.fecha_creacion) {
+        return ordenAbierta.fecha_creacion;
+    }
+
+    if (!allowLastOrderFallback) {
+        return null;
+    }
+
+    const ultimaOrden = await Models.PedidOrden.findOne({
+        where: { id_mesa: idMesa },
+        attributes: ['fecha_creacion'],
+        order: [['fecha_creacion', 'DESC']],
+        transaction,
+    });
+
+    return ultimaOrden?.fecha_creacion ?? null;
+}
+
 async function getMesas(idNegocio) {
     return Models.RestMesa.findAll({
         where: { id_negocio: idNegocio, estado: 'A' },
-        attributes: ['id_mesa', 'nombre', 'numero', 'capacidad', 'estado', 'estado_servicio'],
+        attributes: ['id_mesa', 'nombre', 'numero', 'capacidad', 'estado', 'estado_servicio', 'fecha_inicio_servicio'],
         order: [['numero', 'ASC']],
     });
 }
 
 async function getMesasDashboard(idNegocio) {
+    const serviceStartExpr = `COALESCE(
+        "RestMesa"."fecha_inicio_servicio",
+        (
+            SELECT MIN(o.fecha_creacion)
+            FROM restaurante.pedid_orden o
+            WHERE o.id_mesa = "RestMesa"."id_mesa"
+              AND o.estado = 'ABIERTA'
+        )
+    )`;
+
+    const elapsedMinutesExpr = `CASE
+        WHEN ${serviceStartExpr} IS NULL THEN NULL
+        ELSE GREATEST(
+            0,
+            FLOOR(EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - (${serviceStartExpr}))) / 60)
+        )
+    END`;
+
     const mesas = await Models.RestMesa.findAll({
         where: { id_negocio: idNegocio },
-        attributes: ['id_mesa', 'nombre', 'numero', 'capacidad', 'estado', 'estado_servicio'],
+        attributes: [
+            'id_mesa',
+            'nombre',
+            'numero',
+            'capacidad',
+            'estado',
+            'estado_servicio',
+            'fecha_inicio_servicio',
+            [Models.Sequelize.literal(elapsedMinutesExpr), 'minutos_servicio'],
+        ],
         order: [['numero', 'ASC']],
         include: [{
             model: Models.PedidOrden,
@@ -50,11 +111,11 @@ async function getMesasDashboard(idNegocio) {
         else if (mesa.estado_servicio === 'POR_COBRAR') status = 'payment';
         else if (ordenActiva || mesa.estado_servicio === 'OCUPADA') status = 'occupied';
 
-        const msElapsed = ordenActiva
-            ? Math.max(0, Date.now() - new Date(ordenActiva.fecha_creacion).getTime())
-            : 0;
-        const min = Math.floor(msElapsed / 60000);
-        const time = ordenActiva ? (min >= 60 ? `${Math.floor(min / 60)}h ${min % 60}m` : `${min} min`) : '';
+        const minutesRaw = Number(mesa.get('minutos_servicio'));
+        const hasServiceClock = Number.isFinite(minutesRaw) && minutesRaw >= 0;
+        const time = (status === 'occupied' || status === 'payment')
+            ? (hasServiceClock ? formatElapsedMinutes(minutesRaw) : '0 min')
+            : '';
 
         return {
             id_mesa: mesa.id_mesa,
@@ -75,13 +136,22 @@ async function getMesasDashboard(idNegocio) {
 }
 
 async function crearMesa({ idNegocio, nombre, numero, capacidad }) {
+    let nextNumero = Number(numero);
+    if (!Number.isInteger(nextNumero) || nextNumero < 1) {
+        const maxNumero = await Models.RestMesa.max('numero', {
+            where: { id_negocio: idNegocio },
+        });
+        nextNumero = (Number(maxNumero) || 0) + 1;
+    }
+
     return Models.RestMesa.create({
         id_negocio: idNegocio,
         nombre,
-        numero,
+        numero: nextNumero,
         capacidad: capacidad || 4,
         estado: 'A',
         estado_servicio: 'DISPONIBLE',
+        fecha_inicio_servicio: null,
     });
 }
 
@@ -100,14 +170,33 @@ async function actualizarMesa(idMesa, { nombre, numero, capacidad }) {
 async function setMesaEstado(idMesa, estado) {
     const mesa = await Models.RestMesa.findByPk(idMesa);
     if (!mesa) return null;
-    await mesa.update({ estado });
+
+    const updates = { estado };
+    if (estado !== 'A') {
+        updates.estado_servicio = 'DISPONIBLE';
+        updates.fecha_inicio_servicio = null;
+    }
+
+    await mesa.update(updates);
     return mesa;
 }
 
 async function setMesaEstadoServicio(idMesa, estadoServicio) {
     const mesa = await Models.RestMesa.findByPk(idMesa);
     if (!mesa) return null;
-    await mesa.update({ estado_servicio: estadoServicio });
+
+    const updates = { estado_servicio: estadoServicio };
+
+    if (estadoServicio === 'DISPONIBLE') {
+        updates.fecha_inicio_servicio = null;
+    } else if (!mesa.fecha_inicio_servicio) {
+        const inferredStart = await inferMesaServiceStart(idMesa, {
+            allowLastOrderFallback: mesa.estado_servicio !== 'DISPONIBLE',
+        });
+        updates.fecha_inicio_servicio = inferredStart || new Date();
+    }
+
+    await mesa.update(updates);
     return mesa;
 }
 
@@ -136,7 +225,10 @@ async function liberarMesa(idMesa) {
             throw error;
         }
 
-        await mesa.update({ estado_servicio: 'DISPONIBLE' }, { transaction: t });
+        await mesa.update({
+            estado_servicio: 'DISPONIBLE',
+            fecha_inicio_servicio: null,
+        }, { transaction: t });
 
         await t.commit();
         return mesa;

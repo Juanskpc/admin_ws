@@ -8,14 +8,12 @@ const DEFAULT_RANGE_DAYS = 30;
 
 const REPORT_TYPES = {
     ventas_periodo: {
-        titulo: 'Ventas por periodo',
+        titulo: 'Ventas por pedido',
         columns: [
             { key: 'numero_orden', label: 'Orden', type: 'text' },
-            { key: 'fecha_cierre', label: 'Fecha cierre', type: 'date' },
+            { key: 'fecha_pedido', label: 'Fecha pedido', type: 'date' },
             { key: 'mesa', label: 'Mesa', type: 'text' },
-            { key: 'cajero', label: 'Cajero', type: 'text' },
-            { key: 'subtotal', label: 'Subtotal', type: 'currency' },
-            { key: 'impuesto', label: 'Impuesto', type: 'currency' },
+            { key: 'mesero', label: 'Mesero', type: 'text' },
             { key: 'total', label: 'Total', type: 'currency' },
         ],
     },
@@ -155,10 +153,9 @@ function normalizeRows(tipo, rows) {
     if (tipo === 'ventas_periodo') {
         return rows.map((row) => ({
             ...row,
-            subtotal: toNumber(row.subtotal),
-            impuesto: toNumber(row.impuesto),
             total: toNumber(row.total),
-            fecha_cierre: toNullableDate(row.fecha_cierre),
+            fecha_pedido: toNullableDate(row.fecha_pedido || row.fecha_cierre),
+            mesero: row.mesero || row.cajero || 'No registrado',
         }));
     }
 
@@ -267,11 +264,9 @@ async function runVentasPeriodoQuery({ idNegocio, startDate, endDate, page, page
         SELECT
             o.id_orden,
             COALESCE(o.numero_orden, '#' || o.id_orden::text) AS numero_orden,
-            o.fecha_cierre,
+            COALESCE(o.fecha_creacion, o.fecha_cierre) AS fecha_pedido,
             COALESCE(m.nombre, 'Para llevar') AS mesa,
-            TRIM(CONCAT(u.primer_nombre, ' ', u.primer_apellido)) AS cajero,
-            o.subtotal,
-            o.impuesto,
+            TRIM(CONCAT(u.primer_nombre, ' ', u.primer_apellido)) AS mesero,
             o.total
         FROM restaurante.pedid_orden o
         LEFT JOIN restaurante.rest_mesa m ON m.id_mesa = o.id_mesa
@@ -280,7 +275,7 @@ async function runVentasPeriodoQuery({ idNegocio, startDate, endDate, page, page
           AND o.estado = 'CERRADA'
           AND o.fecha_cierre >= ($2::date AT TIME ZONE 'America/Bogota')
           AND o.fecha_cierre < (($3::date + 1) AT TIME ZONE 'America/Bogota')
-        ORDER BY o.fecha_cierre DESC, o.id_orden DESC
+        ORDER BY COALESCE(o.fecha_creacion, o.fecha_cierre) DESC, o.id_orden DESC
         LIMIT $4 OFFSET $5
     `;
 

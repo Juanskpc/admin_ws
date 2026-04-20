@@ -7,6 +7,7 @@ module.exports = (sequelize, DataTypes) => {
         capacidad:      { type: DataTypes.INTEGER, defaultValue: 4 },
         estado:         { type: DataTypes.CHAR(1), defaultValue: 'A' },
         estado_servicio:{ type: DataTypes.STRING(20), defaultValue: 'DISPONIBLE' },
+        fecha_inicio_servicio: { type: DataTypes.DATE, allowNull: true },
         fecha_creacion: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
     }, {
         tableName: 'rest_mesa',
