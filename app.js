@@ -35,10 +35,15 @@ const allowedOrigins = (process.env.CORS_ORIGIN || 'http://localhost:4002,http:/
     .map(o => o.trim());
 
 app.use(cors({
-    origin: allowedOrigins,
+    origin: (origin, callback) => {
+        // Permitir peticiones sin origin (Postman, curl, server-to-server)
+        if (!origin) return callback(null, true);
+        if (allowedOrigins.includes(origin)) return callback(null, true);
+        callback(new Error(`CORS: origen no permitido — ${origin}`));
+    },
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
     allowedHeaders: ['Content-Type', 'Authorization'],
-    credentials: true
+    credentials: true,
 }));
 
 // Rate limiting global:
