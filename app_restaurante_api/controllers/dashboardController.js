@@ -1,5 +1,7 @@
 const jwt = require('jsonwebtoken');
+const { v4: uuidv4 } = require('uuid');
 const DashboardService = require('../services/dashboardService');
+const AccessCodeStore = require('../../app_parqueadero_api/services/accessCodeStore');
 const Respuesta = require('../../app_core/helpers/respuesta');
 
 /**
@@ -82,8 +84,85 @@ async function getPerfilRestaurante(req, res) {
     }
 }
 
+/**
+ * POST /restaurante/auth/generar-codigo
+ * Recibe el JWT del admin_app, verifica que el usuario tenga acceso al
+ * módulo restaurante y emite un código de acceso de un solo uso (TTL 30 s).
+ *
+ * Necesario porque las apps están en orígenes distintos en desarrollo
+ * (admin:4002 ↔ restaurante:6002) y los navegadores limpian `window.name`
+ * en navegación cross-origin (Chrome 88+, Firefox 79+).
+ */
+async function generarCodigoAcceso(req, res) {
+    const { token, id_negocio } = req.body;
+    if (!token) return Respuesta.error(res, 'Token requerido', 400);
+
+    try {
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        const acceso = await DashboardService.verificarAccesoRestaurante(decoded.id_usuario);
+        if (!acceso) return Respuesta.error(res, 'No tienes acceso al módulo de restaurante.', 403);
+
+        if (id_negocio) {
+            const tieneAcceso = (acceso.negocios || []).some(
+                (n) => n.id_negocio === parseInt(id_negocio, 10)
+            );
+            if (!tieneAcceso) return Respuesta.error(res, 'No tienes acceso a este negocio.', 403);
+        }
+
+        const code = uuidv4();
+        AccessCodeStore.save(code, {
+            idUsuario: decoded.id_usuario,
+            token,
+            idNegocio: id_negocio ? parseInt(id_negocio, 10) : null,
+        });
+        return Respuesta.success(res, 'Código generado', { code });
+    } catch (err) {
+        if (err.name === 'TokenExpiredError') return Respuesta.error(res, 'El token ha expirado.', 401);
+        if (err.name === 'JsonWebTokenError')  return Respuesta.error(res, 'Token inválido.', 401);
+        console.error('[Restaurante] Error generarCodigoAcceso:', err.message);
+        return Respuesta.error(res, 'Error al generar código de acceso.');
+    }
+}
+
+/**
+ * POST /restaurante/auth/canjear-codigo
+ * Canjea el código de un solo uso por la sesión completa (token + datos).
+ */
+async function canjearCodigo(req, res) {
+    const { code } = req.body;
+    if (!code) return Respuesta.error(res, 'Código requerido', 400);
+
+    const entry = AccessCodeStore.consume(code);
+    if (!entry) return Respuesta.error(res, 'Código inválido o expirado.', 401);
+
+    try {
+        const acceso = await DashboardService.verificarAccesoRestaurante(entry.idUsuario);
+        if (!acceso) return Respuesta.error(res, 'Acceso revocado.', 403);
+
+        if (entry.idNegocio) {
+            const negocioSeleccionado = (acceso.negocios || []).find(
+                (n) => n.id_negocio === entry.idNegocio
+            );
+            if (negocioSeleccionado) {
+                acceso.negocio = negocioSeleccionado;
+                acceso.roles = negocioSeleccionado.roles;
+            }
+        }
+
+        return Respuesta.success(res, 'Acceso concedido', {
+            token: entry.token,
+            ...acceso,
+        });
+    } catch (err) {
+        console.error('[Restaurante] Error canjearCodigo:', err.message);
+        return Respuesta.error(res, 'Error al canjear código.');
+    }
+}
+
 module.exports = {
     verificarTokenAcceso,
+    generarCodigoAcceso,
+    canjearCodigo,
     getResumenDashboard,
     getPerfilRestaurante,
 };

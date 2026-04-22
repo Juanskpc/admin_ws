@@ -1,7 +1,13 @@
 const Models = require('../../app_core/models/conection');
+const cajaService = require('./cajaService');
 
 /**
  * pedidoService — Lógica de negocio para órdenes / pedidos del restaurante.
+ *
+ * Reglas de caja (ver cajaService):
+ *  - crearOrden, agregarItemsOrden y cerrarOrden requieren caja abierta.
+ *  - cerrarOrden registra automáticamente un movimiento INGRESO en la caja
+ *    activa y persiste id_caja en la orden.
  */
 
 function buildStockInsuficienteError(faltantes) {
@@ -170,6 +176,8 @@ async function recalcularTotalesOrden({ idOrden, porcentajeImpuesto = 0, transac
 async function crearOrden({ idNegocio, idUsuario, idMesa, nota, items, porcentajeImpuesto = 0, permitirStockNegativo = false }) {
     const t = await Models.sequelize.transaction();
     try {
+        await cajaService.requireCajaAbierta(idNegocio, { transaction: t });
+
         const numeroOrden = await generarNumeroOrden(idNegocio);
 
         await consumirIngredientesPorItems({
@@ -222,6 +230,8 @@ async function crearOrden({ idNegocio, idUsuario, idMesa, nota, items, porcentaj
 async function agregarItemsOrden({ idOrden, idNegocio, nota, items, porcentajeImpuesto = 0, permitirStockNegativo = false }) {
     const t = await Models.sequelize.transaction();
     try {
+        await cajaService.requireCajaAbierta(idNegocio, { transaction: t });
+
         const orden = await Models.PedidOrden.findOne({
             where: {
                 id_orden: idOrden,
@@ -415,14 +425,53 @@ async function marcarDetalleCompleto(idDetalle) {
 }
 
 /**
- * Cierra / cobra una orden.
+ * Cierra (cobra) una orden.
+ *
+ * Atómico dentro de una transacción:
+ *  1. Verifica caja abierta del negocio.
+ *  2. Registra movimiento INGRESO por el total de la orden.
+ *  3. Marca la orden CERRADA y persiste id_caja para auditoría.
+ *
+ * @param {number} idOrden
+ * @param {{ idUsuario: number }} ctx — usuario que ejecuta el cobro
  */
-async function cerrarOrden(idOrden) {
-    await Models.PedidOrden.update(
-        { estado: 'CERRADA', fecha_cierre: new Date() },
-        { where: { id_orden: idOrden } }
-    );
-    return getOrdenById(idOrden);
+async function cerrarOrden(idOrden, { idUsuario } = {}) {
+    const t = await Models.sequelize.transaction();
+    try {
+        const orden = await Models.PedidOrden.findOne({
+            where: { id_orden: idOrden },
+            transaction: t,
+            lock: t.LOCK.UPDATE,
+        });
+        if (!orden) {
+            await t.rollback();
+            return null;
+        }
+        if (orden.estado === 'CERRADA') {
+            await t.commit();
+            return getOrdenById(idOrden);
+        }
+
+        const caja = await cajaService.registrarIngresoOrden({
+            idNegocio:  orden.id_negocio,
+            idOrden:    orden.id_orden,
+            idUsuario:  idUsuario || orden.id_usuario,
+            monto:      orden.total,
+            numeroOrden: orden.numero_orden,
+            transaction: t,
+        });
+
+        await orden.update(
+            { estado: 'CERRADA', fecha_cierre: new Date(), id_caja: caja.id_caja },
+            { transaction: t },
+        );
+
+        await t.commit();
+        return getOrdenById(idOrden);
+    } catch (err) {
+        await t.rollback();
+        throw err;
+    }
 }
 
 module.exports = {

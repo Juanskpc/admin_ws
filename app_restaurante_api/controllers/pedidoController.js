@@ -52,6 +52,9 @@ async function crearOrden(req, res) {
         });
         return Respuesta.success(res, 'Orden creada', orden, 201);
     } catch (err) {
+        if (err.code === 'CAJA_CERRADA') {
+            return Respuesta.error(res, err.message, err.statusCode || 409, { code: err.code });
+        }
         if (err.code === 'STOCK_INSUFICIENTE') {
             return Respuesta.error(res, err.message, err.statusCode || 409, {
                 code: err.code,
@@ -85,6 +88,9 @@ async function agregarItemsOrden(req, res) {
 
         return Respuesta.success(res, 'Items agregados a la orden', orden);
     } catch (err) {
+        if (err.code === 'CAJA_CERRADA') {
+            return Respuesta.error(res, err.message, err.statusCode || 409, { code: err.code });
+        }
         if (err.message === 'ORDEN_NO_ENCONTRADA') {
             return Respuesta.error(res, 'Orden no encontrada o no está abierta', 404);
         }
@@ -184,10 +190,15 @@ async function cambiarEstadoCocina(req, res) {
 /** PATCH /restaurante/pedidos/:id/cerrar */
 async function cerrarOrden(req, res) {
     try {
-        const orden = await PedidoService.cerrarOrden(Number(req.params.id));
+        const orden = await PedidoService.cerrarOrden(Number(req.params.id), {
+            idUsuario: req.usuario?.id_usuario,
+        });
         if (!orden) return Respuesta.error(res, 'Orden no encontrada', 404);
         return Respuesta.success(res, 'Orden cerrada', orden);
     } catch (err) {
+        if (err.code === 'CAJA_CERRADA') {
+            return Respuesta.error(res, err.message, err.statusCode || 409, { code: err.code });
+        }
         console.error('[Pedidos] Error cerrarOrden:', err.message);
         return Respuesta.error(res, 'Error al cerrar la orden.');
     }

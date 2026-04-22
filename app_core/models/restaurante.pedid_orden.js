@@ -14,6 +14,7 @@ module.exports = (sequelize, DataTypes) => {
         estado_cocina:  { type: DataTypes.STRING(20), allowNull: true },
         fecha_creacion: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
         fecha_cierre:   { type: DataTypes.DATE },
+        id_caja:        { type: DataTypes.INTEGER, allowNull: true },
     }, {
         tableName: 'pedid_orden',
         schema: 'restaurante',
@@ -24,6 +25,7 @@ module.exports = (sequelize, DataTypes) => {
         PedidOrden.belongsTo(models.GenerNegocio, { foreignKey: 'id_negocio', as: 'negocio' });
         PedidOrden.belongsTo(models.GenerUsuario,  { foreignKey: 'id_usuario', as: 'usuario' });
         PedidOrden.belongsTo(models.RestMesa,      { foreignKey: 'id_mesa', as: 'mesaRef' });
+        PedidOrden.belongsTo(models.RestCaja,      { foreignKey: 'id_caja', as: 'caja' });
         PedidOrden.hasMany(models.PedidDetalle,    { foreignKey: 'id_orden', as: 'detalles' });
     };
 

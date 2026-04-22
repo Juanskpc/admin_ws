@@ -10,6 +10,7 @@ const MesaController       = require('../controllers/mesaController');
 const InventarioController = require('../controllers/inventarioController');
 const ReporteController    = require('../controllers/reporteController');
 const ConfiguracionController = require('../controllers/configuracionController');
+const CajaController       = require('../controllers/cajaController');
 const { verificarToken }   = require('../../app_core/middleware/auth');
 
 // ============================================================
@@ -18,6 +19,16 @@ const { verificarToken }   = require('../../app_core/middleware/auth');
 
 // Verificar token recibido desde el admin_app (validación de sesión)
 router.post('/auth/verificar-token', DashboardController.verificarTokenAcceso);
+
+// Code-exchange para login cross-origin (admin_app → restaurante_app).
+router.post('/auth/generar-codigo',
+    [body('token').notEmpty().withMessage('Token requerido')],
+    DashboardController.generarCodigoAcceso,
+);
+router.post('/auth/canjear-codigo',
+    [body('code').notEmpty().withMessage('Código requerido')],
+    DashboardController.canjearCodigo,
+);
 
 // ============================================================
 // RUTAS PROTEGIDAS (requieren token JWT)
@@ -149,5 +160,34 @@ router.get('/reportes/exportar', [
 	query('fecha_hasta').optional().isISO8601(),
 	query('formato').optional().isIn(['xlsx', 'pdf']),
 ], ReporteController.exportarReporte);
+
+// --- Caja ---
+router.get('/caja/abierta', [
+	query('id_negocio').isInt({ min: 1 }),
+], CajaController.getCajaAbierta);
+
+router.post('/caja/abrir', [
+	body('id_negocio').isInt({ min: 1 }),
+	body('monto_apertura').optional().isFloat({ min: 0 }),
+	body('observaciones').optional({ nullable: true }).isString(),
+], CajaController.abrirCaja);
+
+router.put('/caja/:id/cerrar', [
+	param('id').isInt({ min: 1 }),
+	body('id_negocio').isInt({ min: 1 }),
+	body('monto_reportado').optional({ nullable: true }).isFloat({ min: 0 }),
+	body('observaciones').optional({ nullable: true }).isString(),
+], CajaController.cerrarCaja);
+
+router.get('/caja/:id/movimientos', [
+	param('id').isInt({ min: 1 }),
+], CajaController.getMovimientos);
+
+router.post('/caja/movimientos', [
+	body('id_caja').isInt({ min: 1 }),
+	body('tipo').isIn(['INGRESO', 'EGRESO']),
+	body('monto').isFloat({ gt: 0 }),
+	body('concepto').optional({ nullable: true }).isString().isLength({ max: 255 }),
+], CajaController.registrarMovimiento);
 
 module.exports = router;
