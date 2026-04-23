@@ -19,6 +19,12 @@ const crearOrdenValidators = [
     body('items.*.precio_unitario').isFloat({ min: 0 }).withMessage('Precio inválido'),
     body('items.*.exclusiones').optional().isArray(),
     body('porcentaje_impuesto').optional().isFloat({ min: 0, max: 1 }),
+    body('tipo_pedido').optional().isIn(['MESA', 'LLEVAR', 'DOMICILIO']),
+    body('contacto_nombre').optional({ nullable: true }).isString().isLength({ max: 160 }),
+    body('contacto_telefono').optional({ nullable: true }).isString().isLength({ max: 40 }),
+    body('direccion_domicilio').optional({ nullable: true }).isString().isLength({ max: 500 }),
+    body('nota_domicilio').optional({ nullable: true }).isString(),
+    body('id_domiciliario').optional({ nullable: true }).isInt({ min: 1 }),
 ];
 
 const agregarItemsOrdenValidators = [
@@ -40,7 +46,10 @@ async function crearOrden(req, res) {
     }
 
     try {
-        const { id_negocio, id_mesa, nota, items, porcentaje_impuesto, permitir_stock_negativo } = req.body;
+        const {
+            id_negocio, id_mesa, nota, items, porcentaje_impuesto, permitir_stock_negativo,
+            tipo_pedido, contacto_nombre, contacto_telefono, direccion_domicilio, nota_domicilio, id_domiciliario,
+        } = req.body;
         const orden = await PedidoService.crearOrden({
             idNegocio:  id_negocio,
             idUsuario:  req.usuario.id_usuario,
@@ -49,6 +58,12 @@ async function crearOrden(req, res) {
             items,
             porcentajeImpuesto: porcentaje_impuesto || 0,
             permitirStockNegativo: Boolean(permitir_stock_negativo),
+            tipoPedido: tipo_pedido || 'MESA',
+            contactoNombre:    contacto_nombre || null,
+            contactoTelefono:  contacto_telefono || null,
+            direccionDomicilio: direccion_domicilio || null,
+            notaDomicilio:     nota_domicilio || null,
+            idDomiciliario:    id_domiciliario ? Number(id_domiciliario) : null,
         });
         return Respuesta.success(res, 'Orden creada', orden, 201);
     } catch (err) {
@@ -192,15 +207,48 @@ async function cerrarOrden(req, res) {
     try {
         const orden = await PedidoService.cerrarOrden(Number(req.params.id), {
             idUsuario: req.usuario?.id_usuario,
+            idMetodoPago: req.body?.id_metodo_pago ? Number(req.body.id_metodo_pago) : null,
         });
         if (!orden) return Respuesta.error(res, 'Orden no encontrada', 404);
         return Respuesta.success(res, 'Orden cerrada', orden);
     } catch (err) {
-        if (err.code === 'CAJA_CERRADA') {
+        if (err.code === 'CAJA_CERRADA' || err.code === 'METODO_PAGO_INVALIDO') {
             return Respuesta.error(res, err.message, err.statusCode || 409, { code: err.code });
         }
         console.error('[Pedidos] Error cerrarOrden:', err.message);
         return Respuesta.error(res, 'Error al cerrar la orden.');
+    }
+}
+
+/** GET /restaurante/despacho?id_negocio=N */
+async function getOrdenesDespacho(req, res) {
+    try {
+        const idNegocio = Number(req.query.id_negocio);
+        if (!idNegocio) return Respuesta.error(res, 'id_negocio requerido', 400);
+        // El frontend pasa ver_todos=true cuando el rol tiene ese subnivel.
+        const verTodos = req.query.ver_todos === 'true';
+        const ordenes = await PedidoService.getOrdenesDespacho({
+            idNegocio,
+            idUsuario: req.usuario.id_usuario,
+            verTodos,
+        });
+        return Respuesta.success(res, 'Pedidos para despacho', ordenes);
+    } catch (err) {
+        console.error('[Despacho] Error getOrdenesDespacho:', err.message);
+        return Respuesta.error(res, 'Error al obtener pedidos de despacho.');
+    }
+}
+
+/** GET /restaurante/domiciliarios?id_negocio=N */
+async function getDomiciliarios(req, res) {
+    try {
+        const idNegocio = Number(req.query.id_negocio);
+        if (!idNegocio) return Respuesta.error(res, 'id_negocio requerido', 400);
+        const list = await PedidoService.listarDomiciliarios(idNegocio);
+        return Respuesta.success(res, 'Domiciliarios obtenidos', list);
+    } catch (err) {
+        console.error('[Despacho] Error getDomiciliarios:', err.message);
+        return Respuesta.error(res, 'Error al obtener domiciliarios.');
     }
 }
 
@@ -210,6 +258,8 @@ module.exports = {
     getOrdenesAbiertas,
     getOrdenById,
     getOrdenesCocina,
+    getOrdenesDespacho,
+    getDomiciliarios,
     enviarACocina,
     cambiarEstadoCocina,
     marcarDetalleCompleto,

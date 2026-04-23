@@ -416,12 +416,23 @@ async function verificarAccesoRestaurante(idUsuario) {
     };
 }
 
+/**
+ * Rango [start, end) que representa "el día N de hoy" en hora Bogotá.
+ * Devuelve momentos UTC para que la BD (con SET TIME ZONE 'America/Bogota')
+ * filtre correctamente registros timestamp-without-time-zone.
+ *
+ * Bogotá no tiene DST → offset fijo -05:00.
+ */
 function dayRange(daysOffset = 0) {
-    const start = new Date();
-    start.setHours(0, 0, 0, 0);
-    start.setDate(start.getDate() + daysOffset);
+    const fmt = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'America/Bogota',
+        year: 'numeric', month: '2-digit', day: '2-digit',
+    });
+    const [y, m, d] = fmt.format(new Date()).split('-').map(Number);
+    // 00:00 hora Bogotá = 05:00 UTC
+    const start = new Date(Date.UTC(y, m - 1, d + daysOffset, 5, 0, 0));
     const end = new Date(start);
-    end.setDate(end.getDate() + 1);
+    end.setUTCDate(end.getUTCDate() + 1);
     return { start, end };
 }
 
@@ -516,7 +527,10 @@ async function getResumenDashboard(idUsuario, idNegocio = null) {
         Models.PedidOrden.count({ where: { id_negocio: negocioId, estado: 'ABIERTA', estado_cocina: 'EN_PREPARACION' } }),
         Models.PedidOrden.count({ where: { id_negocio: negocioId, estado: 'ABIERTA', estado_cocina: 'LISTO' } }),
         Models.RestMesa.count({ where: { id_negocio: negocioId, estado: 'A' } }),
-        Models.RestMesa.count({ where: { id_negocio: negocioId, estado: 'A', estado_servicio: 'OCUPADA' } }),
+        // "Ocupadas" = todo lo que NO está disponible (incluye OCUPADA + POR_COBRAR + cualquier futuro estado).
+        Models.RestMesa.count({
+            where: { id_negocio: negocioId, estado: 'A', estado_servicio: { [Op.ne]: 'DISPONIBLE' } },
+        }),
         Models.RestMesa.count({ where: { id_negocio: negocioId, estado: 'A', estado_servicio: 'POR_COBRAR' } }),
         Models.PedidOrden.findAll({
             where: { id_negocio: negocioId },

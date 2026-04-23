@@ -12,7 +12,11 @@
     "migrate:admin-principal": "node migrations/migrate_usuario_admin_principal.js",
     "migrate:nivel-negocio": "node migrations/migrate_nivel_negocio.js",
     "migrate:reset-niveles-restaurante": "node migrations/migrate_reset_niveles_restaurante.js",
-    "migrate:restaurante-caja": "node migrations/migrate_restaurante_caja.js"
+    "migrate:restaurante-caja": "node migrations/migrate_restaurante_caja.js",
+    "migrate:gym": "node migrations/migrate_gym.js",
+    "migrate:gym-v2": "node migrations/migrate_gym_v2.js",
+    "migrate:restaurante-metodo-pago": "node migrations/migrate_restaurante_metodo_pago.js",
+    "migrate:restaurante-domicilio": "node migrations/migrate_restaurante_domicilio.js"
   },
   "keywords": [],
   "author": "",

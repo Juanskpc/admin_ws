@@ -11,6 +11,7 @@ const InventarioController = require('../controllers/inventarioController');
 const ReporteController    = require('../controllers/reporteController');
 const ConfiguracionController = require('../controllers/configuracionController');
 const CajaController       = require('../controllers/cajaController');
+const MetodoPagoController = require('../controllers/metodoPagoController');
 const { verificarToken }   = require('../../app_core/middleware/auth');
 
 // ============================================================
@@ -129,6 +130,14 @@ router.patch('/pedidos/:id/cerrar',                       PedidoController.cerra
 // --- Cocina (Kitchen Display) ---
 router.get('/cocina', PedidoController.getOrdenesCocina);
 
+// --- Despacho ---
+router.get('/despacho', [
+	query('id_negocio').isInt({ min: 1 }),
+], PedidoController.getOrdenesDespacho);
+router.get('/domiciliarios', [
+	query('id_negocio').isInt({ min: 1 }),
+], PedidoController.getDomiciliarios);
+
 // --- Inventario ---
 router.get('/inventario/resumen', InventarioController.getResumenInventario);
 router.patch('/inventario/ingredientes/:id/ajuste', [
@@ -189,5 +198,26 @@ router.post('/caja/movimientos', [
 	body('monto').isFloat({ gt: 0 }),
 	body('concepto').optional({ nullable: true }).isString().isLength({ max: 255 }),
 ], CajaController.registrarMovimiento);
+
+// --- Métodos de pago ---
+router.get('/metodos-pago', [
+	query('id_negocio').isInt({ min: 1 }),
+], MetodoPagoController.listar);
+
+router.post('/metodos-pago', [
+	body('id_negocio').isInt({ min: 1 }),
+	body('nombre').trim().notEmpty().isLength({ min: 1, max: 80 }),
+], MetodoPagoController.crear);
+
+router.put('/metodos-pago/:id', [
+	param('id').isInt({ min: 1 }),
+	body('id_negocio').isInt({ min: 1 }),
+	body('nombre').trim().notEmpty().isLength({ min: 1, max: 80 }),
+], MetodoPagoController.actualizar);
+
+router.patch('/metodos-pago/:id/inactivar', [
+	param('id').isInt({ min: 1 }),
+	query('id_negocio').isInt({ min: 1 }),
+], MetodoPagoController.inactivar);
 
 module.exports = router;

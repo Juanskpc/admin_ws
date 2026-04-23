@@ -11,10 +11,22 @@ function normalizePgTimestamp(raw) {
   return String(raw).replace(' ', 'T');
 }
 
+/**
+ * Convierte un valor timestamp sin TZ (que postgres entrega como string) a Date.
+ *
+ * La sesión SQL aplica `SET TIME ZONE 'America/Bogota'` (ver `afterConnect`),
+ * así que los valores `timestamp without time zone` se escriben/leen como
+ * "wall time" en hora Bogotá. Para que el Date resultante represente el
+ * instante UTC correcto SIN depender de la TZ del proceso Node, anclamos
+ * explícitamente el offset Bogotá (-05:00) — Colombia no tiene DST.
+ *
+ * Si la BD se configura para almacenar timestamps en UTC (`DB_TIMESTAMPS_ARE_UTC=true`),
+ * se respeta ese modo legacy.
+ */
 function parsePgTimestamp(raw) {
   if (raw == null) return null;
   const normalized = normalizePgTimestamp(raw);
-  const value = dbTimestampsAreUtc ? `${normalized}Z` : normalized;
+  const value = dbTimestampsAreUtc ? `${normalized}Z` : `${normalized}${appTimezoneOffset}`;
   return new Date(value);
 }
 

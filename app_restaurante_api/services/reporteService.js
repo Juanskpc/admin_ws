@@ -14,6 +14,7 @@ const REPORT_TYPES = {
             { key: 'fecha_pedido', label: 'Fecha pedido', type: 'date' },
             { key: 'mesa', label: 'Mesa', type: 'text' },
             { key: 'mesero', label: 'Mesero', type: 'text' },
+            { key: 'metodo_pago', label: 'Forma de pago', type: 'text' },
             { key: 'total', label: 'Total', type: 'currency' },
         ],
     },
@@ -66,18 +67,28 @@ function createHttpError(message, statusCode = 500, code = 'REPORTES_ERROR') {
     return error;
 }
 
+/**
+ * Parsea YYYY-MM-DD como medianoche en hora Bogotá (UTC-5, sin DST).
+ * Devuelve un Date que representa el momento UTC equivalente, así postgres
+ * compara correctamente contra `timestamp without time zone` cuando la session
+ * está en SET TIME ZONE 'America/Bogota'.
+ */
 function parseDateInput(value) {
     if (!value || typeof value !== 'string') return null;
     const trimmed = value.trim();
     const dateToken = trimmed.length >= 10 ? trimmed.slice(0, 10) : trimmed;
     if (!/^\d{4}-\d{2}-\d{2}$/.test(dateToken)) return null;
-    const parsed = new Date(`${dateToken}T00:00:00`);
+    const parsed = new Date(`${dateToken}T05:00:00.000Z`);
     if (Number.isNaN(parsed.getTime())) return null;
     return parsed;
 }
 
+/** Devuelve YYYY-MM-DD del Date interpretado en hora Bogotá. */
 function formatDateOnly(date) {
-    return date.toISOString().slice(0, 10);
+    return new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'America/Bogota',
+        year: 'numeric', month: '2-digit', day: '2-digit',
+    }).format(date);
 }
 
 function buildDateRange(fechaDesde, fechaHasta) {
@@ -267,10 +278,12 @@ async function runVentasPeriodoQuery({ idNegocio, startDate, endDate, page, page
             COALESCE(o.fecha_creacion, o.fecha_cierre) AS fecha_pedido,
             COALESCE(m.nombre, 'Para llevar') AS mesa,
             TRIM(CONCAT(u.primer_nombre, ' ', u.primer_apellido)) AS mesero,
+            COALESCE(mp.nombre, 'Sin método') AS metodo_pago,
             o.total
         FROM restaurante.pedid_orden o
         LEFT JOIN restaurante.rest_mesa m ON m.id_mesa = o.id_mesa
         LEFT JOIN general.gener_usuario u ON u.id_usuario = o.id_usuario
+        LEFT JOIN restaurante.rest_metodo_pago mp ON mp.id_metodo_pago = o.id_metodo_pago
         WHERE o.id_negocio = $1
           AND o.estado = 'CERRADA'
           AND o.fecha_cierre >= ($2::date AT TIME ZONE 'America/Bogota')

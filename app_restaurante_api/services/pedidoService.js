@@ -173,7 +173,11 @@ async function recalcularTotalesOrden({ idOrden, porcentajeImpuesto = 0, transac
  * @param {Array}  params.items — [{ id_producto, cantidad, precio_unitario, nota, exclusiones: [id_ingrediente] }]
  * @param {number} params.porcentajeImpuesto — ej: 0.19
  */
-async function crearOrden({ idNegocio, idUsuario, idMesa, nota, items, porcentajeImpuesto = 0, permitirStockNegativo = false }) {
+async function crearOrden({
+    idNegocio, idUsuario, idMesa, nota, items, porcentajeImpuesto = 0, permitirStockNegativo = false,
+    tipoPedido = 'MESA', contactoNombre = null, contactoTelefono = null,
+    direccionDomicilio = null, notaDomicilio = null, idDomiciliario = null,
+}) {
     const t = await Models.sequelize.transaction();
     try {
         await cajaService.requireCajaAbierta(idNegocio, { transaction: t });
@@ -200,12 +204,18 @@ async function crearOrden({ idNegocio, idUsuario, idMesa, nota, items, porcentaj
             id_negocio: idNegocio,
             id_usuario: idUsuario,
             numero_orden: numeroOrden,
-            id_mesa: idMesa || null,
+            id_mesa: tipoPedido === 'MESA' ? (idMesa || null) : null,
             nota,
             subtotal,
             impuesto,
             total,
             estado: 'ABIERTA',
+            tipo_pedido: tipoPedido,
+            contacto_nombre:     tipoPedido === 'DOMICILIO' ? contactoNombre     : null,
+            contacto_telefono:   tipoPedido === 'DOMICILIO' ? contactoTelefono   : null,
+            direccion_domicilio: tipoPedido === 'DOMICILIO' ? direccionDomicilio : null,
+            nota_domicilio:      tipoPedido === 'DOMICILIO' ? notaDomicilio      : null,
+            id_domiciliario:     tipoPedido === 'DOMICILIO' ? (idDomiciliario || null) : null,
         }, { transaction: t });
 
         await crearDetallesOrden({
@@ -310,8 +320,65 @@ async function getOrdenById(idOrden) {
             as: 'mesaRef',
             attributes: ['id_mesa', 'nombre', 'numero'],
             required: false,
+        }, {
+            model: Models.RestMetodoPago,
+            as: 'metodoPago',
+            attributes: ['id_metodo_pago', 'nombre'],
+            required: false,
+        }, {
+            model: Models.GenerUsuario,
+            as: 'domiciliario',
+            attributes: ['id_usuario', 'primer_nombre', 'primer_apellido'],
+            required: false,
         }],
     });
+}
+
+/**
+ * Lista pedidos LLEVAR/DOMICILIO para el módulo Despacho.
+ * Si verTodos=false, filtra por id_domiciliario = idUsuario.
+ */
+async function getOrdenesDespacho({ idNegocio, idUsuario, verTodos }) {
+    const { Op } = Models.Sequelize;
+    const where = {
+        id_negocio: idNegocio,
+        tipo_pedido: { [Op.in]: ['LLEVAR', 'DOMICILIO'] },
+        estado: 'ABIERTA',
+    };
+    if (!verTodos) where.id_domiciliario = idUsuario;
+
+    return Models.PedidOrden.findAll({
+        where,
+        include: [
+            { model: Models.GenerUsuario, as: 'usuario', attributes: ['id_usuario', 'primer_nombre', 'primer_apellido'] },
+            { model: Models.GenerUsuario, as: 'domiciliario', attributes: ['id_usuario', 'primer_nombre', 'primer_apellido'], required: false },
+            { model: Models.PedidDetalle, as: 'detalles',
+              include: [{ model: Models.CartaProducto, as: 'producto', attributes: ['id_producto', 'nombre'] }] },
+        ],
+        order: [['fecha_creacion', 'DESC']],
+    });
+}
+
+/**
+ * Lista usuarios con rol DOMICILIARIO en el negocio. Útil para asignación.
+ */
+async function listarDomiciliarios(idNegocio) {
+    const rolDom = await Models.GenerRol.findOne({ where: { descripcion: 'DOMICILIARIO', id_tipo_negocio: 1 } });
+    if (!rolDom) return [];
+    const links = await Models.GenerUsuarioRol.findAll({
+        where: { id_negocio: idNegocio, id_rol: rolDom.id_rol, estado: 'A' },
+        include: [{
+            model: Models.GenerUsuario, as: 'usuario',
+            where: { estado: 'A' },
+            attributes: ['id_usuario', 'primer_nombre', 'primer_apellido', 'num_identificacion', 'telefono'],
+        }],
+    });
+    return links.map(l => ({
+        id_usuario: l.usuario.id_usuario,
+        nombre: `${l.usuario.primer_nombre} ${l.usuario.primer_apellido}`.trim(),
+        num_identificacion: l.usuario.num_identificacion,
+        telefono: l.usuario.telefono,
+    }));
 }
 
 /**
@@ -435,7 +502,7 @@ async function marcarDetalleCompleto(idDetalle) {
  * @param {number} idOrden
  * @param {{ idUsuario: number }} ctx — usuario que ejecuta el cobro
  */
-async function cerrarOrden(idOrden, { idUsuario } = {}) {
+async function cerrarOrden(idOrden, { idUsuario, idMetodoPago } = {}) {
     const t = await Models.sequelize.transaction();
     try {
         const orden = await Models.PedidOrden.findOne({
@@ -452,6 +519,20 @@ async function cerrarOrden(idOrden, { idUsuario } = {}) {
             return getOrdenById(idOrden);
         }
 
+        // Validar que el método de pago (si viene) pertenezca al negocio.
+        if (idMetodoPago) {
+            const mp = await Models.RestMetodoPago.findOne({
+                where: { id_metodo_pago: idMetodoPago, id_negocio: orden.id_negocio, estado: 'A' },
+                transaction: t,
+            });
+            if (!mp) {
+                await t.rollback();
+                const e = new Error('Método de pago inválido para este negocio.');
+                e.statusCode = 422; e.code = 'METODO_PAGO_INVALIDO';
+                throw e;
+            }
+        }
+
         const caja = await cajaService.registrarIngresoOrden({
             idNegocio:  orden.id_negocio,
             idOrden:    orden.id_orden,
@@ -462,7 +543,12 @@ async function cerrarOrden(idOrden, { idUsuario } = {}) {
         });
 
         await orden.update(
-            { estado: 'CERRADA', fecha_cierre: new Date(), id_caja: caja.id_caja },
+            {
+                estado: 'CERRADA',
+                fecha_cierre: new Date(),
+                id_caja: caja.id_caja,
+                id_metodo_pago: idMetodoPago || orden.id_metodo_pago || null,
+            },
             { transaction: t },
         );
 
@@ -480,6 +566,8 @@ module.exports = {
     getOrdenById,
     getOrdenesAbiertas,
     getOrdenesCocina,
+    getOrdenesDespacho,
+    listarDomiciliarios,
     enviarACocina,
     cambiarEstadoCocina,
     marcarDetalleCompleto,
