@@ -214,6 +214,21 @@ async function marcarPagado(req, res) {
     }
 }
 
+/** PATCH /restaurante/pedidos/:id/cancelar */
+async function cancelarOrden(req, res) {
+    try {
+        const orden = await PedidoService.cancelarOrden(Number(req.params.id));
+        if (!orden) return Respuesta.error(res, 'Orden no encontrada', 404);
+        return Respuesta.success(res, 'Orden cancelada', orden);
+    } catch (err) {
+        if (err.code === 'ORDEN_PAGADA' || err.code === 'ORDEN_CERRADA') {
+            return Respuesta.error(res, err.message, err.statusCode || 409, { code: err.code });
+        }
+        console.error('[Despacho] Error cancelarOrden:', err.message);
+        return Respuesta.error(res, 'Error al cancelar la orden.');
+    }
+}
+
 /** PATCH /restaurante/pedidos/:id/cerrar */
 async function cerrarOrden(req, res) {
     try {
@@ -276,5 +291,6 @@ module.exports = {
     cambiarEstadoCocina,
     marcarDetalleCompleto,
     marcarPagado,
+    cancelarOrden,
     cerrarOrden,
 };

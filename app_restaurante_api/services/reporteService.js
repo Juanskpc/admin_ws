@@ -68,10 +68,10 @@ function createHttpError(message, statusCode = 500, code = 'REPORTES_ERROR') {
 }
 
 /**
- * Parsea YYYY-MM-DD como medianoche en hora Bogotá (UTC-5, sin DST).
- * Devuelve un Date que representa el momento UTC equivalente, así postgres
- * compara correctamente contra `timestamp without time zone` cuando la session
- * está en SET TIME ZONE 'America/Bogota'.
+ * Parsea YYYY-MM-DD en un Date (medianoche Bogotá).
+ * Las queries comparan directamente contra `timestamp without time zone`
+ * usando `$::date::timestamp`, por lo que basta con pasar el string YYYY-MM-DD
+ * a los queries — postgres lo casteará a timestamp sin aplicar conversiones.
  */
 function parseDateInput(value) {
     if (!value || typeof value !== 'string') return null;
@@ -286,8 +286,8 @@ async function runVentasPeriodoQuery({ idNegocio, startDate, endDate, page, page
         LEFT JOIN restaurante.rest_metodo_pago mp ON mp.id_metodo_pago = o.id_metodo_pago
         WHERE o.id_negocio = $1
           AND o.estado = 'CERRADA'
-          AND o.fecha_cierre >= ($2::date AT TIME ZONE 'America/Bogota')
-          AND o.fecha_cierre < (($3::date + 1) AT TIME ZONE 'America/Bogota')
+          AND o.fecha_cierre >= $2::date::timestamp
+          AND o.fecha_cierre < ($3::date + 1)::timestamp
         ORDER BY COALESCE(o.fecha_creacion, o.fecha_cierre) DESC, o.id_orden DESC
         LIMIT $4 OFFSET $5
     `;
@@ -297,8 +297,8 @@ async function runVentasPeriodoQuery({ idNegocio, startDate, endDate, page, page
         FROM restaurante.pedid_orden o
         WHERE o.id_negocio = $1
           AND o.estado = 'CERRADA'
-          AND o.fecha_cierre >= ($2::date AT TIME ZONE 'America/Bogota')
-          AND o.fecha_cierre < (($3::date + 1) AT TIME ZONE 'America/Bogota')
+          AND o.fecha_cierre >= $2::date::timestamp
+          AND o.fecha_cierre < ($3::date + 1)::timestamp
     `;
 
     const summaryQuery = `
@@ -309,8 +309,8 @@ async function runVentasPeriodoQuery({ idNegocio, startDate, endDate, page, page
         FROM restaurante.pedid_orden o
         WHERE o.id_negocio = $1
           AND o.estado = 'CERRADA'
-          AND o.fecha_cierre >= ($2::date AT TIME ZONE 'America/Bogota')
-          AND o.fecha_cierre < (($3::date + 1) AT TIME ZONE 'America/Bogota')
+          AND o.fecha_cierre >= $2::date::timestamp
+          AND o.fecha_cierre < ($3::date + 1)::timestamp
     `;
 
     const params = [idNegocio, startDate, endDate];
@@ -339,8 +339,8 @@ async function runProductosMasVendidosQuery({ idNegocio, startDate, endDate, pag
         INNER JOIN restaurante.carta_producto p ON p.id_producto = d.id_producto
         WHERE o.id_negocio = $1
           AND o.estado = 'CERRADA'
-          AND o.fecha_cierre >= ($2::date AT TIME ZONE 'America/Bogota')
-          AND o.fecha_cierre < (($3::date + 1) AT TIME ZONE 'America/Bogota')
+          AND o.fecha_cierre >= $2::date::timestamp
+          AND o.fecha_cierre < ($3::date + 1)::timestamp
     `;
 
     const dataQuery = `
@@ -404,8 +404,8 @@ async function runRendimientoMesasQuery({ idNegocio, startDate, endDate, page, p
         LEFT JOIN restaurante.rest_mesa m ON m.id_mesa = o.id_mesa
         WHERE o.id_negocio = $1
           AND o.estado = 'CERRADA'
-          AND o.fecha_cierre >= ($2::date AT TIME ZONE 'America/Bogota')
-          AND o.fecha_cierre < (($3::date + 1) AT TIME ZONE 'America/Bogota')
+          AND o.fecha_cierre >= $2::date::timestamp
+          AND o.fecha_cierre < ($3::date + 1)::timestamp
         GROUP BY m.id_mesa, m.nombre
         ORDER BY ventas_totales DESC, ordenes DESC
         LIMIT $4 OFFSET $5
@@ -419,8 +419,8 @@ async function runRendimientoMesasQuery({ idNegocio, startDate, endDate, page, p
             LEFT JOIN restaurante.rest_mesa m ON m.id_mesa = o.id_mesa
             WHERE o.id_negocio = $1
               AND o.estado = 'CERRADA'
-              AND o.fecha_cierre >= ($2::date AT TIME ZONE 'America/Bogota')
-              AND o.fecha_cierre < (($3::date + 1) AT TIME ZONE 'America/Bogota')
+              AND o.fecha_cierre >= $2::date::timestamp
+              AND o.fecha_cierre < ($3::date + 1)::timestamp
             GROUP BY COALESCE(m.id_mesa, 0)
         ) grouped
     `;
@@ -434,8 +434,8 @@ async function runRendimientoMesasQuery({ idNegocio, startDate, endDate, page, p
         FROM restaurante.pedid_orden o
         WHERE o.id_negocio = $1
           AND o.estado = 'CERRADA'
-          AND o.fecha_cierre >= ($2::date AT TIME ZONE 'America/Bogota')
-          AND o.fecha_cierre < (($3::date + 1) AT TIME ZONE 'America/Bogota')
+          AND o.fecha_cierre >= $2::date::timestamp
+          AND o.fecha_cierre < ($3::date + 1)::timestamp
     `;
 
     const params = [idNegocio, startDate, endDate];
@@ -469,8 +469,8 @@ async function runRendimientoUsuariosQuery({ idNegocio, startDate, endDate, page
         INNER JOIN general.gener_usuario u ON u.id_usuario = o.id_usuario
         WHERE o.id_negocio = $1
           AND o.estado = 'CERRADA'
-          AND o.fecha_cierre >= ($2::date AT TIME ZONE 'America/Bogota')
-          AND o.fecha_cierre < (($3::date + 1) AT TIME ZONE 'America/Bogota')
+          AND o.fecha_cierre >= $2::date::timestamp
+          AND o.fecha_cierre < ($3::date + 1)::timestamp
         GROUP BY u.id_usuario, u.primer_nombre, u.primer_apellido
         ORDER BY ventas_totales DESC, ordenes_cerradas DESC
         LIMIT $4 OFFSET $5
@@ -483,8 +483,8 @@ async function runRendimientoUsuariosQuery({ idNegocio, startDate, endDate, page
             FROM restaurante.pedid_orden o
             WHERE o.id_negocio = $1
               AND o.estado = 'CERRADA'
-              AND o.fecha_cierre >= ($2::date AT TIME ZONE 'America/Bogota')
-              AND o.fecha_cierre < (($3::date + 1) AT TIME ZONE 'America/Bogota')
+              AND o.fecha_cierre >= $2::date::timestamp
+              AND o.fecha_cierre < ($3::date + 1)::timestamp
             GROUP BY o.id_usuario
         ) grouped
     `;
@@ -498,8 +498,8 @@ async function runRendimientoUsuariosQuery({ idNegocio, startDate, endDate, page
         FROM restaurante.pedid_orden o
         WHERE o.id_negocio = $1
           AND o.estado = 'CERRADA'
-          AND o.fecha_cierre >= ($2::date AT TIME ZONE 'America/Bogota')
-          AND o.fecha_cierre < (($3::date + 1) AT TIME ZONE 'America/Bogota')
+          AND o.fecha_cierre >= $2::date::timestamp
+          AND o.fecha_cierre < ($3::date + 1)::timestamp
     `;
 
     const params = [idNegocio, startDate, endDate];
@@ -531,8 +531,8 @@ async function runEstadoCocinaQuery({ idNegocio, startDate, endDate, page, pageS
             COALESCE(SUM(o.total), 0)::numeric AS total_monto
         FROM restaurante.pedid_orden o
         WHERE o.id_negocio = $1
-          AND o.fecha_creacion >= ($2::date AT TIME ZONE 'America/Bogota')
-          AND o.fecha_creacion < (($3::date + 1) AT TIME ZONE 'America/Bogota')
+          AND o.fecha_creacion >= $2::date::timestamp
+          AND o.fecha_creacion < ($3::date + 1)::timestamp
         GROUP BY COALESCE(NULLIF(o.estado_cocina, ''), 'SIN_ESTADO')
         ORDER BY total_ordenes DESC, estado_cocina ASC
         LIMIT $4 OFFSET $5
@@ -544,8 +544,8 @@ async function runEstadoCocinaQuery({ idNegocio, startDate, endDate, page, pageS
             SELECT COALESCE(NULLIF(o.estado_cocina, ''), 'SIN_ESTADO')
             FROM restaurante.pedid_orden o
             WHERE o.id_negocio = $1
-              AND o.fecha_creacion >= ($2::date AT TIME ZONE 'America/Bogota')
-              AND o.fecha_creacion < (($3::date + 1) AT TIME ZONE 'America/Bogota')
+              AND o.fecha_creacion >= $2::date::timestamp
+              AND o.fecha_creacion < ($3::date + 1)::timestamp
             GROUP BY COALESCE(NULLIF(o.estado_cocina, ''), 'SIN_ESTADO')
         ) grouped
     `;
@@ -558,8 +558,8 @@ async function runEstadoCocinaQuery({ idNegocio, startDate, endDate, page, pageS
             COALESCE(SUM(o.total), 0)::numeric AS monto_total
         FROM restaurante.pedid_orden o
         WHERE o.id_negocio = $1
-          AND o.fecha_creacion >= ($2::date AT TIME ZONE 'America/Bogota')
-          AND o.fecha_creacion < (($3::date + 1) AT TIME ZONE 'America/Bogota')
+          AND o.fecha_creacion >= $2::date::timestamp
+          AND o.fecha_creacion < ($3::date + 1)::timestamp
     `;
 
     const params = [idNegocio, startDate, endDate];

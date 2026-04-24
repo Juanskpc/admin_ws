@@ -59,6 +59,46 @@ async function crearIngrediente(req, res) {
     }
 }
 
+/** PUT /restaurante/carta/admin/ingredientes/:id */
+async function editarIngrediente(req, res) {
+    try {
+        const idIngrediente = Number(req.params.id);
+        if (!idIngrediente) return Respuesta.error(res, 'id requerido', 400);
+
+        const { nombre, unidad_medida } = req.body;
+        const ing = await CartaAdminService.editarIngrediente(idIngrediente, { nombre, unidad_medida });
+
+        return Respuesta.success(res, 'Insumo actualizado', {
+            id_ingrediente: ing.id_ingrediente,
+            nombre:         ing.nombre,
+            unidad_medida:  ing.unidad_medida,
+        });
+    } catch (err) {
+        if (err.code === 'INGREDIENTE_NO_ENCONTRADO' || err.code === 'INGREDIENTE_DUPLICADO') {
+            return Respuesta.error(res, err.message, err.statusCode || 409);
+        }
+        console.error('[CartaAdmin] Error editarIngrediente:', err.message);
+        return Respuesta.error(res, 'Error al editar insumo.');
+    }
+}
+
+/** DELETE /restaurante/carta/admin/ingredientes/:id */
+async function eliminarIngrediente(req, res) {
+    try {
+        const idIngrediente = Number(req.params.id);
+        if (!idIngrediente) return Respuesta.error(res, 'id requerido', 400);
+
+        await CartaAdminService.eliminarIngrediente(idIngrediente);
+        return Respuesta.success(res, 'Insumo eliminado');
+    } catch (err) {
+        if (err.code === 'INGREDIENTE_NO_ENCONTRADO') {
+            return Respuesta.error(res, err.message, 404);
+        }
+        console.error('[CartaAdmin] Error eliminarIngrediente:', err.message);
+        return Respuesta.error(res, 'Error al eliminar insumo.');
+    }
+}
+
 // ── Categorías ────────────────────────────────────────────────────────
 
 /** GET /restaurante/carta/admin/categorias?id_negocio=N */
@@ -226,6 +266,8 @@ async function eliminarProducto(req, res) {
 module.exports = {
     getIngredientes,
     crearIngrediente,
+    editarIngrediente,
+    eliminarIngrediente,
     getCategoriasAdmin,
     crearCategoria,
     editarCategoria,

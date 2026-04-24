@@ -503,6 +503,29 @@ async function marcarPagado(idOrden) {
 }
 
 /**
+ * Cancela una orden (solo si NO ha sido pagada).
+ * Se usa desde el módulo de Despacho para eliminar pedidos pendientes de pago.
+ * No registra nada en caja. El stock consumido NO se restaura automáticamente
+ * (la orden sigue existiendo para auditoría, simplemente marcada CANCELADA).
+ */
+async function cancelarOrden(idOrden) {
+    const orden = await Models.PedidOrden.findByPk(idOrden);
+    if (!orden) return null;
+    if (orden.estado_pago === 'pagado') {
+        const e = new Error('No se puede cancelar un pedido ya pagado.');
+        e.code = 'ORDEN_PAGADA'; e.statusCode = 409;
+        throw e;
+    }
+    if (orden.estado === 'CERRADA') {
+        const e = new Error('No se puede cancelar una orden cerrada.');
+        e.code = 'ORDEN_CERRADA'; e.statusCode = 409;
+        throw e;
+    }
+    await orden.update({ estado: 'CANCELADA', fecha_cierre: new Date() });
+    return orden;
+}
+
+/**
  * Cierra (cobra) una orden.
  *
  * Atómico dentro de una transacción:
@@ -583,5 +606,6 @@ module.exports = {
     cambiarEstadoCocina,
     marcarDetalleCompleto,
     marcarPagado,
+    cancelarOrden,
     cerrarOrden,
 };

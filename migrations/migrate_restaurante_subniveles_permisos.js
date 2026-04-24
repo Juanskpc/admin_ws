@@ -10,7 +10,7 @@ const db = require('../app_core/models/conection');
 const sequelize = db.sequelize;
 
 const SUBNIVELES = [
-  { moduloUrl: '/pedidos', descripcion: 'PEDIDOS - PARA LLEVAR', codigo: 'pedidos_para_llevar' },
+  { moduloUrl: '/pedidos', descripcion: 'PEDIDOS - LLEVAR', codigo: 'pedidos_para_llevar' },
   { moduloUrl: '/pedidos', descripcion: 'PEDIDOS - COBRAR', codigo: 'pedidos_cobrar' },
   { moduloUrl: '/pedidos', descripcion: 'PEDIDOS - IMPRIMIR', codigo: 'pedidos_imprimir' },
   { moduloUrl: '/pedidos', descripcion: 'PEDIDOS - ENVIAR A COCINA', codigo: 'pedidos_enviar_cocina' },

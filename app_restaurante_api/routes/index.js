@@ -86,6 +86,14 @@ router.put('/carta/admin/productos/:id',       CartaAdminController.editarProduc
 router.delete('/carta/admin/productos/:id',    CartaAdminController.eliminarProducto);
 
 router.post('/carta/admin/ingredientes',       CartaAdminController.crearIngrediente);
+router.put('/carta/admin/ingredientes/:id', [
+    param('id').isInt({ min: 1 }),
+    body('nombre').optional().isString().isLength({ min: 2, max: 100 }),
+    body('unidad_medida').optional().isString().isLength({ max: 20 }),
+], CartaAdminController.editarIngrediente);
+router.delete('/carta/admin/ingredientes/:id', [
+    param('id').isInt({ min: 1 }),
+], CartaAdminController.eliminarIngrediente);
 
 // --- Mesas ---
 router.get('/mesas', MesaController.getMesas);
@@ -126,6 +134,7 @@ router.get('/pedidos/:id',                                PedidoController.getOr
 router.patch('/pedidos/:id/enviar-cocina',                PedidoController.enviarACocina);
 router.patch('/pedidos/:id/estado-cocina',                PedidoController.cambiarEstadoCocina);
 router.patch('/pedidos/:id/marcar-pagado',                 PedidoController.marcarPagado);
+router.patch('/pedidos/:id/cancelar',                     PedidoController.cancelarOrden);
 router.patch('/pedidos/:id/cerrar',                       PedidoController.cerrarOrden);
 
 // --- Cocina (Kitchen Display) ---

@@ -50,6 +50,65 @@ async function crearIngrediente(idNegocio, nombre, defaults = {}) {
     });
 }
 
+/** Edita nombre y/o unidad de medida de un ingrediente. */
+async function editarIngrediente(idIngrediente, { nombre, unidad_medida } = {}) {
+    const ing = await Models.CartaIngrediente.findOne({
+        where: { id_ingrediente: idIngrediente, estado: 'A' },
+    });
+    if (!ing) {
+        const err = new Error('Ingrediente no encontrado.');
+        err.code = 'INGREDIENTE_NO_ENCONTRADO'; err.statusCode = 404;
+        throw err;
+    }
+
+    const nombreNormalizado = typeof nombre === 'string' ? nombre.trim() : null;
+    if (nombreNormalizado && nombreNormalizado.toLowerCase() !== String(ing.nombre || '').toLowerCase()) {
+        const duplicado = await Models.CartaIngrediente.findOne({
+            where: {
+                id_negocio: ing.id_negocio,
+                estado: 'A',
+                id_ingrediente: { [Models.Sequelize.Op.ne]: idIngrediente },
+                [Models.Sequelize.Op.and]: [
+                    Models.Sequelize.where(
+                        Models.Sequelize.fn('LOWER', Models.Sequelize.col('nombre')),
+                        nombreNormalizado.toLowerCase()
+                    ),
+                ],
+            },
+            attributes: ['id_ingrediente'],
+        });
+        if (duplicado) {
+            const err = new Error('Ya existe un insumo con ese nombre.');
+            err.code = 'INGREDIENTE_DUPLICADO'; err.statusCode = 409;
+            throw err;
+        }
+    }
+
+    const cambios = {};
+    if (nombreNormalizado) cambios.nombre = nombreNormalizado;
+    if (typeof unidad_medida === 'string' && unidad_medida.trim()) {
+        cambios.unidad_medida = unidad_medida.trim();
+    }
+    if (Object.keys(cambios).length === 0) return ing;
+
+    await ing.update(cambios);
+    return ing;
+}
+
+/** Soft delete: marca estado = 'I'. Conserva integridad con recetas históricas. */
+async function eliminarIngrediente(idIngrediente) {
+    const ing = await Models.CartaIngrediente.findOne({
+        where: { id_ingrediente: idIngrediente, estado: 'A' },
+    });
+    if (!ing) {
+        const err = new Error('Ingrediente no encontrado.');
+        err.code = 'INGREDIENTE_NO_ENCONTRADO'; err.statusCode = 404;
+        throw err;
+    }
+    await ing.update({ estado: 'I' });
+    return ing;
+}
+
 async function buildProductoIngredientesRows(idProducto, ingredientes, transaction) {
     if (!Array.isArray(ingredientes) || ingredientes.length === 0) {
         return [];
@@ -300,6 +359,8 @@ async function eliminarProducto(idProducto) {
 module.exports = {
     getIngredientes,
     crearIngrediente,
+    editarIngrediente,
+    eliminarIngrediente,
     getCategoriasAdmin,
     crearCategoria,
     editarCategoria,
