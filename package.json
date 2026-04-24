@@ -16,7 +16,8 @@
     "migrate:gym": "node migrations/migrate_gym.js",
     "migrate:gym-v2": "node migrations/migrate_gym_v2.js",
     "migrate:restaurante-metodo-pago": "node migrations/migrate_restaurante_metodo_pago.js",
-    "migrate:restaurante-domicilio": "node migrations/migrate_restaurante_domicilio.js"
+    "migrate:restaurante-domicilio": "node migrations/migrate_restaurante_domicilio.js",
+    "migrate:restaurante-estado-pago": "node migrations/migrate_restaurante_estado_pago.js"
   },
   "keywords": [],
   "author": "",

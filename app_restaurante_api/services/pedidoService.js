@@ -492,6 +492,17 @@ async function marcarDetalleCompleto(idDetalle) {
 }
 
 /**
+ * Registra el pago de una orden sin cerrarla.
+ * Usado en el flujo de despacho: el pedido queda ABIERTO pero marcado como pagado.
+ */
+async function marcarPagado(idOrden) {
+    const orden = await Models.PedidOrden.findByPk(idOrden);
+    if (!orden) return null;
+    await orden.update({ estado_pago: 'pagado' });
+    return orden;
+}
+
+/**
  * Cierra (cobra) una orden.
  *
  * Atómico dentro de una transacción:
@@ -571,5 +582,6 @@ module.exports = {
     enviarACocina,
     cambiarEstadoCocina,
     marcarDetalleCompleto,
+    marcarPagado,
     cerrarOrden,
 };

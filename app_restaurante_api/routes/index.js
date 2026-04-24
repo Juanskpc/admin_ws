@@ -125,6 +125,7 @@ router.patch('/pedidos/detalle/:id/completar',            PedidoController.marca
 router.get('/pedidos/:id',                                PedidoController.getOrdenById);
 router.patch('/pedidos/:id/enviar-cocina',                PedidoController.enviarACocina);
 router.patch('/pedidos/:id/estado-cocina',                PedidoController.cambiarEstadoCocina);
+router.patch('/pedidos/:id/marcar-pagado',                 PedidoController.marcarPagado);
 router.patch('/pedidos/:id/cerrar',                       PedidoController.cerrarOrden);
 
 // --- Cocina (Kitchen Display) ---

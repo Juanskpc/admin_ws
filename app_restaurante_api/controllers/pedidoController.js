@@ -202,6 +202,18 @@ async function cambiarEstadoCocina(req, res) {
     }
 }
 
+/** PATCH /restaurante/pedidos/:id/marcar-pagado */
+async function marcarPagado(req, res) {
+    try {
+        const orden = await PedidoService.marcarPagado(Number(req.params.id));
+        if (!orden) return Respuesta.error(res, 'Orden no encontrada', 404);
+        return Respuesta.success(res, 'Pago registrado', orden);
+    } catch (err) {
+        console.error('[Despacho] Error marcarPagado:', err.message);
+        return Respuesta.error(res, 'Error al registrar el pago.');
+    }
+}
+
 /** PATCH /restaurante/pedidos/:id/cerrar */
 async function cerrarOrden(req, res) {
     try {
@@ -263,5 +275,6 @@ module.exports = {
     enviarACocina,
     cambiarEstadoCocina,
     marcarDetalleCompleto,
+    marcarPagado,
     cerrarOrden,
 };

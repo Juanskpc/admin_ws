@@ -22,6 +22,7 @@ module.exports = (sequelize, DataTypes) => {
         direccion_domicilio: DataTypes.STRING(500),
         nota_domicilio:      DataTypes.TEXT,
         id_domiciliario:     { type: DataTypes.INTEGER, allowNull: true },
+        estado_pago:         { type: DataTypes.STRING(20), defaultValue: 'pendiente_pago' },
     }, {
         tableName: 'pedid_orden',
         schema: 'restaurante',
