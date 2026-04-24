@@ -1,5 +1,8 @@
 const Models = require('../../app_core/models/conection');
 const cajaService = require('./cajaService');
+const { Op } = require('sequelize');
+
+const SUBNIVEL_CANCELAR_NO_PAGADO = 'despacho_cancelar_no_pagado';
 
 /**
  * pedidoService — Lógica de negocio para órdenes / pedidos del restaurante.
@@ -16,6 +19,94 @@ function buildStockInsuficienteError(faltantes) {
     error.statusCode = 409;
     error.faltantes = faltantes;
     return error;
+}
+
+function normalizePermissionCode(rawCode = '') {
+    return String(rawCode)
+        .trim()
+        .toLowerCase()
+        .replace(/^\/+/, '')
+        .replace(/\//g, '_');
+}
+
+function isAdminRoleName(nombreRol = '') {
+    return String(nombreRol).toUpperCase().includes('ADMINISTRADOR');
+}
+
+async function usuarioPuedeCancelarPedidoNoPagado({ idUsuario, idNegocio }) {
+    const rolesUsuario = await Models.GenerUsuarioRol.findAll({
+        where: {
+            id_usuario: idUsuario,
+            estado: 'A',
+            [Op.or]: [{ id_negocio: idNegocio }, { id_negocio: null }],
+        },
+        attributes: ['id_rol'],
+        include: [{
+            model: Models.GenerRol,
+            as: 'rol',
+            required: true,
+            attributes: ['id_rol', 'descripcion'],
+        }],
+    });
+
+    if (!rolesUsuario.length) return false;
+
+    const roles = rolesUsuario
+        .map((r) => ({
+            id_rol: Number(r.id_rol),
+            descripcion: String(r.rol?.descripcion || ''),
+        }))
+        .filter((r) => Number.isInteger(r.id_rol));
+
+    if (!roles.length) return false;
+    if (roles.some((r) => isAdminRoleName(r.descripcion))) return true;
+
+    const roleIds = [...new Set(roles.map((r) => r.id_rol))];
+    const whereNivelCodigo = normalizePermissionCode(SUBNIVEL_CANCELAR_NO_PAGADO);
+
+    const permisoNegocio = await Models.GenerNivelNegocio.findOne({
+        where: {
+            id_negocio: idNegocio,
+            id_rol: roleIds,
+            estado: 'A',
+            puede_ver: true,
+        },
+        attributes: ['id_nivel_negocio'],
+        include: [{
+            model: Models.GenerNivel,
+            as: 'nivel',
+            required: true,
+            where: {
+                estado: 'A',
+                id_tipo_nivel: 4,
+                url: whereNivelCodigo,
+            },
+            attributes: ['id_nivel'],
+        }],
+    });
+    if (permisoNegocio) return true;
+
+    const permisoGlobal = await Models.GenerRolNivel.findOne({
+        where: {
+            id_rol: roleIds,
+            estado: 'A',
+            puede_ver: true,
+        },
+        attributes: ['id_rol_nivel'],
+        include: [{
+            model: Models.GenerNivel,
+            as: 'nivel',
+            required: true,
+            where: {
+                estado: 'A',
+                id_tipo_nivel: 4,
+                url: whereNivelCodigo,
+            },
+            attributes: ['id_nivel'],
+        }],
+    });
+
+    return Boolean(permisoGlobal);
 }
 
 /**
@@ -495,10 +586,28 @@ async function marcarDetalleCompleto(idDetalle) {
  * Registra el pago de una orden sin cerrarla.
  * Usado en el flujo de despacho: el pedido queda ABIERTO pero marcado como pagado.
  */
-async function marcarPagado(idOrden) {
+async function marcarPagado(idOrden, { idMetodoPago } = {}) {
     const orden = await Models.PedidOrden.findByPk(idOrden);
     if (!orden) return null;
-    await orden.update({ estado_pago: 'pagado' });
+
+    if (!idMetodoPago) {
+        const e = new Error('La forma de pago es obligatoria para registrar el cobro.');
+        e.code = 'METODO_PAGO_REQUERIDO';
+        e.statusCode = 422;
+        throw e;
+    }
+
+    const mp = await Models.RestMetodoPago.findOne({
+        where: { id_metodo_pago: idMetodoPago, id_negocio: orden.id_negocio, estado: 'A' },
+    });
+    if (!mp) {
+        const e = new Error('Método de pago inválido para este negocio.');
+        e.code = 'METODO_PAGO_INVALIDO';
+        e.statusCode = 422;
+        throw e;
+    }
+
+    await orden.update({ estado_pago: 'pagado', id_metodo_pago: idMetodoPago });
     return orden;
 }
 
@@ -508,9 +617,21 @@ async function marcarPagado(idOrden) {
  * No registra nada en caja. El stock consumido NO se restaura automáticamente
  * (la orden sigue existiendo para auditoría, simplemente marcada CANCELADA).
  */
-async function cancelarOrden(idOrden) {
+async function cancelarOrden(idOrden, { idUsuario } = {}) {
     const orden = await Models.PedidOrden.findByPk(idOrden);
     if (!orden) return null;
+
+    const puedeCancelar = await usuarioPuedeCancelarPedidoNoPagado({
+        idUsuario,
+        idNegocio: orden.id_negocio,
+    });
+    if (!puedeCancelar) {
+        const e = new Error('No tienes permiso para eliminar pedidos pendientes de pago.');
+        e.code = 'SIN_PERMISO_CANCELAR_NO_PAGADO';
+        e.statusCode = 403;
+        throw e;
+    }
+
     if (orden.estado_pago === 'pagado') {
         const e = new Error('No se puede cancelar un pedido ya pagado.');
         e.code = 'ORDEN_PAGADA'; e.statusCode = 409;
@@ -553,10 +674,18 @@ async function cerrarOrden(idOrden, { idUsuario, idMetodoPago } = {}) {
             return getOrdenById(idOrden);
         }
 
-        // Validar que el método de pago (si viene) pertenezca al negocio.
-        if (idMetodoPago) {
+        const metodoPagoFinal = idMetodoPago || orden.id_metodo_pago || null;
+        if (!metodoPagoFinal) {
+            await t.rollback();
+            const e = new Error('La forma de pago es obligatoria para cerrar la orden.');
+            e.statusCode = 422; e.code = 'METODO_PAGO_REQUERIDO';
+            throw e;
+        }
+
+        // Validar que el método de pago final pertenezca al negocio.
+        if (metodoPagoFinal) {
             const mp = await Models.RestMetodoPago.findOne({
-                where: { id_metodo_pago: idMetodoPago, id_negocio: orden.id_negocio, estado: 'A' },
+                where: { id_metodo_pago: metodoPagoFinal, id_negocio: orden.id_negocio, estado: 'A' },
                 transaction: t,
             });
             if (!mp) {
@@ -581,7 +710,7 @@ async function cerrarOrden(idOrden, { idUsuario, idMetodoPago } = {}) {
                 estado: 'CERRADA',
                 fecha_cierre: new Date(),
                 id_caja: caja.id_caja,
-                id_metodo_pago: idMetodoPago || orden.id_metodo_pago || null,
+                id_metodo_pago: metodoPagoFinal,
             },
             { transaction: t },
         );

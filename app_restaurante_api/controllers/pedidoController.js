@@ -39,6 +39,14 @@ const agregarItemsOrdenValidators = [
     body('porcentaje_impuesto').optional().isFloat({ min: 0, max: 1 }),
 ];
 
+const marcarPagadoValidators = [
+    body('id_metodo_pago').isInt({ min: 1 }).withMessage('id_metodo_pago requerido'),
+];
+
+const cerrarOrdenValidators = [
+    body('id_metodo_pago').optional({ nullable: true }).isInt({ min: 1 }).withMessage('id_metodo_pago inválido'),
+];
+
 async function crearOrden(req, res) {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
@@ -205,10 +213,20 @@ async function cambiarEstadoCocina(req, res) {
 /** PATCH /restaurante/pedidos/:id/marcar-pagado */
 async function marcarPagado(req, res) {
     try {
-        const orden = await PedidoService.marcarPagado(Number(req.params.id));
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return Respuesta.error(res, 'Datos inválidos', 422, errors.array());
+        }
+
+        const orden = await PedidoService.marcarPagado(Number(req.params.id), {
+            idMetodoPago: Number(req.body.id_metodo_pago),
+        });
         if (!orden) return Respuesta.error(res, 'Orden no encontrada', 404);
         return Respuesta.success(res, 'Pago registrado', orden);
     } catch (err) {
+        if (err.code === 'METODO_PAGO_REQUERIDO' || err.code === 'METODO_PAGO_INVALIDO') {
+            return Respuesta.error(res, err.message, err.statusCode || 422, { code: err.code });
+        }
         console.error('[Despacho] Error marcarPagado:', err.message);
         return Respuesta.error(res, 'Error al registrar el pago.');
     }
@@ -217,11 +235,13 @@ async function marcarPagado(req, res) {
 /** PATCH /restaurante/pedidos/:id/cancelar */
 async function cancelarOrden(req, res) {
     try {
-        const orden = await PedidoService.cancelarOrden(Number(req.params.id));
+        const orden = await PedidoService.cancelarOrden(Number(req.params.id), {
+            idUsuario: req.usuario?.id_usuario,
+        });
         if (!orden) return Respuesta.error(res, 'Orden no encontrada', 404);
         return Respuesta.success(res, 'Orden cancelada', orden);
     } catch (err) {
-        if (err.code === 'ORDEN_PAGADA' || err.code === 'ORDEN_CERRADA') {
+        if (err.code === 'ORDEN_PAGADA' || err.code === 'ORDEN_CERRADA' || err.code === 'SIN_PERMISO_CANCELAR_NO_PAGADO') {
             return Respuesta.error(res, err.message, err.statusCode || 409, { code: err.code });
         }
         console.error('[Despacho] Error cancelarOrden:', err.message);
@@ -232,6 +252,11 @@ async function cancelarOrden(req, res) {
 /** PATCH /restaurante/pedidos/:id/cerrar */
 async function cerrarOrden(req, res) {
     try {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return Respuesta.error(res, 'Datos inválidos', 422, errors.array());
+        }
+
         const orden = await PedidoService.cerrarOrden(Number(req.params.id), {
             idUsuario: req.usuario?.id_usuario,
             idMetodoPago: req.body?.id_metodo_pago ? Number(req.body.id_metodo_pago) : null,
@@ -239,7 +264,7 @@ async function cerrarOrden(req, res) {
         if (!orden) return Respuesta.error(res, 'Orden no encontrada', 404);
         return Respuesta.success(res, 'Orden cerrada', orden);
     } catch (err) {
-        if (err.code === 'CAJA_CERRADA' || err.code === 'METODO_PAGO_INVALIDO') {
+        if (err.code === 'CAJA_CERRADA' || err.code === 'METODO_PAGO_INVALIDO' || err.code === 'METODO_PAGO_REQUERIDO') {
             return Respuesta.error(res, err.message, err.statusCode || 409, { code: err.code });
         }
         console.error('[Pedidos] Error cerrarOrden:', err.message);
@@ -282,6 +307,8 @@ async function getDomiciliarios(req, res) {
 module.exports = {
     crearOrden, crearOrdenValidators,
     agregarItemsOrden, agregarItemsOrdenValidators,
+    marcarPagadoValidators,
+    cerrarOrdenValidators,
     getOrdenesAbiertas,
     getOrdenById,
     getOrdenesCocina,

@@ -18,7 +18,8 @@
     "migrate:restaurante-metodo-pago": "node migrations/migrate_restaurante_metodo_pago.js",
     "migrate:restaurante-domicilio": "node migrations/migrate_restaurante_domicilio.js",
     "migrate:restaurante-estado-pago": "node migrations/migrate_restaurante_estado_pago.js",
-    "migrate:restaurante-inventario-gestionar": "node migrations/migrate_restaurante_inventario_gestionar.js"
+    "migrate:restaurante-inventario-gestionar": "node migrations/migrate_restaurante_inventario_gestionar.js",
+    "migrate:restaurante-despacho-cancelar-no-pagado": "node migrations/migrate_restaurante_despacho_cancelar_no_pagado.js"
   },
   "keywords": [],
   "author": "",
