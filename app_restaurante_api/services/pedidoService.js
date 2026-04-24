@@ -238,6 +238,22 @@ async function crearDetallesOrden({ idOrden, items, transaction }) {
     }
 }
 
+async function validarMetodoPagoParaNegocio({ idMetodoPago, idNegocio, transaction }) {
+    if (!idMetodoPago) return null;
+
+    const mp = await Models.RestMetodoPago.findOne({
+        where: { id_metodo_pago: idMetodoPago, id_negocio: idNegocio, estado: 'A' },
+        transaction,
+    });
+    if (!mp) {
+        const e = new Error('Método de pago inválido para este negocio.');
+        e.statusCode = 422;
+        e.code = 'METODO_PAGO_INVALIDO';
+        throw e;
+    }
+    return mp;
+}
+
 async function recalcularTotalesOrden({ idOrden, porcentajeImpuesto = 0, transaction }) {
     const subtotalRaw = await Models.PedidDetalle.sum('subtotal', {
         where: { id_orden: idOrden },
@@ -265,7 +281,7 @@ async function recalcularTotalesOrden({ idOrden, porcentajeImpuesto = 0, transac
  * @param {number} params.porcentajeImpuesto — ej: 0.19
  */
 async function crearOrden({
-    idNegocio, idUsuario, idMesa, nota, items, porcentajeImpuesto = 0, permitirStockNegativo = false,
+    idNegocio, idMetodoPago = null, idUsuario, idMesa, nota, items, porcentajeImpuesto = 0, permitirStockNegativo = false,
     tipoPedido = 'MESA', contactoNombre = null, contactoTelefono = null,
     direccionDomicilio = null, notaDomicilio = null, idDomiciliario = null,
 }) {
@@ -279,6 +295,12 @@ async function crearOrden({
             idNegocio,
             items,
             permitirStockNegativo,
+            transaction: t,
+        });
+
+        await validarMetodoPagoParaNegocio({
+            idMetodoPago,
+            idNegocio,
             transaction: t,
         });
 
@@ -301,6 +323,7 @@ async function crearOrden({
             impuesto,
             total,
             estado: 'ABIERTA',
+            id_metodo_pago: idMetodoPago || null,
             tipo_pedido: tipoPedido,
             contacto_nombre:     tipoPedido === 'DOMICILIO' ? contactoNombre     : null,
             contacto_telefono:   tipoPedido === 'DOMICILIO' ? contactoTelefono   : null,
@@ -328,7 +351,15 @@ async function crearOrden({
 /**
  * Agrega items a una orden ABIERTA existente (flujo de ajuste POS por mesa).
  */
-async function agregarItemsOrden({ idOrden, idNegocio, nota, items, porcentajeImpuesto = 0, permitirStockNegativo = false }) {
+async function agregarItemsOrden({
+    idOrden,
+    idNegocio,
+    idMetodoPago = null,
+    nota,
+    items,
+    porcentajeImpuesto = 0,
+    permitirStockNegativo = false,
+}) {
     const t = await Models.sequelize.transaction();
     try {
         await cajaService.requireCajaAbierta(idNegocio, { transaction: t });
@@ -347,6 +378,12 @@ async function agregarItemsOrden({ idOrden, idNegocio, nota, items, porcentajeIm
             throw new Error('ORDEN_NO_ENCONTRADA');
         }
 
+        await validarMetodoPagoParaNegocio({
+            idMetodoPago,
+            idNegocio,
+            transaction: t,
+        });
+
         await consumirIngredientesPorItems({
             idNegocio,
             items,
@@ -360,8 +397,15 @@ async function agregarItemsOrden({ idOrden, idNegocio, nota, items, porcentajeIm
             transaction: t,
         });
 
+        const patchOrden = {};
         if (typeof nota === 'string') {
-            await orden.update({ nota: nota.trim() || null }, { transaction: t });
+            patchOrden.nota = nota.trim() || null;
+        }
+        if (idMetodoPago) {
+            patchOrden.id_metodo_pago = idMetodoPago;
+        }
+        if (Object.keys(patchOrden).length > 0) {
+            await orden.update(patchOrden, { transaction: t });
         }
 
         await recalcularTotalesOrden({
@@ -676,7 +720,6 @@ async function cerrarOrden(idOrden, { idUsuario, idMetodoPago } = {}) {
 
         const metodoPagoFinal = idMetodoPago || orden.id_metodo_pago || null;
         if (!metodoPagoFinal) {
-            await t.rollback();
             const e = new Error('La forma de pago es obligatoria para cerrar la orden.');
             e.statusCode = 422; e.code = 'METODO_PAGO_REQUERIDO';
             throw e;
@@ -689,7 +732,6 @@ async function cerrarOrden(idOrden, { idUsuario, idMetodoPago } = {}) {
                 transaction: t,
             });
             if (!mp) {
-                await t.rollback();
                 const e = new Error('Método de pago inválido para este negocio.');
                 e.statusCode = 422; e.code = 'METODO_PAGO_INVALIDO';
                 throw e;
@@ -718,7 +760,9 @@ async function cerrarOrden(idOrden, { idUsuario, idMetodoPago } = {}) {
         await t.commit();
         return getOrdenById(idOrden);
     } catch (err) {
-        await t.rollback();
+        if (!t.finished) {
+            await t.rollback();
+        }
         throw err;
     }
 }

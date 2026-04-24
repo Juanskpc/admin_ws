@@ -10,6 +10,7 @@ const { validationResult } = require('express-validator');
 /** POST /restaurante/pedidos */
 const crearOrdenValidators = [
     body('id_negocio').isInt({ min: 1 }).withMessage('id_negocio inválido'),
+    body('id_metodo_pago').optional({ nullable: true }).isInt({ min: 1 }).withMessage('id_metodo_pago inválido'),
     body('id_mesa').optional({ nullable: true }).isInt({ min: 1 }).withMessage('id_mesa inválido'),
     body('nota').optional({ nullable: true }).isString(),
     body('permitir_stock_negativo').optional().isBoolean().withMessage('permitir_stock_negativo debe ser booleano'),
@@ -29,6 +30,7 @@ const crearOrdenValidators = [
 
 const agregarItemsOrdenValidators = [
     body('id_negocio').isInt({ min: 1 }).withMessage('id_negocio inválido'),
+    body('id_metodo_pago').optional({ nullable: true }).isInt({ min: 1 }).withMessage('id_metodo_pago inválido'),
     body('nota').optional({ nullable: true }).isString(),
     body('permitir_stock_negativo').optional().isBoolean().withMessage('permitir_stock_negativo debe ser booleano'),
     body('items').isArray({ min: 1 }).withMessage('Debe haber al menos un item'),
@@ -55,11 +57,12 @@ async function crearOrden(req, res) {
 
     try {
         const {
-            id_negocio, id_mesa, nota, items, porcentaje_impuesto, permitir_stock_negativo,
+            id_negocio, id_metodo_pago, id_mesa, nota, items, porcentaje_impuesto, permitir_stock_negativo,
             tipo_pedido, contacto_nombre, contacto_telefono, direccion_domicilio, nota_domicilio, id_domiciliario,
         } = req.body;
         const orden = await PedidoService.crearOrden({
             idNegocio:  id_negocio,
+            idMetodoPago: id_metodo_pago ? Number(id_metodo_pago) : null,
             idUsuario:  req.usuario.id_usuario,
             idMesa:     id_mesa || null,
             nota,
@@ -98,11 +101,12 @@ async function agregarItemsOrden(req, res) {
 
     try {
         const idOrden = Number(req.params.id);
-        const { id_negocio, nota, items, porcentaje_impuesto, permitir_stock_negativo } = req.body;
+        const { id_negocio, id_metodo_pago, nota, items, porcentaje_impuesto, permitir_stock_negativo } = req.body;
 
         const orden = await PedidoService.agregarItemsOrden({
             idOrden,
             idNegocio: id_negocio,
+            idMetodoPago: id_metodo_pago ? Number(id_metodo_pago) : null,
             nota,
             items,
             porcentajeImpuesto: porcentaje_impuesto || 0,
