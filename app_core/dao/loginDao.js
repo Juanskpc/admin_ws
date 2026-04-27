@@ -1,4 +1,5 @@
 const Models = require('../models/conection');
+const { getIdsConPlanActivo } = require('../helpers/planHelper');
 
 /**
  * Obtiene credenciales del usuario por número de identificación.
@@ -54,7 +55,11 @@ async function getUsuarioLogin(idUsuario) {
         }]
     });
 
-    // Agrupar negocios con sus roles correspondientes
+    // Verificar qué negocios tienen plan activo
+    const idNegocios = negociosUsuario.map(nu => nu.negocio.id_negocio);
+    const idsConPlan = await getIdsConPlanActivo(idNegocios);
+
+    // Agrupar negocios con sus roles y estado de plan
     const negocios = negociosUsuario.map(nu => {
         const negocio = nu.negocio;
         const roles = rolesUsuario
@@ -64,7 +69,8 @@ async function getUsuarioLogin(idUsuario) {
         return {
             id_negocio: negocio.id_negocio,
             nombre: negocio.nombre,
-            roles
+            roles,
+            plan_activo: idsConPlan.has(negocio.id_negocio),
         };
     });
 

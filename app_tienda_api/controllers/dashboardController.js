@@ -4,6 +4,7 @@ const { v4: uuidv4 } = require('uuid');
 const DashboardService = require('../services/dashboardService');
 const AccessCodeStore = require('../../app_parqueadero_api/services/accessCodeStore');
 const Respuesta = require('../../app_core/helpers/respuesta');
+const { tienePlanActivo } = require('../../app_core/helpers/planHelper');
 
 /** POST /tienda/auth/verificar-token */
 async function verificarTokenAcceso(req, res) {
@@ -70,6 +71,10 @@ async function canjearCodigo(req, res) {
                 acceso.roles = seleccionado.roles;
             }
         }
+
+        const idNegocioActivo = entry.idNegocio || acceso.negocio?.id_negocio || null;
+        acceso.plan_activo = idNegocioActivo ? await tienePlanActivo(idNegocioActivo) : false;
+
         return Respuesta.success(res, 'Acceso concedido', { token: entry.token, ...acceso });
     } catch (err) {
         console.error('[Tienda] canjearCodigo:', err.message);

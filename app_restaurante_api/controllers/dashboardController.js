@@ -3,6 +3,7 @@ const { v4: uuidv4 } = require('uuid');
 const DashboardService = require('../services/dashboardService');
 const AccessCodeStore = require('../../app_parqueadero_api/services/accessCodeStore');
 const Respuesta = require('../../app_core/helpers/respuesta');
+const { tienePlanActivo } = require('../../app_core/helpers/planHelper');
 
 /**
  * dashboardController — Endpoints para el módulo restaurante.
@@ -148,6 +149,9 @@ async function canjearCodigo(req, res) {
                 acceso.roles = negocioSeleccionado.roles;
             }
         }
+
+        const idNegocioActivo = entry.idNegocio || acceso.negocio?.id_negocio || null;
+        acceso.plan_activo = idNegocioActivo ? await tienePlanActivo(idNegocioActivo) : false;
 
         return Respuesta.success(res, 'Acceso concedido', {
             token: entry.token,
