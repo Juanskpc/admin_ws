@@ -72,11 +72,32 @@ function getListaRoles() {
     });
 }
 
+function getUsuarioById(idUsuario) {
+    return Models.GenerUsuario.findOne({
+        where: { id_usuario: idUsuario },
+        attributes: ['id_usuario', 'password', 'estado'],
+    });
+}
+
+async function updateUsuarioInfo(idUsuario, campos) {
+    await Models.GenerUsuario.update(campos, { where: { id_usuario: idUsuario } });
+}
+
+async function updatePassword(idUsuario, newHashedPassword) {
+    await Models.GenerUsuario.update(
+        { password: newHashedPassword },
+        { where: { id_usuario: idUsuario } },
+    );
+}
+
 module.exports = {
     getInfoUsuario,
     verificarUsuarioExistente,
     createUsuario,
     createUsuarioNegocio,
     createUsuarioRol,
-    getListaRoles
+    getListaRoles,
+    getUsuarioById,
+    updateUsuarioInfo,
+    updatePassword,
 };

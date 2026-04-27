@@ -86,6 +86,7 @@ async function getUsuarioLogin(idUsuario) {
         primer_apellido: usuario.primer_apellido,
         segundo_apellido: usuario.segundo_apellido,
         email: usuario.email,
+        num_identificacion: usuario.num_identificacion,
         negocios,
         roles_globales: rolesGlobales
     };

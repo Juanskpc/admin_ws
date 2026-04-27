@@ -79,6 +79,20 @@ router.post('/usuarios', [
 ], UsuarioController.createUsuario);
 
 router.get('/usuarios/perfil', UsuarioController.getPerfil);
+router.put('/usuarios/perfil', [
+    body('primer_nombre').trim().notEmpty().withMessage('El primer nombre es requerido').isLength({ max: 100 }),
+    body('primer_apellido').trim().notEmpty().withMessage('El primer apellido es requerido').isLength({ max: 100 }),
+    body('segundo_nombre').optional({ nullable: true }).trim().isLength({ max: 100 }),
+    body('segundo_apellido').optional({ nullable: true }).trim().isLength({ max: 100 }),
+    body('num_identificacion').trim().notEmpty().withMessage('El número de identificación es requerido'),
+], UsuarioController.updatePerfil);
+router.post('/auth/change-password', [
+    body('currentPassword').notEmpty().withMessage('La contraseña actual es requerida'),
+    body('newPassword').isLength({ min: 8 }).withMessage('Mínimo 8 caracteres')
+        .matches(/(?=.*[A-Z])/).withMessage('Debe tener al menos una mayúscula')
+        .matches(/(?=.*\d)/).withMessage('Debe tener al menos un número'),
+], UsuarioController.changePassword);
+router.get('/usuarios/mis-negocios-planes', UsuarioController.getMisNegociosPlanInfo);
 router.get('/roles', UsuarioController.getListaRoles);
 
 // --- Administración de usuarios y permisos ---
