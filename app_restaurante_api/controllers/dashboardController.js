@@ -35,6 +35,9 @@ async function verificarTokenAcceso(req, res) {
             return Respuesta.error(res, 'No tienes acceso al módulo de restaurante.', 403);
         }
 
+        const idNegocioActivo = acceso.negocio?.id_negocio ?? null;
+        acceso.plan_activo = idNegocioActivo ? await tienePlanActivo(idNegocioActivo) : false;
+
         return Respuesta.success(res, 'Token válido', acceso);
     } catch (err) {
         if (err.name === 'TokenExpiredError') {

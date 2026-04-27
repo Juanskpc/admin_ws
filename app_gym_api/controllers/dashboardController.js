@@ -14,6 +14,10 @@ async function verificarTokenAcceso(req, res) {
         const decoded = jwt.verify(token, process.env.JWT_SECRET);
         const acceso = await DashboardService.verificarAccesoGym(decoded.id_usuario);
         if (!acceso) return Respuesta.error(res, 'No tienes acceso al módulo de gimnasio.', 403);
+
+        const idNegocioActivo = acceso.negocio?.id_negocio ?? null;
+        acceso.plan_activo = idNegocioActivo ? await tienePlanActivo(idNegocioActivo) : false;
+
         return Respuesta.success(res, 'Token válido', acceso);
     } catch (err) {
         if (err.name === 'TokenExpiredError') return Respuesta.error(res, 'El token ha expirado.', 401);
