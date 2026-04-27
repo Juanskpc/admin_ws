@@ -10,6 +10,7 @@ const adminRoutes = require('./app_admin_api/routes/index');
 const restauranteRoutes = require('./app_restaurante_api/routes/index');
 const parqueaderoRoutes = require('./app_parqueadero_api/routes/index');
 const gymRoutes = require('./app_gym_api/routes/index');
+const tiendaRoutes = require('./app_tienda_api/routes/index');
 const { errorHandler, notFound } = require('./app_core/middleware/errorHandler');
 
 const app = express();
@@ -31,7 +32,7 @@ if (process.env.NODE_ENV !== 'production') {
 
 // ⚠️  CORS debe ir ANTES del rate limiter para que los headers
 // Access-Control-Allow-Origin se incluyan incluso en respuestas 429.
-const allowedOrigins = (process.env.CORS_ORIGIN || 'http://localhost:4002,http://localhost:6002,http://localhost:4003,http://localhost:4004')
+const allowedOrigins = (process.env.CORS_ORIGIN || 'http://localhost:4002,http://localhost:6002,http://localhost:4003,http://localhost:4004,http://localhost:4005')
     .split(',')
     .map(o => o.trim());
 
@@ -81,6 +82,7 @@ app.use('/admin', adminRoutes);
 app.use('/restaurante', restauranteRoutes);
 app.use('/parqueadero', parqueaderoRoutes);
 app.use('/gym', gymRoutes);
+app.use('/tienda', tiendaRoutes);
 
 // Ruta de salud / health check
 app.get('/', (req, res) => {
