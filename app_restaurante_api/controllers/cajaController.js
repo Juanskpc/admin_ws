@@ -63,6 +63,12 @@ async function cerrarCaja(req, res) {
         if (!caja) return Respuesta.error(res, 'Caja no encontrada o ya cerrada.', 404);
         return Respuesta.success(res, 'Caja cerrada', caja);
     } catch (err) {
+        if (err.code === 'PENDIENTES_ACTIVOS') {
+            return Respuesta.error(res, err.message, err.statusCode || 409, {
+                code: err.code,
+                pendientes: err.pendientes,
+            });
+        }
         console.error('[Caja] Error cerrarCaja:', err.message);
         return Respuesta.error(res, 'Error al cerrar la caja.');
     }

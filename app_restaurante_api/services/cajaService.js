@@ -50,7 +50,68 @@ async function abrirCaja({ idNegocio, idUsuario, montoApertura, observaciones })
     });
 }
 
+/**
+ * Retorna el total de ingresos del turno agrupado por forma de pago.
+ * Los movimientos sin orden asociada se listan como "Manual / Sin orden".
+ */
+async function getDesglosePorMetodo(idCaja) {
+    const rows = await Models.sequelize.query(`
+        SELECT
+            po.id_metodo_pago,
+            COALESCE(mp.nombre, 'Manual / Sin orden') AS nombre,
+            SUM(m.monto)                               AS total
+        FROM restaurante.rest_movimiento_caja m
+        LEFT JOIN restaurante.pedid_orden      po ON po.id_orden       = m.id_orden
+        LEFT JOIN restaurante.rest_metodo_pago mp ON mp.id_metodo_pago = po.id_metodo_pago
+        WHERE m.id_caja = :idCaja AND m.tipo = 'INGRESO'
+        GROUP BY po.id_metodo_pago, mp.nombre
+        ORDER BY total DESC
+    `, {
+        replacements: { idCaja },
+        type: Models.sequelize.QueryTypes.SELECT,
+    });
+    return rows.map((r) => ({
+        id_metodo_pago: r.id_metodo_pago ?? null,
+        nombre:         r.nombre ?? 'Manual / Sin orden',
+        total:          Number(r.total ?? 0),
+    }));
+}
+
+/**
+ * Verifica si existen operaciones que impidan cerrar caja:
+ *  - Mesas con pedidos sin cobrar (ABIERTA + pendiente_pago).
+ *  - Domicilios o pedidos para llevar sin finalizar (ABIERTA).
+ */
+async function validarPendientesCierre(idNegocio) {
+    const [mesas, domicilios, llevar] = await Promise.all([
+        Models.PedidOrden.count({
+            where: { id_negocio: idNegocio, estado: 'ABIERTA', tipo_pedido: 'MESA', estado_pago: 'pendiente_pago' },
+        }),
+        Models.PedidOrden.count({
+            where: { id_negocio: idNegocio, estado: 'ABIERTA', tipo_pedido: 'DOMICILIO' },
+        }),
+        Models.PedidOrden.count({
+            where: { id_negocio: idNegocio, estado: 'ABIERTA', tipo_pedido: 'LLEVAR' },
+        }),
+    ]);
+    return {
+        puedesCerrar: mesas === 0 && domicilios === 0 && llevar === 0,
+        mesas,
+        domicilios,
+        llevar,
+    };
+}
+
 async function cerrarCaja({ idCaja, idNegocio, montoReportado, observaciones }) {
+    const pendientes = await validarPendientesCierre(idNegocio);
+    if (!pendientes.puedesCerrar) {
+        const err = new Error('No se puede cerrar la caja con operaciones pendientes.');
+        err.code        = 'PENDIENTES_ACTIVOS';
+        err.statusCode  = 409;
+        err.pendientes  = { mesas: pendientes.mesas, domicilios: pendientes.domicilios, llevar: pendientes.llevar };
+        throw err;
+    }
+
     const caja = await Models.RestCaja.findOne({
         where: { id_caja: idCaja, id_negocio: idNegocio, estado: 'A' },
         include: [{ model: Models.RestMovimientoCaja, as: 'movimientos' }],
@@ -109,10 +170,14 @@ async function getCajaAbierta(idNegocio) {
         .filter((m) => m.tipo === 'EGRESO')
         .reduce((sum, m) => sum + Number(m.monto), 0);
 
-    const json = caja.toJSON();
-    json.ingresos = ingresos;
-    json.egresos = egresos;
-    json.monto_esperado = Number(caja.monto_apertura) + ingresos - egresos;
+    const [json, desglose] = await Promise.all([
+        Promise.resolve(caja.toJSON()),
+        getDesglosePorMetodo(caja.id_caja),
+    ]);
+    json.ingresos            = ingresos;
+    json.egresos             = egresos;
+    json.monto_esperado      = Number(caja.monto_apertura) + ingresos - egresos;
+    json.ingresos_por_metodo = desglose;
     delete json.movimientos;
     return json;
 }
@@ -184,4 +249,6 @@ module.exports = {
     getMovimientos,
     registrarMovimiento,
     registrarIngresoOrden,
+    getDesglosePorMetodo,
+    validarPendientesCierre,
 };
