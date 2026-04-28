@@ -627,32 +627,62 @@ async function marcarDetalleCompleto(idDetalle) {
 }
 
 /**
- * Registra el pago de una orden sin cerrarla.
+ * Registra el cobro de una orden sin cerrarla.
  * Usado en el flujo de despacho: el pedido queda ABIERTO pero marcado como pagado.
+ * Registra inmediatamente el INGRESO en la caja activa del negocio.
  */
 async function marcarPagado(idOrden, { idMetodoPago } = {}) {
-    const orden = await Models.PedidOrden.findByPk(idOrden);
-    if (!orden) return null;
+    const t = await Models.sequelize.transaction();
+    try {
+        const orden = await Models.PedidOrden.findByPk(idOrden, {
+            transaction: t,
+            lock: t.LOCK.UPDATE,
+        });
+        if (!orden) {
+            await t.rollback();
+            return null;
+        }
 
-    if (!idMetodoPago) {
-        const e = new Error('La forma de pago es obligatoria para registrar el cobro.');
-        e.code = 'METODO_PAGO_REQUERIDO';
-        e.statusCode = 422;
-        throw e;
+        if (!idMetodoPago) {
+            const e = new Error('La forma de pago es obligatoria para registrar el cobro.');
+            e.code = 'METODO_PAGO_REQUERIDO';
+            e.statusCode = 422;
+            throw e;
+        }
+
+        const mp = await Models.RestMetodoPago.findOne({
+            where: { id_metodo_pago: idMetodoPago, id_negocio: orden.id_negocio, estado: 'A' },
+            transaction: t,
+        });
+        if (!mp) {
+            const e = new Error('Método de pago inválido para este negocio.');
+            e.code = 'METODO_PAGO_INVALIDO';
+            e.statusCode = 422;
+            throw e;
+        }
+
+        // Registrar ingreso en caja inmediatamente al cobrar (sin esperar al cierre)
+        const caja = await cajaService.registrarIngresoOrden({
+            idNegocio:   orden.id_negocio,
+            idOrden:     orden.id_orden,
+            idUsuario:   orden.id_usuario,
+            monto:       orden.total,
+            numeroOrden: orden.numero_orden,
+            transaction: t,
+        });
+
+        await orden.update({
+            estado_pago:    'pagado',
+            id_metodo_pago: idMetodoPago,
+            id_caja:        caja.id_caja,
+        }, { transaction: t });
+
+        await t.commit();
+        return orden;
+    } catch (err) {
+        if (!t.finished) await t.rollback();
+        throw err;
     }
-
-    const mp = await Models.RestMetodoPago.findOne({
-        where: { id_metodo_pago: idMetodoPago, id_negocio: orden.id_negocio, estado: 'A' },
-    });
-    if (!mp) {
-        const e = new Error('Método de pago inválido para este negocio.');
-        e.code = 'METODO_PAGO_INVALIDO';
-        e.statusCode = 422;
-        throw e;
-    }
-
-    await orden.update({ estado_pago: 'pagado', id_metodo_pago: idMetodoPago });
-    return orden;
 }
 
 /**
@@ -738,20 +768,25 @@ async function cerrarOrden(idOrden, { idUsuario, idMetodoPago } = {}) {
             }
         }
 
-        const caja = await cajaService.registrarIngresoOrden({
-            idNegocio:  orden.id_negocio,
-            idOrden:    orden.id_orden,
-            idUsuario:  idUsuario || orden.id_usuario,
-            monto:      orden.total,
-            numeroOrden: orden.numero_orden,
-            transaction: t,
-        });
+        // Si marcarPagado ya registró el ingreso en caja, reusar ese id_caja
+        let idCaja = orden.id_caja || null;
+        if (!idCaja) {
+            const caja = await cajaService.registrarIngresoOrden({
+                idNegocio:   orden.id_negocio,
+                idOrden:     orden.id_orden,
+                idUsuario:   idUsuario || orden.id_usuario,
+                monto:       orden.total,
+                numeroOrden: orden.numero_orden,
+                transaction: t,
+            });
+            idCaja = caja.id_caja;
+        }
 
         await orden.update(
             {
                 estado: 'CERRADA',
                 fecha_cierre: new Date(),
-                id_caja: caja.id_caja,
+                id_caja: idCaja,
                 id_metodo_pago: metodoPagoFinal,
             },
             { transaction: t },

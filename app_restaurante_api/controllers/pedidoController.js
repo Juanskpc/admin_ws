@@ -231,6 +231,9 @@ async function marcarPagado(req, res) {
         if (err.code === 'METODO_PAGO_REQUERIDO' || err.code === 'METODO_PAGO_INVALIDO') {
             return Respuesta.error(res, err.message, err.statusCode || 422, { code: err.code });
         }
+        if (err.code === 'CAJA_CERRADA') {
+            return Respuesta.error(res, err.message, err.statusCode || 409, { code: err.code });
+        }
         console.error('[Despacho] Error marcarPagado:', err.message);
         return Respuesta.error(res, 'Error al registrar el pago.');
     }
