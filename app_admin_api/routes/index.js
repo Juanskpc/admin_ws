@@ -95,6 +95,7 @@ router.post('/auth/change-password', [
 router.get('/usuarios/mis-negocios-planes', UsuarioController.getMisNegociosPlanInfo);
 router.get('/roles', UsuarioController.getListaRoles);
 
+
 // --- Administración de usuarios y permisos ---
 router.get('/usuarios/admin', UsuarioAdminController.usuarioAdminValidators.list, UsuarioAdminController.listUsuarios);
 router.post('/usuarios/admin', UsuarioAdminController.usuarioAdminValidators.create, UsuarioAdminController.createUsuario);
