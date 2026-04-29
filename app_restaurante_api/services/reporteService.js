@@ -11,9 +11,10 @@ const REPORT_TYPES = {
         titulo: 'Ventas por pedido',
         columns: [
             { key: 'numero_orden', label: 'Orden', type: 'text' },
+            { key: 'tipo_pedido', label: 'Tipo pedido', type: 'text' },
             { key: 'fecha_pedido', label: 'Fecha pedido', type: 'date' },
             { key: 'mesa', label: 'Mesa', type: 'text' },
-            { key: 'mesero', label: 'Mesero', type: 'text' },
+            { key: 'responsable', label: 'Responsable', type: 'text' },
             { key: 'metodo_pago', label: 'Forma de pago', type: 'text' },
             { key: 'total', label: 'Total', type: 'currency' },
         ],
@@ -164,9 +165,11 @@ function normalizeRows(tipo, rows) {
     if (tipo === 'ventas_periodo') {
         return rows.map((row) => ({
             ...row,
+            tipo_pedido: row.tipo_pedido || 'MESA',
+            mesa: row.mesa || 'No aplica',
+            responsable: row.responsable || 'No aplica',
             total: toNumber(row.total),
             fecha_pedido: toNullableDate(row.fecha_pedido || row.fecha_cierre),
-            mesero: row.mesero || row.cajero || 'No registrado',
         }));
     }
 
@@ -275,14 +278,23 @@ async function runVentasPeriodoQuery({ idNegocio, startDate, endDate, page, page
         SELECT
             o.id_orden,
             COALESCE(o.numero_orden, '#' || o.id_orden::text) AS numero_orden,
+            COALESCE(o.tipo_pedido, 'MESA') AS tipo_pedido,
             COALESCE(o.fecha_creacion, o.fecha_cierre) AS fecha_pedido,
-            COALESCE(m.nombre, 'Para llevar') AS mesa,
-            TRIM(CONCAT(u.primer_nombre, ' ', u.primer_apellido)) AS mesero,
+            CASE
+                WHEN o.tipo_pedido = 'MESA' AND m.id_mesa IS NOT NULL
+                    THEN COALESCE(CONCAT(m.nombre, ' · #', m.numero::text), 'No aplica')
+                ELSE 'No aplica'
+            END AS mesa,
+            CASE
+                WHEN o.tipo_pedido = 'DOMICILIO' THEN COALESCE(TRIM(CONCAT(d.primer_nombre, ' ', d.primer_apellido)), 'No aplica')
+                ELSE COALESCE(TRIM(CONCAT(u.primer_nombre, ' ', u.primer_apellido)), 'No aplica')
+            END AS responsable,
             COALESCE(mp.nombre, 'Sin método') AS metodo_pago,
             o.total
         FROM restaurante.pedid_orden o
         LEFT JOIN restaurante.rest_mesa m ON m.id_mesa = o.id_mesa
         LEFT JOIN general.gener_usuario u ON u.id_usuario = o.id_usuario
+        LEFT JOIN general.gener_usuario d ON d.id_usuario = o.id_domiciliario
         LEFT JOIN restaurante.rest_metodo_pago mp ON mp.id_metodo_pago = o.id_metodo_pago
         WHERE o.id_negocio = $1
           AND o.estado = 'CERRADA'
@@ -731,6 +743,12 @@ async function getDetalleVentaPeriodo({ idUsuario, idNegocio, idOrden }) {
                 attributes: ['id_usuario', 'primer_nombre', 'primer_apellido'],
             },
             {
+                model: Models.GenerUsuario,
+                as: 'domiciliario',
+                attributes: ['id_usuario', 'primer_nombre', 'primer_apellido'],
+                required: false,
+            },
+            {
                 model: Models.RestMesa,
                 as: 'mesaRef',
                 attributes: ['id_mesa', 'nombre', 'numero'],
@@ -747,6 +765,14 @@ async function getDetalleVentaPeriodo({ idUsuario, idNegocio, idOrden }) {
         .filter(Boolean)
         .join(' ')
         .trim();
+
+    const nombreDomiciliario = [orden.domiciliario?.primer_nombre, orden.domiciliario?.primer_apellido]
+        .filter(Boolean)
+        .join(' ')
+        .trim();
+    const responsable = orden.tipo_pedido === 'DOMICILIO'
+        ? (nombreDomiciliario || 'No aplica')
+        : (nombreMesero || 'No aplica');
 
     const items = (orden.detalles || [])
         .map((detalle) => ({
@@ -776,6 +802,7 @@ async function getDetalleVentaPeriodo({ idUsuario, idNegocio, idOrden }) {
     return {
         id_orden: Number(orden.id_orden),
         numero_orden: orden.numero_orden || `#${orden.id_orden}`,
+        tipo_pedido: orden.tipo_pedido || 'MESA',
         fecha_creacion: toNullableDate(orden.fecha_creacion),
         fecha_cierre: toNullableDate(orden.fecha_cierre),
         estado: orden.estado,
@@ -794,6 +821,13 @@ async function getDetalleVentaPeriodo({ idUsuario, idNegocio, idOrden }) {
                 nombre: nombreMesero || 'Mesero',
             }
             : null,
+        domiciliario: orden.domiciliario
+            ? {
+                id_usuario: Number(orden.domiciliario.id_usuario),
+                nombre: nombreDomiciliario || 'Domiciliario',
+            }
+            : null,
+        responsable,
         totales: {
             subtotal: toNumber(orden.subtotal),
             impuesto: toNumber(orden.impuesto),

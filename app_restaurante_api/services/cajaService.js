@@ -77,6 +77,67 @@ async function getDesglosePorMetodo(idCaja) {
     }));
 }
 
+async function getResumenDomiciliarios(idNegocio) {
+    const clasificacionPago = `(
+        COALESCE(mp.nombre, '') ILIKE '%efectiv%'
+        OR COALESCE(mp.nombre, '') ILIKE '%contra entrega%'
+        OR COALESCE(mp.nombre, '') ILIKE '%cobro%'
+    )`;
+
+    const rows = await Models.sequelize.query(`
+        SELECT
+            o.id_domiciliario,
+            COALESCE(TRIM(CONCAT(u.primer_nombre, ' ', u.primer_apellido)), 'Sin domiciliario') AS domiciliario,
+            COUNT(*)::int AS total_pedidos,
+            SUM(CASE WHEN NOT ${clasificacionPago} THEN 1 ELSE 0 END)::int AS pedidos_adelantados,
+            SUM(CASE WHEN ${clasificacionPago} THEN 1 ELSE 0 END)::int AS pedidos_cobrados,
+            COALESCE(SUM(CASE WHEN NOT ${clasificacionPago} THEN o.total ELSE 0 END), 0)::numeric AS monto_adelantado,
+            COALESCE(SUM(CASE WHEN ${clasificacionPago} THEN o.total ELSE 0 END), 0)::numeric AS monto_cobrado
+        FROM restaurante.pedid_orden o
+        LEFT JOIN general.gener_usuario u ON u.id_usuario = o.id_domiciliario
+        LEFT JOIN restaurante.rest_metodo_pago mp ON mp.id_metodo_pago = o.id_metodo_pago
+        WHERE o.id_negocio = :idNegocio
+          AND o.estado = 'ABIERTA'
+          AND o.tipo_pedido = 'DOMICILIO'
+          AND o.id_domiciliario IS NOT NULL
+        GROUP BY o.id_domiciliario, u.primer_nombre, u.primer_apellido
+        ORDER BY pedidos_cobrados DESC, total_pedidos DESC, domiciliario ASC
+    `, {
+        replacements: { idNegocio },
+        type: Models.sequelize.QueryTypes.SELECT,
+    });
+
+    const resumen = rows.reduce((acc, row) => {
+        acc.domiciliarios += 1;
+        acc.total_pedidos += Number(row.total_pedidos ?? 0);
+        acc.pedidos_adelantados += Number(row.pedidos_adelantados ?? 0);
+        acc.pedidos_cobrados += Number(row.pedidos_cobrados ?? 0);
+        acc.monto_adelantado += Number(row.monto_adelantado ?? 0);
+        acc.monto_cobrado += Number(row.monto_cobrado ?? 0);
+        return acc;
+    }, {
+        domiciliarios: 0,
+        total_pedidos: 0,
+        pedidos_adelantados: 0,
+        pedidos_cobrados: 0,
+        monto_adelantado: 0,
+        monto_cobrado: 0,
+    });
+
+    return {
+        resumen,
+        rows: rows.map((row) => ({
+            id_domiciliario: row.id_domiciliario ?? null,
+            domiciliario: row.domiciliario ?? 'Sin domiciliario',
+            total_pedidos: Number(row.total_pedidos ?? 0),
+            pedidos_adelantados: Number(row.pedidos_adelantados ?? 0),
+            pedidos_cobrados: Number(row.pedidos_cobrados ?? 0),
+            monto_adelantado: Number(row.monto_adelantado ?? 0),
+            monto_cobrado: Number(row.monto_cobrado ?? 0),
+        })),
+    };
+}
+
 /**
  * Verifica si existen operaciones que impidan cerrar caja:
  *  - Mesas con pedidos sin cobrar (ABIERTA + pendiente_pago).
@@ -194,7 +255,7 @@ async function getMovimientos(idCaja) {
             {
                 model: Models.PedidOrden,
                 as: 'orden',
-                attributes: ['id_orden', 'numero_orden'],
+                attributes: ['id_orden', 'numero_orden', 'tipo_pedido'],
                 required: false,
             },
         ],
@@ -247,6 +308,7 @@ module.exports = {
     cerrarCaja,
     getCajaAbierta,
     getMovimientos,
+    getResumenDomiciliarios,
     registrarMovimiento,
     registrarIngresoOrden,
     getDesglosePorMetodo,

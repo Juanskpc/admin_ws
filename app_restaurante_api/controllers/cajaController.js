@@ -86,6 +86,20 @@ async function getMovimientos(req, res) {
     }
 }
 
+/** GET /restaurante/caja/domiciliarios?id_negocio=N */
+async function getResumenDomiciliarios(req, res) {
+    try {
+        const idNegocio = Number(req.query.id_negocio);
+        if (!idNegocio) return Respuesta.error(res, 'id_negocio requerido', 400);
+
+        const resumen = await CajaService.getResumenDomiciliarios(idNegocio);
+        return Respuesta.success(res, 'Resumen de domiciliarios obtenido', resumen);
+    } catch (err) {
+        console.error('[Caja] Error getResumenDomiciliarios:', err.message);
+        return Respuesta.error(res, 'Error al obtener el resumen de domiciliarios.');
+    }
+}
+
 /** POST /restaurante/caja/movimientos */
 async function registrarMovimiento(req, res) {
     if (!handleValidation(req, res)) return;
@@ -111,5 +125,6 @@ module.exports = {
     abrirCaja,
     cerrarCaja,
     getMovimientos,
+    getResumenDomiciliarios,
     registrarMovimiento,
 };

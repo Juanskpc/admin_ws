@@ -191,6 +191,10 @@ router.get('/caja/abierta', [
 	query('id_negocio').isInt({ min: 1 }),
 ], CajaController.getCajaAbierta);
 
+router.get('/caja/domiciliarios', [
+	query('id_negocio').isInt({ min: 1 }),
+], CajaController.getResumenDomiciliarios);
+
 router.post('/caja/abrir', [
 	body('id_negocio').isInt({ min: 1 }),
 	body('monto_apertura').optional().isFloat({ min: 0 }),
