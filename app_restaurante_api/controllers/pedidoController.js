@@ -43,6 +43,8 @@ const agregarItemsOrdenValidators = [
 
 const marcarPagadoValidators = [
     body('id_metodo_pago').isInt({ min: 1 }).withMessage('id_metodo_pago requerido'),
+    body('origen_cobro').optional({ nullable: true }).isIn(['CAJA', 'DOMICILIARIO'])
+        .withMessage('origen_cobro inválido'),
 ];
 
 const cerrarOrdenValidators = [
@@ -224,6 +226,7 @@ async function marcarPagado(req, res) {
 
         const orden = await PedidoService.marcarPagado(Number(req.params.id), {
             idMetodoPago: Number(req.body.id_metodo_pago),
+            origenCobro: req.body.origen_cobro || 'CAJA',
         });
         if (!orden) return Respuesta.error(res, 'Orden no encontrada', 404);
         return Respuesta.success(res, 'Pago registrado', orden);

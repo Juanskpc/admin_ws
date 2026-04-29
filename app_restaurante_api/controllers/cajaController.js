@@ -120,6 +120,23 @@ async function registrarMovimiento(req, res) {
     }
 }
 
+/** POST /restaurante/caja/domiciliarios/transferir */
+async function transferirDomiciliario(req, res) {
+    if (!handleValidation(req, res)) return;
+    try {
+        const { id_negocio, id_domiciliario } = req.body;
+        const result = await CajaService.transferirDomiciliarioACaja({
+            idNegocio: Number(id_negocio),
+            idDomiciliario: Number(id_domiciliario),
+            idUsuario: req.usuario?.id_usuario,
+        });
+        return Respuesta.success(res, 'Pedidos transferidos a caja', result);
+    } catch (err) {
+        console.error('[Caja] Error transferirDomiciliario:', err.message);
+        return Respuesta.error(res, 'Error al transferir pedidos a caja.');
+    }
+}
+
 module.exports = {
     getCajaAbierta,
     abrirCaja,
@@ -127,4 +144,5 @@ module.exports = {
     getMovimientos,
     getResumenDomiciliarios,
     registrarMovimiento,
+    transferirDomiciliario,
 };

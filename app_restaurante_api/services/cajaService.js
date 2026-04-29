@@ -1,4 +1,5 @@
 'use strict';
+const { Op } = require('sequelize');
 const Models = require('../../app_core/models/conection');
 
 /**
@@ -78,32 +79,49 @@ async function getDesglosePorMetodo(idCaja) {
 }
 
 async function getResumenDomiciliarios(idNegocio) {
-    const clasificacionPago = `(
-        COALESCE(mp.nombre, '') ILIKE '%efectiv%'
-        OR COALESCE(mp.nombre, '') ILIKE '%contra entrega%'
-        OR COALESCE(mp.nombre, '') ILIKE '%cobro%'
-    )`;
+    const caja = await Models.RestCaja.findOne({
+        where: { id_negocio: idNegocio, estado: 'A' },
+        attributes: ['id_caja', 'fecha_apertura'],
+    });
+
+    if (!caja) {
+        return {
+            resumen: {
+                domiciliarios: 0,
+                total_pedidos: 0,
+                pedidos_adelantados: 0,
+                pedidos_cobrados: 0,
+                pedidos_en_posesion: 0,
+                monto_adelantado: 0,
+                monto_cobrado: 0,
+                monto_en_posesion: 0,
+            },
+            rows: [],
+        };
+    }
 
     const rows = await Models.sequelize.query(`
         SELECT
             o.id_domiciliario,
             COALESCE(TRIM(CONCAT(u.primer_nombre, ' ', u.primer_apellido)), 'Sin domiciliario') AS domiciliario,
             COUNT(*)::int AS total_pedidos,
-            SUM(CASE WHEN NOT ${clasificacionPago} THEN 1 ELSE 0 END)::int AS pedidos_adelantados,
-            SUM(CASE WHEN ${clasificacionPago} THEN 1 ELSE 0 END)::int AS pedidos_cobrados,
-            COALESCE(SUM(CASE WHEN NOT ${clasificacionPago} THEN o.total ELSE 0 END), 0)::numeric AS monto_adelantado,
-            COALESCE(SUM(CASE WHEN ${clasificacionPago} THEN o.total ELSE 0 END), 0)::numeric AS monto_cobrado
+            SUM(CASE WHEN o.estado_pago = 'pagado' AND o.id_caja IS NOT NULL THEN 1 ELSE 0 END)::int AS pedidos_adelantados,
+            SUM(CASE WHEN COALESCE(o.estado_pago, 'pendiente_pago') = 'pendiente_pago' THEN 1 ELSE 0 END)::int AS pedidos_cobrados,
+            SUM(CASE WHEN o.estado_pago = 'pagado' AND o.id_caja IS NULL THEN 1 ELSE 0 END)::int AS pedidos_en_posesion,
+            COALESCE(SUM(CASE WHEN o.estado_pago = 'pagado' AND o.id_caja IS NOT NULL THEN o.total ELSE 0 END), 0)::numeric AS monto_adelantado,
+            COALESCE(SUM(CASE WHEN COALESCE(o.estado_pago, 'pendiente_pago') = 'pendiente_pago' THEN o.total ELSE 0 END), 0)::numeric AS monto_cobrado,
+            COALESCE(SUM(CASE WHEN o.estado_pago = 'pagado' AND o.id_caja IS NULL THEN o.total ELSE 0 END), 0)::numeric AS monto_en_posesion
         FROM restaurante.pedid_orden o
         LEFT JOIN general.gener_usuario u ON u.id_usuario = o.id_domiciliario
-        LEFT JOIN restaurante.rest_metodo_pago mp ON mp.id_metodo_pago = o.id_metodo_pago
         WHERE o.id_negocio = :idNegocio
-          AND o.estado = 'ABIERTA'
+          AND o.estado IN ('ABIERTA', 'CERRADA')
           AND o.tipo_pedido = 'DOMICILIO'
           AND o.id_domiciliario IS NOT NULL
+          AND COALESCE(o.fecha_cierre, o.fecha_creacion) >= :fechaApertura
         GROUP BY o.id_domiciliario, u.primer_nombre, u.primer_apellido
         ORDER BY pedidos_cobrados DESC, total_pedidos DESC, domiciliario ASC
     `, {
-        replacements: { idNegocio },
+        replacements: { idNegocio, fechaApertura: caja.fecha_apertura },
         type: Models.sequelize.QueryTypes.SELECT,
     });
 
@@ -112,16 +130,20 @@ async function getResumenDomiciliarios(idNegocio) {
         acc.total_pedidos += Number(row.total_pedidos ?? 0);
         acc.pedidos_adelantados += Number(row.pedidos_adelantados ?? 0);
         acc.pedidos_cobrados += Number(row.pedidos_cobrados ?? 0);
+        acc.pedidos_en_posesion += Number(row.pedidos_en_posesion ?? 0);
         acc.monto_adelantado += Number(row.monto_adelantado ?? 0);
         acc.monto_cobrado += Number(row.monto_cobrado ?? 0);
+        acc.monto_en_posesion += Number(row.monto_en_posesion ?? 0);
         return acc;
     }, {
         domiciliarios: 0,
         total_pedidos: 0,
         pedidos_adelantados: 0,
         pedidos_cobrados: 0,
+        pedidos_en_posesion: 0,
         monto_adelantado: 0,
         monto_cobrado: 0,
+        monto_en_posesion: 0,
     });
 
     return {
@@ -132,10 +154,69 @@ async function getResumenDomiciliarios(idNegocio) {
             total_pedidos: Number(row.total_pedidos ?? 0),
             pedidos_adelantados: Number(row.pedidos_adelantados ?? 0),
             pedidos_cobrados: Number(row.pedidos_cobrados ?? 0),
+            pedidos_en_posesion: Number(row.pedidos_en_posesion ?? 0),
             monto_adelantado: Number(row.monto_adelantado ?? 0),
             monto_cobrado: Number(row.monto_cobrado ?? 0),
+            monto_en_posesion: Number(row.monto_en_posesion ?? 0),
         })),
     };
+}
+
+async function transferirDomiciliarioACaja({ idNegocio, idDomiciliario, idUsuario }) {
+    const t = await Models.sequelize.transaction();
+    try {
+        const caja = await requireCajaAbierta(idNegocio, { transaction: t });
+        const fechaFiltro = caja.fecha_apertura;
+
+        const ordenes = await Models.PedidOrden.findAll({
+            where: {
+                id_negocio: idNegocio,
+                tipo_pedido: 'DOMICILIO',
+                id_domiciliario: idDomiciliario,
+                estado_pago: 'pagado',
+                id_caja: null,
+                [Op.and]: [
+                    Models.sequelize.where(
+                        Models.sequelize.fn(
+                            'COALESCE',
+                            Models.sequelize.col('fecha_cierre'),
+                            Models.sequelize.col('fecha_creacion'),
+                        ),
+                        { [Op.gte]: fechaFiltro },
+                    ),
+                ],
+            },
+            order: [['fecha_creacion', 'ASC'], ['id_orden', 'ASC']],
+            transaction: t,
+            lock: t.LOCK.UPDATE,
+        });
+
+        if (ordenes.length === 0) {
+            await t.commit();
+            return { total_pedidos: 0, total_monto: 0 };
+        }
+
+        let totalMonto = 0;
+        for (const orden of ordenes) {
+            const numeroOrden = orden.numero_orden || `#${orden.id_orden}`;
+            await registrarIngresoOrden({
+                idNegocio,
+                idOrden: orden.id_orden,
+                idUsuario,
+                monto: Number(orden.total || 0),
+                numeroOrden,
+                transaction: t,
+            });
+            totalMonto += Number(orden.total || 0);
+            await orden.update({ id_caja: caja.id_caja }, { transaction: t });
+        }
+
+        await t.commit();
+        return { total_pedidos: ordenes.length, total_monto: totalMonto };
+    } catch (err) {
+        if (!t.finished) await t.rollback();
+        throw err;
+    }
 }
 
 /**
@@ -309,6 +390,7 @@ module.exports = {
     getCajaAbierta,
     getMovimientos,
     getResumenDomiciliarios,
+    transferirDomiciliarioACaja,
     registrarMovimiento,
     registrarIngresoOrden,
     getDesglosePorMetodo,

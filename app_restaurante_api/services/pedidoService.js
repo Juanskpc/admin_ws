@@ -631,7 +631,7 @@ async function marcarDetalleCompleto(idDetalle) {
  * Usado en el flujo de despacho: el pedido queda ABIERTO pero marcado como pagado.
  * Registra inmediatamente el INGRESO en la caja activa del negocio.
  */
-async function marcarPagado(idOrden, { idMetodoPago } = {}) {
+async function marcarPagado(idOrden, { idMetodoPago, origenCobro = 'CAJA' } = {}) {
     const t = await Models.sequelize.transaction();
     try {
         const orden = await Models.PedidOrden.findByPk(idOrden, {
@@ -661,20 +661,22 @@ async function marcarPagado(idOrden, { idMetodoPago } = {}) {
             throw e;
         }
 
-        // Registrar ingreso en caja inmediatamente al cobrar (sin esperar al cierre)
-        const caja = await cajaService.registrarIngresoOrden({
-            idNegocio:   orden.id_negocio,
-            idOrden:     orden.id_orden,
-            idUsuario:   orden.id_usuario,
-            monto:       orden.total,
-            numeroOrden: orden.numero_orden,
-            transaction: t,
-        });
+        const registraEnCaja = origenCobro !== 'DOMICILIARIO';
+        const caja = registraEnCaja
+            ? await cajaService.registrarIngresoOrden({
+                idNegocio:   orden.id_negocio,
+                idOrden:     orden.id_orden,
+                idUsuario:   orden.id_usuario,
+                monto:       orden.total,
+                numeroOrden: orden.numero_orden,
+                transaction: t,
+            })
+            : null;
 
         await orden.update({
             estado_pago:    'pagado',
             id_metodo_pago: idMetodoPago,
-            id_caja:        caja.id_caja,
+            id_caja:        caja ? caja.id_caja : null,
         }, { transaction: t });
 
         await t.commit();
