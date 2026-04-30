@@ -84,6 +84,8 @@ async function getResumenDomiciliarios(idNegocio) {
         attributes: ['id_caja', 'fecha_apertura'],
     });
 
+    console.log('consulta caja domicilarios ----->', caja);
+
     if (!caja) {
         return {
             resumen: {
