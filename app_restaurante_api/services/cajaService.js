@@ -79,14 +79,18 @@ async function getDesglosePorMetodo(idCaja) {
 }
 
 async function getResumenDomiciliarios(idNegocio) {
-    const caja = await Models.RestCaja.findOne({
-        where: { id_negocio: idNegocio, estado: 'A' },
-        attributes: ['id_caja', 'fecha_apertura'],
+    // Obtener fecha_apertura directamente de BD como string para evitar conversiones de timezone
+    const cajaRow = await Models.sequelize.query(`
+        SELECT id_caja, fecha_apertura::text AS fecha_apertura
+        FROM restaurante.rest_caja
+        WHERE id_negocio = :idNegocio AND estado = 'A'
+        LIMIT 1
+    `, {
+        replacements: { idNegocio },
+        type: Models.sequelize.QueryTypes.SELECT,
     });
 
-    console.log('consulta caja domicilarios ----->', caja);
-
-    if (!caja) {
+    if (!cajaRow || cajaRow.length === 0) {
         return {
             resumen: {
                 domiciliarios: 0,
@@ -102,6 +106,13 @@ async function getResumenDomiciliarios(idNegocio) {
         };
     }
 
+    const caja = cajaRow[0];
+    console.log('consulta caja domicilarios ----->', {
+        id_caja: caja.id_caja,
+        fecha_apertura: caja.fecha_apertura,
+    });
+
+    // Usar la fecha como string para comparación sin conversiones de timezone
     const rows = await Models.sequelize.query(`
         SELECT
             o.id_domiciliario,
@@ -119,7 +130,7 @@ async function getResumenDomiciliarios(idNegocio) {
           AND o.estado IN ('ABIERTA', 'CERRADA')
           AND o.tipo_pedido = 'DOMICILIO'
           AND o.id_domiciliario IS NOT NULL
-          AND COALESCE(o.fecha_cierre, o.fecha_creacion) >= :fechaApertura
+          AND COALESCE(o.fecha_cierre, o.fecha_creacion)::timestamp >= :fechaApertura::timestamp
         GROUP BY o.id_domiciliario, u.primer_nombre, u.primer_apellido
         ORDER BY pedidos_cobrados DESC, total_pedidos DESC, domiciliario ASC
     `, {
@@ -167,30 +178,43 @@ async function getResumenDomiciliarios(idNegocio) {
 async function transferirDomiciliarioACaja({ idNegocio, idDomiciliario, idUsuario }) {
     const t = await Models.sequelize.transaction();
     try {
-        const caja = await requireCajaAbierta(idNegocio, { transaction: t });
-        const fechaFiltro = caja.fecha_apertura;
-
-        const ordenes = await Models.PedidOrden.findAll({
-            where: {
-                id_negocio: idNegocio,
-                tipo_pedido: 'DOMICILIO',
-                id_domiciliario: idDomiciliario,
-                estado_pago: 'pagado',
-                id_caja: null,
-                [Op.and]: [
-                    Models.sequelize.where(
-                        Models.sequelize.fn(
-                            'COALESCE',
-                            Models.sequelize.col('fecha_cierre'),
-                            Models.sequelize.col('fecha_creacion'),
-                        ),
-                        { [Op.gte]: fechaFiltro },
-                    ),
-                ],
-            },
-            order: [['fecha_creacion', 'ASC'], ['id_orden', 'ASC']],
+        // Obtener caja y fecha_apertura como string sin conversión de timezone
+        const cajaRow = await Models.sequelize.query(`
+            SELECT id_caja, fecha_apertura::text AS fecha_apertura
+            FROM restaurante.rest_caja
+            WHERE id_negocio = :idNegocio AND estado = 'A'
+            LIMIT 1
+        `, {
+            replacements: { idNegocio },
+            type: Models.sequelize.QueryTypes.SELECT,
             transaction: t,
-            lock: t.LOCK.UPDATE,
+        });
+
+        if (!cajaRow || cajaRow.length === 0) {
+            throw buildCajaCerradaError();
+        }
+
+        const cajaInfo = cajaRow[0];
+        const fechaApertura = cajaInfo.fecha_apertura;
+
+        // Obtener las órdenes usando una query SQL para mantener la fecha como string
+        const ordenes = await Models.sequelize.query(`
+            SELECT 
+                id_orden, 
+                numero_orden, 
+                total
+            FROM restaurante.pedid_orden
+            WHERE id_negocio = :idNegocio
+              AND tipo_pedido = 'DOMICILIO'
+              AND id_domiciliario = :idDomiciliario
+              AND estado_pago = 'pagado'
+              AND id_caja IS NULL
+              AND COALESCE(fecha_cierre, fecha_creacion)::timestamp >= :fechaApertura::timestamp
+            ORDER BY fecha_creacion ASC, id_orden ASC
+        `, {
+            replacements: { idNegocio, idDomiciliario, fechaApertura },
+            type: Models.sequelize.QueryTypes.SELECT,
+            transaction: t,
         });
 
         if (ordenes.length === 0) {
@@ -210,7 +234,17 @@ async function transferirDomiciliarioACaja({ idNegocio, idDomiciliario, idUsuari
                 transaction: t,
             });
             totalMonto += Number(orden.total || 0);
-            await orden.update({ id_caja: caja.id_caja }, { transaction: t });
+            
+            // Actualizar id_caja de la orden
+            await Models.sequelize.query(`
+                UPDATE restaurante.pedid_orden
+                SET id_caja = :idCaja
+                WHERE id_orden = :idOrden
+            `, {
+                replacements: { idCaja: cajaInfo.id_caja, idOrden: orden.id_orden },
+                type: Models.sequelize.QueryTypes.UPDATE,
+                transaction: t,
+            });
         }
 
         await t.commit();
