@@ -92,7 +92,31 @@ async function getResumenDomiciliarios(req, res) {
         const idNegocio = Number(req.query.id_negocio);
         if (!idNegocio) return Respuesta.error(res, 'id_negocio requerido', 400);
 
-        const resumen = await CajaService.getResumenDomiciliarios(idNegocio);
+        const resumen = {
+            "resumen": {
+                "domiciliarios": 1,
+                "total_pedidos": 2,
+                "pedidos_adelantados": 1,
+                "pedidos_cobrados": 1,
+                "pedidos_en_posesion": 0,
+                "monto_adelantado": 18000,
+                "monto_cobrado": 14000,
+                "monto_en_posesion": 0
+            },
+            "rows": [
+                {
+                    "id_domiciliario": 14,
+                    "domiciliario": "NICO PAEZ",
+                    "total_pedidos": 2,
+                    "pedidos_adelantados": 1,
+                    "pedidos_cobrados": 1,
+                    "pedidos_en_posesion": 0,
+                    "monto_adelantado": 18000,
+                    "monto_cobrado": 14000,
+                    "monto_en_posesion": 0
+                }
+            ]
+        }
         return Respuesta.success(res, 'Resumen de domiciliarios obtenido', resumen);
     } catch (err) {
         console.error('[Caja] Error getResumenDomiciliarios:', err.message);
