@@ -141,46 +141,33 @@ async function usuarioPuedeVerTodosDespacho({ idUsuario, idNegocio }) {
     const roleIds = [...new Set(roles.map((r) => r.id_rol))];
     const whereNivelCodigo = normalizePermissionCode(SUBNIVEL_VER_TODOS);
 
+    const nivelInclude = {
+        model: Models.GenerNivel,
+        as: 'nivel',
+        required: true,
+        where: { estado: 'A', id_tipo_nivel: 4, url: whereNivelCodigo },
+        attributes: ['id_nivel'],
+    };
+
     const permisoNegocio = await Models.GenerNivelNegocio.findOne({
-        where: {
-            id_negocio: idNegocio,
-            id_rol: roleIds,
-            estado: 'A',
-            puede_ver: true,
-        },
+        where: { id_negocio: idNegocio, id_rol: roleIds, estado: 'A', puede_ver: true },
         attributes: ['id_nivel_negocio'],
-        include: [{
-            model: Models.GenerNivel,
-            as: 'nivel',
-            required: true,
-            where: {
-                estado: 'A',
-                id_tipo_nivel: 4,
-                url: whereNivelCodigo,
-            },
-            attributes: ['id_nivel'],
-        }],
+        include: [nivelInclude],
     });
     if (permisoNegocio) return true;
 
+    // Si el negocio denegó explícitamente este permiso, no consultar el global.
+    const negadoNegocio = await Models.GenerNivelNegocio.findOne({
+        where: { id_negocio: idNegocio, id_rol: roleIds, estado: 'A', puede_ver: false },
+        attributes: ['id_nivel_negocio'],
+        include: [nivelInclude],
+    });
+    if (negadoNegocio) return false;
+
     const permisoGlobal = await Models.GenerRolNivel.findOne({
-        where: {
-            id_rol: roleIds,
-            estado: 'A',
-            puede_ver: true,
-        },
+        where: { id_rol: roleIds, estado: 'A', puede_ver: true },
         attributes: ['id_rol_nivel'],
-        include: [{
-            model: Models.GenerNivel,
-            as: 'nivel',
-            required: true,
-            where: {
-                estado: 'A',
-                id_tipo_nivel: 4,
-                url: whereNivelCodigo,
-            },
-            attributes: ['id_nivel'],
-        }],
+        include: [nivelInclude],
     });
 
     return Boolean(permisoGlobal);
