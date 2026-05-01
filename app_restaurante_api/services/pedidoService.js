@@ -3,6 +3,7 @@ const cajaService = require('./cajaService');
 const { Op } = require('sequelize');
 
 const SUBNIVEL_CANCELAR_NO_PAGADO = 'despacho_cancelar_no_pagado';
+const SUBNIVEL_VER_TODOS = 'despacho_ver_todos';
 
 /**
  * pedidoService — Lógica de negocio para órdenes / pedidos del restaurante.
@@ -63,6 +64,82 @@ async function usuarioPuedeCancelarPedidoNoPagado({ idUsuario, idNegocio }) {
 
     const roleIds = [...new Set(roles.map((r) => r.id_rol))];
     const whereNivelCodigo = normalizePermissionCode(SUBNIVEL_CANCELAR_NO_PAGADO);
+
+    const permisoNegocio = await Models.GenerNivelNegocio.findOne({
+        where: {
+            id_negocio: idNegocio,
+            id_rol: roleIds,
+            estado: 'A',
+            puede_ver: true,
+        },
+        attributes: ['id_nivel_negocio'],
+        include: [{
+            model: Models.GenerNivel,
+            as: 'nivel',
+            required: true,
+            where: {
+                estado: 'A',
+                id_tipo_nivel: 4,
+                url: whereNivelCodigo,
+            },
+            attributes: ['id_nivel'],
+        }],
+    });
+    if (permisoNegocio) return true;
+
+    const permisoGlobal = await Models.GenerRolNivel.findOne({
+        where: {
+            id_rol: roleIds,
+            estado: 'A',
+            puede_ver: true,
+        },
+        attributes: ['id_rol_nivel'],
+        include: [{
+            model: Models.GenerNivel,
+            as: 'nivel',
+            required: true,
+            where: {
+                estado: 'A',
+                id_tipo_nivel: 4,
+                url: whereNivelCodigo,
+            },
+            attributes: ['id_nivel'],
+        }],
+    });
+
+    return Boolean(permisoGlobal);
+}
+
+async function usuarioPuedeVerTodosDespacho({ idUsuario, idNegocio }) {
+    const rolesUsuario = await Models.GenerUsuarioRol.findAll({
+        where: {
+            id_usuario: idUsuario,
+            estado: 'A',
+            [Op.or]: [{ id_negocio: idNegocio }, { id_negocio: null }],
+        },
+        attributes: ['id_rol'],
+        include: [{
+            model: Models.GenerRol,
+            as: 'rol',
+            required: true,
+            attributes: ['id_rol', 'descripcion'],
+        }],
+    });
+
+    if (!rolesUsuario.length) return false;
+
+    const roles = rolesUsuario
+        .map((r) => ({
+            id_rol: Number(r.id_rol),
+            descripcion: String(r.rol?.descripcion || ''),
+        }))
+        .filter((r) => Number.isInteger(r.id_rol));
+
+    if (!roles.length) return false;
+    if (roles.some((r) => isAdminRoleName(r.descripcion))) return true;
+
+    const roleIds = [...new Set(roles.map((r) => r.id_rol))];
+    const whereNivelCodigo = normalizePermissionCode(SUBNIVEL_VER_TODOS);
 
     const permisoNegocio = await Models.GenerNivelNegocio.findOne({
         where: {
@@ -473,8 +550,9 @@ async function getOrdenById(idOrden) {
  * Lista pedidos LLEVAR/DOMICILIO para el módulo Despacho.
  * Si verTodos=false, filtra por id_domiciliario = idUsuario.
  */
-async function getOrdenesDespacho({ idNegocio, idUsuario, verTodos }) {
+async function getOrdenesDespacho({ idNegocio, idUsuario }) {
     const { Op } = Models.Sequelize;
+    const verTodos = await usuarioPuedeVerTodosDespacho({ idUsuario, idNegocio });
     const where = {
         id_negocio: idNegocio,
         tipo_pedido: { [Op.in]: ['LLEVAR', 'DOMICILIO'] },
@@ -487,8 +565,9 @@ async function getOrdenesDespacho({ idNegocio, idUsuario, verTodos }) {
         include: [
             { model: Models.GenerUsuario, as: 'usuario', attributes: ['id_usuario', 'primer_nombre', 'primer_apellido'] },
             { model: Models.GenerUsuario, as: 'domiciliario', attributes: ['id_usuario', 'primer_nombre', 'primer_apellido'], required: false },
-            { model: Models.PedidDetalle, as: 'detalles',
-              include: [{ model: Models.CartaProducto, as: 'producto', attributes: ['id_producto', 'nombre'] }] },
+                        { model: Models.PedidDetalle, as: 'detalles',
+                            attributes: ['id_detalle', 'cantidad', 'precio_unitario', 'nota'],
+                            include: [{ model: Models.CartaProducto, as: 'producto', attributes: ['id_producto', 'nombre'] }] },
         ],
         order: [['fecha_creacion', 'DESC']],
     });
@@ -818,4 +897,5 @@ module.exports = {
     marcarPagado,
     cancelarOrden,
     cerrarOrden,
+    usuarioPuedeVerTodosDespacho,
 };

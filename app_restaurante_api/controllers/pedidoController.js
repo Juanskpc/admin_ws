@@ -287,12 +287,9 @@ async function getOrdenesDespacho(req, res) {
     try {
         const idNegocio = Number(req.query.id_negocio);
         if (!idNegocio) return Respuesta.error(res, 'id_negocio requerido', 400);
-        // El frontend pasa ver_todos=true cuando el rol tiene ese subnivel.
-        const verTodos = req.query.ver_todos === 'true';
         const ordenes = await PedidoService.getOrdenesDespacho({
             idNegocio,
             idUsuario: req.usuario.id_usuario,
-            verTodos,
         });
         return Respuesta.success(res, 'Pedidos para despacho', ordenes);
     } catch (err) {

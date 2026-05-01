@@ -83,11 +83,11 @@ async function getMesasDashboard(idNegocio) {
             as: 'ordenes',
             where: { estado: 'ABIERTA' },
             required: false,
-            attributes: ['id_orden', 'total', 'fecha_creacion', 'estado_cocina'],
+            attributes: ['id_orden', 'total', 'fecha_creacion', 'estado_cocina', 'id_metodo_pago', 'nota'],
             include: [{
                 model: Models.PedidDetalle,
                 as: 'detalles',
-                attributes: ['id_detalle', 'cantidad'],
+                attributes: ['id_detalle', 'cantidad', 'nota'],
                 include: [{
                     model: Models.CartaProducto,
                     as: 'producto',
@@ -103,7 +103,12 @@ async function getMesasDashboard(idNegocio) {
         const items = (ordenActiva?.detalles ?? []).flatMap((d) => {
             const nombre = d.producto?.nombre;
             if (!nombre) return [];
-            return [{ name: nombre, price: Number(d.producto.precio ?? 0), cantidad: Number(d.cantidad ?? 1) }];
+            return [{
+                name: nombre,
+                price: Number(d.producto.precio ?? 0),
+                cantidad: Number(d.cantidad ?? 1),
+                nota: d.nota ?? null,
+            }];
         });
 
         let status = 'available';
@@ -129,6 +134,8 @@ async function getMesasDashboard(idNegocio) {
             order: ordenActiva ? {
                 id_orden: ordenActiva.id_orden,
                 total,
+                id_metodo_pago: ordenActiva.id_metodo_pago ?? null,
+                nota: ordenActiva.nota ?? null,
                 items,
             } : { total: 0, items: [] },
         };

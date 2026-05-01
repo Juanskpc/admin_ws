@@ -95,7 +95,10 @@ async function editarIngrediente(idIngrediente, { nombre, unidad_medida } = {}) 
     return ing;
 }
 
-/** Soft delete: marca estado = 'I'. Conserva integridad con recetas históricas. */
+/**
+ * Desactiva un ingrediente y libera su nombre para reutilizarlo.
+ * Mantiene trazabilidad de recetas historicas evitando borrar filas usadas.
+ */
 async function eliminarIngrediente(idIngrediente) {
     const ing = await Models.CartaIngrediente.findOne({
         where: { id_ingrediente: idIngrediente, estado: 'A' },
@@ -105,8 +108,26 @@ async function eliminarIngrediente(idIngrediente) {
         err.code = 'INGREDIENTE_NO_ENCONTRADO'; err.statusCode = 404;
         throw err;
     }
-    await ing.update({ estado: 'I' });
-    return ing;
+
+    const t = await Models.sequelize.transaction();
+    try {
+        await Models.CartaProductoIngred.update(
+            { estado: 'I' },
+            { where: { id_ingrediente: idIngrediente }, transaction: t },
+        );
+
+        const nombreActual = String(ing.nombre || '').trim();
+        const nombreInactivo = nombreActual
+            ? `${nombreActual} (eliminado ${ing.id_ingrediente})`
+            : `Insumo eliminado ${ing.id_ingrediente}`;
+
+        await ing.update({ estado: 'I', nombre: nombreInactivo }, { transaction: t });
+        await t.commit();
+        return ing;
+    } catch (err) {
+        await t.rollback();
+        throw err;
+    }
 }
 
 async function buildProductoIngredientesRows(idProducto, ingredientes, transaction) {
