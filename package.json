@@ -21,7 +21,8 @@
     "migrate:restaurante-inventario-gestionar": "node migrations/migrate_restaurante_inventario_gestionar.js",
     "migrate:tienda": "node migrations/migrate_tienda.js",
     "migrate:planes-base": "node migrations/migrate_planes_base.js",
-    "migrate:restaurante-despacho-cancelar-no-pagado": "node migrations/migrate_restaurante_despacho_cancelar_no_pagado.js"
+    "migrate:restaurante-despacho-cancelar-no-pagado": "node migrations/migrate_restaurante_despacho_cancelar_no_pagado.js",
+    "migrate:trial-registration": "node migrations/migrate_trial_registration.js"
   },
   "keywords": [],
   "author": "",

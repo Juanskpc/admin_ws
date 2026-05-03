@@ -19,6 +19,19 @@ const enviarCodigoValidators = [
     body('email')
         .isEmail().withMessage('Formato de email inválido')
         .normalizeEmail(),
+    body('nombre_completo')
+        .optional()
+        .trim()
+        .isLength({ min: 2, max: 255 }).withMessage('El nombre debe tener entre 2 y 255 caracteres'),
+    body('num_identificacion')
+        .optional()
+        .trim()
+        .isLength({ min: 3, max: 50 }).withMessage('El número de identificación debe tener entre 3 y 50 caracteres'),
+    body('tipo_negocio')
+        .optional()
+        .trim()
+        .isIn(['RESTAURANTE', 'PARQUEADERO', 'GIMNASIO', 'TIENDA'])
+        .withMessage('Tipo de negocio inválido'),
     body('id_plan')
         .optional()
         .isInt({ min: 1 }).withMessage('ID de plan inválido'),
@@ -34,10 +47,15 @@ async function enviarCodigo(req, res) {
         return Respuesta.error(res, 'Datos de entrada inválidos', 400, errors.array());
     }
 
-    const { email, id_plan } = req.body;
+    const { email, nombre_completo, num_identificacion, tipo_negocio, id_plan } = req.body;
 
     try {
-        const result = await RegistroVerifService.sendRegistroCode(email, id_plan);
+        const result = await RegistroVerifService.sendRegistroCode(email, {
+            nombre:           nombre_completo,
+            numIdentificacion: num_identificacion,
+            tipoNegocio:      tipo_negocio,
+            idPlan:           id_plan,
+        });
 
         if (!result.ok) {
             return Respuesta.error(res, result.error, 400);

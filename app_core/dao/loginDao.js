@@ -27,7 +27,8 @@ async function getUsuarioLogin(idUsuario) {
         where: { id_usuario: idUsuario, estado: 'A' },
         attributes: [
             'id_usuario', 'primer_nombre', 'segundo_nombre',
-            'primer_apellido', 'segundo_apellido', 'email', 'num_identificacion'
+            'primer_apellido', 'segundo_apellido', 'email', 'num_identificacion',
+            'debe_cambiar_password',
         ]
     });
 
@@ -80,15 +81,16 @@ async function getUsuarioLogin(idUsuario) {
         .map(r => ({ id_rol: r.rol.id_rol, descripcion: r.rol.descripcion }));
 
     return {
-        id_usuario: usuario.id_usuario,
-        primer_nombre: usuario.primer_nombre,
-        segundo_nombre: usuario.segundo_nombre,
-        primer_apellido: usuario.primer_apellido,
-        segundo_apellido: usuario.segundo_apellido,
-        email: usuario.email,
-        num_identificacion: usuario.num_identificacion,
+        id_usuario:            usuario.id_usuario,
+        primer_nombre:         usuario.primer_nombre,
+        segundo_nombre:        usuario.segundo_nombre,
+        primer_apellido:       usuario.primer_apellido,
+        segundo_apellido:      usuario.segundo_apellido,
+        email:                 usuario.email,
+        num_identificacion:    usuario.num_identificacion,
+        debe_cambiar_password: usuario.debe_cambiar_password,
         negocios,
-        roles_globales: rolesGlobales
+        roles_globales:        rolesGlobales,
     };
 }
 

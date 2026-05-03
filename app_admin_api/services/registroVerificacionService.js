@@ -46,11 +46,15 @@ async function hashOTP(otp) {
 /**
  * Genera un OTP de registro y lo envía al email proporcionado.
  *
- * @param {string} email  - Email de la persona interesada (aún sin cuenta)
- * @param {number} [idPlan] - ID del plan seleccionado (opcional)
+ * @param {string} email
+ * @param {object} [opts]
+ * @param {string} [opts.nombre]           - Nombre completo del solicitante (trial)
+ * @param {string} [opts.numIdentificacion] - Cédula del solicitante (trial)
+ * @param {string} [opts.tipoNegocio]      - Tipo de negocio seleccionado (trial)
+ * @param {number} [opts.idPlan]           - ID del plan seleccionado (opcional)
  * @returns {Promise<{ ok: boolean, error?: string }>}
  */
-async function sendRegistroCode(email, idPlan) {
+async function sendRegistroCode(email, { nombre, numIdentificacion, tipoNegocio, idPlan } = {}) {
     const normalizedEmail = email.toLowerCase().trim();
 
     // Verificar que el email no esté ya registrado
@@ -58,9 +62,19 @@ async function sendRegistroCode(email, idPlan) {
         where: { email: normalizedEmail },
         attributes: ['id_usuario'],
     });
-
     if (existingUser) {
         return { ok: false, error: 'Este correo ya se encuentra registrado. Inicia sesión o recupera tu contraseña.' };
+    }
+
+    // Para el flujo trial, verificar que la cédula no esté en uso
+    if (numIdentificacion) {
+        const existingCedula = await Models.GenerUsuario.findOne({
+            where: { num_identificacion: numIdentificacion.trim() },
+            attributes: ['id_usuario'],
+        });
+        if (existingCedula) {
+            return { ok: false, error: 'Ya existe una cuenta con ese número de cédula. Inicia sesión o recupera tu contraseña.' };
+        }
     }
 
     // Verificar que el plan exista (si se proporcionó)
@@ -82,13 +96,16 @@ async function sendRegistroCode(email, idPlan) {
     const tokenHash = await hashOTP(otp);
     const expiresAt = new Date(Date.now() + EXPIRES_MINUTES * 60 * 1000);
 
-    // Persistir hash
+    // Persistir hash junto con datos del solicitante
     await CodigoVerifDao.createCodigo({
-        email:     normalizedEmail,
+        email:                 normalizedEmail,
         tokenHash,
         expiresAt,
-        tipo:      TIPO,
-        idPlan:    idPlan || null,
+        tipo:                  TIPO,
+        idPlan:                idPlan || null,
+        nombreCompleto:        nombre || null,
+        numIdentificacionReg:  numIdentificacion || null,
+        tipoNegocio:           tipoNegocio || null,
     });
 
     // Enviar correo

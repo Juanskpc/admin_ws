@@ -57,6 +57,21 @@ module.exports = (sequelize, DataTypes) => {
             type: DataTypes.INTEGER,
             allowNull: true,
         },
+        /** Nombre completo del solicitante (solo tipo REGISTRO — trial). */
+        nombre_completo: {
+            type: DataTypes.STRING(255),
+            allowNull: true,
+        },
+        /** Número de identificación del solicitante (solo tipo REGISTRO — trial). */
+        num_identificacion_reg: {
+            type: DataTypes.STRING(50),
+            allowNull: true,
+        },
+        /** Tipo de negocio seleccionado (solo tipo REGISTRO — trial). */
+        tipo_negocio: {
+            type: DataTypes.STRING(50),
+            allowNull: true,
+        },
         created_at: {
             type: DataTypes.DATE,
             defaultValue: DataTypes.NOW,

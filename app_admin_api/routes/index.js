@@ -17,6 +17,7 @@ const {
     verificarCodigo,
     verificarCodigoValidators,
 } = require('../controllers/registroVerificacionController');
+const { verificarYCrear, verificarYCrearValidators } = require('../controllers/registroTrialController');
 const PaletaColorController = require('../controllers/paletaColorController');
 const { verificarToken } = require('../../app_core/middleware/auth');
 
@@ -45,6 +46,9 @@ router.post('/auth/reset-password', resetPasswordValidators, resetPassword);
 // Verificación de email para registro (landing page)
 router.post('/auth/registro/enviar-codigo', enviarCodigoValidators, enviarCodigo);
 router.post('/auth/registro/verificar-codigo', verificarCodigoValidators, verificarCodigo);
+
+// Registro trial: verifica OTP y crea cuenta automáticamente
+router.post('/auth/registro/prueba/verificar', verificarYCrearValidators, verificarYCrear);
 
 // Paletas de colores (públicas — para que la app del negocio cargue los colores)
 router.get('/paletas', PaletaColorController.getListaPaletas);

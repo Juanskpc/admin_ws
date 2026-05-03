@@ -20,18 +20,24 @@ const { Op } = require('sequelize');
  * @param {Date}    data.expiresAt  - Fecha de expiración
  * @param {string}  data.tipo       - 'RESET_PASSWORD' | 'REGISTRO'
  * @param {number}  [data.idUsuario]  - ID del usuario (solo RESET_PASSWORD)
- * @param {number}  [data.idPlan]     - ID del plan (solo REGISTRO, opcional)
+ * @param {number}  [data.idPlan]              - ID del plan (solo REGISTRO, opcional)
+ * @param {string}  [data.nombreCompleto]       - Nombre completo (solo REGISTRO trial)
+ * @param {string}  [data.numIdentificacionReg] - Cédula (solo REGISTRO trial)
+ * @param {string}  [data.tipoNegocio]          - Tipo de negocio (solo REGISTRO trial)
  */
 function createCodigo(data) {
     return Models.GenerCodigoVerificacion.create({
-        email:      data.email,
-        token_hash: data.tokenHash,
-        expires_at: data.expiresAt,
-        tipo:       data.tipo,
-        id_usuario: data.idUsuario || null,
-        id_plan:    data.idPlan || null,
-        used:       false,
-        attempts:   0,
+        email:                  data.email,
+        token_hash:             data.tokenHash,
+        expires_at:             data.expiresAt,
+        tipo:                   data.tipo,
+        id_usuario:             data.idUsuario || null,
+        id_plan:                data.idPlan || null,
+        nombre_completo:        data.nombreCompleto || null,
+        num_identificacion_reg: data.numIdentificacionReg || null,
+        tipo_negocio:           data.tipoNegocio || null,
+        used:                   false,
+        attempts:               0,
     });
 }
 

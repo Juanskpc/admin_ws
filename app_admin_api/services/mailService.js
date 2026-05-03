@@ -231,4 +231,286 @@ async function verifyTransport() {
     }
 }
 
-module.exports = { sendPasswordResetEmail, verifyTransport };
+// ============================================================
+// Correo de verificación para registro de prueba (Trial)
+// ============================================================
+
+function buildRegistroVerifHtml(otp, expiresMinutes, logoUrl) {
+    return `<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1.0" />
+  <title>Verifica tu correo · EscalApp</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f0f2f5; margin: 0; padding: 0; }
+    .wrapper { padding: 40px 16px; }
+    .container { max-width: 480px; margin: 0 auto; background: #ffffff; border-radius: 12px; box-shadow: 0 4px 16px rgba(0,0,0,.08); overflow: hidden; }
+    .header { background: #0d1b2a; padding: 28px 32px; text-align: center; }
+    .header img { max-height: 52px; width: auto; display: inline-block; }
+    .header-title { color: #ffffff; font-size: 13px; letter-spacing: 1px; text-transform: uppercase; margin: 10px 0 0; opacity: .7; }
+    .body { padding: 36px 32px; }
+    .greeting { font-size: 16px; color: #1a1a2e; font-weight: 600; margin: 0 0 8px; }
+    .body p { color: #4a5568; font-size: 14px; line-height: 1.7; margin: 0 0 16px; }
+    .otp-box { text-align: center; background: #f7f9ff; border: 2px dashed #4361ee; border-radius: 10px; padding: 24px 20px; margin: 24px 0; }
+    .otp-label { font-size: 11px; text-transform: uppercase; letter-spacing: 1.5px; color: #718096; margin: 0 0 10px; font-weight: 600; }
+    .otp-code { font-size: 44px; font-weight: 800; letter-spacing: 12px; color: #4361ee; font-family: 'Courier New', monospace; line-height: 1; }
+    .otp-expires { font-size: 12px; color: #a0aec0; margin-top: 10px; }
+    .tips { background: #f0fff4; border-left: 4px solid #48bb78; border-radius: 6px; padding: 14px 16px; margin-bottom: 20px; }
+    .tips p { font-size: 13px; color: #276749; margin: 0; line-height: 1.6; }
+    .divider { border: none; border-top: 1px solid #e8ecf0; margin: 24px 0; }
+    .warning { font-size: 12px; color: #a0aec0; line-height: 1.6; }
+    .footer { background: #f7f9ff; padding: 18px 32px; text-align: center; }
+    .footer p { font-size: 11px; color: #a0aec0; margin: 0; line-height: 1.6; }
+    .footer strong { color: #718096; }
+  </style>
+</head>
+<body>
+  <div class="wrapper">
+    <div class="container">
+      <div class="header">
+        ${logoUrl
+            ? `<img src="${logoUrl}" alt="EscalApp" />`
+            : `<span style="color:#ffffff;font-size:22px;font-weight:800;letter-spacing:1px;">EscalApp</span>`
+        }
+        <p class="header-title">Verifica tu correo electrónico</p>
+      </div>
+      <div class="body">
+        <p class="greeting">¡Casi listo para tu prueba gratuita!</p>
+        <p>
+          Ingresa el siguiente código en la página de registro para confirmar tu correo
+          y crear tu cuenta en <strong>EscalApp</strong>.
+        </p>
+        <div class="otp-box">
+          <p class="otp-label">Código de verificación</p>
+          <div class="otp-code">${otp}</div>
+          <p class="otp-expires">⏱ Válido por <strong>${expiresMinutes} minutos</strong></p>
+        </div>
+        <div class="tips">
+          <p>
+            ✅ Una vez verificado, tu cuenta se crea automáticamente.<br />
+            Tu usuario y contraseña temporal serán tu número de cédula.
+          </p>
+        </div>
+        <hr class="divider" />
+        <p class="warning">
+          Si no solicitaste este registro, puedes ignorar este correo con seguridad.
+          Nunca compartas este código con nadie.
+        </p>
+      </div>
+      <div class="footer">
+        <p>
+          © ${new Date().getFullYear()} <strong>EscalApp</strong> · Todos los derechos reservados<br />
+          Este correo fue generado automáticamente, por favor no respondas a este mensaje.
+        </p>
+      </div>
+    </div>
+  </div>
+</body>
+</html>`;
+}
+
+/**
+ * Envía el correo de verificación de email para el registro trial.
+ * @param {string} email          - Destinatario
+ * @param {string} otp            - Código OTP en texto plano
+ * @param {object} [opts]
+ * @param {number} [opts.expiresMinutes=10]
+ */
+async function sendRegistroVerificationEmail(email, otp, opts = {}) {
+    const expiresMinutes = opts.expiresMinutes ?? 10;
+    const from           = process.env.MAIL_FROM || '"EscalApp" <escalappsystem@gmail.com>';
+
+    if (!process.env.MAIL_USER || !process.env.MAIL_PASS) {
+        if (process.env.NODE_ENV !== 'production') {
+            console.warn('⚠️  MAIL sin configurar. OTP de registro (solo dev):', otp);
+            return;
+        }
+        throw new Error('Configuración de correo incompleta');
+    }
+
+    const attachments = [];
+    let logoSrc = '';
+    if (fs.existsSync(LOGO_PATH)) {
+        attachments.push({ filename: 'escalapplogo.png', path: LOGO_PATH, cid: 'escalapplogo' });
+        logoSrc = 'cid:escalapplogo';
+    }
+
+    const info = await transporter.sendMail({
+        from,
+        to:      email,
+        subject: `Tu código de verificación EscalApp: ${otp}`,
+        text:    `EscalApp — Verificación de registro\n\nTu código es: ${otp}\nVálido por ${expiresMinutes} minutos.\n\nSi no solicitaste este registro, ignora este correo.`,
+        html:    buildRegistroVerifHtml(otp, expiresMinutes, logoSrc),
+        attachments,
+    });
+
+    console.info(`✉️  Código de registro enviado a ${email} — messageId: ${info.messageId}`);
+}
+
+// ============================================================
+// Correo de bienvenida con credenciales generadas
+// ============================================================
+
+function buildWelcomeEmailHtml(nombre, numIdentificacion, loginUrl, logoUrl) {
+    return `<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1.0" />
+  <title>¡Bienvenido a EscalApp!</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f0f2f5; margin: 0; padding: 0; }
+    .wrapper { padding: 40px 16px; }
+    .container { max-width: 480px; margin: 0 auto; background: #ffffff; border-radius: 12px; box-shadow: 0 4px 16px rgba(0,0,0,.08); overflow: hidden; }
+    .header { background: linear-gradient(135deg, #0d1b2a 0%, #1a3a5c 100%); padding: 28px 32px; text-align: center; }
+    .header img { max-height: 52px; width: auto; display: inline-block; }
+    .header-title { color: #ffffff; font-size: 15px; font-weight: 700; margin: 12px 0 0; }
+    .body { padding: 36px 32px; }
+    .body p { color: #4a5568; font-size: 14px; line-height: 1.7; margin: 0 0 16px; }
+    .cred-box { background: #f7f9ff; border: 1px solid #c3cfff; border-radius: 10px; padding: 20px 24px; margin: 24px 0; }
+    .cred-row { display: flex; align-items: center; margin-bottom: 12px; }
+    .cred-row:last-child { margin-bottom: 0; }
+    .cred-label { font-size: 12px; color: #718096; text-transform: uppercase; letter-spacing: 1px; font-weight: 600; width: 100px; flex-shrink: 0; }
+    .cred-value { font-size: 18px; font-weight: 800; color: #4361ee; font-family: 'Courier New', monospace; letter-spacing: 2px; }
+    .warning-box { background: #fffbeb; border-left: 4px solid #f6ad55; border-radius: 6px; padding: 14px 16px; margin-bottom: 20px; }
+    .warning-box p { font-size: 13px; color: #744210; margin: 0; line-height: 1.6; }
+    .btn-wrap { text-align: center; margin: 24px 0 8px; }
+    .btn { display: inline-block; background: #4361ee; color: #ffffff !important; text-decoration: none; padding: 14px 36px; border-radius: 8px; font-weight: 700; font-size: 15px; }
+    .divider { border: none; border-top: 1px solid #e8ecf0; margin: 24px 0; }
+    .footer { background: #f7f9ff; padding: 18px 32px; text-align: center; }
+    .footer p { font-size: 11px; color: #a0aec0; margin: 0; line-height: 1.6; }
+    .footer strong { color: #718096; }
+  </style>
+</head>
+<body>
+  <div class="wrapper">
+    <div class="container">
+      <div class="header">
+        ${logoUrl
+            ? `<img src="${logoUrl}" alt="EscalApp" />`
+            : `<span style="color:#ffffff;font-size:22px;font-weight:800;">EscalApp</span>`
+        }
+        <p class="header-title">🎉 ¡Tu cuenta está lista!</p>
+      </div>
+      <div class="body">
+        <p>Hola, <strong>${nombre}</strong>. Tu prueba gratuita de 7 días en <strong>EscalApp</strong> ya está activa. Estas son tus credenciales de acceso:</p>
+        <div class="cred-box">
+          <div class="cred-row">
+            <span class="cred-label">Usuario</span>
+            <span class="cred-value">${numIdentificacion}</span>
+          </div>
+          <div class="cred-row">
+            <span class="cred-label">Contraseña</span>
+            <span class="cred-value">${numIdentificacion}</span>
+          </div>
+        </div>
+        <div class="warning-box">
+          <p>
+            ⚠️ <strong>Importante:</strong> Tu contraseña temporal es igual a tu número de cédula.
+            Por seguridad, cámbiala la primera vez que inicies sesión desde
+            <em>Perfil → Cambiar contraseña</em>.
+          </p>
+        </div>
+        <div class="btn-wrap">
+          <a class="btn" href="${loginUrl}">Iniciar sesión ahora →</a>
+        </div>
+        <hr class="divider" />
+        <p style="font-size:12px;color:#a0aec0;">
+          Tu prueba gratuita dura <strong>7 días</strong> con acceso al Plan Básico.
+          Al finalizar podrás elegir el plan que mejor se adapte a tu negocio.
+        </p>
+      </div>
+      <div class="footer">
+        <p>
+          © ${new Date().getFullYear()} <strong>EscalApp</strong> · Todos los derechos reservados<br />
+          Este correo fue generado automáticamente, por favor no respondas a este mensaje.
+        </p>
+      </div>
+    </div>
+  </div>
+</body>
+</html>`;
+}
+
+/**
+ * Envía el correo de bienvenida con las credenciales auto-generadas.
+ * @param {string} email             - Destinatario
+ * @param {string} nombre            - Nombre del usuario
+ * @param {string} numIdentificacion - Cédula (usada como usuario y contraseña temporal)
+ */
+async function sendWelcomeEmail(email, nombre, numIdentificacion) {
+    const from     = process.env.MAIL_FROM || '"EscalApp" <escalappsystem@gmail.com>';
+    const loginUrl = `${process.env.FRONTEND_URL || 'https://escalapp.cloud'}/admin/`;
+
+    if (!process.env.MAIL_USER || !process.env.MAIL_PASS) {
+        if (process.env.NODE_ENV !== 'production') {
+            console.warn(`⚠️  MAIL sin configurar. Bienvenida (dev): usuario=${numIdentificacion}, pass=${numIdentificacion}`);
+            return;
+        }
+        throw new Error('Configuración de correo incompleta');
+    }
+
+    const attachments = [];
+    let logoSrc = '';
+    if (fs.existsSync(LOGO_PATH)) {
+        attachments.push({ filename: 'escalapplogo.png', path: LOGO_PATH, cid: 'escalapplogo' });
+        logoSrc = 'cid:escalapplogo';
+    }
+
+    const info = await transporter.sendMail({
+        from,
+        to:      email,
+        subject: '¡Tu cuenta de EscalApp está lista! — Credenciales de acceso',
+        text:    `Hola ${nombre},\n\nTu cuenta de EscalApp está lista.\n\nUsuario: ${numIdentificacion}\nContraseña temporal: ${numIdentificacion}\n\nCambia tu contraseña al iniciar sesión.\n\nAccede aquí: ${loginUrl}`,
+        html:    buildWelcomeEmailHtml(nombre, numIdentificacion, loginUrl, logoSrc),
+        attachments,
+    });
+
+    console.info(`✉️  Correo de bienvenida enviado a ${email} — messageId: ${info.messageId}`);
+}
+
+// ============================================================
+// Notificación al administrador sobre nuevo registro trial
+// ============================================================
+
+/**
+ * Notifica al administrador de un nuevo usuario que se registró en modo trial.
+ * @param {object} datos
+ * @param {string} datos.nombre
+ * @param {string} datos.numIdentificacion
+ * @param {string} datos.email
+ * @param {string} datos.tipoNegocio
+ * @param {string} datos.fechaRegistro
+ */
+async function sendAdminNotificationEmail(datos) {
+    const adminEmail = process.env.MAIL_ADMIN || process.env.MAIL_FROM;
+    if (!adminEmail) {
+        console.warn('⚠️  MAIL_ADMIN no configurado. Omitiendo notificación de admin.');
+        return;
+    }
+    if (!process.env.MAIL_USER || !process.env.MAIL_PASS) {
+        if (process.env.NODE_ENV !== 'production') {
+            console.warn('⚠️  MAIL sin configurar. Notificación admin (dev):', datos);
+            return;
+        }
+        return;
+    }
+
+    const from    = process.env.MAIL_FROM || '"EscalApp" <escalappsystem@gmail.com>';
+    const subject = `[EscalApp] Nuevo usuario trial: ${datos.nombre}`;
+    const text    = `
+Nuevo usuario registrado en modo trial.
+
+Nombre:           ${datos.nombre}
+Cédula:           ${datos.numIdentificacion}
+Correo:           ${datos.email}
+Tipo de negocio:  ${datos.tipoNegocio}
+Fecha de registro: ${datos.fechaRegistro}
+`.trim();
+
+    await transporter.sendMail({ from, to: adminEmail, subject, text });
+    console.info(`✉️  Notificación admin enviada a ${adminEmail}`);
+}
+
+module.exports = { sendPasswordResetEmail, sendRegistroVerificationEmail, sendWelcomeEmail, sendAdminNotificationEmail, verifyTransport };

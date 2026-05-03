@@ -1011,4 +1011,6 @@ module.exports = {
     getPermisosMatrizRol,
     savePermisosRol,
     getPermisosEfectivosUsuario,
+    syncUsuarioRolActivo,
+    rebuildNivelesUsuario,
 };

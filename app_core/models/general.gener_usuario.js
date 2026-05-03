@@ -17,6 +17,11 @@ module.exports = (sequelize, DataTypes) => {
             allowNull: false,
             defaultValue: false
         },
+        debe_cambiar_password: {
+            type: DataTypes.BOOLEAN,
+            allowNull: false,
+            defaultValue: false,
+        },
         estado: {
             type: DataTypes.CHAR(1),
             defaultValue: 'A',
