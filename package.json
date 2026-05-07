@@ -20,6 +20,7 @@
     "migrate:restaurante-estado-pago": "node migrations/migrate_restaurante_estado_pago.js",
     "migrate:restaurante-inventario-gestionar": "node migrations/migrate_restaurante_inventario_gestionar.js",
     "migrate:tienda": "node migrations/migrate_tienda.js",
+    "migrate:reserva": "node migrations/migrate_reserva.js",
     "migrate:planes-base": "node migrations/migrate_planes_base.js",
     "migrate:restaurante-despacho-cancelar-no-pagado": "node migrations/migrate_restaurante_despacho_cancelar_no_pagado.js",
     "migrate:trial-registration": "node migrations/migrate_trial_registration.js"
@@ -42,6 +43,7 @@
     "helmet": "^8.1.0",
     "jsonwebtoken": "^9.0.2",
     "morgan": "^1.10.0",
+    "multer": "^2.1.1",
     "node-cron": "^4.2.1",
     "nodemailer": "^8.0.1",
     "pdf-to-printer": "^5.7.0",
