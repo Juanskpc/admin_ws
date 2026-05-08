@@ -41,6 +41,10 @@ async function updateConfiguracion(req, res) {
             nit: req.body.nit,
             email_contacto: req.body.email_contacto,
             telefono: req.body.telefono,
+            direccion: req.body.direccion,
+            url_whatsapp: req.body.url_whatsapp,
+            url_facebook: req.body.url_facebook,
+            url_instagram: req.body.url_instagram,
             id_paleta: req.body.id_paleta !== undefined ? req.body.id_paleta : undefined,
         };
 

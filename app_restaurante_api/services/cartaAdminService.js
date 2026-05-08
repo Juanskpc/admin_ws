@@ -231,7 +231,7 @@ async function syncProductoIngredientes(idProducto, ingredientes, transaction) {
 async function getCategoriasAdmin(idNegocio) {
     return Models.CartaCategoria.findAll({
         where: { id_negocio: idNegocio, estado: 'A' },
-        attributes: ['id_categoria', 'nombre', 'descripcion', 'icono', 'orden', 'estado'],
+        attributes: ['id_categoria', 'nombre', 'descripcion', 'icono', 'orden', 'visible', 'estado'],
         include: [{
             model: Models.CartaProducto,
             as: 'productos',
@@ -244,18 +244,19 @@ async function getCategoriasAdmin(idNegocio) {
 }
 
 /** Crea una categoría para el menú. */
-async function crearCategoria({ id_negocio, nombre, descripcion, icono, orden }) {
+async function crearCategoria({ id_negocio, nombre, descripcion, icono, orden, visible }) {
     return Models.CartaCategoria.create({
         id_negocio,
         nombre,
         descripcion: descripcion || null,
         icono: icono || '🍽️',
         orden: orden || 0,
+        visible: visible !== undefined ? visible : true,
     });
 }
 
 /** Edita una categoría existente. */
-async function editarCategoria(idCategoria, { nombre, descripcion, icono, orden }) {
+async function editarCategoria(idCategoria, { nombre, descripcion, icono, orden, visible }) {
     const cat = await Models.CartaCategoria.findByPk(idCategoria);
     if (!cat) throw new Error('Categoría no encontrada');
     return cat.update({
@@ -263,6 +264,7 @@ async function editarCategoria(idCategoria, { nombre, descripcion, icono, orden 
         descripcion: descripcion ?? cat.descripcion,
         icono:       icono       ?? cat.icono,
         orden:       orden       ?? cat.orden,
+        visible:     visible     !== undefined ? visible : cat.visible,
     });
 }
 
@@ -291,7 +293,7 @@ async function getProductosAdmin(idNegocio, idCategoria) {
         where,
         attributes: [
             'id_producto', 'id_categoria', 'nombre', 'descripcion',
-            'precio', 'imagen_url', 'icono', 'es_popular', 'disponible',
+            'precio', 'imagen_url', 'icono', 'es_popular', 'disponible', 'visible',
         ],
         include: [{
             model: Models.CartaProductoIngred,
@@ -310,7 +312,7 @@ async function getProductosAdmin(idNegocio, idCategoria) {
 }
 
 /** Crea un producto con sus ingredientes. */
-async function crearProducto({ id_negocio, id_categoria, nombre, descripcion, precio, icono, imagen_url, es_popular, disponible, ingredientes }) {
+async function crearProducto({ id_negocio, id_categoria, nombre, descripcion, precio, icono, imagen_url, es_popular, disponible, visible, ingredientes }) {
     const t = await Models.sequelize.transaction();
     try {
         const prod = await Models.CartaProducto.create({
@@ -323,6 +325,7 @@ async function crearProducto({ id_negocio, id_categoria, nombre, descripcion, pr
             imagen_url: imagen_url || null,
             es_popular: es_popular || false,
             disponible: disponible !== undefined ? disponible : true,
+            visible: visible !== undefined ? visible : true,
         }, { transaction: t });
 
         if (Array.isArray(ingredientes) && ingredientes.length > 0) {
@@ -339,7 +342,7 @@ async function crearProducto({ id_negocio, id_categoria, nombre, descripcion, pr
 }
 
 /** Edita un producto y sincroniza su lista de ingredientes. */
-async function editarProducto(idProducto, { id_categoria, nombre, descripcion, precio, icono, imagen_url, es_popular, disponible, ingredientes }) {
+async function editarProducto(idProducto, { id_categoria, nombre, descripcion, precio, icono, imagen_url, es_popular, disponible, visible, ingredientes }) {
     const t = await Models.sequelize.transaction();
     try {
         const prod = await Models.CartaProducto.findByPk(idProducto);
@@ -354,6 +357,7 @@ async function editarProducto(idProducto, { id_categoria, nombre, descripcion, p
             imagen_url:   imagen_url   !== undefined ? imagen_url   : prod.imagen_url,
             es_popular:   es_popular   !== undefined ? es_popular   : prod.es_popular,
             disponible:   disponible   !== undefined ? disponible   : prod.disponible,
+            visible:      visible      !== undefined ? visible      : prod.visible,
         }, { transaction: t });
 
         // Sync ingredientes: actualiza existentes, reactiva eliminados lógicos,

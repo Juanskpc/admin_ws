@@ -6,6 +6,7 @@ module.exports = (sequelize, DataTypes) => {
         descripcion:    { type: DataTypes.STRING(255) },
         icono:          { type: DataTypes.STRING(50) },
         orden:          { type: DataTypes.INTEGER, defaultValue: 0 },
+        visible:        { type: DataTypes.BOOLEAN, defaultValue: true },
         estado:         { type: DataTypes.CHAR(1), defaultValue: 'A' },
         fecha_creacion: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
     }, {

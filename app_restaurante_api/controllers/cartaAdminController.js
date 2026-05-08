@@ -114,6 +114,7 @@ async function getCategoriasAdmin(req, res) {
             descripcion:     c.descripcion,
             icono:           c.icono,
             orden:           c.orden,
+            visible:         c.visible !== false,
             total_productos: c.productos ? c.productos.length : 0,
         }));
 
@@ -127,17 +128,18 @@ async function getCategoriasAdmin(req, res) {
 /** POST /restaurante/carta/admin/categorias */
 async function crearCategoria(req, res) {
     try {
-        const { id_negocio, nombre, descripcion, icono, orden } = req.body;
+        const { id_negocio, nombre, descripcion, icono, orden, visible } = req.body;
         if (!id_negocio || !nombre?.trim()) {
             return Respuesta.error(res, 'id_negocio y nombre son requeridos', 400);
         }
 
-        const cat = await CartaAdminService.crearCategoria({ id_negocio, nombre: nombre.trim(), descripcion, icono, orden });
+        const cat = await CartaAdminService.crearCategoria({ id_negocio, nombre: nombre.trim(), descripcion, icono, orden, visible });
         return Respuesta.success(res, 'Categoría creada', {
             id_categoria: cat.id_categoria,
             nombre:       cat.nombre,
             icono:        cat.icono,
             orden:        cat.orden,
+            visible:      cat.visible !== false,
         }, 201);
     } catch (err) {
         console.error('[CartaAdmin] Error crearCategoria:', err.message);
@@ -193,6 +195,7 @@ async function getProductosAdmin(req, res) {
             icono:        p.icono,
             es_popular:   p.es_popular,
             disponible:   p.disponible,
+            visible:      p.visible !== false,
             ingredientes: (p.ingredientes || [])
                 .map(pi => {
                     const idIngrediente = pi.ingrediente?.id_ingrediente ?? pi.id_ingrediente;
@@ -219,14 +222,14 @@ async function getProductosAdmin(req, res) {
 /** POST /restaurante/carta/admin/productos */
 async function crearProducto(req, res) {
     try {
-        const { id_negocio, id_categoria, nombre, descripcion, precio, icono, imagen_url, es_popular, disponible, ingredientes } = req.body;
+        const { id_negocio, id_categoria, nombre, descripcion, precio, icono, imagen_url, es_popular, disponible, visible, ingredientes } = req.body;
         if (!id_negocio || !id_categoria || !nombre?.trim() || precio === undefined) {
             return Respuesta.error(res, 'id_negocio, id_categoria, nombre y precio son requeridos', 400);
         }
 
         await CartaAdminService.crearProducto({
             id_negocio, id_categoria, nombre: nombre.trim(), descripcion,
-            precio, icono, imagen_url, es_popular, disponible, ingredientes,
+            precio, icono, imagen_url, es_popular, disponible, visible, ingredientes,
         });
         return Respuesta.success(res, 'Producto creado', null, 201);
     } catch (err) {

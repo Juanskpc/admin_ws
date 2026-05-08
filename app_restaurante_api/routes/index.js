@@ -5,6 +5,7 @@ const router = express.Router();
 const DashboardController  = require('../controllers/dashboardController');
 const CartaController      = require('../controllers/cartaController');
 const CartaAdminController = require('../controllers/cartaAdminController');
+const PublicoController    = require('../controllers/publicoController');
 const PedidoController     = require('../controllers/pedidoController');
 const MesaController       = require('../controllers/mesaController');
 const InventarioController = require('../controllers/inventarioController');
@@ -31,6 +32,13 @@ router.post('/auth/canjear-codigo',
     DashboardController.canjearCodigo,
 );
 
+// --- Carta / Menú público ---
+router.get('/public/negocios/:id', [
+	param('id').isInt({ min: 1 }),
+], PublicoController.getNegocio);
+router.get('/public/carta/categorias', PublicoController.getCategorias);
+router.get('/public/carta/productos', PublicoController.getProductos);
+
 // ============================================================
 // RUTAS PROTEGIDAS (requieren token JWT)
 // ============================================================
@@ -53,6 +61,10 @@ router.patch('/configuracion', [
 	body('nit').optional({ nullable: true }).isString().isLength({ max: 50 }),
 	body('email_contacto').optional({ nullable: true }).isEmail(),
 	body('telefono').optional({ nullable: true }).isString().isLength({ max: 50 }),
+	body('direccion').optional({ nullable: true }).isString().isLength({ max: 255 }),
+	body('url_whatsapp').optional({ nullable: true }).isURL({ require_protocol: true }),
+	body('url_facebook').optional({ nullable: true }).isURL({ require_protocol: true }),
+	body('url_instagram').optional({ nullable: true }).isURL({ require_protocol: true }),
 	body('id_paleta').optional({ nullable: true }).isInt({ min: 1 }),
 ], ConfiguracionController.updateConfiguracion);
 

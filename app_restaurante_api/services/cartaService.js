@@ -31,11 +31,58 @@ async function getCategorias(idNegocio) {
 }
 
 /**
+ * Lista las categorias visibles del negocio para vista publica.
+ */
+async function getCategoriasPublicas(idNegocio) {
+    return Models.CartaCategoria.findAll({
+        where: { id_negocio: idNegocio, estado: 'A', visible: true },
+        attributes: ['id_categoria', 'nombre', 'descripcion', 'icono', 'orden'],
+        include: [{
+            model: Models.CartaProducto,
+            as: 'productos',
+            where: { estado: 'A', disponible: true, visible: true },
+            required: false,
+            attributes: ['id_producto'],
+        }],
+        order: [['orden', 'ASC']],
+    });
+}
+
+/**
  * Lista los productos de una categoría, con ingredientes.
  */
 async function getProductosByCategoria(idNegocio, idCategoria) {
     return Models.CartaProducto.findAll({
         where: { id_negocio: idNegocio, id_categoria: idCategoria, estado: 'A', disponible: true },
+        attributes: ['id_producto', 'nombre', 'descripcion', 'precio', 'imagen_url', 'icono', 'es_popular'],
+        include: [{
+            model: Models.CartaProductoIngred,
+            as: 'ingredientes',
+            where: { estado: 'A' },
+            required: false,
+            include: [{
+                model: Models.CartaIngrediente,
+                as: 'ingrediente',
+                attributes: ['id_ingrediente', 'nombre'],
+            }],
+            attributes: ['id_producto_ingred', 'es_removible'],
+        }],
+        order: [['es_popular', 'DESC'], ['nombre', 'ASC']],
+    });
+}
+
+/**
+ * Lista productos visibles de una categoria para vista publica.
+ */
+async function getProductosPublicosByCategoria(idNegocio, idCategoria) {
+    return Models.CartaProducto.findAll({
+        where: {
+            id_negocio: idNegocio,
+            id_categoria: idCategoria,
+            estado: 'A',
+            disponible: true,
+            visible: true,
+        },
         attributes: ['id_producto', 'nombre', 'descripcion', 'precio', 'imagen_url', 'icono', 'es_popular'],
         include: [{
             model: Models.CartaProductoIngred,
@@ -70,7 +117,7 @@ async function buscarProductos(idNegocio, termino, options = {}) {
             estado: 'A',
             ...(includeDisabled ? {} : { disponible: true }),
         },
-        attributes: ['id_producto', 'nombre', 'descripcion', 'precio', 'icono', 'es_popular', 'id_categoria', 'disponible'],
+        attributes: ['id_producto', 'nombre', 'descripcion', 'precio', 'icono', 'es_popular', 'id_categoria', 'disponible', 'visible'],
         include: [{
             model: Models.CartaCategoria,
             as: 'categoria',
@@ -102,5 +149,7 @@ async function buscarProductos(idNegocio, termino, options = {}) {
 module.exports = {
     getCategorias,
     getProductosByCategoria,
+    getCategoriasPublicas,
+    getProductosPublicosByCategoria,
     buscarProductos,
 };

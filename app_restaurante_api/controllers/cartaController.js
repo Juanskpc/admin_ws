@@ -86,6 +86,7 @@ async function buscarProductos(req, res) {
             icono:        p.icono,
             es_popular:   p.es_popular,
             disponible:   p.disponible !== false,
+            visible:      p.visible !== false,
             categoria:    p.categoria ? { nombre: p.categoria.nombre, icono: p.categoria.icono } : null,
             ingredientes: (p.ingredientes || []).map(pi => ({
                 id_producto_ingred: pi.id_producto_ingred,

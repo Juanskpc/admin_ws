@@ -10,6 +10,7 @@ module.exports = (sequelize, DataTypes) => {
         icono:          { type: DataTypes.STRING(50) },
         es_popular:     { type: DataTypes.BOOLEAN, defaultValue: false },
         disponible:     { type: DataTypes.BOOLEAN, defaultValue: true },
+        visible:        { type: DataTypes.BOOLEAN, defaultValue: true },
         estado:         { type: DataTypes.CHAR(1), defaultValue: 'A' },
         fecha_creacion: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
     }, {

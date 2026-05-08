@@ -100,6 +100,10 @@ async function getConfiguracionNegocio(idUsuario, idNegocio = null) {
             'nit',
             'email_contacto',
             'telefono',
+            'direccion',
+            'url_whatsapp',
+            'url_facebook',
+            'url_instagram',
             'id_tipo_negocio',
             'id_paleta',
             'fecha_registro',
@@ -132,6 +136,10 @@ async function getConfiguracionNegocio(idUsuario, idNegocio = null) {
         nit: negocio.nit,
         email_contacto: negocio.email_contacto,
         telefono: negocio.telefono,
+        direccion: negocio.direccion,
+        url_whatsapp: negocio.url_whatsapp,
+        url_facebook: negocio.url_facebook,
+        url_instagram: negocio.url_instagram,
         id_tipo_negocio: negocio.id_tipo_negocio,
         tipo_negocio: negocio.tipoNegocio?.nombre || null,
         id_paleta: negocio.id_paleta,
@@ -180,6 +188,22 @@ async function updateConfiguracionNegocio(idUsuario, payload = {}) {
 
     if (payload.telefono !== undefined) {
         patch.telefono = cleanNullableString(payload.telefono);
+    }
+
+    if (payload.direccion !== undefined) {
+        patch.direccion = cleanNullableString(payload.direccion);
+    }
+
+    if (payload.url_whatsapp !== undefined) {
+        patch.url_whatsapp = cleanNullableString(payload.url_whatsapp);
+    }
+
+    if (payload.url_facebook !== undefined) {
+        patch.url_facebook = cleanNullableString(payload.url_facebook);
+    }
+
+    if (payload.url_instagram !== undefined) {
+        patch.url_instagram = cleanNullableString(payload.url_instagram);
     }
 
     if (payload.id_paleta !== undefined) {
