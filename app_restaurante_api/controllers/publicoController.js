@@ -1,10 +1,16 @@
 const CartaService = require('../services/cartaService');
 const PublicoService = require('../services/publicoService');
 const Respuesta = require('../../app_core/helpers/respuesta');
+const { tienePlanActivo } = require('../../app_core/helpers/planHelper');
 
-/**
- * publicoController — endpoints publicos para la carta.
- */
+const CODIGO_SIN_PLAN = 'SIN_PLAN_ACTIVO';
+
+function planError(res) {
+    return Respuesta.error(res, 'El negocio no cuenta con un plan activo.', 402, [{
+        code: CODIGO_SIN_PLAN,
+        message: 'Suscripcion inactiva',
+    }]);
+}
 
 /** GET /restaurante/public/negocios/:id */
 async function getNegocio(req, res) {
@@ -15,7 +21,12 @@ async function getNegocio(req, res) {
         const negocio = await PublicoService.getNegocioPublico(idNegocio);
         if (!negocio) return Respuesta.error(res, 'Negocio no encontrado', 404);
 
-        return Respuesta.success(res, 'Negocio obtenido', negocio);
+        const planActivo = await tienePlanActivo(idNegocio);
+
+        return Respuesta.success(res, 'Negocio obtenido', {
+            ...negocio.toJSON(),
+            plan_activo: planActivo,
+        });
     } catch (err) {
         console.error('[Publico] Error getNegocio:', err.message);
         return Respuesta.error(res, 'Error al obtener informacion del negocio.');
@@ -27,6 +38,8 @@ async function getCategorias(req, res) {
     try {
         const idNegocio = Number(req.query.id_negocio);
         if (!idNegocio) return Respuesta.error(res, 'id_negocio requerido', 400);
+
+        if (!(await tienePlanActivo(idNegocio))) return planError(res);
 
         const categorias = await CartaService.getCategoriasPublicas(idNegocio);
         const data = categorias.map(c => ({
@@ -54,6 +67,8 @@ async function getProductos(req, res) {
             return Respuesta.error(res, 'id_negocio e id_categoria requeridos', 400);
         }
 
+        if (!(await tienePlanActivo(idNegocio))) return planError(res);
+
         const productos = await CartaService.getProductosPublicosByCategoria(idNegocio, idCategoria);
         const data = productos.map(p => ({
             id_producto: p.id_producto,
@@ -78,8 +93,29 @@ async function getProductos(req, res) {
     }
 }
 
+/** GET /restaurante/public/negocios/:id/paleta */
+async function getPaleta(req, res) {
+    try {
+        const idNegocio = Number(req.params.id);
+        if (!idNegocio) return Respuesta.error(res, 'id_negocio requerido', 400);
+
+        const paleta = await PublicoService.getPaletaNegocioPublico(idNegocio);
+        if (!paleta) return Respuesta.error(res, 'Paleta no encontrada', 404);
+
+        return Respuesta.success(res, 'Paleta obtenida', {
+            id_paleta: paleta.id_paleta,
+            nombre: paleta.nombre,
+            colores: paleta.colores,
+        });
+    } catch (err) {
+        console.error('[Publico] Error getPaleta:', err.message);
+        return Respuesta.error(res, 'Error al obtener la paleta.');
+    }
+}
+
 module.exports = {
     getNegocio,
     getCategorias,
     getProductos,
+    getPaleta,
 };

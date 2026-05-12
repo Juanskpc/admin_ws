@@ -33,9 +33,8 @@ router.post('/auth/canjear-codigo',
 );
 
 // --- Carta / Menú público ---
-router.get('/public/negocios/:id', [
-	param('id').isInt({ min: 1 }),
-], PublicoController.getNegocio);
+router.get('/public/negocios/:id', [param('id').isInt({ min: 1 })], PublicoController.getNegocio);
+router.get('/public/negocios/:id/paleta', [param('id').isInt({ min: 1 })], PublicoController.getPaleta);
 router.get('/public/carta/categorias', PublicoController.getCategorias);
 router.get('/public/carta/productos', PublicoController.getProductos);
 
