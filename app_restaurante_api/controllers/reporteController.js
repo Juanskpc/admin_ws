@@ -75,14 +75,17 @@ async function exportarReporte(req, res) {
             kpis: payload.resumen,
         };
 
-        let exportResult;
         if (formato === 'pdf') {
-            exportResult = await exportService.generarPDF(payload.exportRows, exportOptions);
-        } else {
-            exportResult = await exportService.generarXLSX(payload.exportRows, exportOptions);
+            const { buffer, filename } = await exportService.generarPDFBuffer(payload.exportRows, exportOptions);
+            res.setHeader('Content-Type', 'application/pdf');
+            res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+            return res.send(buffer);
         }
 
-        return res.download(exportResult.filePath, exportResult.filename);
+        const { buffer, filename } = await exportService.generarXLSXBuffer(payload.exportRows, exportOptions);
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+        return res.send(buffer);
     } catch (error) {
         const status = getErrorStatus(error);
         if (status >= 500) {

@@ -158,6 +158,57 @@ async function generarXLSX(datos, opciones = {}) {
   return { filePath, filename };
 }
 
+/**
+ * Genera un XLSX en memoria (sin escribir en disco).
+ * @param {object[]} datos
+ * @param {object} opciones
+ * @returns {Promise<{ buffer: Buffer, filename: string }>} 
+ */
+async function generarXLSXBuffer(datos, opciones = {}) {
+  const ExcelJS  = require('exceljs');
+  const { slugNegocio, tipoReporte, columnas, titulo } = opciones;
+  if (!datos || datos.length === 0) throw new Error('Sin datos para exportar');
+
+  const cols     = columnas || Object.keys(datos[0]);
+  const filename = buildFilename(slugNegocio, tipoReporte, 'xlsx');
+
+  const workbook  = new ExcelJS.Workbook();
+  workbook.creator = 'Escalapp';
+  workbook.created = new Date();
+
+  const sheet = workbook.addWorksheet(titulo || tipoReporte || 'Reporte');
+
+  sheet.columns = cols.map(col => ({
+    header: col,
+    key:    col,
+    width:  Math.max(col.length + 4, 15),
+  }));
+
+  const headerRow = sheet.getRow(1);
+  headerRow.eachCell((cell) => {
+    cell.fill = {
+      type: 'pattern', pattern: 'solid',
+      fgColor: { argb: 'FF1E3A5F' },
+    };
+    cell.font  = { color: { argb: 'FFFFFFFF' }, bold: true };
+    cell.alignment = { horizontal: 'center' };
+  });
+
+  datos.forEach(fila => sheet.addRow(fila));
+
+  sheet.columns.forEach(col => {
+    let maxLen = col.header ? col.header.length : 10;
+    col.eachCell({ includeEmpty: false }, cell => {
+      const len = cell.value ? String(cell.value).length : 0;
+      if (len > maxLen) maxLen = len;
+    });
+    col.width = Math.min(maxLen + 2, 60);
+  });
+
+  const buffer = await workbook.xlsx.writeBuffer();
+  return { buffer: Buffer.from(buffer), filename };
+}
+
 // ─────────────────────────────────────────────
 // PDF
 // ─────────────────────────────────────────────
@@ -260,6 +311,92 @@ async function generarPDF(datos, opciones = {}) {
   });
 }
 
+/**
+ * Genera un PDF en memoria (sin escribir en disco).
+ * @param {object[]} datos
+ * @param {object} opciones
+ * @returns {Promise<{ buffer: Buffer, filename: string }>} 
+ */
+async function generarPDFBuffer(datos, opciones = {}) {
+  const PDFDocument = require('pdfkit');
+  const { slugNegocio, tipoReporte, titulo, columnas, kpis = {} } = opciones;
+  if (!datos || datos.length === 0) throw new Error('Sin datos para exportar');
+
+  const cols     = columnas || Object.keys(datos[0]);
+  const filename = buildFilename(slugNegocio, tipoReporte, 'pdf');
+
+  return new Promise((resolve, reject) => {
+    const doc = new PDFDocument({ margin: 40, size: 'A4' });
+    const chunks = [];
+
+    doc.on('data', (chunk) => chunks.push(chunk));
+    doc.on('end', () => resolve({ buffer: Buffer.concat(chunks), filename }));
+    doc.on('error', reject);
+
+    doc.fontSize(18).font('Helvetica-Bold')
+       .text(titulo || 'Reporte Escalapp', { align: 'center' });
+    doc.moveDown(0.5);
+    doc.fontSize(10).font('Helvetica')
+       .text(`Generado: ${new Date().toLocaleString('es-CO', { timeZone: 'America/Bogota' })}`, { align: 'right' });
+    doc.moveDown(0.5);
+
+    if (Object.keys(kpis).length > 0) {
+      doc.fontSize(11).font('Helvetica-Bold').text('Resumen del período:');
+      doc.fontSize(10).font('Helvetica');
+      Object.entries(kpis).forEach(([k, v]) => {
+        doc.text(`  ${k}: ${v}`);
+      });
+      doc.moveDown(0.5);
+    }
+
+    doc.moveTo(40, doc.y).lineTo(555, doc.y).stroke('#1E3A5F');
+    doc.moveDown(0.5);
+
+    const colWidth = Math.floor((555 - 40) / cols.length);
+    let y = doc.y;
+    const ROW_H = 18;
+    const PAGE_H = doc.page.height - doc.page.margins.bottom;
+
+    const dibujarCabecera = () => {
+      doc.rect(40, y, 515, ROW_H).fill('#1E3A5F');
+      cols.forEach((col, i) => {
+        doc.fillColor('white').fontSize(8).font('Helvetica-Bold')
+           .text(col, 42 + i * colWidth, y + 4, { width: colWidth - 4, lineBreak: false });
+      });
+      doc.fillColor('black');
+      y += ROW_H;
+    };
+
+    dibujarCabecera();
+
+    datos.forEach((fila, idx) => {
+      if (y + ROW_H > PAGE_H) {
+        doc.addPage();
+        y = 40;
+        dibujarCabecera();
+      }
+
+      if (idx % 2 === 0) doc.rect(40, y, 515, ROW_H).fill('#F5F5F5');
+      doc.fillColor('black');
+
+      cols.forEach((col, i) => {
+        const val = fila[col];
+        const txt = val instanceof Date ? val.toLocaleString('es-CO', { timeZone: 'America/Bogota' })
+                  : val !== null && val !== undefined ? String(val) : '';
+        doc.fontSize(7).font('Helvetica')
+           .text(txt, 42 + i * colWidth, y + 5, { width: colWidth - 4, lineBreak: false });
+      });
+
+      y += ROW_H;
+    });
+
+    doc.fontSize(8).font('Helvetica').fillColor('#666')
+       .text(`Total registros: ${datos.length}`, 40, y + 10);
+
+    doc.end();
+  });
+}
+
 // ─────────────────────────────────────────────
 // Stream CSV (para exports grandes)
 // ─────────────────────────────────────────────
@@ -319,7 +456,9 @@ async function limpiarArchivosVencidos(retentionDays = 30) {
 module.exports = {
   generarCSV,
   generarXLSX,
+  generarXLSXBuffer,
   generarPDF,
+  generarPDFBuffer,
   iniciarStreamCSV,
   buildFilename,
   getFilePath,
