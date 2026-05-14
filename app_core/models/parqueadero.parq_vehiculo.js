@@ -11,6 +11,7 @@ module.exports = (sequelize, DataTypes) => {
     id_usuario_entrada: DataTypes.INTEGER,
     id_usuario_salida:  DataTypes.INTEGER,
     observaciones:     DataTypes.TEXT,
+    qr_token:         { type: DataTypes.STRING(64), unique: true },
     estado:            { type: DataTypes.CHAR(1), defaultValue: 'A' }, // A=Dentro, S=Salió, X=Anulado
     fecha_creacion:    { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
   }, {

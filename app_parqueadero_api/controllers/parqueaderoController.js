@@ -1,7 +1,36 @@
 const { validationResult } = require('express-validator');
 const ParqService    = require('../services/parqueaderoService');
 const ImpresionSvc   = require('../services/impresionService');
+const QrService      = require('../services/qrService');
 const Respuesta = require('../../app_core/helpers/respuesta');
+
+// ──── QR (PÚBLICO) ────
+
+async function getVehiculoQR(req, res) {
+  try {
+    const { token } = req.params;
+    if (!token) return Respuesta.error(res, 'Token QR requerido', 400);
+    const vehiculo = await ParqService.buscarVehiculoPorQR(token);
+    if (!vehiculo) return Respuesta.error(res, 'QR no válido o vehículo ya salió', 404);
+    return Respuesta.success(res, 'Vehículo encontrado', vehiculo);
+  } catch (err) {
+    console.error('Error en getVehiculoQR:', err);
+    return Respuesta.error(res, 'Error al buscar vehículo por QR');
+  }
+}
+
+async function confirmarSalidaQR(req, res) {
+  try {
+    const { token } = req.params;
+    if (!token) return Respuesta.error(res, 'Token QR requerido', 400);
+    const result = await ParqService.registrarSalidaQR(token);
+    if (!result) return Respuesta.error(res, 'QR no válido o vehículo ya salió', 404);
+    return Respuesta.success(res, 'Salida registrada', result);
+  } catch (err) {
+    console.error('Error en confirmarSalidaQR:', err);
+    return Respuesta.error(res, 'Error al procesar la salida');
+  }
+}
 
 // ──── VEHÍCULOS ────
 
@@ -426,4 +455,5 @@ module.exports = {
   abrirCaja, cerrarCaja, getCajaAbierta, getMovimientosCaja, registrarMovimientoCaja,
   getFactura, getFacturaPdf, calcularCosto,
   imprimirRecibo, listarImpresoras,
+  getVehiculoQR, confirmarSalidaQR,
 };

@@ -9,6 +9,7 @@ const fs      = require('fs');
 const PDFKit  = require('pdfkit');
 const bwipjs  = require('bwip-js');
 const printer = require('pdf-to-printer');
+const QrService = require('./qrService');
 const Models  = require('../../app_core/models/conection');
 
 const TZ = 'America/Bogota';
@@ -90,10 +91,19 @@ async function generarBarras(texto) {
  * @param {object} v           - Datos del vehículo/factura
  * @param {boolean} esSalida   - true = recibo de salida, false = entrada
  * @param {object} config      - Configuración del parqueadero
+ * @param {string} qrUrl       - URL codificada en el QR (opcional)
  */
-async function generarPdfRecibo(v, esSalida, config) {
+async function generarPdfRecibo(v, esSalida, config, qrUrl) {
   // Generar código de barras antes de iniciar el PDF
   const barcodeBuffer = await generarBarras(v.placa || 'NOPLATE');
+
+  // Generar QR si hay URL
+  let qrBuffer = null;
+  if (qrUrl) {
+    try {
+      qrBuffer = await QrService.generarQR(qrUrl, 200);
+    } catch (_) { /* continuar sin QR */ }
+  }
 
   return new Promise((resolve, reject) => {
     const ANCHO  = 226.77;   // 80 mm en puntos
@@ -204,6 +214,16 @@ async function generarPdfRecibo(v, esSalida, config) {
     doc.image(barcodeBuffer, MARGIN + (COL - BW) / 2, y, { width: BW, height: BH });
     y += BH + 6;
 
+    // ── Código QR (para salida desde celular) ──
+    if (qrBuffer) {
+      const QR_SIZE = 56;
+      doc.image(qrBuffer, MARGIN + (COL - QR_SIZE) / 2, y, { width: QR_SIZE, height: QR_SIZE });
+      y += QR_SIZE + 2;
+      doc.font(FNT_NORMAL).fontSize(SZ_SMALL - 2).fillColor('#888888')
+         .text('Escanee para pagar', MARGIN, y, { width: COL, align: 'center' });
+      y += 10;
+    }
+
     dashed();
 
     // ── Detalles del vehículo y tarifa ──
@@ -261,8 +281,15 @@ async function imprimirRecibo(vehiculoData, esSalida, idNegocio) {
   const config = await Models.ParqConfiguracion.findOne({ where: { id_negocio: idNegocio } });
   const configJson = config?.toJSON() || {};
 
+  // Construir URL del QR
+  let qrUrl = null;
+  if (vehiculoData.qr_token) {
+    const qrBaseUrl = process.env.QR_BASE_URL || process.env.PARQUEADERO_APP_URL || 'http://localhost:4003';
+    qrUrl = `${qrBaseUrl}/salida-qr/${vehiculoData.qr_token}`;
+  }
+
   // Generar PDF
-  const pdfBuffer = await generarPdfRecibo(vehiculoData, esSalida, configJson);
+  const pdfBuffer = await generarPdfRecibo(vehiculoData, esSalida, configJson, qrUrl);
   // Escribir en archivo temporal
   const tmpFile = path.join(os.tmpdir(), `recibo_${Date.now()}_${idNegocio}.pdf`);
   fs.writeFileSync(tmpFile, pdfBuffer);

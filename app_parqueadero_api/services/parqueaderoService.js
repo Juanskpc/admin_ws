@@ -1,5 +1,6 @@
 const Models = require('../../app_core/models/conection');
 const { Op } = require('sequelize');
+const QrService = require('./qrService');
 
 // ──── HELPERS ────
 
@@ -105,6 +106,7 @@ ${esCierre ? '<script>window.onload=()=>{setTimeout(()=>window.print(),300);}<\/
 // ──── VEHÍCULOS ────
 
 async function registrarEntrada(data) {
+  const qrToken = QrService.generarToken();
   const vehiculo = await Models.ParqVehiculo.create({
     placa: data.placa.toUpperCase().trim(),
     id_tipo_vehiculo: data.id_tipo_vehiculo,
@@ -112,6 +114,7 @@ async function registrarEntrada(data) {
     id_tarifa: data.id_tarifa || null,
     id_usuario_entrada: data.id_usuario,
     observaciones: data.observaciones || null,
+    qr_token: qrToken,
     estado: 'A',
   });
 
@@ -144,7 +147,15 @@ async function registrarEntrada(data) {
     ],
   });
 
-  return { ...vehiculoConDatos.toJSON(), id_factura: factura.id_factura, numero_factura: factura.numero_factura };
+  return { ...vehiculoConDatos.toJSON(), id_factura: factura.id_factura, numero_factura: factura.numero_factura, qr_token: qrToken };
+}
+
+async function buscarVehiculoPorQR(qrToken) {
+  return QrService.getVehiculoPorToken(qrToken);
+}
+
+async function registrarSalidaQR(qrToken) {
+  return QrService.procesarSalidaQR(qrToken);
 }
 
 async function registrarSalida(idVehiculo, idNegocio, idUsuario, valorCobrado) {
@@ -488,7 +499,7 @@ async function registrarMovimientoCaja(data) {
 module.exports = {
   // Vehículos
   registrarEntrada, registrarSalida, getVehiculosActuales, getHistorialVehiculos,
-  getVehiculoActivoPorPlaca,
+  getVehiculoActivoPorPlaca, buscarVehiculoPorQR, registrarSalidaQR,
   // Facturas
   getFactura, getFacturaDeVehiculo, calcularCostoActual, getFacturaHtml,
   // Tarifas

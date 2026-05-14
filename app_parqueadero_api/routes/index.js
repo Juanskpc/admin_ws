@@ -25,6 +25,10 @@ router.post('/auth/canjear-codigo',
 // Descarga de archivo (JWT firmado en ?token= — no requiere sesión)
 router.get('/reportes/:reporteId/descargar',   ReporteController.descargarReporte);
 
+// ── QR público: salida desde celular ──
+router.get('/qr/:token',             ParqueaderoController.getVehiculoQR);
+router.post('/qr/:token/confirmar',  ParqueaderoController.confirmarSalidaQR);
+
 // ═══════════════ RUTAS PROTEGIDAS ═══════════════
 router.use(verificarToken);
 

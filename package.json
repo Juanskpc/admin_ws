@@ -23,7 +23,8 @@
     "migrate:reserva": "node migrations/migrate_reserva.js",
     "migrate:planes-base": "node migrations/migrate_planes_base.js",
     "migrate:restaurante-despacho-cancelar-no-pagado": "node migrations/migrate_restaurante_despacho_cancelar_no_pagado.js",
-    "migrate:trial-registration": "node migrations/migrate_trial_registration.js"
+    "migrate:trial-registration": "node migrations/migrate_trial_registration.js",
+    "migrate:parqueadero-qr": "node migrations/migrate_parqueadero_qr.js"
   },
   "keywords": [],
   "author": "",
@@ -49,6 +50,7 @@
     "pdf-to-printer": "^5.7.0",
     "pdfkit": "^0.17.2",
     "pg": "^8.16.3",
+    "qrcode": "^1.5.4",
     "sequelize": "^6.37.7"
   },
   "devDependencies": {
