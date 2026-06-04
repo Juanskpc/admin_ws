@@ -513,4 +513,130 @@ Fecha de registro: ${datos.fechaRegistro}
     console.info(`✉️  Notificación admin enviada a ${adminEmail}`);
 }
 
-module.exports = { sendPasswordResetEmail, sendRegistroVerificationEmail, sendWelcomeEmail, sendAdminNotificationEmail, verifyTransport };
+// ============================================================
+// Correo de advertencia de vencimiento de plan
+// ============================================================
+
+function buildPlanExpiryHtml(nombreNegocio, nombrePlan, fechaVencimiento, diasRestantes, logoUrl) {
+    const esUrgente = diasRestantes <= 1;
+    const colorAccent = esUrgente ? '#e53e3e' : '#dd6b20';
+    const colorBg = esUrgente ? '#fff5f5' : '#fffaf0';
+    const colorBorder = esUrgente ? '#fc8181' : '#f6ad55';
+
+    return `<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1.0" />
+  <title>Aviso de vencimiento · EscalApp</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f0f2f5; margin: 0; padding: 0; }
+    .wrapper { padding: 40px 16px; }
+    .container { max-width: 480px; margin: 0 auto; background: #ffffff; border-radius: 12px; box-shadow: 0 4px 16px rgba(0,0,0,.08); overflow: hidden; }
+    .header { background: #0d1b2a; padding: 28px 32px; text-align: center; }
+    .header img { max-height: 52px; width: auto; display: inline-block; }
+    .header-title { color: #ffffff; font-size: 13px; letter-spacing: 1px; text-transform: uppercase; margin: 10px 0 0; opacity: .7; }
+    .body { padding: 36px 32px; }
+    .body p { color: #4a5568; font-size: 14px; line-height: 1.7; margin: 0 0 16px; }
+    .alert-box { background: ${colorBg}; border-left: 4px solid ${colorBorder}; border-radius: 8px; padding: 20px 24px; margin: 24px 0; }
+    .alert-box .days { font-size: 36px; font-weight: 800; color: ${colorAccent}; line-height: 1; }
+    .alert-box .days-label { font-size: 13px; color: #718096; margin-top: 4px; }
+    .alert-box .plan-name { font-size: 16px; font-weight: 700; color: #1a202c; margin-top: 12px; }
+    .alert-box .fecha { font-size: 14px; color: #4a5568; margin-top: 4px; }
+    .btn-wrap { text-align: center; margin: 24px 0; }
+    .btn { display: inline-block; background: #4361ee; color: #ffffff !important; text-decoration: none; padding: 14px 36px; border-radius: 8px; font-weight: 700; font-size: 15px; }
+    .divider { border: none; border-top: 1px solid #e8ecf0; margin: 24px 0; }
+    .footer { background: #f7f9ff; padding: 18px 32px; text-align: center; }
+    .footer p { font-size: 11px; color: #a0aec0; margin: 0; line-height: 1.6; }
+    .footer strong { color: #718096; }
+  </style>
+</head>
+<body>
+  <div class="wrapper">
+    <div class="container">
+      <div class="header">
+        ${logoUrl
+            ? `<img src="${logoUrl}" alt="EscalApp" />`
+            : `<span style="color:#ffffff;font-size:22px;font-weight:800;letter-spacing:1px;">EscalApp</span>`
+        }
+        <p class="header-title">Aviso de vencimiento de plan</p>
+      </div>
+      <div class="body">
+        <p>Hola,</p>
+        <p>
+          Te escribimos para informarte que el plan de tu negocio está próximo a vencer.
+          Queremos que sigas aprovechando todas las herramientas de <strong>EscalApp</strong> sin interrupciones.
+        </p>
+        <div class="alert-box">
+          <div class="days">${diasRestantes}</div>
+          <div class="days-label">${diasRestantes === 1 ? 'día restante' : 'días restantes'}</div>
+          <div class="plan-name">${nombrePlan}</div>
+          <div class="fecha">Negocio: ${nombreNegocio}</div>
+          <div class="fecha">Vence el: ${fechaVencimiento}</div>
+        </div>
+        <p>
+          ${esUrgente
+            ? '<strong>¡Tu plan vence mañana!</strong> Renueva ahora para evitar la interrupción del servicio.'
+            : 'Aún tienes tiempo para renovar. Hazlo antes de la fecha de vencimiento para mantener tu acceso completo.'
+          }
+        </p>
+        <div class="btn-wrap">
+          <a class="btn" href="${process.env.FRONTEND_URL || 'https://escalapp.cloud'}/admin/configuracion">Ver mi plan →</a>
+        </div>
+        <hr class="divider" />
+        <p style="font-size:12px;color:#a0aec0;">
+          Si ya renovaste tu plan, puedes ignorar este mensaje.
+        </p>
+      </div>
+      <div class="footer">
+        <p>
+          © ${new Date().getFullYear()} <strong>EscalApp</strong> · Todos los derechos reservados<br />
+          Este correo fue generado automáticamente, por favor no respondas a este mensaje.
+        </p>
+      </div>
+    </div>
+  </div>
+</body>
+</html>`;
+}
+
+/**
+ * Envía correo de advertencia de vencimiento de plan.
+ * @param {string} email - Destinatario
+ * @param {object} datos
+ * @param {string} datos.nombreNegocio
+ * @param {string} datos.nombrePlan
+ * @param {string} datos.fechaVencimiento
+ * @param {number} datos.diasRestantes
+ */
+async function sendPlanExpiryWarningEmail(email, datos) {
+    const from = process.env.MAIL_FROM || '"EscalApp" <escalappsystem@gmail.com>';
+
+    if (!process.env.MAIL_USER || !process.env.MAIL_PASS) {
+        if (process.env.NODE_ENV !== 'production') {
+            console.warn(`⚠️  MAIL sin configurar. Aviso vencimiento (dev):`, datos);
+            return;
+        }
+        throw new Error('Configuración de correo incompleta');
+    }
+
+    const attachments = [];
+    let logoSrc = '';
+    if (fs.existsSync(LOGO_PATH)) {
+        attachments.push({ filename: 'escalapplogo.png', path: LOGO_PATH, cid: 'escalapplogo' });
+        logoSrc = 'cid:escalapplogo';
+    }
+
+    const info = await transporter.sendMail({
+        from,
+        to: email,
+        subject: `Tu plan ${datos.nombrePlan} vence en ${datos.diasRestantes} ${datos.diasRestantes === 1 ? 'día' : 'días'} — EscalApp`,
+        text: `EscalApp — Aviso de vencimiento\n\nTu plan "${datos.nombrePlan}" para "${datos.nombreNegocio}" vence el ${datos.fechaVencimiento}.\n\nFaltan ${datos.diasRestantes} ${datos.diasRestantes === 1 ? 'día' : 'días'}.\n\nRenueva desde: ${process.env.FRONTEND_URL || 'https://escalapp.cloud'}/admin/configuracion`,
+        html: buildPlanExpiryHtml(datos.nombreNegocio, datos.nombrePlan, datos.fechaVencimiento, datos.diasRestantes, logoSrc),
+        attachments,
+    });
+
+    console.info(`✉️  Aviso de vencimiento enviado a ${email} — messageId: ${info.messageId}`);
+}
+
+module.exports = { sendPasswordResetEmail, sendRegistroVerificationEmail, sendWelcomeEmail, sendAdminNotificationEmail, sendPlanExpiryWarningEmail, verifyTransport };

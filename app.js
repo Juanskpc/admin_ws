@@ -118,6 +118,10 @@ app.use(errorHandler);
                 const { verifyTransport } = require('./app_admin_api/services/mailService');
                 verifyTransport();
             }
+
+            // Iniciar scheduler de vencimientos de plan
+            const planScheduler = require('./app_admin_api/services/planVencimientoScheduler');
+            planScheduler.iniciar();
         });
     } catch (error) {
         console.error('Error al iniciar el servidor:', error.message);

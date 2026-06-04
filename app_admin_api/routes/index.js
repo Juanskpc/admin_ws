@@ -19,6 +19,7 @@ const {
 } = require('../controllers/registroVerificacionController');
 const { verificarYCrear, verificarYCrearValidators } = require('../controllers/registroTrialController');
 const PaletaColorController = require('../controllers/paletaColorController');
+const NotificacionController = require('../controllers/notificacionController');
 const { verificarToken } = require('../../app_core/middleware/auth');
 
 // ============================================================
@@ -170,5 +171,22 @@ router.patch('/planes/:id/inactivar', [
 
 // --- Paletas de colores (asignación, protegida) ---
 router.patch('/negocios/:id/paleta', PaletaColorController.assignPaletaValidators, PaletaColorController.assignPaletaNegocio);
+
+// --- Notificaciones ---
+router.get('/mis-notificaciones', NotificacionController.getMisNotificaciones);
+router.get('/mis-notificaciones/no-leidas', NotificacionController.contarMisNoLeidas);
+router.get('/notificaciones/:id_negocio', [
+    param('id_negocio').isInt({ min: 1 }).withMessage('ID de negocio inválido')
+], NotificacionController.getNotificaciones);
+router.get('/notificaciones/no-leidas/:id_negocio', [
+    param('id_negocio').isInt({ min: 1 }).withMessage('ID de negocio inválido')
+], NotificacionController.contarNoLeidas);
+router.put('/notificaciones/:id_notificacion/leida', [
+    param('id_notificacion').isInt({ min: 1 }).withMessage('ID de notificación inválido'),
+    body('id_negocio').isInt({ min: 1 }).withMessage('ID de negocio inválido')
+], NotificacionController.marcarLeida);
+router.put('/notificaciones/leer-todas/:id_negocio', [
+    param('id_negocio').isInt({ min: 1 }).withMessage('ID de negocio inválido')
+], NotificacionController.marcarTodasLeidas);
 
 module.exports = router;
