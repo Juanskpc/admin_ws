@@ -41,4 +41,28 @@ async function getTipoNegocioById(req, res) {
     }
 }
 
-module.exports = { getListaTiposNegocio, getTipoNegocioById };
+/**
+ * Crear un nuevo tipo de negocio.
+ * POST /admin/tipos-negocio
+ */
+async function createTipoNegocio(req, res) {
+    try {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return Respuesta.error(res, 'Datos de entrada inválidos', 400, errors.array());
+        }
+
+        const { nombre, descripcion, icono, color_hex } = req.body;
+        const tipo = await TipoNegocioDao.createTipoNegocio({ nombre, descripcion, icono, color_hex });
+
+        return Respuesta.success(res, 'Tipo de negocio creado exitosamente', tipo, 201);
+    } catch (error) {
+        if (error?.name === 'SequelizeUniqueConstraintError') {
+            return Respuesta.error(res, 'Ya existe un tipo de negocio con ese nombre', 409);
+        }
+        console.error('Error en createTipoNegocio:', error);
+        return Respuesta.error(res, 'Error al crear el tipo de negocio');
+    }
+}
+
+module.exports = { getListaTiposNegocio, getTipoNegocioById, createTipoNegocio };

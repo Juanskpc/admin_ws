@@ -1,5 +1,6 @@
 const { Op } = require('sequelize');
 const Models = require('../models/conection');
+const planHelper = require('../helpers/planHelper');
 
 function isAdminRoleName(nombreRol = '') {
     return nombreRol.toUpperCase().includes('ADMINISTRADOR');
@@ -218,6 +219,26 @@ async function getUsuarios({ search = '', idRol = null, idNegocio = null, estado
             roles: rolesActivos,
         };
     });
+
+    // Enriquecer cada usuario con el plan vigente de los negocios que tiene asignados.
+    const negocioIds = [...new Set(
+        mapped.flatMap((u) => u.roles.map((r) => r.id_negocio)).filter(Boolean).map(Number)
+    )];
+    const planMap = await planHelper.getPlanesActivosPorNegocio(negocioIds);
+
+    for (const u of mapped) {
+        const negocios = new Map();
+        for (const r of u.roles) {
+            if (r.id_negocio && !negocios.has(r.id_negocio)) {
+                negocios.set(r.id_negocio, r.negocio_nombre || null);
+            }
+        }
+        u.planes = [...negocios.entries()].map(([id_negocio, negocio_nombre]) => ({
+            id_negocio,
+            negocio_nombre,
+            plan: planMap.get(id_negocio) || null,
+        }));
+    }
 
     if (!idRol) return mapped;
     return mapped.filter((u) => u.roles.some((r) => Number(r.id_rol) === Number(idRol)));

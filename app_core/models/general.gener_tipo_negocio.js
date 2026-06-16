@@ -3,6 +3,8 @@ module.exports = (sequelize, DataTypes) => {
         id_tipo_negocio: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
         nombre: { type: DataTypes.STRING(100), allowNull: false, unique: true },
         descripcion: { type: DataTypes.STRING(255) },
+        icono: { type: DataTypes.STRING(50), allowNull: true },
+        color_hex: { type: DataTypes.STRING(20), allowNull: true },
         estado: { type: DataTypes.CHAR(1), allowNull: false, defaultValue: 'A' },
         fecha_creacion: { type: DataTypes.DATE, allowNull: false, defaultValue: DataTypes.NOW },
         fecha_actualizacion: { type: DataTypes.DATE, allowNull: false, defaultValue: DataTypes.NOW }

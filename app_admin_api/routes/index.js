@@ -20,7 +20,8 @@ const {
 const { verificarYCrear, verificarYCrearValidators } = require('../controllers/registroTrialController');
 const PaletaColorController = require('../controllers/paletaColorController');
 const NotificacionController = require('../controllers/notificacionController');
-const { verificarToken } = require('../../app_core/middleware/auth');
+const MetricasController = require('../controllers/metricasController');
+const { verificarToken, requireSuperAdmin } = require('../../app_core/middleware/auth');
 
 // ============================================================
 // RUTAS PÚBLICAS (no requieren autenticación)
@@ -134,6 +135,8 @@ router.patch('/roles/:id/inactivar', [
 // --- Negocios ---
 router.get('/mis-negocios', NegocioController.getMisNegocios);
 router.get('/negocios', NegocioController.getListaNegocios);
+// '/negocios/admin' debe ir ANTES de '/negocios/:id' para no colisionar.
+router.get('/negocios/admin', requireSuperAdmin, NegocioController.getListaNegociosAdmin);
 router.get('/negocios/:id', [
     param('id').isInt({ min: 1 }).withMessage('ID de negocio inválido')
 ], NegocioController.getNegocioById);
@@ -145,12 +148,56 @@ router.post('/negocios', [
         .optional()
         .isEmail().withMessage('El email de contacto no es válido')
 ], NegocioController.createNegocio);
+router.patch('/negocios/:id/plan', requireSuperAdmin, [
+    param('id').isInt({ min: 1 }).withMessage('ID de negocio inválido'),
+    body('id_plan').isInt({ min: 1 }).withMessage('ID de plan inválido'),
+    body('meses').optional().isInt({ min: 1, max: 60 }).withMessage('La duración en meses no es válida'),
+    body('fecha_inicio').optional({ nullable: true }).isISO8601().withMessage('Fecha de inicio inválida'),
+    body('fecha_fin').optional({ nullable: true }).isISO8601().withMessage('Fecha de fin inválida')
+], NegocioController.cambiarPlan);
+router.put('/negocios/:id', requireSuperAdmin, [
+    param('id').isInt({ min: 1 }).withMessage('ID de negocio inválido'),
+    body('nombre').trim().notEmpty().withMessage('El nombre del negocio es requerido'),
+    body('email_contacto').optional({ nullable: true }).isEmail().withMessage('Email de contacto inválido'),
+    body('id_tipo_negocio').optional({ nullable: true }).isInt({ min: 1 }).withMessage('Tipo de negocio inválido')
+], NegocioController.updateNegocio);
+router.patch('/negocios/:id/estado', requireSuperAdmin, [
+    param('id').isInt({ min: 1 }).withMessage('ID de negocio inválido'),
+    body('estado').isIn(['A', 'I']).withMessage('Estado inválido')
+], NegocioController.setEstadoNegocio);
+router.post('/negocios/registrar-cliente', requireSuperAdmin, [
+    body('negocio.nombre').trim().notEmpty().withMessage('El nombre del negocio es requerido'),
+    body('negocio.id_tipo_negocio').isInt({ min: 1 }).withMessage('El tipo de negocio es requerido'),
+    body('negocio.email_contacto').optional({ nullable: true }).isEmail().withMessage('Email de contacto inválido'),
+    body('plan.id_plan').optional({ nullable: true }).isInt({ min: 1 }).withMessage('Plan inválido'),
+    body('plan.meses').optional({ nullable: true }).isInt({ min: 1, max: 60 }).withMessage('Duración inválida'),
+    body('admin.primer_nombre').trim().notEmpty().withMessage('El nombre del administrador es requerido'),
+    body('admin.primer_apellido').trim().notEmpty().withMessage('El apellido del administrador es requerido'),
+    body('admin.num_identificacion').trim().notEmpty().withMessage('La identificación del administrador es requerida'),
+    body('admin.email').isEmail().withMessage('Email del administrador inválido'),
+    body('admin.password').isLength({ min: 8 }).withMessage('La contraseña debe tener mínimo 8 caracteres')
+        .matches(/(?=.*[A-Z])/).withMessage('La contraseña debe tener al menos una mayúscula')
+        .matches(/(?=.*\d)/).withMessage('La contraseña debe tener al menos un número')
+], NegocioController.registrarCliente);
+
+// --- Métricas (Super Admin) ---
+router.get('/metricas/resumen', requireSuperAdmin, MetricasController.getResumen);
 
 // --- Tipos de Negocio ---
 router.get('/tipos-negocio', TipoNegocioController.getListaTiposNegocio);
 router.get('/tipos-negocio/:id', [
     param('id').isInt({ min: 1 }).withMessage('ID de tipo de negocio inválido')
 ], TipoNegocioController.getTipoNegocioById);
+router.post('/tipos-negocio', requireSuperAdmin, [
+    body('nombre')
+        .trim()
+        .notEmpty().withMessage('El nombre del tipo de negocio es requerido')
+        .isLength({ max: 100 }).withMessage('Máximo 100 caracteres'),
+    body('descripcion').optional({ nullable: true }).trim().isLength({ max: 255 }),
+    body('icono').optional({ nullable: true }).trim().isLength({ max: 50 }),
+    body('color_hex').optional({ nullable: true }).trim()
+        .matches(/^#?[0-9A-Fa-f]{3,8}$/).withMessage('Color hexadecimal inválido'),
+], TipoNegocioController.createTipoNegocio);
 
 // --- Planes ---
 router.get('/planes', PlanController.getListaPlanes);
