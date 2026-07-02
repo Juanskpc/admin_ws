@@ -554,6 +554,40 @@ async function updateUsuario(idUsuario, payload, transaction) {
     return idUsuario;
 }
 
+/**
+ * Actualiza ÚNICAMENTE los datos de perfil de un usuario (nombre, apellidos,
+ * identificación, teléfono, email y opcionalmente contraseña).
+ *
+ * A diferencia de `updateUsuario`, NO toca las asignaciones de rol/negocio ni
+ * los niveles, por lo que es seguro para usuarios que administran varios
+ * negocios. `telefono` y `password` solo se modifican si vienen en el payload.
+ */
+async function updatePerfilUsuario(idUsuario, payload, transaction) {
+    const usuario = await Models.GenerUsuario.findByPk(idUsuario, { transaction });
+    if (!usuario) return null;
+
+    const patch = {
+        primer_nombre: payload.primer_nombre,
+        segundo_nombre: payload.segundo_nombre || null,
+        primer_apellido: payload.primer_apellido,
+        segundo_apellido: payload.segundo_apellido || null,
+        num_identificacion: payload.num_identificacion,
+        email: payload.email,
+    };
+
+    if (payload.telefono !== undefined) {
+        patch.telefono = payload.telefono || null;
+    }
+
+    if (payload.password) {
+        patch.password = payload.password;
+    }
+
+    await usuario.update(patch, { transaction });
+
+    return idUsuario;
+}
+
 async function updateEstadoUsuario(idUsuario, estado, transaction) {
     const [affectedRows] = await Models.GenerUsuario.update(
         { estado },
@@ -1017,6 +1051,53 @@ async function getPermisosEfectivosUsuario(idUsuario) {
     };
 }
 
+/**
+ * Agrega (upsert) solo la relación usuario-negocio sin tocar las existentes.
+ * A diferencia de syncUsuarioNegocioActivo, NO inactiva otras relaciones activas.
+ */
+async function addNegocioUsuario(idUsuario, idNegocio, transaction) {
+    const existing = await Models.GenerNegocioUsuario.findOne({
+        where: { id_usuario: idUsuario, id_negocio: idNegocio },
+        transaction,
+    });
+    if (existing) {
+        if (existing.estado !== 'A') {
+            await existing.update({ estado: 'A' }, { transaction });
+        }
+    } else {
+        await Models.GenerNegocioUsuario.create(
+            { id_usuario: idUsuario, id_negocio: idNegocio, estado: 'A' },
+            { transaction },
+        );
+    }
+}
+
+/**
+ * Agrega (upsert) solo el rol usuario-negocio sin tocar los existentes.
+ * A diferencia de syncUsuarioRolActivo, NO inactiva otros roles activos.
+ */
+async function addUsuarioRol(idUsuario, idRol, idNegocio, transaction) {
+    const where = { id_usuario: idUsuario, id_rol: idRol, id_negocio: idNegocio };
+    const existing = await Models.GenerUsuarioRol.findOne({ where, transaction });
+    if (existing) {
+        if (existing.estado !== 'A') {
+            await existing.update({ estado: 'A' }, { transaction });
+        }
+    } else {
+        await Models.GenerUsuarioRol.create({ ...where, estado: 'A' }, { transaction });
+    }
+}
+
+/**
+ * Vincula un usuario existente como administrador de un negocio recién creado.
+ * Usa upsert ADITIVO: solo agrega el nuevo negocio/rol sin inactivar los existentes.
+ */
+async function vincularUsuarioANegocio(idUsuario, idRol, idNegocio, transaction) {
+    await addNegocioUsuario(idUsuario, idNegocio, transaction);
+    await addUsuarioRol(idUsuario, idRol, idNegocio, transaction);
+    await rebuildNivelesUsuario(idUsuario, transaction);
+}
+
 module.exports = {
     isAdminRoleName,
     getUsuarios,
@@ -1027,6 +1108,7 @@ module.exports = {
     countAdminsActivos,
     createUsuario,
     updateUsuario,
+    updatePerfilUsuario,
     updateEstadoUsuario,
     softDeleteUsuario,
     getPermisosMatrizRol,
@@ -1034,4 +1116,5 @@ module.exports = {
     getPermisosEfectivosUsuario,
     syncUsuarioRolActivo,
     rebuildNivelesUsuario,
+    vincularUsuarioANegocio,
 };

@@ -3,7 +3,12 @@ const { Op } = Models.Sequelize;
 
 /**
  * dashboardService — Lógica de negocio para el módulo restaurante.
+ *
+ * Filtra estrictamente a negocios con tipo RESTAURANTE para que usuarios
+ * multi-rubro no vean parqueaderos/gimnasios/etc. al entrar al restaurante.
  */
+
+const TIPO_NEGOCIO_NOMBRE = 'RESTAURANTE';
 
 function normalizeRoutePath(url) {
     if (!url) return '/';
@@ -313,8 +318,9 @@ async function verificarAccesoRestaurante(idUsuario) {
 
     if (!usuario) return null;
 
-    // 2. Obtener negocios del usuario que sean de tipo restaurante
-    // (tipo_negocio con nombre que contenga "restaurante" o similar)
+    // 2. Obtener negocios del usuario que sean de tipo RESTAURANTE.
+    //    El filtro por tipo evita que un usuario multi-rubro vea (y caiga por
+    //    defecto en) negocios de otros verticales sin permisos en esta app.
     const negociosUsuario = await Models.GenerNegocioUsuario.findAll({
         where: { id_usuario: idUsuario, estado: 'A' },
         include: [{
@@ -326,6 +332,8 @@ async function verificarAccesoRestaurante(idUsuario) {
                 {
                     model: Models.GenerTipoNegocio,
                     as: 'tipoNegocio',
+                    where: { nombre: TIPO_NEGOCIO_NOMBRE },
+                    required: true,
                     attributes: ['id_tipo_negocio', 'nombre'],
                 },
                 {

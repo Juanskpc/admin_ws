@@ -252,13 +252,14 @@ async function setEstadoNegocio(idNegocio, estado) {
 
 /**
  * Registra un cliente nuevo: crea el negocio, le asigna un plan (opcional)
- * y crea su usuario administrador — todo en una sola transacción.
+ * y crea (o vincula) su usuario administrador — todo en una sola transacción.
  *
- * @param {Object} payload { negocio, plan, admin }
+ * @param {Object} payload { negocio, plan, admin?, id_usuario_existente? }
  * @returns {Promise<{id_negocio:number, id_usuario:number}>}
  */
-async function registrarCliente({ negocio, plan, admin }) {
-    // Validaciones previas (fallar rápido, fuera de la transacción).
+async function registrarCliente({ negocio, plan, admin, id_usuario_existente }) {
+    // ── Validaciones previas (fallar rápido, fuera de la transacción) ──────────
+
     const tipo = await Models.GenerTipoNegocio.findOne({
         where: { id_tipo_negocio: negocio.id_tipo_negocio, estado: 'A' },
         attributes: ['id_tipo_negocio'],
@@ -269,7 +270,6 @@ async function registrarCliente({ negocio, plan, admin }) {
         throw err;
     }
 
-    // Rol de administrador correspondiente al tipo.
     const roles = await usuarioAdminDao.getRolesActivos({ idTipoNegocio: negocio.id_tipo_negocio });
     const rolAdmin = roles.find((r) => usuarioAdminDao.isAdminRoleName(r.descripcion));
     if (!rolAdmin) {
@@ -278,16 +278,29 @@ async function registrarCliente({ negocio, plan, admin }) {
         throw err;
     }
 
-    // El usuario administrador debe ser nuevo (no duplicar email/identificación).
-    const duplicado = await usuarioAdminDao.findUsuarioDuplicado({
-        email: admin.email,
-        num_identificacion: admin.num_identificacion,
-    });
-    if (duplicado) {
-        const campo = duplicado.email === admin.email ? 'email' : 'número de identificación';
-        const err = new Error(`Ya existe un usuario con ese ${campo}`);
-        err.statusCode = 409;
-        throw err;
+    if (id_usuario_existente) {
+        // Modo "usuario existente": verificar que el usuario exista y esté activo.
+        const existente = await Models.GenerUsuario.findOne({
+            where: { id_usuario: id_usuario_existente, estado: 'A' },
+            attributes: ['id_usuario'],
+        });
+        if (!existente) {
+            const err = new Error('El usuario seleccionado no existe o está inactivo');
+            err.statusCode = 404;
+            throw err;
+        }
+    } else {
+        // Modo "usuario nuevo": evitar duplicados de email / identificación.
+        const duplicado = await usuarioAdminDao.findUsuarioDuplicado({
+            email: admin.email,
+            num_identificacion: admin.num_identificacion,
+        });
+        if (duplicado) {
+            const campo = duplicado.email === admin.email ? 'email' : 'número de identificación';
+            const err = new Error(`Ya existe un usuario con ese ${campo}`);
+            err.statusCode = 409;
+            throw err;
+        }
     }
 
     if (plan?.id_plan) {
@@ -331,21 +344,29 @@ async function registrarCliente({ negocio, plan, admin }) {
             }, { transaction });
         }
 
-        // 3. Usuario administrador (la contraseña se hashea en el hook del modelo)
-        const idUsuario = await usuarioAdminDao.createUsuario({
-            primer_nombre: admin.primer_nombre,
-            segundo_nombre: admin.segundo_nombre || null,
-            primer_apellido: admin.primer_apellido,
-            segundo_apellido: admin.segundo_apellido || null,
-            num_identificacion: admin.num_identificacion,
-            telefono: admin.telefono || null,
-            email: admin.email,
-            password: admin.password,
-            id_rol: rolAdmin.id_rol,
-            id_negocio: idNegocio,
-            estado: 'A',
-            es_admin_principal: false,
-        }, transaction);
+        // 3. Usuario: vincular existente O crear nuevo
+        let idUsuario;
+        if (id_usuario_existente) {
+            await usuarioAdminDao.vincularUsuarioANegocio(
+                id_usuario_existente, rolAdmin.id_rol, idNegocio, transaction,
+            );
+            idUsuario = id_usuario_existente;
+        } else {
+            idUsuario = await usuarioAdminDao.createUsuario({
+                primer_nombre: admin.primer_nombre,
+                segundo_nombre: admin.segundo_nombre || null,
+                primer_apellido: admin.primer_apellido,
+                segundo_apellido: admin.segundo_apellido || null,
+                num_identificacion: admin.num_identificacion,
+                telefono: admin.telefono || null,
+                email: admin.email,
+                password: admin.password,
+                id_rol: rolAdmin.id_rol,
+                id_negocio: idNegocio,
+                estado: 'A',
+                es_admin_principal: false,
+            }, transaction);
+        }
 
         await transaction.commit();
         return { id_negocio: idNegocio, id_usuario: idUsuario };

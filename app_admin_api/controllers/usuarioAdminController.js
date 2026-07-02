@@ -34,6 +34,21 @@ const usuarioAdminValidators = {
         body('estado').isIn(['A', 'I']),
         body('es_admin_principal').optional().isBoolean(),
     ],
+    updatePerfil: [
+        param('id').isInt({ min: 1 }),
+        body('primer_nombre').trim().notEmpty().isLength({ max: 100 }),
+        body('segundo_nombre').optional({ nullable: true }).isString().isLength({ max: 100 }),
+        body('primer_apellido').trim().notEmpty().isLength({ max: 100 }),
+        body('segundo_apellido').optional({ nullable: true }).isString().isLength({ max: 100 }),
+        body('num_identificacion').trim().notEmpty().isLength({ max: 50 }),
+        body('telefono').optional({ nullable: true }).isString().isLength({ max: 50 }),
+        body('email').isEmail().normalizeEmail(),
+        body('password')
+            .optional({ nullable: true, checkFalsy: true })
+            .isLength({ min: 8 }).withMessage('La contraseña debe tener mínimo 8 caracteres')
+            .matches(/(?=.*[A-Z])/).withMessage('La contraseña debe tener al menos una mayúscula')
+            .matches(/(?=.*\d)/).withMessage('La contraseña debe tener al menos un número'),
+    ],
     setEstado: [
         param('id').isInt({ min: 1 }),
         body('estado').isIn(['A', 'I']),
@@ -271,6 +286,58 @@ async function updateUsuario(req, res) {
     }
 }
 
+/**
+ * Actualiza los datos de perfil de un usuario (nombre → contraseña) sin alterar
+ * sus roles/negocios. Endpoint: PUT /admin/usuarios/admin/:id/perfil
+ */
+async function updatePerfilUsuario(req, res) {
+    let transaction;
+    try {
+        const validationError = getValidationErrors(req, res);
+        if (validationError) return validationError;
+
+        const idUsuario = Number(req.params.id);
+        const usuarioActual = await UsuarioAdminDao.getUsuarioById(idUsuario);
+
+        if (!usuarioActual) {
+            return Respuesta.error(res, 'Usuario no encontrado', 404);
+        }
+
+        const payload = {
+            primer_nombre: req.body.primer_nombre,
+            segundo_nombre: req.body.segundo_nombre,
+            primer_apellido: req.body.primer_apellido,
+            segundo_apellido: req.body.segundo_apellido,
+            num_identificacion: req.body.num_identificacion,
+            email: req.body.email.toLowerCase().trim(),
+        };
+        if (req.body.telefono !== undefined) payload.telefono = req.body.telefono;
+        if (req.body.password) payload.password = req.body.password;
+
+        const duplicado = await UsuarioAdminDao.findUsuarioDuplicado({
+            email: payload.email,
+            num_identificacion: payload.num_identificacion,
+            excludeId: idUsuario,
+        });
+
+        if (duplicado) {
+            const campo = duplicado.email === payload.email ? 'email' : 'número de identificación';
+            return Respuesta.error(res, `Ya existe un usuario con ese ${campo}`, 409);
+        }
+
+        transaction = await initTransaction();
+        await UsuarioAdminDao.updatePerfilUsuario(idUsuario, payload, transaction);
+        await transaction.commit();
+
+        return Respuesta.success(res, 'Usuario actualizado correctamente');
+    } catch (error) {
+        if (transaction) await transaction.rollback();
+        console.error('Error en updatePerfilUsuario:', error);
+        const mapped = resolvePersistenceError(error, 'actualizar');
+        return Respuesta.error(res, mapped.message, mapped.status);
+    }
+}
+
 async function setEstadoUsuario(req, res) {
     let transaction;
     try {
@@ -412,15 +479,43 @@ async function savePermisosRol(req, res) {
     }
 }
 
+/**
+ * Búsqueda rápida de usuarios para el autocomplete de "asignar negocio".
+ * GET /admin/usuarios/buscar?q=...
+ * Requiere q ≥ 2 caracteres; solo devuelve usuarios activos.
+ */
+async function buscarUsuarios(req, res) {
+    try {
+        const q = String(req.query.q ?? '').trim();
+        if (q.length < 2) return Respuesta.success(res, 'OK', []);
+
+        const lista = await UsuarioAdminDao.getUsuarios({ search: q, estado: 'A' });
+        const data = lista.map((u) => ({
+            id_usuario: u.id_usuario,
+            primer_nombre: u.primer_nombre,
+            primer_apellido: u.primer_apellido,
+            email: u.email,
+            num_identificacion: u.num_identificacion,
+            telefono: u.telefono ?? null,
+        }));
+        return Respuesta.success(res, 'OK', data);
+    } catch (error) {
+        console.error('Error en buscarUsuarios:', error);
+        return Respuesta.error(res, 'Error al buscar usuarios', 500);
+    }
+}
+
 module.exports = {
     usuarioAdminValidators,
     listUsuarios,
     getRoles,
     createUsuario,
     updateUsuario,
+    updatePerfilUsuario,
     setEstadoUsuario,
     deleteUsuario,
     getPermisosUsuario,
     getPermisosRol,
     savePermisosRol,
+    buscarUsuarios,
 };

@@ -1,5 +1,5 @@
 const express = require('express');
-const { body, param } = require('express-validator');
+const { body, param, query } = require('express-validator');
 const router = express.Router();
 
 const UsuarioController = require('../controllers/usuarioController');
@@ -103,9 +103,13 @@ router.get('/roles', UsuarioController.getListaRoles);
 
 
 // --- Administración de usuarios y permisos ---
+router.get('/usuarios/buscar', requireSuperAdmin, [
+    query('q').optional().isString().isLength({ max: 100 }),
+], UsuarioAdminController.buscarUsuarios);
 router.get('/usuarios/admin', UsuarioAdminController.usuarioAdminValidators.list, UsuarioAdminController.listUsuarios);
 router.post('/usuarios/admin', UsuarioAdminController.usuarioAdminValidators.create, UsuarioAdminController.createUsuario);
 router.put('/usuarios/admin/:id', UsuarioAdminController.usuarioAdminValidators.update, UsuarioAdminController.updateUsuario);
+router.put('/usuarios/admin/:id/perfil', UsuarioAdminController.usuarioAdminValidators.updatePerfil, UsuarioAdminController.updatePerfilUsuario);
 router.patch('/usuarios/admin/:id/estado', UsuarioAdminController.usuarioAdminValidators.setEstado, UsuarioAdminController.setEstadoUsuario);
 router.delete('/usuarios/admin/:id', UsuarioAdminController.usuarioAdminValidators.remove, UsuarioAdminController.deleteUsuario);
 router.get('/usuarios/admin/:id/permisos', UsuarioAdminController.usuarioAdminValidators.getPermisosUsuario, UsuarioAdminController.getPermisosUsuario);
@@ -171,13 +175,33 @@ router.post('/negocios/registrar-cliente', requireSuperAdmin, [
     body('negocio.email_contacto').optional({ nullable: true }).isEmail().withMessage('Email de contacto inválido'),
     body('plan.id_plan').optional({ nullable: true }).isInt({ min: 1 }).withMessage('Plan inválido'),
     body('plan.meses').optional({ nullable: true }).isInt({ min: 1, max: 60 }).withMessage('Duración inválida'),
-    body('admin.primer_nombre').trim().notEmpty().withMessage('El nombre del administrador es requerido'),
-    body('admin.primer_apellido').trim().notEmpty().withMessage('El apellido del administrador es requerido'),
-    body('admin.num_identificacion').trim().notEmpty().withMessage('La identificación del administrador es requerida'),
-    body('admin.email').isEmail().withMessage('Email del administrador inválido'),
-    body('admin.password').isLength({ min: 8 }).withMessage('La contraseña debe tener mínimo 8 caracteres')
+    // Modo A: usuario existente
+    body('id_usuario_existente').optional({ nullable: true }).isInt({ min: 1 }).withMessage('ID de usuario inválido'),
+    // Modo B: crear usuario nuevo (campos requeridos solo cuando no viene id_usuario_existente)
+    body('admin.primer_nombre')
+        .if((_, { req }) => !req.body.id_usuario_existente)
+        .trim().notEmpty().withMessage('El nombre del administrador es requerido'),
+    body('admin.primer_apellido')
+        .if((_, { req }) => !req.body.id_usuario_existente)
+        .trim().notEmpty().withMessage('El apellido del administrador es requerido'),
+    body('admin.num_identificacion')
+        .if((_, { req }) => !req.body.id_usuario_existente)
+        .trim().notEmpty().withMessage('La identificación del administrador es requerida'),
+    body('admin.email')
+        .if((_, { req }) => !req.body.id_usuario_existente)
+        .isEmail().withMessage('Email del administrador inválido'),
+    body('admin.password')
+        .if((_, { req }) => !req.body.id_usuario_existente)
+        .isLength({ min: 8 }).withMessage('La contraseña debe tener mínimo 8 caracteres')
         .matches(/(?=.*[A-Z])/).withMessage('La contraseña debe tener al menos una mayúscula')
-        .matches(/(?=.*\d)/).withMessage('La contraseña debe tener al menos un número')
+        .matches(/(?=.*\d)/).withMessage('La contraseña debe tener al menos un número'),
+    // Validación cruzada: debe venir exactamente uno de los dos modos
+    body().custom((_, { req }) => {
+        if (!req.body.id_usuario_existente && !req.body.admin?.primer_nombre) {
+            throw new Error('Debe crear un usuario nuevo o seleccionar uno existente');
+        }
+        return true;
+    }),
 ], NegocioController.registrarCliente);
 
 // --- Métricas (Super Admin) ---

@@ -188,10 +188,17 @@ async function registrarCliente(req, res) {
             return Respuesta.error(res, 'Datos de entrada inválidos', 400, errors.array());
         }
 
-        const { negocio, plan, admin } = req.body;
-        const adminNorm = { ...admin, email: String(admin.email).toLowerCase().trim() };
+        const { negocio, plan, admin, id_usuario_existente } = req.body;
+        const adminNorm = admin
+            ? { ...admin, email: String(admin.email).toLowerCase().trim() }
+            : null;
 
-        const result = await NegocioDao.registrarCliente({ negocio, plan, admin: adminNorm });
+        const result = await NegocioDao.registrarCliente({
+            negocio,
+            plan,
+            admin: adminNorm,
+            id_usuario_existente: id_usuario_existente ? Number(id_usuario_existente) : null,
+        });
         return Respuesta.success(res, 'Cliente registrado correctamente', result, 201);
     } catch (error) {
         if (error?.name === 'SequelizeUniqueConstraintError') {
