@@ -106,6 +106,11 @@ router.get('/roles', UsuarioController.getListaRoles);
 router.get('/usuarios/buscar', requireSuperAdmin, [
     query('q').optional().isString().isLength({ max: 100 }),
 ], UsuarioAdminController.buscarUsuarios);
+
+// Impersonación: super admin obtiene un token de sesión de cualquier usuario (auditado)
+router.post('/auth/impersonar', requireSuperAdmin, [
+    body('id_usuario').notEmpty().withMessage('El id_usuario objetivo es requerido'),
+], UsuarioController.impersonarUsuario);
 router.get('/usuarios/admin', UsuarioAdminController.usuarioAdminValidators.list, UsuarioAdminController.listUsuarios);
 router.post('/usuarios/admin', UsuarioAdminController.usuarioAdminValidators.create, UsuarioAdminController.createUsuario);
 router.put('/usuarios/admin/:id', UsuarioAdminController.usuarioAdminValidators.update, UsuarioAdminController.updateUsuario);

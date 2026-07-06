@@ -4,6 +4,7 @@ const { validationResult } = require('express-validator');
 
 const LoginDao = require('../../app_core/dao/loginDao');
 const UsuarioDao = require('../../app_core/dao/usuarioDao');
+const ImpersonacionDao = require('../../app_core/dao/impersonacionDao');
 const Respuesta = require('../../app_core/helpers/respuesta');
 const { initTransaction } = require('../../app_core/helpers/funcionesAdicionales');
 
@@ -50,6 +51,58 @@ async function loginUsuario(req, res) {
     } catch (error) {
         console.error('Error en loginUsuario:', error);
         return Respuesta.error(res, 'Error al iniciar sesión');
+    }
+}
+
+/**
+ * Impersonación de super administrador.
+ * Permite a un SUPER ADMINISTRADOR (ya autenticado, validado por requireSuperAdmin)
+ * obtener un token de sesión de cualquier usuario activo, para dar soporte/control total.
+ *
+ * No usa ningún secreto compartido: la autoridad proviene de la identidad del super admin.
+ * El token emitido lleva `impersonado_por` (auditable) y una expiración corta.
+ * Cada uso queda registrado en general.gener_impersonacion.
+ */
+async function impersonarUsuario(req, res) {
+    try {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return Respuesta.error(res, 'Datos de entrada inválidos', 400, errors.array());
+        }
+
+        const adminId = req.usuario.id_usuario;            // super admin autenticado
+        const { id_usuario } = req.body;                   // usuario objetivo
+
+        if (Number(id_usuario) === Number(adminId)) {
+            return Respuesta.error(res, 'No es necesario impersonarse a sí mismo', 400);
+        }
+
+        // getUsuarioLogin ya filtra estado 'A': null ⇒ no existe o inactivo
+        const objetivo = await LoginDao.getUsuarioLogin(id_usuario);
+        if (!objetivo) {
+            return Respuesta.error(res, 'Usuario objetivo no encontrado o inactivo', 404);
+        }
+
+        // Registrar auditoría antes de emitir el token (si falla, se aborta: no hay impersonación sin rastro)
+        await ImpersonacionDao.registrarImpersonacion({
+            id_admin: adminId,
+            id_usuario_objetivo: id_usuario,
+            ip: req.ip,
+            user_agent: req.headers['user-agent'] || null,
+        });
+
+        const token = jwt.sign(
+            { id_usuario, impersonado_por: adminId },
+            process.env.JWT_SECRET,
+            { expiresIn: process.env.JWT_IMPERSONATION_EXPIRES_IN || '1h' }
+        );
+
+        console.warn(`[IMPERSONACION] super admin ${adminId} inició sesión como usuario ${id_usuario}`);
+
+        return Respuesta.success(res, 'Sesión de impersonación creada', { token, usuario: objetivo });
+    } catch (error) {
+        console.error('Error en impersonarUsuario:', error);
+        return Respuesta.error(res, 'Error al crear la sesión de impersonación');
     }
 }
 
@@ -279,4 +332,4 @@ async function getMisNegociosPlanInfo(req, res) {
     }
 }
 
-module.exports = { loginUsuario, createUsuario, getListaRoles, getPerfil, updatePerfil, changePassword, getMisNegociosPlanInfo };
+module.exports = { loginUsuario, impersonarUsuario, createUsuario, getListaRoles, getPerfil, updatePerfil, changePassword, getMisNegociosPlanInfo };
