@@ -27,14 +27,11 @@
     "migrate:parqueadero-qr": "node migrations/migrate_parqueadero_qr.js",
     "migrate:notificaciones": "node migrations/migrate_notificaciones.js",
     "migrate:tipo-negocio-branding": "node migrations/migrate_tipo_negocio_branding.js",
-<<<<<<< Updated upstream
-    "migrate:impersonacion": "node migrations/migrate_impersonacion.js"
-=======
+    "migrate:impersonacion": "node migrations/migrate_impersonacion.js",
     "migrate:auditoria-base": "node migrations/migrate_auditoria_base.js",
     "migrate:auditoria-general": "node migrations/migrate_auditoria_general.js",
     "migrate:auditoria-restaurante": "node migrations/migrate_auditoria_restaurante.js",
     "migrate:auditoria-verticales": "node migrations/migrate_auditoria_verticales.js"
->>>>>>> Stashed changes
   },
   "keywords": [],
   "author": "",
