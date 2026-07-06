@@ -1,6 +1,7 @@
 const { body, validationResult } = require('express-validator');
 const PwResetService = require('../services/passwordResetService');
 const Respuesta = require('../../app_core/helpers/respuesta');
+const Audit = require('../../app_core/helpers/auditHelper');
 
 /**
  * resetPasswordController — POST /admin/auth/reset-password
@@ -37,9 +38,16 @@ async function resetPassword(req, res) {
         const result = await PwResetService.verifyAndReset(email, code, newPassword);
 
         if (!result.ok) {
+            await Audit.registrarEvento({
+                modulo: 'auth', accion: 'password_reset_fail', resultado: 'error',
+                detalle: { email, motivo: result.error || 'codigo_invalido' },
+            });
             return Respuesta.error(res, result.error || 'Código inválido o expirado.', 400);
         }
 
+        await Audit.registrarEvento({
+            modulo: 'auth', accion: 'password_reset_completado', detalle: { email },
+        });
         return Respuesta.success(res, 'Contraseña actualizada correctamente. Ya puedes iniciar sesión.');
     } catch (err) {
         console.error('[ResetPassword] Error interno:', err.message);

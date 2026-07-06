@@ -71,6 +71,56 @@ sequelize.addHook('afterConnect', async (connection) => {
   await connection.query(`SET TIME ZONE '${appTimezone}'`);
 });
 
+// ── Contexto de auditoría por transacción ──
+// Al abrir cada transacción se fijan las GUC `app.id_usuario` / `app.id_negocio`
+// vía set_config(..., is_local = true) — equivalente a SET LOCAL: el valor muere
+// con la transacción, seguro con el pool. La función trigger auditoria.fn_audit()
+// las lee con current_setting(..., true) para atribuir el actor del cambio.
+// El contexto viene del middleware auditContext (AsyncLocalStorage por request);
+// fuera de un request (crons, scripts) simplemente no se fija nada.
+const { getAuditContext } = require('../middleware/auditContext');
+const _transaction = sequelize.transaction.bind(sequelize);
+sequelize.transaction = function (options, autoCallback) {
+  if (typeof options === 'function') {
+    autoCallback = options;
+    options = undefined;
+  }
+
+  const aplicarContexto = async (t) => {
+    try {
+      const ctx = getAuditContext();
+      if (ctx.idUsuario == null && ctx.idNegocio == null) return;
+      await sequelize.query(
+        `SELECT set_config('app.id_usuario', $1, true), set_config('app.id_negocio', $2, true)`,
+        {
+          bind: [
+            ctx.idUsuario == null ? '' : String(ctx.idUsuario),
+            ctx.idNegocio == null ? '' : String(ctx.idNegocio),
+          ],
+          transaction: t,
+        }
+      );
+    } catch (err) {
+      // La auditoría nunca debe romper la operación de negocio
+      console.warn('auditContext: no se pudo fijar el contexto de auditoría:', err.message);
+    }
+  };
+
+  if (autoCallback) {
+    // Forma managed: sequelize.transaction(async (t) => { ... })
+    return _transaction(options, async (t) => {
+      await aplicarContexto(t);
+      return autoCallback(t);
+    });
+  }
+
+  // Forma unmanaged: const t = await sequelize.transaction()
+  return _transaction(options).then(async (t) => {
+    await aplicarContexto(t);
+    return t;
+  });
+};
+
 const db = {};
 const modelsPath = __dirname;
 

@@ -21,6 +21,7 @@ const { verificarYCrear, verificarYCrearValidators } = require('../controllers/r
 const PaletaColorController = require('../controllers/paletaColorController');
 const NotificacionController = require('../controllers/notificacionController');
 const MetricasController = require('../controllers/metricasController');
+const AuditoriaController = require('../controllers/auditoriaController');
 const { verificarToken, requireSuperAdmin } = require('../../app_core/middleware/auth');
 
 // ============================================================
@@ -211,6 +212,24 @@ router.post('/negocios/registrar-cliente', requireSuperAdmin, [
 
 // --- Métricas (Super Admin) ---
 router.get('/metricas/resumen', requireSuperAdmin, MetricasController.getResumen);
+
+// --- Auditoría (Super Admin) ---
+const auditoriaFiltrosComunes = [
+    query('id_negocio').optional().isInt({ min: 1 }).withMessage('id_negocio inválido'),
+    query('id_usuario').optional().isInt({ min: 1 }).withMessage('id_usuario inválido'),
+    query('desde').optional().isISO8601().withMessage('Fecha desde inválida (YYYY-MM-DD)'),
+    query('hasta').optional().isISO8601().withMessage('Fecha hasta inválida (YYYY-MM-DD)'),
+    query('page').optional().isInt({ min: 1 }),
+    query('limit').optional().isInt({ min: 1, max: 100 }),
+];
+router.get('/auditoria/datos', requireSuperAdmin, [
+    ...auditoriaFiltrosComunes,
+    query('operacion').optional().isIn(['I', 'U', 'D', 'B']).withMessage('Operación inválida'),
+], AuditoriaController.getDatos);
+router.get('/auditoria/eventos', requireSuperAdmin, auditoriaFiltrosComunes, AuditoriaController.getEventos);
+router.get('/auditoria/catalogo', requireSuperAdmin, AuditoriaController.getCatalogo);
+router.get('/auditoria/datos/export', requireSuperAdmin, AuditoriaController.exportDatos);
+router.get('/auditoria/eventos/export', requireSuperAdmin, AuditoriaController.exportEventos);
 
 // --- Tipos de Negocio ---
 router.get('/tipos-negocio', TipoNegocioController.getListaTiposNegocio);

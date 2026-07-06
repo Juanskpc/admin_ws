@@ -1,6 +1,7 @@
 const { body, validationResult } = require('express-validator');
 const PwResetService = require('../services/passwordResetService');
 const Respuesta = require('../../app_core/helpers/respuesta');
+const Audit = require('../../app_core/helpers/auditHelper');
 
 /**
  * forgotPasswordController — POST /admin/auth/forgot-password
@@ -31,6 +32,12 @@ async function forgotPassword(req, res) {
     }
 
     const { email } = req.body;
+
+    // La respuesta HTTP es anti-enumeration, pero la auditoría interna sí
+    // registra toda solicitud de reset (señal de seguridad).
+    await Audit.registrarEvento({
+        modulo: 'auth', accion: 'password_reset_solicitado', detalle: { email },
+    });
 
     try {
         // createResetToken maneja internamente el caso de email inexistente

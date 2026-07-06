@@ -2,6 +2,8 @@
 const { validationResult } = require('express-validator');
 const CajaService = require('../services/cajaService');
 const Respuesta = require('../../app_core/helpers/respuesta');
+const Audit = require('../../app_core/helpers/auditHelper');
+const { setAuditNegocio } = require('../../app_core/middleware/auditContext');
 
 function handleValidation(req, res) {
     const errors = validationResult(req);
@@ -31,11 +33,16 @@ async function abrirCaja(req, res) {
     if (!handleValidation(req, res)) return;
     try {
         const { id_negocio, monto_apertura, observaciones } = req.body;
+        setAuditNegocio(id_negocio);
         const caja = await CajaService.abrirCaja({
             idNegocio: id_negocio,
             idUsuario: req.usuario.id_usuario,
             montoApertura: Number(monto_apertura) || 0,
             observaciones,
+        });
+        await Audit.registrarEvento({
+            modulo: 'caja', accion: 'caja_abierta', idNegocio: id_negocio,
+            detalle: { id_caja: caja?.id_caja, monto_apertura: Number(monto_apertura) || 0 },
         });
         return Respuesta.success(res, 'Caja abierta', caja, 201);
     } catch (err) {
@@ -54,6 +61,7 @@ async function cerrarCaja(req, res) {
         const idCaja = Number(req.params.id);
         const { id_negocio, monto_reportado, observaciones } = req.body;
 
+        setAuditNegocio(Number(id_negocio));
         const caja = await CajaService.cerrarCaja({
             idCaja,
             idNegocio: Number(id_negocio),
@@ -61,6 +69,10 @@ async function cerrarCaja(req, res) {
             observaciones,
         });
         if (!caja) return Respuesta.error(res, 'Caja no encontrada o ya cerrada.', 404);
+        await Audit.registrarEvento({
+            modulo: 'caja', accion: 'caja_cerrada', idNegocio: Number(id_negocio),
+            detalle: { id_caja: idCaja, monto_reportado },
+        });
         return Respuesta.success(res, 'Caja cerrada', caja);
     } catch (err) {
         if (err.code === 'PENDIENTES_ACTIVOS') {
@@ -126,10 +138,15 @@ async function transferirDomiciliario(req, res) {
     if (!handleValidation(req, res)) return;
     try {
         const { id_negocio, id_domiciliario } = req.body;
+        setAuditNegocio(Number(id_negocio));
         const result = await CajaService.transferirDomiciliarioACaja({
             idNegocio: Number(id_negocio),
             idDomiciliario: Number(id_domiciliario),
             idUsuario: req.usuario?.id_usuario,
+        });
+        await Audit.registrarEvento({
+            modulo: 'caja', accion: 'domiciliario_transferido', idNegocio: Number(id_negocio),
+            detalle: { id_domiciliario: Number(id_domiciliario) },
         });
         return Respuesta.success(res, 'Pedidos transferidos a caja', result);
     } catch (err) {

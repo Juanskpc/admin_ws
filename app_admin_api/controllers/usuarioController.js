@@ -6,6 +6,7 @@ const LoginDao = require('../../app_core/dao/loginDao');
 const UsuarioDao = require('../../app_core/dao/usuarioDao');
 const ImpersonacionDao = require('../../app_core/dao/impersonacionDao');
 const Respuesta = require('../../app_core/helpers/respuesta');
+const Audit = require('../../app_core/helpers/auditHelper');
 const { initTransaction } = require('../../app_core/helpers/funcionesAdicionales');
 
 /**
@@ -24,16 +25,28 @@ async function loginUsuario(req, res) {
         // Buscar usuario por número de identificación
         const usuario = await LoginDao.getPwUsuario(num_identificacion);
         if (!usuario) {
+            await Audit.registrarEvento({
+                modulo: 'auth', accion: 'login_fail', resultado: 'error',
+                detalle: { num_identificacion, motivo: 'usuario_no_existe' },
+            });
             return Respuesta.error(res, 'Credenciales incorrectas', 401);
         }
 
         if (usuario.estado !== 'A') {
+            await Audit.registrarEvento({
+                modulo: 'auth', accion: 'login_fail', resultado: 'denegado',
+                idUsuario: usuario.id_usuario, detalle: { motivo: 'usuario_inactivo' },
+            });
             return Respuesta.error(res, 'Usuario inactivo. Comuníquese con un administrador.', 403);
         }
 
         // Verificar contraseña
         const pwCorrecta = await Bcrypt.compare(password, usuario.password);
         if (!pwCorrecta) {
+            await Audit.registrarEvento({
+                modulo: 'auth', accion: 'login_fail', resultado: 'error',
+                idUsuario: usuario.id_usuario, detalle: { motivo: 'password_incorrecta' },
+            });
             return Respuesta.error(res, 'Credenciales incorrectas', 401);
         }
 
@@ -46,6 +59,10 @@ async function loginUsuario(req, res) {
             process.env.JWT_SECRET,
             { expiresIn: process.env.JWT_EXPIRES_IN || '24h' }
         );
+
+        await Audit.registrarEvento({
+            modulo: 'auth', accion: 'login_ok', idUsuario: usuario.id_usuario,
+        });
 
         return Respuesta.success(res, 'Login exitoso', { token, usuario: datosUsuario });
     } catch (error) {
@@ -254,10 +271,17 @@ async function changePassword(req, res) {
         if (!usuario) return Respuesta.error(res, 'Usuario no encontrado', 404);
 
         const match = await Bcrypt.compare(currentPassword, usuario.password);
-        if (!match) return Respuesta.error(res, 'La contraseña actual es incorrecta', 400);
+        if (!match) {
+            await Audit.registrarEvento({
+                modulo: 'auth', accion: 'password_cambio_fail', resultado: 'denegado',
+                detalle: { motivo: 'password_actual_incorrecta' },
+            });
+            return Respuesta.error(res, 'La contraseña actual es incorrecta', 400);
+        }
 
         const hash = await Bcrypt.hash(newPassword, 10);
         await UsuarioDao.updatePassword(id_usuario, hash);
+        await Audit.registrarEvento({ modulo: 'auth', accion: 'password_cambiada' });
         return Respuesta.success(res, 'Contraseña actualizada correctamente');
     } catch (err) {
         console.error('Error en changePassword:', err);

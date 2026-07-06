@@ -76,6 +76,11 @@ app.use('/admin/auth/login', loginLimiter);
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
+// Contexto de auditoría por request (AsyncLocalStorage) — debe ir ANTES de las
+// rutas para que las transacciones abiertas en services hereden el actor JWT.
+const { auditContext } = require('./app_core/middleware/auditContext');
+app.use(auditContext);
+
 // ========================
 // Rutas
 // ========================
@@ -122,6 +127,10 @@ app.use(errorHandler);
             // Iniciar scheduler de vencimientos de plan
             const planScheduler = require('./app_admin_api/services/planVencimientoScheduler');
             planScheduler.iniciar();
+
+            // Iniciar scheduler de particiones de auditoría
+            const auditScheduler = require('./app_core/helpers/auditParticionScheduler');
+            auditScheduler.iniciar();
         });
     } catch (error) {
         console.error('Error al iniciar el servidor:', error.message);

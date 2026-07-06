@@ -9,6 +9,7 @@
 const { body, validationResult } = require('express-validator');
 const RegistroTrialService = require('../services/registroTrialService');
 const Respuesta = require('../../app_core/helpers/respuesta');
+const Audit = require('../../app_core/helpers/auditHelper');
 
 const verificarYCrearValidators = [
     body('email')
@@ -31,8 +32,19 @@ async function verificarYCrear(req, res) {
         const result = await RegistroTrialService.verificarYCrearCuentaTrial(email, code);
 
         if (!result.ok) {
+            await Audit.registrarEvento({
+                modulo: 'auth', accion: 'registro_trial_fail', resultado: 'error',
+                detalle: { email, motivo: result.error },
+            });
             return Respuesta.error(res, result.error, 400);
         }
+
+        await Audit.registrarEvento({
+            modulo: 'auth', accion: 'registro_trial_creado',
+            idUsuario: result.data?.id_usuario ?? null,
+            idNegocio: result.data?.id_negocio ?? null,
+            detalle: { email },
+        });
 
         return Respuesta.success(res,
             '¡Cuenta creada exitosamente! Revisa tu correo para ver tus credenciales de acceso.',
