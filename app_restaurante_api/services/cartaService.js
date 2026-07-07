@@ -18,7 +18,7 @@ function normalizeSearchText(value = '') {
 async function getCategorias(idNegocio) {
     return Models.CartaCategoria.findAll({
         where: { id_negocio: idNegocio, estado: 'A' },
-        attributes: ['id_categoria', 'nombre', 'descripcion', 'icono', 'orden'],
+        attributes: ['id_categoria', 'nombre', 'descripcion', 'icono', 'imagen_url', 'orden'],
         include: [{
             model: Models.CartaProducto,
             as: 'productos',
@@ -36,7 +36,7 @@ async function getCategorias(idNegocio) {
 async function getCategoriasPublicas(idNegocio) {
     return Models.CartaCategoria.findAll({
         where: { id_negocio: idNegocio, estado: 'A', visible: true },
-        attributes: ['id_categoria', 'nombre', 'descripcion', 'icono', 'orden'],
+        attributes: ['id_categoria', 'nombre', 'descripcion', 'icono', 'imagen_url', 'orden'],
         include: [{
             model: Models.CartaProducto,
             as: 'productos',
@@ -117,7 +117,7 @@ async function buscarProductos(idNegocio, termino, options = {}) {
             estado: 'A',
             ...(includeDisabled ? {} : { disponible: true }),
         },
-        attributes: ['id_producto', 'nombre', 'descripcion', 'precio', 'icono', 'es_popular', 'id_categoria', 'disponible', 'visible'],
+        attributes: ['id_producto', 'nombre', 'descripcion', 'precio', 'imagen_url', 'icono', 'es_popular', 'id_categoria', 'disponible', 'visible'],
         include: [{
             model: Models.CartaCategoria,
             as: 'categoria',

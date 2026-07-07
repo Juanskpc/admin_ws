@@ -231,7 +231,7 @@ async function syncProductoIngredientes(idProducto, ingredientes, transaction) {
 async function getCategoriasAdmin(idNegocio) {
     return Models.CartaCategoria.findAll({
         where: { id_negocio: idNegocio, estado: 'A' },
-        attributes: ['id_categoria', 'nombre', 'descripcion', 'icono', 'orden', 'visible', 'estado'],
+        attributes: ['id_categoria', 'nombre', 'descripcion', 'icono', 'imagen_url', 'orden', 'visible', 'estado'],
         include: [{
             model: Models.CartaProducto,
             as: 'productos',
@@ -244,25 +244,27 @@ async function getCategoriasAdmin(idNegocio) {
 }
 
 /** Crea una categoría para el menú. */
-async function crearCategoria({ id_negocio, nombre, descripcion, icono, orden, visible }) {
+async function crearCategoria({ id_negocio, nombre, descripcion, icono, imagen_url, orden, visible }) {
     return Models.CartaCategoria.create({
         id_negocio,
         nombre,
         descripcion: descripcion || null,
         icono: icono || '🍽️',
+        imagen_url: imagen_url || null,
         orden: orden || 0,
         visible: visible !== undefined ? visible : true,
     });
 }
 
 /** Edita una categoría existente. */
-async function editarCategoria(idCategoria, { nombre, descripcion, icono, orden, visible }) {
+async function editarCategoria(idCategoria, { nombre, descripcion, icono, imagen_url, orden, visible }) {
     const cat = await Models.CartaCategoria.findByPk(idCategoria);
     if (!cat) throw new Error('Categoría no encontrada');
     return cat.update({
         nombre:      nombre      ?? cat.nombre,
         descripcion: descripcion ?? cat.descripcion,
         icono:       icono       ?? cat.icono,
+        imagen_url:  imagen_url  !== undefined ? imagen_url : cat.imagen_url,
         orden:       orden       ?? cat.orden,
         visible:     visible     !== undefined ? visible : cat.visible,
     });

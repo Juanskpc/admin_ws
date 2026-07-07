@@ -1,4 +1,7 @@
 const express = require('express');
+const path = require('path');
+const fs = require('fs');
+const multer = require('multer');
 const { body, param, query } = require('express-validator');
 const router = express.Router();
 
@@ -14,6 +17,39 @@ const ConfiguracionController = require('../controllers/configuracionController'
 const CajaController       = require('../controllers/cajaController');
 const MetodoPagoController = require('../controllers/metodoPagoController');
 const { verificarToken }   = require('../../app_core/middleware/auth');
+
+// ───────── Multer: imágenes de la carta (productos y categorías) ─────────
+// Se guardan en admin_ws/uploads/restaurante/menu/<id_negocio>/ y se sirven
+// públicamente desde /uploads/restaurante/menu (ver app.js).
+const MENU_IMG_BASE = path.resolve(path.join(__dirname, '..', '..', 'uploads', 'restaurante', 'menu'));
+// El archivo se nombra con el ID de la entidad (no un hash) y se separa por
+// tipo (producto/categoria) para que los IDs no colisionen entre sí.
+const menuImgTipo = (raw) => (raw === 'categoria' ? 'categoria' : 'producto');
+const menuImgStorage = multer.diskStorage({
+    destination(req, _file, cb) {
+        const idNegocio = String(req.params.id_negocio || 'misc').replace(/[^\d]/g, '') || 'misc';
+        const tipo = menuImgTipo(req.params.tipo);
+        const dir = path.join(MENU_IMG_BASE, idNegocio, tipo);
+        fs.mkdirSync(dir, { recursive: true });
+        cb(null, dir);
+    },
+    filename(req, file, cb) {
+        const idEntidad = String(req.params.id_entidad || '').replace(/[^\d]/g, '') || 'tmp';
+        const ext = file.mimetype === 'image/png' ? '.png'
+            : file.mimetype === 'image/jpeg' ? '.jpg'
+            : '.webp';
+        cb(null, `${idEntidad}${ext}`);
+    },
+});
+const menuImgFilter = (_req, file, cb) => {
+    if (['image/jpeg', 'image/png', 'image/webp'].includes(file.mimetype)) cb(null, true);
+    else cb(Object.assign(new Error('Solo se permiten imágenes JPG, PNG o WEBP'), { statusCode: 400 }));
+};
+const uploadMenuImg = multer({
+    storage: menuImgStorage,
+    fileFilter: menuImgFilter,
+    limits: { fileSize: 5 * 1024 * 1024 },  // 5 MB
+});
 
 // ============================================================
 // RUTAS PÚBLICAS (no requieren autenticación)
@@ -95,6 +131,18 @@ router.get('/carta/admin/productos',           CartaAdminController.getProductos
 router.post('/carta/admin/productos',          CartaAdminController.crearProducto);
 router.put('/carta/admin/productos/:id',       CartaAdminController.editarProducto);
 router.delete('/carta/admin/productos/:id',    CartaAdminController.eliminarProducto);
+
+// Subida de imágenes de carta (opcional; conviven con los íconos).
+// El archivo se nombra con el ID de la entidad: <id>.webp
+router.post('/carta/admin/:id_negocio/imagen/:tipo/:id_entidad',
+    [
+        param('id_negocio').isInt({ min: 1 }),
+        param('tipo').isIn(['producto', 'categoria']),
+        param('id_entidad').isInt({ min: 1 }),
+    ],
+    uploadMenuImg.single('imagen'),
+    CartaAdminController.subirImagenCarta,
+);
 
 router.post('/carta/admin/ingredientes',       CartaAdminController.crearIngrediente);
 router.put('/carta/admin/ingredientes/:id', [

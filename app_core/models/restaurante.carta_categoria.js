@@ -5,6 +5,7 @@ module.exports = (sequelize, DataTypes) => {
         nombre:         { type: DataTypes.STRING(100), allowNull: false },
         descripcion:    { type: DataTypes.STRING(255) },
         icono:          { type: DataTypes.STRING(50) },
+        imagen_url:     { type: DataTypes.STRING(500) },
         orden:          { type: DataTypes.INTEGER, defaultValue: 0 },
         visible:        { type: DataTypes.BOOLEAN, defaultValue: true },
         estado:         { type: DataTypes.CHAR(1), defaultValue: 'A' },

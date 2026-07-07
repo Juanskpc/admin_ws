@@ -47,6 +47,7 @@ async function getCategorias(req, res) {
             nombre: c.nombre,
             descripcion: c.descripcion,
             icono: c.icono,
+            imagen_url: c.imagen_url,
             orden: c.orden,
             total_productos: c.productos ? c.productos.length : 0,
         }));

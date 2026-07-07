@@ -19,6 +19,7 @@ async function getCategorias(req, res) {
             nombre:       c.nombre,
             descripcion:  c.descripcion,
             icono:        c.icono,
+            imagen_url:   c.imagen_url,
             orden:        c.orden,
             total_productos: c.productos ? c.productos.length : 0,
         }));
@@ -83,6 +84,7 @@ async function buscarProductos(req, res) {
             nombre:       p.nombre,
             descripcion:  p.descripcion,
             precio:       Number(p.precio),
+            imagen_url:   p.imagen_url,
             icono:        p.icono,
             es_popular:   p.es_popular,
             disponible:   p.disponible !== false,

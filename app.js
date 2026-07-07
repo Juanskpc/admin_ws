@@ -1,5 +1,6 @@
 require('dotenv').config();
 const express = require('express');
+const path = require('path');
 const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
@@ -80,6 +81,23 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 // rutas para que las transacciones abiertas en services hereden el actor JWT.
 const { auditContext } = require('./app_core/middleware/auditContext');
 app.use(auditContext);
+
+// ========================
+// Archivos estáticos públicos
+// ========================
+// Imágenes del menú (carta) del restaurante. Se sirve SOLO esta subcarpeta
+// (no todo /uploads) para no exponer comprobantes de pago ni reportes privados.
+// CORP cross-origin: el menú digital vive en otro origen (escalapp.cloud) y
+// debe poder cargar estas imágenes servidas desde api.escalapp.cloud.
+app.use(
+    '/uploads/restaurante/menu',
+    express.static(path.join(__dirname, 'uploads', 'restaurante', 'menu'), {
+        maxAge: '7d',
+        setHeaders(res) {
+            res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+        },
+    })
+);
 
 // ========================
 // Rutas

@@ -19,6 +19,7 @@
     "migrate:restaurante-domicilio": "node migrations/migrate_restaurante_domicilio.js",
     "migrate:restaurante-estado-pago": "node migrations/migrate_restaurante_estado_pago.js",
     "migrate:restaurante-inventario-gestionar": "node migrations/migrate_restaurante_inventario_gestionar.js",
+    "migrate:restaurante-imagenes": "node migrations/migrate_restaurante_imagenes.js",
     "migrate:tienda": "node migrations/migrate_tienda.js",
     "migrate:reserva": "node migrations/migrate_reserva.js",
     "migrate:planes-base": "node migrations/migrate_planes_base.js",

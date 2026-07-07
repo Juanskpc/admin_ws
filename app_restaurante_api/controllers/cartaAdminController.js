@@ -1,3 +1,5 @@
+const fs = require('fs');
+const path = require('path');
 const CartaAdminService = require('../services/cartaAdminService');
 const Respuesta = require('../../app_core/helpers/respuesta');
 
@@ -99,6 +101,42 @@ async function eliminarIngrediente(req, res) {
     }
 }
 
+// ── Imágenes de carta ─────────────────────────────────────────────────
+
+/**
+ * POST /restaurante/carta/admin/:id_negocio/imagen/:tipo/:id_entidad
+ * (multipart, campo "imagen"). El archivo se nombra con el ID de la entidad.
+ */
+async function subirImagenCarta(req, res) {
+    try {
+        const idNegocio = Number(req.params.id_negocio);
+        const tipo = req.params.tipo === 'categoria' ? 'categoria' : 'producto';
+        const idEntidad = Number(req.params.id_entidad);
+        if (!idNegocio) return Respuesta.error(res, 'id_negocio requerido', 400);
+        if (!idEntidad) return Respuesta.error(res, 'id de entidad requerido', 400);
+        if (!req.file) return Respuesta.error(res, 'No se recibió ninguna imagen', 400);
+
+        // Limpia versiones anteriores del mismo ID con otra extensión
+        // (p.ej. reemplazar un antiguo <id>.jpg por el nuevo <id>.webp).
+        try {
+            const dir = req.file.destination;
+            for (const nombre of fs.readdirSync(dir)) {
+                if (nombre !== req.file.filename && nombre.startsWith(`${idEntidad}.`)) {
+                    fs.unlinkSync(path.join(dir, nombre));
+                }
+            }
+        } catch { /* limpieza best-effort */ }
+
+        // ?v= evita que el caché (navegador/CDN) sirva la imagen anterior,
+        // ya que el nombre del archivo es fijo por ID.
+        const imagen_url = `/uploads/restaurante/menu/${idNegocio}/${tipo}/${req.file.filename}?v=${Date.now()}`;
+        return Respuesta.success(res, 'Imagen subida', { imagen_url }, 201);
+    } catch (err) {
+        console.error('[CartaAdmin] Error subirImagenCarta:', err.message);
+        return Respuesta.error(res, 'Error al subir la imagen.');
+    }
+}
+
 // ── Categorías ────────────────────────────────────────────────────────
 
 /** GET /restaurante/carta/admin/categorias?id_negocio=N */
@@ -113,6 +151,7 @@ async function getCategoriasAdmin(req, res) {
             nombre:          c.nombre,
             descripcion:     c.descripcion,
             icono:           c.icono,
+            imagen_url:      c.imagen_url,
             orden:           c.orden,
             visible:         c.visible !== false,
             total_productos: c.productos ? c.productos.length : 0,
@@ -128,16 +167,17 @@ async function getCategoriasAdmin(req, res) {
 /** POST /restaurante/carta/admin/categorias */
 async function crearCategoria(req, res) {
     try {
-        const { id_negocio, nombre, descripcion, icono, orden, visible } = req.body;
+        const { id_negocio, nombre, descripcion, icono, imagen_url, orden, visible } = req.body;
         if (!id_negocio || !nombre?.trim()) {
             return Respuesta.error(res, 'id_negocio y nombre son requeridos', 400);
         }
 
-        const cat = await CartaAdminService.crearCategoria({ id_negocio, nombre: nombre.trim(), descripcion, icono, orden, visible });
+        const cat = await CartaAdminService.crearCategoria({ id_negocio, nombre: nombre.trim(), descripcion, icono, imagen_url, orden, visible });
         return Respuesta.success(res, 'Categoría creada', {
             id_categoria: cat.id_categoria,
             nombre:       cat.nombre,
             icono:        cat.icono,
+            imagen_url:   cat.imagen_url,
             orden:        cat.orden,
             visible:      cat.visible !== false,
         }, 201);
@@ -227,11 +267,11 @@ async function crearProducto(req, res) {
             return Respuesta.error(res, 'id_negocio, id_categoria, nombre y precio son requeridos', 400);
         }
 
-        await CartaAdminService.crearProducto({
+        const prod = await CartaAdminService.crearProducto({
             id_negocio, id_categoria, nombre: nombre.trim(), descripcion,
             precio, icono, imagen_url, es_popular, disponible, visible, ingredientes,
         });
-        return Respuesta.success(res, 'Producto creado', null, 201);
+        return Respuesta.success(res, 'Producto creado', { id_producto: prod.id_producto }, 201);
     } catch (err) {
         console.error('[CartaAdmin] Error crearProducto:', err.message);
         return Respuesta.error(res, 'Error al crear producto.');
@@ -271,6 +311,7 @@ module.exports = {
     crearIngrediente,
     editarIngrediente,
     eliminarIngrediente,
+    subirImagenCarta,
     getCategoriasAdmin,
     crearCategoria,
     editarCategoria,
