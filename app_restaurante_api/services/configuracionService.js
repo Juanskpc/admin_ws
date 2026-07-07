@@ -106,6 +106,7 @@ async function getConfiguracionNegocio(idUsuario, idNegocio = null) {
             'url_instagram',
             'id_tipo_negocio',
             'id_paleta',
+            'permite_multipago',
             'fecha_registro',
         ],
         include: [
@@ -144,6 +145,7 @@ async function getConfiguracionNegocio(idUsuario, idNegocio = null) {
         tipo_negocio: negocio.tipoNegocio?.nombre || null,
         id_paleta: negocio.id_paleta,
         paleta: negocio.paletaColor || null,
+        permite_multipago: !!negocio.permite_multipago,
         fecha_registro: negocio.fecha_registro,
         roles: acceso.roles,
         can_edit: acceso.canEdit,
@@ -204,6 +206,10 @@ async function updateConfiguracionNegocio(idUsuario, payload = {}) {
 
     if (payload.url_instagram !== undefined) {
         patch.url_instagram = cleanNullableString(payload.url_instagram);
+    }
+
+    if (payload.permite_multipago !== undefined) {
+        patch.permite_multipago = payload.permite_multipago === true || payload.permite_multipago === 'true';
     }
 
     if (payload.id_paleta !== undefined) {

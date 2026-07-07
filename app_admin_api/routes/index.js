@@ -18,6 +18,7 @@ const {
     verificarCodigoValidators,
 } = require('../controllers/registroVerificacionController');
 const { verificarYCrear, verificarYCrearValidators } = require('../controllers/registroTrialController');
+const SsoController = require('../controllers/ssoController');
 const PaletaColorController = require('../controllers/paletaColorController');
 const NotificacionController = require('../controllers/notificacionController');
 const MetricasController = require('../controllers/metricasController');
@@ -52,6 +53,12 @@ router.post('/auth/registro/verificar-codigo', verificarCodigoValidators, verifi
 
 // Registro trial: verifica OTP y crea cuenta automáticamente
 router.post('/auth/registro/prueba/verificar', verificarYCrearValidators, verificarYCrear);
+
+// SSO de salida: canjea un código de un solo uso por la sesión del admin_app
+// (permite volver al portal central autenticado desde una app vertical).
+router.post('/auth/canjear-codigo', [
+    body('code').trim().notEmpty().withMessage('El código es requerido'),
+], SsoController.canjearCodigo);
 
 // Paletas de colores (públicas — para que la app del negocio cargue los colores)
 router.get('/paletas', PaletaColorController.getListaPaletas);

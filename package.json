@@ -32,7 +32,8 @@
     "migrate:auditoria-base": "node migrations/migrate_auditoria_base.js",
     "migrate:auditoria-general": "node migrations/migrate_auditoria_general.js",
     "migrate:auditoria-restaurante": "node migrations/migrate_auditoria_restaurante.js",
-    "migrate:auditoria-verticales": "node migrations/migrate_auditoria_verticales.js"
+    "migrate:auditoria-verticales": "node migrations/migrate_auditoria_verticales.js",
+    "migrate:restaurante-multipago": "node migrations/migrate_restaurante_multipago.js"
   },
   "keywords": [],
   "author": "",

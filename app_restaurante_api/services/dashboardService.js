@@ -342,7 +342,7 @@ async function verificarAccesoRestaurante(idUsuario) {
                     attributes: ['id_paleta', 'nombre', 'colores'],
                 },
             ],
-            attributes: ['id_negocio', 'nombre', 'id_tipo_negocio', 'id_paleta'],
+            attributes: ['id_negocio', 'nombre', 'id_tipo_negocio', 'id_paleta', 'permite_multipago'],
         }],
     });
 
@@ -400,6 +400,7 @@ async function verificarAccesoRestaurante(idUsuario) {
                 ? negocio.tipoNegocio.nombre
                 : null,
             paleta: negocio.paletaColor || null,
+            permite_multipago: !!negocio.permite_multipago,
             roles,
             permisos_vista: permisosVista,
             permisos_subnivel: permisosSubnivel,

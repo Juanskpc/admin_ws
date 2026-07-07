@@ -42,13 +42,20 @@ const agregarItemsOrdenValidators = [
 ];
 
 const marcarPagadoValidators = [
-    body('id_metodo_pago').isInt({ min: 1 }).withMessage('id_metodo_pago requerido'),
+    // Pago simple: id_metodo_pago. Multipago: arreglo pagos[]. Al menos uno.
+    body('id_metodo_pago').optional({ nullable: true }).isInt({ min: 1 }).withMessage('id_metodo_pago inválido'),
+    body('pagos').optional({ nullable: true }).isArray({ min: 2 }).withMessage('pagos debe tener al menos 2 formas de pago'),
+    body('pagos.*.id_metodo_pago').optional().isInt({ min: 1 }).withMessage('id_metodo_pago inválido en pagos'),
+    body('pagos.*.valor').optional().isFloat({ gt: 0 }).withMessage('valor inválido en pagos'),
     body('origen_cobro').optional({ nullable: true }).isIn(['CAJA', 'DOMICILIARIO'])
         .withMessage('origen_cobro inválido'),
 ];
 
 const cerrarOrdenValidators = [
     body('id_metodo_pago').optional({ nullable: true }).isInt({ min: 1 }).withMessage('id_metodo_pago inválido'),
+    body('pagos').optional({ nullable: true }).isArray({ min: 2 }).withMessage('pagos debe tener al menos 2 formas de pago'),
+    body('pagos.*.id_metodo_pago').optional().isInt({ min: 1 }).withMessage('id_metodo_pago inválido en pagos'),
+    body('pagos.*.valor').optional().isFloat({ gt: 0 }).withMessage('valor inválido en pagos'),
 ];
 
 async function crearOrden(req, res) {
@@ -225,7 +232,8 @@ async function marcarPagado(req, res) {
         }
 
         const orden = await PedidoService.marcarPagado(Number(req.params.id), {
-            idMetodoPago: Number(req.body.id_metodo_pago),
+            idMetodoPago: req.body.id_metodo_pago ? Number(req.body.id_metodo_pago) : null,
+            pagos: Array.isArray(req.body.pagos) ? req.body.pagos : null,
             origenCobro: req.body.origen_cobro || 'CAJA',
         });
         if (!orden) return Respuesta.error(res, 'Orden no encontrada', 404);
@@ -270,6 +278,7 @@ async function cerrarOrden(req, res) {
         const orden = await PedidoService.cerrarOrden(Number(req.params.id), {
             idUsuario: req.usuario?.id_usuario,
             idMetodoPago: req.body?.id_metodo_pago ? Number(req.body.id_metodo_pago) : null,
+            pagos: Array.isArray(req.body?.pagos) ? req.body.pagos : null,
         });
         if (!orden) return Respuesta.error(res, 'Orden no encontrada', 404);
         return Respuesta.success(res, 'Orden cerrada', orden);

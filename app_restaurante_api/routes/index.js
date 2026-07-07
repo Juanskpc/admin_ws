@@ -100,6 +100,7 @@ router.patch('/configuracion', [
 	body('url_whatsapp').optional({ nullable: true }).isURL({ require_protocol: true }),
 	body('url_facebook').optional({ nullable: true }).isURL({ require_protocol: true }),
 	body('url_instagram').optional({ nullable: true }).isURL({ require_protocol: true }),
+	body('permite_multipago').optional().isBoolean(),
 	body('id_paleta').optional({ nullable: true }).isInt({ min: 1 }),
 ], ConfiguracionController.updateConfiguracion);
 
