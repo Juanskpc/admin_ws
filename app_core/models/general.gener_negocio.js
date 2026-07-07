@@ -11,6 +11,7 @@ module.exports = (sequelize, DataTypes) => {
         url_instagram: DataTypes.STRING,
         id_tipo_negocio: { type: DataTypes.INTEGER },
         id_paleta: { type: DataTypes.INTEGER, allowNull: true },
+        permite_multipago: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
         estado: { type: DataTypes.CHAR(1), defaultValue: 'A' },
         fecha_registro: { type: DataTypes.DATE, defaultValue: DataTypes.NOW }
     }, {

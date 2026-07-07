@@ -525,6 +525,18 @@ async function getOrdenById(idOrden) {
             attributes: ['id_metodo_pago', 'nombre'],
             required: false,
         }, {
+            // Desglose de formas de pago cuando la orden se cobró con Multipago.
+            model: Models.RestPagoOrden,
+            as: 'pagos',
+            attributes: ['id_pago', 'id_metodo_pago', 'valor'],
+            required: false,
+            include: [{
+                model: Models.RestMetodoPago,
+                as: 'metodoPago',
+                attributes: ['id_metodo_pago', 'nombre'],
+                required: false,
+            }],
+        }, {
             model: Models.GenerUsuario,
             as: 'domiciliario',
             attributes: ['id_usuario', 'primer_nombre', 'primer_apellido'],
@@ -693,11 +705,79 @@ async function marcarDetalleCompleto(idDetalle) {
 }
 
 /**
+ * Valida y persiste el desglose de pagos (Multipago) de una orden.
+ *  - Requiere que el negocio tenga permite_multipago = true.
+ *  - Exige al menos 2 formas de pago, todas activas y del negocio.
+ *  - La suma de los valores debe ser EXACTAMENTE igual al total de la orden.
+ * Reemplaza cualquier desglose previo de la orden (idempotente ante recobro).
+ * Devuelve la lista de pagos normalizada.
+ */
+async function validarYGuardarPagos({ orden, pagos, transaction }) {
+    const negocio = await Models.GenerNegocio.findByPk(orden.id_negocio, {
+        attributes: ['id_negocio', 'permite_multipago'],
+        transaction,
+    });
+    if (!negocio || !negocio.permite_multipago) {
+        const e = new Error('El multipago no está habilitado para este negocio.');
+        e.code = 'MULTIPAGO_NO_HABILITADO'; e.statusCode = 422;
+        throw e;
+    }
+
+    if (!Array.isArray(pagos) || pagos.length < 2) {
+        const e = new Error('El multipago requiere al menos dos formas de pago.');
+        e.code = 'MULTIPAGO_MINIMO'; e.statusCode = 422;
+        throw e;
+    }
+
+    const ids = pagos.map((p) => Number(p.id_metodo_pago));
+    const metodos = await Models.RestMetodoPago.findAll({
+        where: { id_metodo_pago: ids, id_negocio: orden.id_negocio, estado: 'A' },
+        attributes: ['id_metodo_pago'],
+        transaction,
+    });
+    const validos = new Set(metodos.map((m) => m.id_metodo_pago));
+
+    let suma = 0;
+    const normalizados = pagos.map((p) => {
+        const idm = Number(p.id_metodo_pago);
+        const val = Number(p.valor);
+        if (!validos.has(idm)) {
+            const e = new Error('Una de las formas de pago no es válida para este negocio.');
+            e.code = 'METODO_PAGO_INVALIDO'; e.statusCode = 422;
+            throw e;
+        }
+        if (!(val > 0)) {
+            const e = new Error('Cada forma de pago debe tener un valor mayor a cero.');
+            e.code = 'MULTIPAGO_VALOR_INVALIDO'; e.statusCode = 422;
+            throw e;
+        }
+        suma += val;
+        return { id_orden: orden.id_orden, id_metodo_pago: idm, valor: val };
+    });
+
+    // Comparar en centavos para evitar problemas de coma flotante.
+    const total = Number(orden.total);
+    if (Math.round(suma * 100) !== Math.round(total * 100)) {
+        const e = new Error(
+            `La suma de las formas de pago (${suma}) debe ser igual al total de la orden (${total}).`
+        );
+        e.code = 'MULTIPAGO_DESCUADRE'; e.statusCode = 422;
+        throw e;
+    }
+
+    await Models.RestPagoOrden.destroy({ where: { id_orden: orden.id_orden }, transaction });
+    await Models.RestPagoOrden.bulkCreate(normalizados, { transaction });
+    return normalizados;
+}
+
+/**
  * Registra el cobro de una orden sin cerrarla.
  * Usado en el flujo de despacho: el pedido queda ABIERTO pero marcado como pagado.
  * Registra inmediatamente el INGRESO en la caja activa del negocio.
+ *
+ * Acepta pago simple (`idMetodoPago`) o Multipago (`pagos: [{id_metodo_pago, valor}]`).
  */
-async function marcarPagado(idOrden, { idMetodoPago, origenCobro = 'CAJA' } = {}) {
+async function marcarPagado(idOrden, { idMetodoPago, pagos, origenCobro = 'CAJA' } = {}) {
     const t = await Models.sequelize.transaction();
     try {
         const orden = await Models.PedidOrden.findByPk(idOrden, {
@@ -709,22 +789,28 @@ async function marcarPagado(idOrden, { idMetodoPago, origenCobro = 'CAJA' } = {}
             return null;
         }
 
-        if (!idMetodoPago) {
-            const e = new Error('La forma de pago es obligatoria para registrar el cobro.');
-            e.code = 'METODO_PAGO_REQUERIDO';
-            e.statusCode = 422;
-            throw e;
-        }
+        const esMultipago = Array.isArray(pagos) && pagos.length > 0;
 
-        const mp = await Models.RestMetodoPago.findOne({
-            where: { id_metodo_pago: idMetodoPago, id_negocio: orden.id_negocio, estado: 'A' },
-            transaction: t,
-        });
-        if (!mp) {
-            const e = new Error('Método de pago inválido para este negocio.');
-            e.code = 'METODO_PAGO_INVALIDO';
-            e.statusCode = 422;
-            throw e;
+        if (esMultipago) {
+            await validarYGuardarPagos({ orden, pagos, transaction: t });
+        } else {
+            if (!idMetodoPago) {
+                const e = new Error('La forma de pago es obligatoria para registrar el cobro.');
+                e.code = 'METODO_PAGO_REQUERIDO';
+                e.statusCode = 422;
+                throw e;
+            }
+
+            const mp = await Models.RestMetodoPago.findOne({
+                where: { id_metodo_pago: idMetodoPago, id_negocio: orden.id_negocio, estado: 'A' },
+                transaction: t,
+            });
+            if (!mp) {
+                const e = new Error('Método de pago inválido para este negocio.');
+                e.code = 'METODO_PAGO_INVALIDO';
+                e.statusCode = 422;
+                throw e;
+            }
         }
 
         const registraEnCaja = origenCobro !== 'DOMICILIARIO';
@@ -741,7 +827,8 @@ async function marcarPagado(idOrden, { idMetodoPago, origenCobro = 'CAJA' } = {}
 
         await orden.update({
             estado_pago:    'pagado',
-            id_metodo_pago: idMetodoPago,
+            // En multipago el detalle vive en rest_pago_orden; la columna queda null.
+            id_metodo_pago: esMultipago ? null : idMetodoPago,
             id_caja:        caja ? caja.id_caja : null,
         }, { transaction: t });
 
@@ -799,7 +886,7 @@ async function cancelarOrden(idOrden, { idUsuario } = {}) {
  * @param {number} idOrden
  * @param {{ idUsuario: number }} ctx — usuario que ejecuta el cobro
  */
-async function cerrarOrden(idOrden, { idUsuario, idMetodoPago } = {}) {
+async function cerrarOrden(idOrden, { idUsuario, idMetodoPago, pagos } = {}) {
     const t = await Models.sequelize.transaction();
     try {
         const orden = await Models.PedidOrden.findOne({
@@ -816,15 +903,29 @@ async function cerrarOrden(idOrden, { idUsuario, idMetodoPago } = {}) {
             return getOrdenById(idOrden);
         }
 
-        const metodoPagoFinal = idMetodoPago || orden.id_metodo_pago || null;
-        if (!metodoPagoFinal) {
-            const e = new Error('La forma de pago es obligatoria para cerrar la orden.');
-            e.statusCode = 422; e.code = 'METODO_PAGO_REQUERIDO';
-            throw e;
+        // Multipago: llega el desglose ahora, o la orden ya fue cobrada con
+        // multipago (rest_pago_orden con filas) desde el flujo de despacho.
+        let esMultipago = Array.isArray(pagos) && pagos.length > 0;
+        if (esMultipago) {
+            await validarYGuardarPagos({ orden, pagos, transaction: t });
+        } else {
+            const pagosExistentes = await Models.RestPagoOrden.count({
+                where: { id_orden: orden.id_orden },
+                transaction: t,
+            });
+            esMultipago = pagosExistentes > 0;
         }
 
-        // Validar que el método de pago final pertenezca al negocio.
-        if (metodoPagoFinal) {
+        let metodoPagoFinal = null;
+        if (!esMultipago) {
+            metodoPagoFinal = idMetodoPago || orden.id_metodo_pago || null;
+            if (!metodoPagoFinal) {
+                const e = new Error('La forma de pago es obligatoria para cerrar la orden.');
+                e.statusCode = 422; e.code = 'METODO_PAGO_REQUERIDO';
+                throw e;
+            }
+
+            // Validar que el método de pago final pertenezca al negocio.
             const mp = await Models.RestMetodoPago.findOne({
                 where: { id_metodo_pago: metodoPagoFinal, id_negocio: orden.id_negocio, estado: 'A' },
                 transaction: t,
@@ -855,7 +956,8 @@ async function cerrarOrden(idOrden, { idUsuario, idMetodoPago } = {}) {
                 estado: 'CERRADA',
                 fecha_cierre: new Date(),
                 id_caja: idCaja,
-                id_metodo_pago: metodoPagoFinal,
+                // En multipago el detalle vive en rest_pago_orden; la columna queda null.
+                id_metodo_pago: esMultipago ? null : metodoPagoFinal,
             },
             { transaction: t },
         );

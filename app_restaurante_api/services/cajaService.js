@@ -56,16 +56,49 @@ async function abrirCaja({ idNegocio, idUsuario, montoApertura, observaciones })
  * Los movimientos sin orden asociada se listan como "Manual / Sin orden".
  */
 async function getDesglosePorMetodo(idCaja) {
+    // El dinero de cada ingreso se atribuye por forma de pago:
+    //  - Órdenes con Multipago (filas en rest_pago_orden): se reparte el monto
+    //    del ingreso proporcionalmente al valor de cada forma de pago.
+    //  - Órdenes con pago simple o movimientos manuales: el monto completo va
+    //    al id_metodo_pago de la orden (o "Manual / Sin orden").
     const rows = await Models.sequelize.query(`
-        SELECT
-            po.id_metodo_pago,
-            COALESCE(mp.nombre, 'Manual / Sin orden') AS nombre,
-            SUM(m.monto)                               AS total
-        FROM restaurante.rest_movimiento_caja m
-        LEFT JOIN restaurante.pedid_orden      po ON po.id_orden       = m.id_orden
-        LEFT JOIN restaurante.rest_metodo_pago mp ON mp.id_metodo_pago = po.id_metodo_pago
-        WHERE m.id_caja = :idCaja AND m.tipo = 'INGRESO'
-        GROUP BY po.id_metodo_pago, mp.nombre
+        WITH ingresos AS (
+            SELECT m.id_orden, m.monto
+            FROM restaurante.rest_movimiento_caja m
+            WHERE m.id_caja = :idCaja AND m.tipo = 'INGRESO'
+        ),
+        multipago AS (
+            SELECT pp.id_metodo_pago,
+                   SUM(i.monto * (pp.valor / NULLIF(tot.suma, 0))) AS total
+            FROM ingresos i
+            JOIN restaurante.rest_pago_orden pp ON pp.id_orden = i.id_orden
+            JOIN (
+                SELECT id_orden, SUM(valor) AS suma
+                FROM restaurante.rest_pago_orden
+                GROUP BY id_orden
+            ) tot ON tot.id_orden = i.id_orden
+            GROUP BY pp.id_metodo_pago
+        ),
+        simple AS (
+            SELECT po.id_metodo_pago, SUM(i.monto) AS total
+            FROM ingresos i
+            LEFT JOIN restaurante.pedid_orden po ON po.id_orden = i.id_orden
+            WHERE NOT EXISTS (
+                SELECT 1 FROM restaurante.rest_pago_orden pp WHERE pp.id_orden = i.id_orden
+            )
+            GROUP BY po.id_metodo_pago
+        ),
+        combinado AS (
+            SELECT id_metodo_pago, total FROM multipago
+            UNION ALL
+            SELECT id_metodo_pago, total FROM simple
+        )
+        SELECT c.id_metodo_pago,
+               COALESCE(mp.nombre, 'Manual / Sin orden') AS nombre,
+               SUM(c.total)                              AS total
+        FROM combinado c
+        LEFT JOIN restaurante.rest_metodo_pago mp ON mp.id_metodo_pago = c.id_metodo_pago
+        GROUP BY c.id_metodo_pago, mp.nombre
         ORDER BY total DESC
     `, {
         replacements: { idCaja },

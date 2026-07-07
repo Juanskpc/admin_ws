@@ -45,6 +45,7 @@ async function updateConfiguracion(req, res) {
             url_whatsapp: req.body.url_whatsapp,
             url_facebook: req.body.url_facebook,
             url_instagram: req.body.url_instagram,
+            permite_multipago: req.body.permite_multipago !== undefined ? req.body.permite_multipago : undefined,
             id_paleta: req.body.id_paleta !== undefined ? req.body.id_paleta : undefined,
         };
 
