@@ -117,6 +117,22 @@ Resultado esperado: 11 órdenes, de las cuales 6 quedan enlazadas a **2** `perso
 (los cinco formatos del mismo número colapsan en una sola persona, con el nombre de la orden
 más reciente). Las órdenes del fixture se identifican por `numero_orden LIKE 'TEST-%'`.
 
+## 4c. Segundo inquilino (para probar aislamiento)
+
+La suite de aislamiento multi-inquilino necesita **dos** negocios con datos propios; con uno
+solo no se puede demostrar que un token no cruza de negocio:
+
+```bash
+psql -U escalapp_dev -h localhost -d escalapp_dev -f scripts/fixtures/dev_segundo_negocio.sql
+```
+
+Crea "Restaurante Rival" y su admin `1000000003` / `Admin123*`, cada negocio con una mesa
+propia. Después:
+
+```bash
+npx jest __tests__/platform/ --runInBand
+```
+
 ## 5. Verificar
 
 ```bash

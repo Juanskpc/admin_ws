@@ -32,6 +32,11 @@ router.post('/qr/:token/confirmar',  ParqueaderoController.confirmarSalidaQR);
 // ═══════════════ RUTAS PROTEGIDAS ═══════════════
 router.use(verificarToken);
 
+// Autorizacion multi-inquilino (ADR-002, ADR-010): verifica que el usuario del token
+// pertenece al id_negocio que pide. Arranca en modo observacion (audita, no bloquea).
+const { exigirPertenenciaNegocio } = require('../../app_core/middleware/authzNegocio');
+router.use(exigirPertenenciaNegocio);
+
 // ── Dashboard ──
 router.get('/dashboard/resumen', DashboardController.getResumenDashboard);
 router.get('/perfil', DashboardController.getPerfilParqueadero);

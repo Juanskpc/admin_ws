@@ -95,6 +95,11 @@ router.post('/publico/cita/:codigo_publico/cancelar',
 // ═════════ RUTAS PROTEGIDAS ═════════
 router.use(verificarToken);
 
+// Autorizacion multi-inquilino (ADR-002, ADR-010): verifica que el usuario del token
+// pertenece al id_negocio que pide. Arranca en modo observacion (audita, no bloquea).
+const { exigirPertenenciaNegocio } = require('../../app_core/middleware/authzNegocio');
+router.use(exigirPertenenciaNegocio);
+
 router.get('/dashboard/resumen', [query('id_negocio').isInt({ min: 1 })], Dashboard.getResumen);
 router.get('/perfil', Dashboard.getPerfil);
 

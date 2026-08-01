@@ -79,6 +79,11 @@ router.get('/public/carta/productos', PublicoController.getProductos);
 // ============================================================
 router.use(verificarToken);
 
+// Autorizacion multi-inquilino (ADR-002, ADR-010): verifica que el usuario del token
+// pertenece al id_negocio que pide. Arranca en modo observacion (audita, no bloquea).
+const { exigirPertenenciaNegocio } = require('../../app_core/middleware/authzNegocio');
+router.use(exigirPertenenciaNegocio);
+
 // --- Dashboard ---
 router.get('/dashboard/resumen', DashboardController.getResumenDashboard);
 

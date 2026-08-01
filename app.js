@@ -150,6 +150,11 @@ app.use(errorHandler);
             const auditScheduler = require('./app_core/helpers/auditParticionScheduler');
             auditScheduler.iniciar();
 
+            // Modo de autorización multi-inquilino (ADR-002, ADR-010). Se anuncia siempre:
+            // creer que se está bloqueando cuando solo se observa es el peor error posible aquí.
+            const { describirModo } = require('./app_core/middleware/authzNegocio');
+            console.log(describirModo());
+
             // Relay del outbox de eventos de dominio (ADR-012).
             // Hoy arranca inactivo a propósito: no hay consumidores registrados todavía.
             // Los consumidores se registran con outboxRelay.registrarConsumidor() ANTES de
