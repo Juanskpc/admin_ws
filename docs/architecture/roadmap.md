@@ -26,7 +26,7 @@ ajustarse, la espina dorsal no.
 
 | Fase | Qué | ADRs clave | Corrección de revisión |
 |---|---|---|---|
-| **F0** | `platform.persona` / `persona_negocio` / `persona_identificador`; nivel global vacío. **Backfill solo de `restaurante`** (gym/parqueadero/tienda no tienen datos). **Entregable visible: Ficha 360.** | 006, 024 | Backfill reducido; Ficha 360 como victoria temprana |
+| **F0** | `platform.persona` / `persona_negocio` / `persona_identificador`; nivel global vacío. **Backfill solo de `restaurante`** (gym/parqueadero/tienda no tienen datos) **+ camino de escritura**: `pedid_orden.id_persona_negocio` (FK nullable) y resolución best-effort al crear la orden. **Entregable visible: Ficha 360.** | 006, 024 | Backfill reducido; Ficha 360 como victoria temprana; camino de escritura añadido 2026-07-31 |
 | **F1** | Outbox transaccional en `platform` + relay. | 012 | — |
 | **F2** | AuthZ: inyección de `id_negocio`, base del Policy Gate. | 010, 002 | — |
 | **F3** | Saneamiento de invariantes de `reserva` (protección en dominio, no formulario). **Framing: mejora propia de la vertical, no prerequisito de la IA.** | 003, 009 | Reencuadre según punto 10 |
@@ -65,9 +65,25 @@ ajustarse, la espina dorsal no.
    El dato no es basura (94.8% móviles válidos, 95.3% activos en 90 días), pero la población es
    de **621 personas y el 98% pertenece a un solo negocio**. Consecuencias: el backfill es
    trivial (una migración simple, sin lotes ni job); hace falta una regla de elección para
-   `nombre_mostrado` (20.3% de los móviles tiene 2+ nombres); y queda **un punto de alcance
-   abierto**: si F0 entrega solo la carga inicial y no el camino de escritura, la Ficha 360
-   envejece desde el primer pedido nuevo.
+   `nombre_mostrado` (20.3% de los móviles tiene 2+ nombres); y el alcance de F0 se amplió para
+   incluir el camino de escritura (ver punto 7).
+
+7. **F0 incluye el camino de escritura** (decidido 2026-07-31). Sin él, la Ficha 360 queda
+   congelada en la foto del backfill y envejece con cada pedido nuevo. No amplía la
+   arquitectura: `freeze.md` §B ya lista `pedid_orden.id_persona_negocio` y
+   `bounded-contexts.md` ya autoriza la FK nullable vertical → `platform`. Restricciones que
+   se derivan de los invariantes ya congelados:
+   - La FK es **nullable** y la resolución es **best-effort**: si resolver o crear el
+     `persona_negocio` falla, la orden se crea igual con `id_persona_negocio = NULL`. Una
+     vertical funciona sin persona ([ADR-006](../adr/ADR-006-persona.md)); la caja de un
+     restaurante no puede caerse por el módulo de identidad.
+   - `restaurante` es Grupo 1: **solo cambios aditivos** ([ADR-003](../adr/ADR-003-madurez-esquemas.md),
+     `freeze.md` §C.8). Añadir una columna nullable lo es; modificar las existentes, no.
+   - La resolución es **síncrona dentro de la transacción de la orden**. La alternativa
+     asíncrona exige el outbox, que es F1: resolver con lo que existe hoy
+     ([architecture-principles.md](architecture-principles.md), arquitectura evolutiva).
+   - Sigue sin haber dependencia hacia Intelligence: la flecha es vertical → `platform`, no
+     vertical → `intelligence`. El test del apagón no se ve afectado.
 
 ## Antes del MVP comercial (fuera de nuestro control, empezar con antelación)
 
