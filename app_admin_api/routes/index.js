@@ -22,6 +22,7 @@ const SsoController = require('../controllers/ssoController');
 const PaletaColorController = require('../controllers/paletaColorController');
 const NotificacionController = require('../controllers/notificacionController');
 const MetricasController = require('../controllers/metricasController');
+const FichaPersonaController = require('../controllers/fichaPersonaController');
 const AuditoriaController = require('../controllers/auditoriaController');
 const { verificarToken, requireSuperAdmin } = require('../../app_core/middleware/auth');
 
@@ -290,5 +291,17 @@ router.put('/notificaciones/:id_notificacion/leida', [
 router.put('/notificaciones/leer-todas/:id_negocio', [
     param('id_negocio').isInt({ min: 1 }).withMessage('ID de negocio inválido')
 ], NotificacionController.marcarTodasLeidas);
+
+// --- Ficha 360 de personas (platform.persona_negocio) — solo lectura, Super Admin ---
+router.get('/personas', requireSuperAdmin, [
+    query('id_negocio').optional().isInt({ min: 1 }).withMessage('ID de negocio inválido'),
+    query('q').optional().isLength({ max: 100 }).withMessage('Búsqueda demasiado larga'),
+    query('limit').optional().isInt({ min: 1, max: 100 }).withMessage('Límite inválido'),
+    query('offset').optional().isInt({ min: 0 }).withMessage('Offset inválido'),
+], FichaPersonaController.listarPersonas);
+
+router.get('/personas/:id/ficha', requireSuperAdmin, [
+    param('id').isUUID().withMessage('ID de persona inválido'),
+], FichaPersonaController.getFicha);
 
 module.exports = router;
