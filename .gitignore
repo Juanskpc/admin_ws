@@ -3,7 +3,11 @@ node_modules/
 package-lock.json
 
 # Variables de entorno
+# Cubre .env y cualquier variante (.env.local, .env.produccion.bak, ...).
+# .env.example SI se versiona.
 .env
+.env.*
+!.env.example
 
 # Logs
 npm-debug.log*
