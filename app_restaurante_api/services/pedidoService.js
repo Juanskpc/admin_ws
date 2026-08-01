@@ -1,5 +1,6 @@
 const Models = require('../../app_core/models/conection');
 const cajaService = require('./cajaService');
+const personaNegocioDao = require('../../app_core/dao/personaNegocioDao');
 const { Op } = require('sequelize');
 
 const SUBNIVEL_CANCELAR_NO_PAGADO = 'despacho_cancelar_no_pagado';
@@ -376,6 +377,18 @@ async function crearOrden({
         const impuesto = Math.round(subtotal * porcentajeImpuesto * 100) / 100;
         const total = subtotal + impuesto;
 
+        // Resolver la identidad del cliente (platform.persona_negocio). Es best-effort a
+        // propósito: si falla, la orden se crea igual con id_persona_negocio = NULL — una
+        // vertical funciona sin persona (ADR-006). Devuelve null también cuando el teléfono
+        // no es utilizable, que es el caso del ~5% de lo que se captura.
+        const idPersonaNegocio =
+            tipoPedido === 'DOMICILIO' && contactoTelefono
+                ? await personaNegocioDao.resolverOCrearBestEffort(
+                      { idNegocio, telefono: contactoTelefono, nombre: contactoNombre },
+                      { transaction: t }
+                  )
+                : null;
+
         // 1. Crear la orden
         const orden = await Models.PedidOrden.create({
             id_negocio: idNegocio,
@@ -389,6 +402,7 @@ async function crearOrden({
             estado: 'ABIERTA',
             id_metodo_pago: idMetodoPago || null,
             tipo_pedido: tipoPedido,
+            id_persona_negocio:  idPersonaNegocio,
             contacto_nombre:     tipoPedido === 'DOMICILIO' ? contactoNombre     : null,
             contacto_telefono:   tipoPedido === 'DOMICILIO' ? contactoTelefono   : null,
             direccion_domicilio: tipoPedido === 'DOMICILIO' ? direccionDomicilio : null,

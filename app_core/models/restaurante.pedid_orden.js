@@ -23,6 +23,9 @@ module.exports = (sequelize, DataTypes) => {
         nota_domicilio:      DataTypes.TEXT,
         id_domiciliario:     { type: DataTypes.INTEGER, allowNull: true },
         estado_pago:         { type: DataTypes.STRING(20), defaultValue: 'pendiente_pago' },
+        // FK a platform.persona_negocio. SIEMPRE nullable (ADR-006): la orden existe
+        // aunque no se haya podido identificar al cliente.
+        id_persona_negocio:  { type: DataTypes.UUID, allowNull: true },
     }, {
         tableName: 'pedid_orden',
         schema: 'restaurante',
