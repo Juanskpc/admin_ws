@@ -149,6 +149,13 @@ app.use(errorHandler);
             // Iniciar scheduler de particiones de auditoría
             const auditScheduler = require('./app_core/helpers/auditParticionScheduler');
             auditScheduler.iniciar();
+
+            // Relay del outbox de eventos de dominio (ADR-012).
+            // Hoy arranca inactivo a propósito: no hay consumidores registrados todavía.
+            // Los consumidores se registran con outboxRelay.registrarConsumidor() ANTES de
+            // esta llamada; los primeros llegan en F4/F5.
+            const outboxRelay = require('./app_core/outbox/outboxRelay');
+            outboxRelay.iniciar();
         });
     } catch (error) {
         console.error('Error al iniciar el servidor:', error.message);

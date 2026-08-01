@@ -33,7 +33,7 @@ ajustarse, la espina dorsal no.
 | Fase | Qué | ADRs clave | Corrección de revisión |
 |---|---|---|---|
 | **F0** | `platform.persona` / `persona_negocio` / `persona_identificador`; nivel global vacío. **Backfill solo de `restaurante`** (gym/parqueadero/tienda no tienen datos) **+ camino de escritura**: `pedid_orden.id_persona_negocio` (FK nullable) y resolución best-effort al crear la orden. **Entregable visible: Ficha 360.** | 006, 024 | Backfill reducido; Ficha 360 como victoria temprana; camino de escritura añadido 2026-07-31 |
-| **F1** | Outbox transaccional en `platform` + relay. | 012 | — |
+| **F1** | Outbox transaccional en `platform` + relay. **Hecho en local 2026-08-01** (sin desplegar): `platform.outbox`, `outboxDao.emitir()` (exige transacción), relay con `FOR UPDATE SKIP LOCKED`, backoff exponencial y dead letter. **Ninguna vertical emite todavía** y el relay arranca inactivo: un evento se define cuando hay productor Y consumidor ([ADR-013](../adr/ADR-013-catalogo-eventos.md) regla 4), y el primer consumidor llega en F4/F5. | 012 | El `master-plan` metía en F1 "toda transición emite su evento"; se difiere a la adopción de cada vertical por la regla 4 |
 | **F2** | AuthZ: inyección de `id_negocio`, base del Policy Gate. | 010, 002 | — |
 | **F3** | Saneamiento de invariantes de `reserva` (protección en dominio, no formulario). **Framing: mejora propia de la vertical, no prerequisito de la IA.** | 003, 009 | Reencuadre según punto 10 |
 
