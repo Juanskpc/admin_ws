@@ -100,6 +100,23 @@ Dos migraciones **no** sirven para sembrar sobre una base vacía, y por eso el s
 - `migrate:planes-base` inserta en `gener_negocio_plan` con `id_negocio = 6` hardcodeado,
   que en local no existe: viola la FK y hace rollback.
 
+## 4b. Órdenes de prueba para F0 (opcional)
+
+Para trabajar sobre el modelo de identidad hace falta que `restaurante.pedid_orden` tenga
+datos. El fixture reproduce los casos límite reales encontrados en la medición de producción
+—mismo móvil en cinco formatos distintos, basura, número corto, fijo, sin teléfono— y sirve
+para verificar el backfill y, más adelante, la Ficha 360:
+
+```bash
+psql -U escalapp_dev -h localhost -d escalapp_dev -f scripts/fixtures/dev_ordenes_restaurante.sql
+npm run migrate:platform-persona
+npm run migrate:platform-backfill-restaurante
+```
+
+Resultado esperado: 11 órdenes, de las cuales 6 quedan enlazadas a **2** `persona_negocio`
+(los cinco formatos del mismo número colapsan en una sola persona, con el nombre de la orden
+más reciente). Las órdenes del fixture se identifican por `numero_orden LIKE 'TEST-%'`.
+
 ## 5. Verificar
 
 ```bash
