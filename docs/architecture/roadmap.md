@@ -60,8 +60,14 @@ ajustarse, la espina dorsal no.
 3. Tool Registry eliminado. **(sí)**
 4. Riesgo de promesas no respaldadas: anotado hoy, mecanismo antes de F7.
 5. `persona_identificador` como tabla hija (bloqueó la congelación hasta corregirlo).
-6. Tarea de media hora previa a F0: **medir la calidad de los teléfonos en `restaurante`** (única
-   fuente real del backfill; si es basura, la Ficha 360 nace coja).
+6. ~~Tarea de media hora previa a F0: **medir la calidad de los teléfonos en `restaurante`**~~
+   **HECHO (2026-07-31)** → [`mediciones/2026-07-31-calidad-telefonos-restaurante.md`](../mediciones/2026-07-31-calidad-telefonos-restaurante.md).
+   El dato no es basura (94.8% móviles válidos, 95.3% activos en 90 días), pero la población es
+   de **621 personas y el 98% pertenece a un solo negocio**. Consecuencias: el backfill es
+   trivial (una migración simple, sin lotes ni job); hace falta una regla de elección para
+   `nombre_mostrado` (20.3% de los móviles tiene 2+ nombres); y queda **un punto de alcance
+   abierto**: si F0 entrega solo la carga inicial y no el camino de escritura, la Ficha 360
+   envejece desde el primer pedido nuevo.
 
 ## Antes del MVP comercial (fuera de nuestro control, empezar con antelación)
 
