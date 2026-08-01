@@ -24,6 +24,12 @@ ajustarse, la espina dorsal no.
 
 ### Ola A — cimientos (sin nada demo-able de IA; victoria temprana = Ficha 360)
 
+> **F0 implementada en local el 2026-07-31** (aún NO desplegada en producción). Esquema
+> `platform` ([ADR-025](../adr/ADR-025-identificadores-nivel-global-vacio.md)),
+> `pedid_orden.id_persona_negocio`, backfill, camino de escritura best-effort y Ficha 360 en
+> `/admin/personas`. La vista se ubicó en el admin y no en `restaurante_app` porque el 98% de
+> las personas pertenece a un solo negocio: todavía no hay a quién demostrársela.
+
 | Fase | Qué | ADRs clave | Corrección de revisión |
 |---|---|---|---|
 | **F0** | `platform.persona` / `persona_negocio` / `persona_identificador`; nivel global vacío. **Backfill solo de `restaurante`** (gym/parqueadero/tienda no tienen datos) **+ camino de escritura**: `pedid_orden.id_persona_negocio` (FK nullable) y resolución best-effort al crear la orden. **Entregable visible: Ficha 360.** | 006, 024 | Backfill reducido; Ficha 360 como victoria temprana; camino de escritura añadido 2026-07-31 |
