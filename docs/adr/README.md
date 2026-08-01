@@ -45,6 +45,7 @@ Si eres nuevo en el proyecto, lee en orden ADR-001 → ADR-006. Con eso entiende
 
 ### Identidad
 - [ADR-006 — Modelo Persona / PersonaNegocio / Identificador](ADR-006-persona.md) · Aceptado
+- [ADR-025 — Dónde viven los identificadores mientras el nivel global está vacío](ADR-025-identificadores-nivel-global-vacio.md) · Aceptado
 
 ### Dominio y capacidades
 - [ADR-007 — Arquitectura basada en Capacidades](ADR-007-capacidades.md) · Aceptado

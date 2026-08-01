@@ -18,9 +18,12 @@ vocabulario.
 - **Persona** — el ser humano, **global**, transversal a inquilinos. Solo ancla identidad; ningún
   inquilino la consulta. No se puebla hasta el Portal del Cliente.
 - **PersonaNegocio** — la **relación** de una persona con **un** negocio. Es lo que las verticales
-  referencian (FK nullable). Aquí viven nombre-conocido, notas, consentimiento, historial.
+  referencian (FK nullable). Aquí viven nombre-conocido, notas, consentimiento, historial — y,
+  mientras el nivel global esté vacío, también el **teléfono operativo**, único por
+  `(negocio, teléfono)` ([ADR-025](../adr/ADR-025-identificadores-nivel-global-vacio.md)).
 - **Identificador (`persona_identificador`)** — teléfono/email de una persona. Muchos por persona. La
-  resolución de identidad busca aquí, no en una columna.
+  resolución de identidad busca aquí, no en una columna. **Tabla reservada y vacía** hasta que el
+  Portal del Cliente active el nivel global ([ADR-025](../adr/ADR-025-identificadores-nivel-global-vacio.md)).
 - **Ficha 360** — vista de lectura que agrega la actividad de una `persona_negocio` (o `persona`) a
   través de verticales. Victoria temprana de la Fase 0.
 
