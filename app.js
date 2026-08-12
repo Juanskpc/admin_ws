@@ -109,6 +109,26 @@ app.use('/gym', gymRoutes);
 app.use('/tienda', tiendaRoutes);
 app.use('/reserva', reservaRoutes);
 
+// ========================
+// EscalApp Intelligence (OPCIONAL — ADR-005)
+// ========================
+// Primera vez que Intelligence se expone por HTTP (F5-C). Dos guardas, y las dos importan:
+//
+//   1. El directorio tiene que existir. Es lo que mantiene LITERAL el test del apagón: se
+//      borra `intelligence/` y el backend arranca igual, sin un require que reviente.
+//   2. `INTELLIGENCE_HTTP_ENABLED=true`. Apagado por defecto porque estas rutas NO están
+//      autenticadas —un widget lo usa un cliente final anónimo— y hoy solo las protege la
+//      feature comercial del negocio. No encenderlo en producción hasta F8.
+//
+// La flecha de dependencia no cambia: ninguna vertical importa esto ni sabe que existe.
+const intelligenceHabilitado =
+    process.env.INTELLIGENCE_HTTP_ENABLED === 'true' &&
+    require('fs').existsSync(path.join(__dirname, 'intelligence'));
+
+if (intelligenceHabilitado) {
+    app.use('/intelligence', require('./intelligence/http'));
+}
+
 // Ruta de salud / health check
 app.get('/', (req, res) => {
     res.json({
@@ -161,6 +181,28 @@ app.use(errorHandler);
             // esta llamada; los primeros llegan en F4/F5.
             const outboxRelay = require('./app_core/outbox/outboxRelay');
             outboxRelay.iniciar();
+
+            // Conversation Engine + canales (F5-B, F5-C). Solo si el HTTP está encendido:
+            // sin canal no puede entrarle un mensaje, así que arrancar el motor sería
+            // encender un motor sin combustible.
+            if (intelligenceHabilitado) {
+                const intelligence = require('./intelligence');
+                // El manejador es todavía el andamio de eco: el motor determinista es F5-D.
+                intelligence
+                    .arrancarMotor(intelligence.manejadorEco.manejarEco)
+                    .then(() => {
+                        const canales = intelligence.arrancarCanales();
+                        console.log(
+                            `[intelligence] HTTP en /intelligence — canal(es): ${canales.join(', ')}. ` +
+                                'Widget de pruebas en /intelligence/webchat/'
+                        );
+                    })
+                    .catch((error) => {
+                        // Que Intelligence no arranque no puede tumbar el backend: es una
+                        // capacidad opcional (ADR-005), no el producto.
+                        console.error('[intelligence] No se pudo arrancar:', error.message);
+                    });
+            }
         });
     } catch (error) {
         console.error('Error al iniciar el servidor:', error.message);

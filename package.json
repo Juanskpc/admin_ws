@@ -36,7 +36,12 @@
     "migrate:restaurante-multipago": "node migrations/migrate_restaurante_multipago.js",
     "migrate:platform-persona": "node migrations/migrate_platform_persona.js",
     "migrate:platform-backfill-restaurante": "node migrations/migrate_platform_backfill_restaurante.js",
-    "migrate:platform-outbox": "node migrations/migrate_platform_outbox.js"
+    "migrate:platform-outbox": "node migrations/migrate_platform_outbox.js",
+    "migrate:platform-capacidades": "node migrations/migrate_platform_capacidades.js",
+    "migrate:reserva-hold": "node migrations/migrate_reserva_hold.js",
+    "migrate:platform-idempotencia": "node migrations/migrate_platform_idempotencia.js",
+    "migrate:intelligence-ledger": "node migrations/migrate_intelligence_ledger.js",
+    "migrate:intelligence-canal": "node migrations/migrate_intelligence_canal.js"
   },
   "keywords": [],
   "author": "",

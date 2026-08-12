@@ -38,14 +38,41 @@ son detalle de implementación privado de la capacidad ([ADR-008](../adr/ADR-008
 
 ## 2. Manifiesto: `reserva` (borrador en papel)
 
-| Capacidad | tipo | idempotente | Parámetros (sin `id_negocio`) | Emite |
-|---|---|---|---|---|
-| `consultar_servicios` | consulta | — | `{}` | — |
-| `consultar_disponibilidad` | consulta | — | `{ id_servicio, fecha }` | — |
-| `reservar_turno` | mutacion | **sí** (una cita por slot) | `{ id_servicio, inicio, id_profesional? }` | `cita.creada.v1` |
-| `reagendar_cita` | mutacion | sí | `{ id_cita, nuevo_inicio }` | `cita.reagendada.v1` |
-| `cancelar_cita` | mutacion | sí | `{ id_cita, motivo? }` | `cita.cancelada.v1` |
-| `consultar_mis_citas` | consulta | — | `{ id_persona_negocio }` | — |
+| Capacidad | tipo | idempotente | Parámetros (sin `id_negocio`) | Emite | Estado |
+|---|---|---|---|---|---|
+| `consultar_servicios` | consulta | — | `{}` | — | ✅ F4-A |
+| `consultar_disponibilidad` | consulta | — | `{ id_servicio, fecha, id_profesional? }` | — | ✅ F4-A |
+| `proponer_turno` | mutacion | **no** (cada llamada aparta un hueco nuevo) | `{ id_servicio, inicio, id_profesional? }` | — | ✅ F4-B |
+| `reservar_turno` | mutacion | **sí** (el hold se consume al confirmarlo) | `{ codigo_hold, cliente_nombre, cliente_telefono?, notas? }` | *(pendiente de consumidor)* | ✅ F4-B |
+| `reagendar_cita` | mutacion | sí | `{ codigo_cita, codigo_hold }` | *(pendiente de consumidor)* | ✅ F4-B |
+| `cancelar_cita` | mutacion | sí | `{ codigo_cita, motivo? }` · política `ventana_cancelacion_horas` | *(pendiente de consumidor)* | ✅ F4-B |
+| `consultar_mis_citas` | consulta | — | `{ id_persona_negocio }` | — | ⬜ bloqueada: `reserva_cita` no tiene `id_persona_negocio` |
+
+**Seis capacidades, techo diez.** Queda margen, y conviene defenderlo.
+
+**El ciclo `propose → hold → confirm` está cortado en dos capacidades**, `proponer_turno` y
+`reservar_turno`. Pasa el test que el plan impone —«si una capacidad obliga a llamar a otra
+después para dejar el sistema consistente, están mal cortadas»— porque **no obliga a nada**:
+si `reservar_turno` no llega nunca, el hold expira solo y la agenda queda como estaba.
+
+**Los eventos siguen sin emitirse**, aunque las mutaciones ya existan. Un evento se define
+cuando hay productor **y** consumidor ([ADR-013](../adr/ADR-013-catalogo-eventos.md) regla 4)
+y el primer consumidor llega en F5. Emitir ahora congelaría un contrato que nadie lee.
+
+**Los parámetros usan `codigo_*` (uuid) y no `id_cita`.** Ver la nota de la Ola B en
+[`roadmap.md`](roadmap.md): un entero secuencial dejaría cancelar la cita de otro cliente del
+mismo negocio contando hacia arriba.
+
+**Por qué `consultar_mis_citas` está bloqueada.** Necesita el punto 1 del Contrato de
+Adopción (§5): `reserva` todavía no adoptó `platform.persona`. F0 solo lo hizo en
+`restaurante`.
+
+`consultar_disponibilidad` ganó `id_profesional?` respecto al papel: el servicio de dominio
+de la vertical exige un profesional concreto (nació para un formulario donde ya estaba
+elegido), y la pregunta de negocio —«¿hay hueco el martes?»— no lo tiene. El adaptador funde
+las agendas de todos los profesionales que prestan el servicio y devuelve, con cada hora,
+quién la atiende. Es exactamente el trabajo anticorrupción de
+[ADR-009](../adr/ADR-009-capability-adapter.md).
 
 **Forma dominante:** una cita es un **punto** en el tiempo. `reservar_turno` es naturalmente
 idempotente (el mismo cliente, mismo slot → una cita). El objetivo se cumple en 1–2 capacidades.
@@ -97,3 +124,20 @@ De `revision-01.md`, punto 6. Una vertical es adoptable cuando cumple las seis:
 4. Publica su **manifiesto de capacidades** (máx. ~10, acciones de negocio, no CRUD).
 5. Tiene su **Capability Adapter** en `intelligence/adapters/<vertical>`.
 6. Aporta sus **conversaciones doradas** al arnés de evaluación.
+
+### Estado del contrato en `reserva` (la vertical piloto)
+
+| # | Punto | Estado |
+|---|---|---|
+| 1 | Adopta `platform.persona` | ⬜ `reserva_cita` no tiene `id_persona_negocio`. Bloquea `consultar_mis_citas`. |
+| 2 | Invariantes en el dominio | ✅ **F3** (2026-08-03) |
+| 3 | Emite eventos al outbox | ⬜ A propósito: un evento se define cuando hay productor **y** consumidor ([ADR-013](../adr/ADR-013-catalogo-eventos.md) regla 4). El primer consumidor llega en F5. |
+| 4 | Manifiesto publicado | ✅ §2 de este documento |
+| 5 | Capability Adapter | ✅ **F4-A + F4-B** (2026-08-03) |
+| 6 | Conversaciones doradas | ⬜ F6 |
+
+Cumple 3 de 6. Los dos que faltan —adoptar `persona` y emitir eventos— están ambos
+bloqueados por decisiones **deliberadas**, no por falta de trabajo: el nivel global de
+identidad no se puebla hasta el Portal del Cliente
+([ADR-025](../adr/ADR-025-identificadores-nivel-global-vacio.md)) y un evento no se define
+sin consumidor ([ADR-013](../adr/ADR-013-catalogo-eventos.md) regla 4).
