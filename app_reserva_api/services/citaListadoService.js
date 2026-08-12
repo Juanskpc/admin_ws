@@ -1,5 +1,6 @@
 'use strict';
 const Models = require('../../app_core/models/conection');
+const EstadoCita = require('./estadoCita');
 const { Op } = Models.Sequelize;
 
 async function listar({ idNegocio, desde, hasta, idProfesional, estado, soloPendientesPago = false }) {
@@ -36,10 +37,32 @@ async function getById(idCita, idNegocio) {
     });
 }
 
+/**
+ * Cambia el estado de una cita respetando la máquina de estados.
+ *
+ * Devuelve `null` si la cita no existe (el controlador lo traduce a 404) y **lanza** un
+ * error tipado si la transición no es válida. La diferencia es deliberada: «no existe» es
+ * una respuesta, «no se puede» es un rechazo del dominio y merece decir por qué.
+ *
+ * Se relee el estado dentro de la transacción y se escribe con la condición del estado
+ * origen: dos peticiones simultáneas sobre la misma cita no pueden ganar las dos.
+ */
 async function cambiarEstado(idCita, idNegocio, nuevoEstado, extra = {}) {
-    const cita = await Models.ReservaCita.findOne({ where: { id_cita: idCita, id_negocio: idNegocio } });
-    if (!cita) return null;
-    return cita.update({ estado: nuevoEstado, ...extra, fecha_actualizacion: new Date() });
+    return Models.sequelize.transaction(async (t) => {
+        const cita = await Models.ReservaCita.findOne({
+            where: { id_cita: idCita, id_negocio: idNegocio },
+            transaction: t,
+            lock: t.LOCK.UPDATE,
+        });
+        if (!cita) return null;
+
+        EstadoCita.exigirTransicion(cita.estado, nuevoEstado);
+
+        return cita.update(
+            { estado: nuevoEstado, ...extra, fecha_actualizacion: new Date() },
+            { transaction: t }
+        );
+    });
 }
 
 module.exports = { listar, getById, cambiarEstado };

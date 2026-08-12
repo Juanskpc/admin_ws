@@ -1,18 +1,26 @@
 'use strict';
 const Models = require('../../app_core/models/conection');
-const { Op } = Models.Sequelize;
+const Reglas = require('./reglasAgenda');
 
 /**
  * Calcula los slots disponibles para un servicio + profesional + fecha.
  *
+ * Desde F3 **no implementa las reglas de la agenda**: las consume de `reglasAgenda`, que es
+ * el mismo módulo que usa la creación de citas. Antes había dos implementaciones de la misma
+ * regla y divergieron —el buffer se aplicaba a medias aquí y entero al crear—, así que este
+ * servicio ofrecía horas que después se rechazaban con un 409. Su trabajo ahora es solo el
+ * que le corresponde: **partir los huecos reservables en slots**.
+ *
  * Algoritmo:
- *   1. Carga config del negocio (anticipación, buffer, paso de slot).
- *   2. Carga servicio (duración).
- *   3. Carga horario laboral del profesional para el día (con fallback al horario del negocio).
- *   4. Resta bloqueos.
- *   5. Resta citas existentes ± buffer.
- *   6. Genera slots cada `paso_slot_min` que quepan duración.
- *   7. Filtra los que no cumplen anticipación mínima.
+ *   1. Config del negocio (anticipación, buffer, paso de slot).
+ *   2. Servicio (duración) y profesional, ambos del negocio.
+ *   3. `Reglas.huecosReservables` → horario laboral − bloqueos − (citas y holds ± buffer).
+ *   4. Genera slots cada `paso_slot_min` que quepan enteros en un hueco.
+ *   5. Marca como no disponibles los que no cumplen la anticipación mínima.
+ *
+ * **Garantía de F3:** todo slot marcado `disponible: true` pasa la verificación de
+ * `Reglas.verificarReservable`. Si eso deja de ser cierto, es un bug, no una diferencia de
+ * criterio.
  *
  * Devuelve: { fecha, duracion_servicio_min, buffer_min, paso_slot_min, slots: [{ hora, disponible, motivo? }] }
  */
@@ -38,165 +46,58 @@ async function calcularSlots({ idNegocio, idServicio, idProfesional, fechaISO })
         const e = new Error('Profesional no encontrado'); e.statusCode = 404; throw e;
     }
 
-    const dia = parseFechaLocal(fechaISO);                // Date a las 00:00 del día solicitado (Bogotá wall time)
-    const diaSemana = dia.getDay();                       // 0=Dom..6=Sab
-    const finDia = addMinutes(dia, 24 * 60);
+    const vacio = {
+        fecha: fechaISO,
+        duracion_servicio_min: servicio.duracion_min,
+        buffer_min: cfg.buffer_limpieza_min,
+        paso_slot_min: cfg.paso_slot_min,
+        slots: [],
+    };
 
-    // Horario: primero override por profesional, si no, horario del negocio
-    let horario = await Models.ReservaHorario.findAll({
-        where: { id_negocio: idNegocio, id_profesional: idProfesional, dia_semana: diaSemana },
-        attributes: ['hora_inicio', 'hora_fin'],
-        order: [['hora_inicio', 'ASC']],
+    const huecos = await Reglas.huecosReservables({
+        idNegocio,
+        idProfesional,
+        fechaISO,
+        bufferMin: cfg.buffer_limpieza_min,
     });
-    if (horario.length === 0) {
-        horario = await Models.ReservaHorario.findAll({
-            where: { id_negocio: idNegocio, id_profesional: null, dia_semana: diaSemana },
-            attributes: ['hora_inicio', 'hora_fin'],
-            order: [['hora_inicio', 'ASC']],
-        });
-    }
+    if (huecos.length === 0) return vacio;
 
-    if (horario.length === 0) {
-        return {
-            fecha: fechaISO,
-            duracion_servicio_min: servicio.duracion_min,
-            buffer_min: cfg.buffer_limpieza_min,
-            paso_slot_min: cfg.paso_slot_min,
-            slots: [],
-        };
-    }
-
-    // Intervalos laborales del día como [Date, Date]
-    const intervalosLibres = horario.map(h => ([
-        combinarFechaHora(dia, h.hora_inicio),
-        combinarFechaHora(dia, h.hora_fin),
-    ]));
-
-    // Bloqueos que solapan el día
-    const bloqueos = await Models.ReservaBloqueo.findAll({
-        where: {
-            id_negocio: idNegocio,
-            [Op.or]: [
-                { id_profesional: idProfesional },
-                { id_profesional: null },
-            ],
-            fecha_inicio: { [Op.lt]: finDia },
-            fecha_fin:    { [Op.gt]: dia },
-        },
-        attributes: ['fecha_inicio', 'fecha_fin'],
-    });
-
-    // Citas activas del profesional en el día
-    const citas = await Models.ReservaCita.findAll({
-        where: {
-            id_profesional: idProfesional,
-            estado: { [Op.in]: ['pendiente', 'confirmada'] },
-            fecha_hora_inicio: { [Op.lt]: finDia },
-            fecha_hora_fin:    { [Op.gt]: dia },
-        },
-        attributes: ['fecha_hora_inicio', 'fecha_hora_fin'],
-    });
-
-    // Construir intervalos ocupados (bloqueos sin buffer; citas con buffer)
-    const ocupados = [];
-    for (const b of bloqueos) {
-        ocupados.push([new Date(b.fecha_inicio), new Date(b.fecha_fin)]);
-    }
-    const halfBuffer = cfg.buffer_limpieza_min / 2;
-    for (const c of citas) {
-        ocupados.push([
-            addMinutes(new Date(c.fecha_hora_inicio), -halfBuffer),
-            addMinutes(new Date(c.fecha_hora_fin),    +halfBuffer),
-        ]);
-    }
-
-    // Restar ocupados de cada intervalo libre
-    let libres = intervalosLibres;
-    for (const occ of ocupados) {
-        libres = libres.flatMap(l => restarIntervalo(l, occ));
-    }
-
-    // Generar slots
-    const ahora = new Date();
-    const minimoInicio = addMinutes(ahora, cfg.anticipacion_min_horas * 60);
-    const slots = [];
+    const minimoInicio = Reglas.addMinutes(new Date(), cfg.anticipacion_min_horas * 60);
     const duracion = servicio.duracion_min;
     const paso = cfg.paso_slot_min;
+    const slots = [];
 
-    for (const [a, b] of libres) {
-        let t = redondearHaciaArriba(a, paso);
-        while (addMinutes(t, duracion) <= b) {
+    for (const [desde, hasta] of huecos) {
+        let t = redondearHaciaArriba(desde, paso);
+        while (Reglas.addMinutes(t, duracion) <= hasta) {
             const disponible = t >= minimoInicio;
             slots.push({
                 hora: formatearHoraLocal(t),
                 disponible,
                 ...(disponible ? {} : { motivo: 'anticipacion' }),
             });
-            t = addMinutes(t, paso);
+            t = Reglas.addMinutes(t, paso);
         }
     }
 
-    return {
-        fecha: fechaISO,
-        duracion_servicio_min: duracion,
-        buffer_min: cfg.buffer_limpieza_min,
-        paso_slot_min: paso,
-        slots,
-    };
+    // Dos huecos distintos no pueden producir la misma hora, pero sí llegan desordenados
+    // cuando un bloqueo parte la jornada. El cliente espera la lista en orden.
+    slots.sort((a, b) => a.hora.localeCompare(b.hora));
+
+    return { ...vacio, slots };
 }
 
-// ────────────────────────── Helpers de tiempo ──────────────────────────
-
-/** Construye un Date a las 00:00 hora Bogotá del día YYYY-MM-DD. */
-function parseFechaLocal(fechaISO) {
-    const [y, m, d] = fechaISO.split('-').map(Number);
-    // -05:00 fijo (Colombia sin DST). El parser del pool ya ancla así, mantenemos coherencia.
-    return new Date(`${fechaISO}T00:00:00-05:00`);
-}
-
-function addMinutes(date, mins) {
-    return new Date(date.getTime() + mins * 60_000);
-}
-
-/** "HH:MM:SS" o "HH:MM" → combinar con día base, en hora Bogotá. */
-function combinarFechaHora(diaBase, horaStr) {
-    const partes = String(horaStr).split(':');
-    const hh = parseInt(partes[0], 10);
-    const mm = parseInt(partes[1], 10);
-    const ss = parseInt(partes[2] || '0', 10);
-    const fechaISO = formatearFechaISO(diaBase);
-    return new Date(`${fechaISO}T${pad(hh)}:${pad(mm)}:${pad(ss)}-05:00`);
-}
-
-function formatearFechaISO(date) {
-    // YYYY-MM-DD en hora Bogotá
-    const opts = { timeZone: 'America/Bogota', year: 'numeric', month: '2-digit', day: '2-digit' };
-    const parts = new Intl.DateTimeFormat('en-CA', opts).formatToParts(date);
-    const map = Object.fromEntries(parts.map(p => [p.type, p.value]));
-    return `${map.year}-${map.month}-${map.day}`;
-}
+// ────────────────────────── Helpers propios de la vista de slots ──────────────────────────
 
 function formatearHoraLocal(date) {
     const opts = { timeZone: 'America/Bogota', hour: '2-digit', minute: '2-digit', hour12: false };
     return new Intl.DateTimeFormat('en-GB', opts).format(date);
 }
 
-function pad(n) { return String(n).padStart(2, '0'); }
-
-/** Resta el intervalo `b` del intervalo `a`. Devuelve 0..2 sub-intervalos. */
-function restarIntervalo([aStart, aEnd], [bStart, bEnd]) {
-    if (bEnd <= aStart || bStart >= aEnd) return [[aStart, aEnd]];
-    const out = [];
-    if (bStart > aStart) out.push([aStart, bStart]);
-    if (bEnd < aEnd) out.push([bEnd, aEnd]);
-    return out;
-}
-
 /** Redondea `date` hacia arriba al múltiplo más cercano de `pasoMin`. */
 function redondearHaciaArriba(date, pasoMin) {
     const ms = pasoMin * 60_000;
-    const t = date.getTime();
-    return new Date(Math.ceil(t / ms) * ms);
+    return new Date(Math.ceil(date.getTime() / ms) * ms);
 }
 
 async function getConfig(idNegocio) {

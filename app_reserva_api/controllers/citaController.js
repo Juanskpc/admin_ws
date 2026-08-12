@@ -13,6 +13,23 @@ function check(req, res) {
     return true;
 }
 
+/**
+ * Reenvía un error de dominio tal cual, sin re-envolverlo.
+ *
+ * Desde F3 el dominio rechaza cosas que antes aceptaba (transición inválida, fuera de
+ * horario, sobre un bloqueo) y lo hace con `.code` + `.statusCode`. Traducir todo eso a un
+ * 500 genérico —como hacían los cuatro manejadores de transición— convertiría un «no se
+ * puede completar una cita cancelada», que es información útil, en un «error del servidor»,
+ * que no lo es. Solo lo que no trae `statusCode` es un fallo de verdad.
+ */
+function fallo(res, err, contexto, mensajeGenerico) {
+    if (err.statusCode) {
+        return Respuesta.error(res, err.message, err.statusCode, err.code ? [{ code: err.code }] : null);
+    }
+    console.error(`[Reserva/Citas] ${contexto}:`, err.message);
+    return Respuesta.error(res, mensajeGenerico);
+}
+
 /** GET /reserva/citas?id_negocio=&desde=&hasta=&id_profesional=&estado= */
 async function listar(req, res) {
     try {
@@ -90,8 +107,7 @@ async function confirmar(req, res) {
         if (!c) return Respuesta.error(res, 'Cita no encontrada', 404);
         return Respuesta.success(res, 'Cita confirmada', c);
     } catch (err) {
-        console.error('[Reserva/Citas] confirmar:', err.message);
-        return Respuesta.error(res, 'Error al confirmar la cita.');
+        return fallo(res, err, 'confirmar', 'Error al confirmar la cita.');
     }
 }
 
@@ -104,8 +120,7 @@ async function completar(req, res) {
         if (!c) return Respuesta.error(res, 'Cita no encontrada', 404);
         return Respuesta.success(res, 'Cita completada', c);
     } catch (err) {
-        console.error('[Reserva/Citas] completar:', err.message);
-        return Respuesta.error(res, 'Error al completar la cita.');
+        return fallo(res, err, 'completar', 'Error al completar la cita.');
     }
 }
 
@@ -118,8 +133,7 @@ async function noShow(req, res) {
         if (!c) return Respuesta.error(res, 'Cita no encontrada', 404);
         return Respuesta.success(res, 'Cita marcada como no-show', c);
     } catch (err) {
-        console.error('[Reserva/Citas] noShow:', err.message);
-        return Respuesta.error(res, 'Error al marcar la cita.');
+        return fallo(res, err, 'noShow', 'Error al marcar la cita.');
     }
 }
 
@@ -133,8 +147,7 @@ async function cancelarPorNegocio(req, res) {
         if (!c) return Respuesta.error(res, 'Cita no encontrada', 404);
         return Respuesta.success(res, 'Cita cancelada', c);
     } catch (err) {
-        console.error('[Reserva/Citas] cancelar:', err.message);
-        return Respuesta.error(res, 'Error al cancelar la cita.');
+        return fallo(res, err, 'cancelar', 'Error al cancelar la cita.');
     }
 }
 

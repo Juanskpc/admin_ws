@@ -1,16 +1,24 @@
 'use strict';
 const Models = require('../../app_core/models/conection');
-const { Op, QueryTypes } = Models.Sequelize;
+const { Op } = Models.Sequelize;
 const Disponibilidad = require('./disponibilidadService');
 const Notificacion = require('./notificacionService');
+const Reglas = require('./reglasAgenda');
+const EstadoCita = require('./estadoCita');
 
 /**
  * Crea una cita aplicando todas las reglas de negocio:
  *  - Anticipación mínima
  *  - Profesional ofrece los servicios pedidos
- *  - Slot dentro del horario laboral (heurística simple: si todos los slots libres lo permiten)
- *  - Anti-doble-reserva con SELECT FOR UPDATE + buffer de limpieza
+ *  - **Dentro del horario laboral y fuera de todo bloqueo** (F3: antes no se comprobaba)
+ *  - Anti-doble-reserva contra citas y holds, con el buffer de limpieza
  *  - Si cobro_adelantado=true: comprobante obligatorio + estado pago=pendiente_validacion
+ *
+ * Desde F3 las tres últimas las decide `reglasAgenda`, el mismo módulo que usa
+ * `disponibilidadService` para ofrecer horas. Antes cada uno tenía su propia versión y
+ * divergieron: se ofrecían horas que aquí se rechazaban con un 409, y aquí se aceptaban
+ * citas un domingo a las 3 de la mañana porque nadie miraba el horario. Estaba tapado
+ * porque el único cliente era un formulario que solo ofrecía lo válido.
  *
  * @param {Object} params
  * @param {number}   params.idNegocio
@@ -23,12 +31,15 @@ const Notificacion = require('./notificacionService');
  * @param {string=}  params.notas
  * @param {string=}  params.comprobantePath     Ruta relativa del archivo subido
  * @param {number=}  params.creadoPorIdUsuario  Si la crea el negocio
+ * @param {number=}  params.consumirHoldId      Hold que esta cita viene a materializar
+ * @param {Object=}  opciones.transaction       Transacción de quien llama. Si viene, este
+ *                   servicio NO confirma: la decisión de commit es de quien la abrió.
  */
-async function crearCita(params) {
+async function crearCita(params, { transaction: transaccionExterna = null } = {}) {
     const {
         idNegocio, idProfesional, idServicios = [],
         fechaHoraInicioISO, clienteNombre, clienteTelefono, clienteEmail, notas,
-        comprobantePath, creadoPorIdUsuario,
+        comprobantePath, creadoPorIdUsuario, consumirHoldId = null,
     } = params;
 
     if (!idNegocio || !idProfesional || !idServicios.length || !fechaHoraInicioISO || !clienteNombre) {
@@ -90,35 +101,34 @@ async function crearCita(params) {
         e.statusCode = 400; e.code = 'COMPROBANTE_REQUERIDO'; throw e;
     }
 
-    // Transacción con anti-doble-reserva
-    const t = await Models.sequelize.transaction();
+    // Transacción con anti-doble-reserva. Si quien llama trae la suya, se trabaja dentro:
+    // es lo que permite que el dry-run del Policy Gate deshaga esto de verdad. Un servicio
+    // que confirma por su cuenta convierte «ejecutar en seco» en «ejecutar».
+    const propia = !transaccionExterna;
+    const t = transaccionExterna || (await Models.sequelize.transaction());
     try {
-        // SELECT ... FOR UPDATE sobre citas que solapan (con buffer).
-        // Importante: usar sequelize.query con la misma transacción para que el lock
-        // y el INSERT siguiente compartan conexión.
-        const buffer = cfg.buffer_limpieza_min;
-        const conflictos = await Models.sequelize.query(
-            `SELECT id_cita FROM reserva.reserva_cita
-              WHERE id_profesional = :idProfesional
-                AND estado IN ('pendiente','confirmada')
-                AND tstzrange(
-                        fecha_hora_inicio - (:buffer || ' minutes')::interval,
-                        fecha_hora_fin    + (:buffer || ' minutes')::interval,
-                        '[)'
-                    ) && tstzrange(:ini, :fin, '[)')
-              FOR UPDATE`,
-            {
-                replacements: { idProfesional, ini: fechaInicio, fin: fechaFin, buffer },
-                type: QueryTypes.SELECT,
-                transaction: t,
-            },
-        );
+        // Lock pesimista sobre la agenda de ESTE profesional. Es un advisory lock y no un
+        // `SELECT ... FOR UPDATE` sobre las citas que solapan porque las filas conflictivas
+        // pueden no existir todavía: dos peticiones simultáneas para el mismo hueco vacío no
+        // tienen ninguna fila que bloquear, y las dos pasarían la comprobación. El lock
+        // serializa por profesional, que es el grano al que se reserva.
+        await Models.sequelize.query('SELECT pg_advisory_xact_lock(:clave);', {
+            replacements: { clave: idProfesional },
+            transaction: t,
+        });
 
-        if (conflictos.length > 0) {
-            await t.rollback();
-            const e = new Error('Ese horario ya no está disponible');
-            e.statusCode = 409; e.code = 'SLOT_NO_DISPONIBLE'; throw e;
-        }
+        await Reglas.verificarReservable(
+            {
+                idNegocio,
+                idProfesional,
+                inicio: fechaInicio,
+                fin: fechaFin,
+                bufferMin: cfg.buffer_limpieza_min,
+            },
+            // Si esta cita viene de un hold, su propio hold no cuenta como conflicto: es
+            // precisamente el hueco que estaba guardando.
+            { transaction: t, excluirHold: consumirHoldId }
+        );
 
         const cita = await Models.ReservaCita.create({
             id_negocio: idNegocio,
@@ -146,22 +156,40 @@ async function crearCita(params) {
         }));
         await Models.ReservaCitaServicio.bulkCreate(detalles, { transaction: t });
 
-        await t.commit();
+        // El hold se consume en la MISMA transacción que la cita: o existen los dos, o
+        // ninguno. Si se marcara después, un fallo entre medias dejaría un hold activo
+        // bloqueando un hueco que ya tiene cita.
+        if (consumirHoldId) {
+            await Models.ReservaHold.update(
+                { estado: 'confirmado', id_cita: cita.id_cita },
+                { where: { id_hold: consumirHoldId, id_negocio: idNegocio }, transaction: t }
+            );
+        }
 
-        // Notificación post-commit (no rompe la transacción si falla)
-        Notificacion.enviar(requierePago ? 'cita_pendiente_pago' : 'cita_creada', {
-            cita: cita.toJSON(), servicios, profesional: profesional.toJSON(),
-        }).catch(err => console.error('[Reserva] notif error:', err.message));
+        if (propia) {
+            await t.commit();
 
-        return await getCitaConDetalle(cita.id_cita);
+            // Notificación post-commit (no rompe la transacción si falla).
+            //
+            // Solo cuando la transacción es nuestra: con una externa todavía no sabemos si
+            // la cita va a existir. Notificar antes del commit ajeno es prometerle al
+            // cliente una cita que un rollback puede borrar — y un correo enviado no se
+            // deshace. Quien abra la transacción notifica después de confirmarla.
+            Notificacion.enviar(requierePago ? 'cita_pendiente_pago' : 'cita_creada', {
+                cita: cita.toJSON(), servicios, profesional: profesional.toJSON(),
+            }).catch(err => console.error('[Reserva] notif error:', err.message));
+        }
+
+        return await getCitaConDetalle(cita.id_cita, { transaction: propia ? null : t });
     } catch (err) {
-        if (t.finished !== 'commit' && t.finished !== 'rollback') await t.rollback();
+        if (propia && t.finished !== 'commit' && t.finished !== 'rollback') await t.rollback();
         throw err;
     }
 }
 
-async function getCitaConDetalle(idCita) {
+async function getCitaConDetalle(idCita, { transaction = null } = {}) {
     return Models.ReservaCita.findOne({
+        transaction,
         where: { id_cita: idCita },
         include: [
             { model: Models.ReservaProfesional, as: 'profesional',
@@ -188,14 +216,27 @@ async function getCitaPorCodigo(codigoPublico) {
     });
 }
 
-async function cancelarPorCliente(codigoPublico, motivo) {
-    const cita = await Models.ReservaCita.findOne({ where: { codigo_publico: codigoPublico } });
+/**
+ * Cancela una cita a petición del cliente, identificándola por su código público.
+ *
+ * `idNegocio` es opcional porque el enlace público de cancelación no sabe a qué negocio
+ * pertenece la cita: el código uuid es toda su credencial. Quien SÍ conoce el negocio —el
+ * panel, y el asistente a través del Policy Gate— debe pasarlo, y entonces la búsqueda queda
+ * acotada al inquilino. Sin ese filtro, un código de otro negocio se cancelaría igual: la
+ * probabilidad de acertar un uuid es despreciable, pero el aislamiento no debe depender de
+ * una probabilidad (ADR-002).
+ */
+async function cancelarPorCliente(codigoPublico, motivo, { idNegocio = null, transaction = null } = {}) {
+    const where = { codigo_publico: codigoPublico };
+    if (idNegocio) where.id_negocio = idNegocio;
+
+    const cita = await Models.ReservaCita.findOne({ where, transaction });
     if (!cita) {
         const e = new Error('Cita no encontrada'); e.statusCode = 404; throw e;
     }
-    if (['cancelada', 'completada', 'no_show'].includes(cita.estado)) {
-        const e = new Error('La cita ya no se puede cancelar'); e.statusCode = 409; throw e;
-    }
+    // Antes esta comprobación estaba escrita a mano aquí y en ningún otro sitio. Ahora es la
+    // misma máquina de estados que usan el panel y (en F4-B) el asistente.
+    EstadoCita.exigirTransicion(cita.estado, EstadoCita.ESTADO.CANCELADA);
 
     const cfg = await Disponibilidad.getConfig(cita.id_negocio);
     const ahora = new Date();
@@ -205,17 +246,128 @@ async function cancelarPorCliente(codigoPublico, motivo) {
         e.statusCode = 400; e.code = 'CANCELACION_TARDE'; throw e;
     }
 
-    await cita.update({
-        estado: 'cancelada',
-        cancelado_por: 'cliente',
-        cancelado_motivo: motivo || null,
-        fecha_actualizacion: new Date(),
-    });
+    await cita.update(
+        {
+            estado: 'cancelada',
+            cancelado_por: 'cliente',
+            cancelado_motivo: motivo || null,
+            fecha_actualizacion: new Date(),
+        },
+        { transaction }
+    );
 
-    Notificacion.enviar('cita_cancelada', { cita: cita.toJSON() })
-        .catch(err => console.error('[Reserva] notif error:', err.message));
+    // Con transacción externa todavía no se sabe si la cancelación va a existir: notificar
+    // antes del commit ajeno es avisar de algo que un rollback puede deshacer, y un correo
+    // enviado no se deshace.
+    if (!transaction) {
+        Notificacion.enviar('cita_cancelada', { cita: cita.toJSON() })
+            .catch(err => console.error('[Reserva] notif error:', err.message));
+    }
 
     return cita;
+}
+
+/**
+ * Mueve una cita a otra hora, del mismo o de otro profesional.
+ *
+ * Pasa por la **misma puerta** que crear (`reglasAgenda.verificarReservable`): reagendar es
+ * crear en otro sitio, y sería absurdo que se pudiera mover una cita a un domingo por el
+ * hecho de que ya existía.
+ *
+ * Se relee y revalida el estado **dentro de la transacción**, sin fiarse de lo que sepa
+ * quien llama: entre que alguien decide reagendar y lo ejecuta, la cita pudo cancelarse
+ * desde el panel (ADR-010, «el contexto es una pista, nunca un hecho»).
+ *
+ * La duración se recalcula desde los servicios ya asociados a la cita, no se hereda del
+ * intervalo anterior: si un servicio cambió de duración, la cita movida debe ocupar lo que
+ * ocupa hoy, no lo que ocupaba el día que se creó.
+ */
+async function reagendarCita(
+    { idCita, idNegocio, nuevaFechaHoraInicioISO, idProfesional = null, consumirHoldId = null },
+    { transaction: transaccionExterna = null } = {}
+) {
+    if (!idCita || !idNegocio || !nuevaFechaHoraInicioISO) {
+        const e = new Error('Datos incompletos para reagendar'); e.statusCode = 400; throw e;
+    }
+
+    const cfg = await Disponibilidad.getConfig(idNegocio);
+    const propia = !transaccionExterna;
+    const t = transaccionExterna || (await Models.sequelize.transaction());
+
+    try {
+        const cita = await Models.ReservaCita.findOne({
+            where: { id_cita: idCita, id_negocio: idNegocio },
+            transaction: t,
+            lock: t.LOCK.UPDATE,
+        });
+        if (!cita) {
+            const e = new Error('Cita no encontrada'); e.statusCode = 404; throw e;
+        }
+        if (EstadoCita.esTerminal(cita.estado)) {
+            const e = new Error(`Una cita "${cita.estado}" ya está cerrada y no se puede reagendar.`);
+            e.statusCode = 409; e.code = 'TRANSICION_INVALIDA'; throw e;
+        }
+
+        const lineas = await Models.ReservaCitaServicio.findAll({
+            where: { id_cita: idCita },
+            attributes: ['id_servicio'],
+            transaction: t,
+        });
+        const servicios = await Models.ReservaServicio.findAll({
+            where: { id_servicio: lineas.map(l => l.id_servicio), id_negocio: idNegocio },
+            attributes: ['duracion_min'],
+            transaction: t,
+        });
+        const duracionTotal = servicios.reduce((acc, s) => acc + s.duracion_min, 0);
+
+        const traeHuso = nuevaFechaHoraInicioISO.includes('+') || nuevaFechaHoraInicioISO.endsWith('Z');
+        const inicio = new Date(`${nuevaFechaHoraInicioISO}${traeHuso ? '' : '-05:00'}`);
+        if (Number.isNaN(inicio.getTime())) {
+            const e = new Error('fecha_hora_inicio inválida'); e.statusCode = 400; throw e;
+        }
+        const fin = new Date(inicio.getTime() + duracionTotal * 60_000);
+        const profesionalDestino = idProfesional || cita.id_profesional;
+
+        await Models.sequelize.query('SELECT pg_advisory_xact_lock(:clave);', {
+            replacements: { clave: profesionalDestino },
+            transaction: t,
+        });
+
+        await Reglas.verificarReservable(
+            { idNegocio, idProfesional: profesionalDestino, inicio, fin, bufferMin: cfg.buffer_limpieza_min },
+            // La propia cita no cuenta como conflicto consigo misma: mover una cita 15
+            // minutos dentro de su propio buffer es legítimo y si no se excluyera fallaría.
+            { transaction: t, excluirCita: idCita, excluirHold: consumirHoldId }
+        );
+
+        await cita.update(
+            {
+                id_profesional: profesionalDestino,
+                fecha_hora_inicio: inicio,
+                fecha_hora_fin: fin,
+                fecha_actualizacion: new Date(),
+            },
+            { transaction: t }
+        );
+
+        if (consumirHoldId) {
+            await Models.ReservaHold.update(
+                { estado: 'confirmado', id_cita: idCita },
+                { where: { id_hold: consumirHoldId, id_negocio: idNegocio }, transaction: t }
+            );
+        }
+
+        if (propia) {
+            await t.commit();
+            Notificacion.enviar('cita_reagendada', { cita: cita.toJSON() })
+                .catch(err => console.error('[Reserva] notif error:', err.message));
+        }
+
+        return await getCitaConDetalle(idCita, { transaction: propia ? null : t });
+    } catch (err) {
+        if (propia && t.finished !== 'commit' && t.finished !== 'rollback') await t.rollback();
+        throw err;
+    }
 }
 
 async function aprobarPago(idCita, idNegocio, idUsuario) {
@@ -224,6 +376,7 @@ async function aprobarPago(idCita, idNegocio, idUsuario) {
     if (cita.pago_estado !== 'pendiente_validacion') {
         const e = new Error('La cita no está pendiente de validación de pago'); e.statusCode = 409; throw e;
     }
+    EstadoCita.exigirTransicion(cita.estado, EstadoCita.ESTADO.CONFIRMADA);
     await cita.update({
         pago_estado: 'aprobado',
         estado: 'confirmada',
@@ -244,6 +397,7 @@ async function rechazarPago(idCita, idNegocio, idUsuario, motivo) {
     if (cita.pago_estado !== 'pendiente_validacion') {
         const e = new Error('La cita no está pendiente de validación de pago'); e.statusCode = 409; throw e;
     }
+    EstadoCita.exigirTransicion(cita.estado, EstadoCita.ESTADO.CANCELADA);
     await cita.update({
         pago_estado: 'rechazado',
         estado: 'cancelada',
@@ -260,6 +414,6 @@ async function rechazarPago(idCita, idNegocio, idUsuario, motivo) {
 }
 
 module.exports = {
-    crearCita, getCitaConDetalle, getCitaPorCodigo, cancelarPorCliente,
+    crearCita, reagendarCita, getCitaConDetalle, getCitaPorCodigo, cancelarPorCliente,
     aprobarPago, rechazarPago,
 };
