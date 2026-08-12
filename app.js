@@ -22,6 +22,11 @@ const PORT = process.env.PORT || 3000;
 // Seguridad y Middlewares
 // ========================
 
+// Detrás de Caddy (VPS Vultr) la IP del socket siempre es 127.0.0.1. Sin esto,
+// req.ip es la del proxy y cualquier limitador por IP agrupa a TODOS los
+// clientes en un mismo cubo. 1 = confiar sólo en el primer proxy (Caddy local).
+app.set('trust proxy', 1);
+
 // Protección de cabeceras HTTP
 app.use(helmet());
 
@@ -50,28 +55,44 @@ app.use(cors({
     credentials: true,
 }));
 
-// Rate limiting global:
-//   - Producción: 200 peticiones por IP cada 15 min
-//   - Desarrollo:  2 000 peticiones por IP cada 15 min (SSR + HMR generan muchas)
+// ⚠️  Rate limiting DESACTIVADO por defecto (migración AWS → VPS Vultr).
+//
+// En el VPS único todo el tráfico entra por Caddy, y el conteo por IP se hacía
+// sobre la IP del proxy: los 200 req/15min de producción se repartían entre
+// TODOS los clientes a la vez, no por usuario. Resultado: "Demasiadas
+// peticiones" en el login de clientes legítimos.
+//
+// Se deja apagado hasta rediseñarlo para la nueva arquitectura (clave por
+// usuario/negocio + almacén compartido, no en memoria del proceso).
+// Para reactivarlo temporalmente: RATE_LIMIT_ENABLED=true en el .env
+const rateLimitEnabled = process.env.RATE_LIMIT_ENABLED === 'true';
 const isDev = process.env.NODE_ENV !== 'production';
-const limiter = rateLimit({
-    windowMs: 15 * 60 * 1000,
-    max: isDev ? 2000 : 200,
-    standardHeaders: true,
-    legacyHeaders: false,
-    message: { success: false, message: 'Demasiadas peticiones, intente más tarde' }
-});
-app.use(limiter);
 
-// Rate limiting específico para login (más restrictivo): máx 10 intentos cada 15 min
-const loginLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000,
-    max: 1000,
-    standardHeaders: true,
-    legacyHeaders: false,
-    message: { success: false, message: 'Demasiados intentos de login, intente más tarde' }
-});
-app.use('/admin/auth/login', loginLimiter);
+if (rateLimitEnabled) {
+    // Rate limiting global:
+    //   - Producción: 200 peticiones por IP cada 15 min
+    //   - Desarrollo:  2 000 peticiones por IP cada 15 min (SSR + HMR generan muchas)
+    const limiter = rateLimit({
+        windowMs: 15 * 60 * 1000,
+        max: isDev ? 2000 : 200,
+        standardHeaders: true,
+        legacyHeaders: false,
+        message: { success: false, message: 'Demasiadas peticiones, intente más tarde' }
+    });
+    app.use(limiter);
+
+    // Rate limiting específico para login (más restrictivo)
+    const loginLimiter = rateLimit({
+        windowMs: 15 * 60 * 1000,
+        max: 1000,
+        standardHeaders: true,
+        legacyHeaders: false,
+        message: { success: false, message: 'Demasiados intentos de login, intente más tarde' }
+    });
+    app.use('/admin/auth/login', loginLimiter);
+} else {
+    console.log('⚠️  Rate limiting DESACTIVADO (RATE_LIMIT_ENABLED != true)');
+}
 
 // Parser JSON con límite de tamaño
 app.use(express.json({ limit: '10mb' }));
