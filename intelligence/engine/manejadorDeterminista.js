@@ -88,8 +88,26 @@ function normalizar(texto) {
         .replace(/[̀-ͯ]/g, '');
 }
 
+/**
+ * La última línea no vacía del texto agrupado.
+ *
+ * El debounce junta la ráfaga en **un** turno, así que aquí no llega «sí» sino «sí\nsí\nsí»,
+ * y comparar el bloque entero contra «sí» no casa: el bot repreguntaba y la cita no se creaba.
+ * Lo cazó el test de ráfaga en el paso de confirmar, que es exactamente para lo que está.
+ *
+ * Se toma la **última** y no «alguna»: dentro de un turno, lo último que dijo la persona es su
+ * intención actual. Con «alguna» valdría, un «cancelar… no, espera, sigue» cancelaría.
+ */
+function ultimaLinea(texto) {
+    const lineas = String(texto || '')
+        .split('\n')
+        .map((l) => l.trim())
+        .filter(Boolean);
+    return lineas[lineas.length - 1] ?? '';
+}
+
 function esComando(texto, lista) {
-    const t = normalizar(texto);
+    const t = normalizar(ultimaLinea(texto));
     return lista.some((palabra) => t === normalizar(palabra));
 }
 
@@ -208,7 +226,7 @@ function crearManejadorDeterminista({
     // ── Pasos de la tarea ───────────────────────────────────────────────────────────────
 
     async function elegirServicio(ctx, datos) {
-        const elegido = normalizar(ctx.texto).match(/\d+/);
+        const elegido = normalizar(ultimaLinea(ctx.texto)).match(/\d+/);
         if (!elegido) {
             return reintentar(ctx, datos, 'Elige uno de los servicios de la lista, por favor.');
         }
@@ -234,7 +252,7 @@ function crearManejadorDeterminista({
     }
 
     async function elegirFecha(ctx, datos) {
-        const fecha = interpretarFecha(ctx.texto, ahora());
+        const fecha = interpretarFecha(ultimaLinea(ctx.texto), ahora());
         if (!fecha) {
             return reintentar(ctx, datos, 'No entendí la fecha. Dime "hoy", "mañana" o algo como 2026-08-20.');
         }
@@ -264,6 +282,17 @@ function crearManejadorDeterminista({
             };
         }
 
+        // ⚠️ Se guarda QUÉ profesional tiene libre cada hora, y no solo la hora.
+        //
+        // `consultar_disponibilidad` funde las agendas de varios profesionales y devuelve,
+        // por cada hora, el primero que la tiene libre — el adaptador lo hace explícitamente
+        // «para que la capacidad de reserva no tenga que volver a calcularlo». Si aquí se
+        // tirara ese dato, `proponer_turno` volvería a elegir profesional por su cuenta y
+        // podría escoger a uno que acaba de ocuparse: `SLOT_NO_DISPONIBLE` sobre una hora que
+        // el bot mismo acababa de ofrecer. Lo cazó el test de extremo a extremo en cuanto
+        // hubo dos profesionales y una cita previa.
+        const profesionalPorHora = Object.fromEntries(horas.map((h) => [h.hora, h.id_profesional]));
+
         return {
             pasos: [paso('menu_horas', { fecha, cuantas: horas.length })],
             respuestas: [
@@ -273,7 +302,10 @@ function crearManejadorDeterminista({
                 },
             ],
             variables: conMemoria(ctx.conversacion),
-            tarea: { nombre: TAREA_AGENDAR, datos: { ...datos, paso: PASO.HORA, fecha } },
+            tarea: {
+                nombre: TAREA_AGENDAR,
+                datos: { ...datos, paso: PASO.HORA, fecha, profesional_por_hora: profesionalPorHora },
+            },
             resultado: 'resuelto',
             nivel: 'determinista',
         };
@@ -287,11 +319,15 @@ function crearManejadorDeterminista({
      * caduque justo cuando el cliente está a punto de confirmar.
      */
     async function elegirHora(ctx, datos) {
-        const hora = normalizar(ctx.texto).match(/\d{1,2}:\d{2}/);
+        const hora = normalizar(ultimaLinea(ctx.texto)).match(/\d{1,2}:\d{2}/);
         if (!hora) {
             return reintentar(ctx, datos, 'Elige una de las horas de la lista, por favor.');
         }
-        const conHora = { ...datos, hora: hora[0] };
+        const conHora = {
+            ...datos,
+            hora: hora[0],
+            id_profesional: datos.profesional_por_hora?.[hora[0]] ?? null,
+        };
 
         if (!ctx.identidad.nombre) {
             return {
@@ -309,7 +345,13 @@ function crearManejadorDeterminista({
     }
 
     async function recibirNombre(ctx, datos) {
-        const nombre = String(ctx.texto || '').trim();
+        // Excepción a la regla de la última línea: «Nicolás\nPaez» son dos trozos de UN
+        // nombre, no dos intenciones. Aquí se unen en vez de quedarse con el último.
+        const nombre = String(ctx.texto || '')
+            .split('\n')
+            .map((l) => l.trim())
+            .filter(Boolean)
+            .join(' ');
         if (nombre.length < 2) {
             return reintentar(ctx, datos, 'Necesito un nombre para la cita. ¿Cómo te llamas?');
         }
@@ -322,7 +364,13 @@ function crearManejadorDeterminista({
         const { resultado } = await invocar({
             ...ctx,
             capacidad: 'proponer_turno',
-            args: { id_servicio: datos.id_servicio, inicio },
+            args: {
+                id_servicio: datos.id_servicio,
+                inicio,
+                // El mismo profesional que tenía libre esa hora cuando se ofreció. Sin esto,
+                // el adaptador vuelve a elegir y puede caer en uno ya ocupado.
+                ...(datos.id_profesional ? { id_profesional: datos.id_profesional } : {}),
+            },
         });
 
         const detalle = [

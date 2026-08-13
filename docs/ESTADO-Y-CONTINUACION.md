@@ -393,6 +393,41 @@ aguantó, que era justo lo que había que comprobar.
    apartar la hora. Al revés, el formulario se come los minutos del hold y caduca justo cuando
    el cliente iba a confirmar.
 
+### ✅ Criterios de aceptación de F5, verificados de extremo a extremo
+
+`__tests__/intelligence/e2e_agendar.test.js` recorre el camino entero contra Postgres, **sin
+dobles**: widget → gateway → motor → identidad → Policy Gate → adaptador → dominio.
+
+| Criterio (master-plan, FASE 5) | Estado |
+|---|---|
+| 1. Cita completa por WebChat con menú determinista, y la cita queda correcta | ✅ fila real en `reserva.reserva_cita`, con su código y su hora |
+| 2. Ráfaga de 5 mensajes en 2 s → **un** turno y **una** cita | ✅ 1 turno, 5 entrantes agrupados, 1 respuesta |
+| 3. Continuidad: abandonar, matar el proceso, volver → la tarea se retoma | ✅ y además se completa hasta crear la cita |
+| 4. Costo en tokens: **$0.00** | ✅ `nivel = determinista` en todos los turnos, 0 filas en `intelligence.costo` |
+
+**Y encontró dos bugs que los tests unitarios no podían encontrar**, que es exactamente para
+lo que está:
+
+- **`SLOT_NO_DISPONIBLE` sobre una hora que el propio bot acababa de ofrecer.**
+  `consultar_disponibilidad` funde las agendas de varios profesionales y devuelve, por cada
+  hora, **cuál** la tiene libre. La FSM tiraba ese dato y `proponer_turno` volvía a elegir
+  profesional por su cuenta, cayendo a veces en uno recién ocupado. Solo aparece con **dos
+  profesionales y una cita previa**: con un solo profesional el bug es invisible.
+- **La ráfaga rompía la confirmación.** Al bot no le llega «sí» sino «sí\nsí\nsí», porque el
+  debounce agrupa. La comparación era contra el bloque entero, así que no casaba y la cita no
+  se creaba. Regla nueva: dentro de un turno manda la **última línea** — lo último que dijo la
+  persona es su intención actual. El nombre es la excepción y se une con espacios.
+
+**Dos avisos para quien corra esta suite:**
+
+- Necesita `FEATURES_FORZADAS=asistente_ia`. **Ningún plan comercial incluye el asistente**, a
+  propósito: todavía no se vende. `features.js` lee la variable **al cargar el módulo**, así que
+  el test la fija antes de los `require`. Sin ella, el Gate deniega con `FEATURE_NO_HABILITADA`
+  y el bot no contesta nada.
+- Barre los holds `activo` del día antes y después. `proponer_turno` no es idempotente y una
+  ejecución cortada a mitad deja holds vivos con minutos de TTL: **la primera pasada va bien y
+  las siguientes fallan**, que parece intermitencia y no lo es.
+
 ---
 
 ## 5. Pendiente de despliegue (en este orden)

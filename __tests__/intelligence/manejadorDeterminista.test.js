@@ -322,6 +322,37 @@ describe('idempotencia y capacidades', () => {
         }
     });
 
+    test('aparta con el MISMO profesional que tenía libre esa hora', async () => {
+        // Regresión de F5-D, cazada por el e2e: `consultar_disponibilidad` funde las agendas
+        // de varios profesionales y dice cuál tiene libre cada hora. Si la FSM tira ese dato,
+        // `proponer_turno` vuelve a elegir y puede caer en uno que acaba de ocuparse —
+        // SLOT_NO_DISPONIBLE sobre una hora que el propio bot acababa de ofrecer.
+        const gate = gateCompleto();
+        const manejar = crearManejadorDeterminista({ gate, identidad: identidadFalsa({ nombre: 'Ana' }) });
+
+        const datos = {
+            paso: PASO.HORA,
+            id_servicio: 1,
+            fecha: '2026-08-20',
+            profesional_por_hora: { '09:00': 4, '10:00': 7 },
+        };
+        await manejar(entrada('10:00', conversacion({ tarea: TAREA_AGENDAR, datos })));
+
+        const propuesta = gate.llamadas.find((l) => l.capacidad === 'proponer_turno');
+        expect(propuesta.args.id_profesional).toBe(7);
+    });
+
+    test('sin profesional conocido no lo inventa: deja elegir al adaptador', async () => {
+        const gate = gateCompleto();
+        const manejar = crearManejadorDeterminista({ gate, identidad: identidadFalsa({ nombre: 'Ana' }) });
+
+        const datos = { paso: PASO.HORA, id_servicio: 1, fecha: '2026-08-20' };
+        await manejar(entrada('10:00', conversacion({ tarea: TAREA_AGENDAR, datos })));
+
+        const propuesta = gate.llamadas.find((l) => l.capacidad === 'proponer_turno');
+        expect(propuesta.args).not.toHaveProperty('id_profesional');
+    });
+
     test('toda invocación lleva el Principal y el negocio de la conversación', async () => {
         const gate = gateCompleto();
         const manejar = crearManejadorDeterminista({ gate, identidad: identidadFalsa() });
@@ -329,6 +360,47 @@ describe('idempotencia y capacidades', () => {
 
         expect(gate.llamadas[0].idNegocio).toBe(7);
         expect(gate.llamadas[0].principal.tipo).toBe('contacto');
+    });
+});
+
+describe('texto agrupado por el debounce', () => {
+    // Lo cazó el test de ráfaga de extremo a extremo: al bot no le llega «sí», le llega
+    // «sí\nsí\nsí», porque el debounce junta la ráfaga en UN turno. Comparar el bloque
+    // entero contra «sí» no casaba y la cita no se creaba.
+    test('tres «sí» seguidos confirman', async () => {
+        const gate = gateCompleto();
+        const manejar = crearManejadorDeterminista({ gate, identidad: identidadFalsa() });
+        const datos = { paso: PASO.CONFIRMAR, fecha: '2026-08-20', hora: '10:00', codigo_hold: 'H', nombre: 'Ana' };
+        const d = await manejar(entrada('sí\nsí\nsí', conversacion({ tarea: TAREA_AGENDAR, datos })));
+
+        expect(d.pasos[0].decision).toBe('cita_creada');
+    });
+
+    test('manda la ÚLTIMA línea, que es la intención actual', async () => {
+        // «cancelar… no, espera» no debe cancelar: si valiera cualquier línea, sí lo haría.
+        const manejar = crearManejadorDeterminista({ gate: gateCompleto(), identidad: identidadFalsa() });
+        const conv = conversacion({ tarea: TAREA_AGENDAR, datos: { paso: PASO.CONFIRMAR, codigo_hold: 'H', nombre: 'Ana', fecha: '2026-08-20', hora: '10:00' } });
+        const d = await manejar(entrada('cancelar\nno, espera\nsí', conv));
+
+        expect(d.pasos[0].decision).toBe('cita_creada');
+    });
+
+    test('un cambio de opinión en la ráfaga elige lo último', async () => {
+        const manejar = crearManejadorDeterminista({ gate: gateCompleto(), identidad: identidadFalsa() });
+        const conv = conversacion({ tarea: TAREA_AGENDAR, datos: { paso: PASO.SERVICIO } });
+        const d = await manejar(entrada('1\nmejor 2', conv));
+
+        expect(d.tarea.datos.id_servicio).toBe(2);
+    });
+
+    test('un nombre partido en dos mensajes se une, no se recorta', async () => {
+        // La excepción a la regla: «Nicolás\nPaez» son dos trozos de UN nombre, no dos
+        // intenciones distintas.
+        const manejar = crearManejadorDeterminista({ gate: gateCompleto(), identidad: identidadFalsa() });
+        const datos = { paso: PASO.NOMBRE, id_servicio: 1, fecha: '2026-08-20', hora: '10:00' };
+        const d = await manejar(entrada('Nicolás\nPaez', conversacion({ tarea: TAREA_AGENDAR, datos })));
+
+        expect(d.variables.nombre).toBe('Nicolás Paez');
     });
 });
 
