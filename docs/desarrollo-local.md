@@ -1,10 +1,80 @@
 # Entorno de desarrollo local
 
-Cómo levantar una base de datos local para trabajar sin tocar producción.
+Cómo levantar una base de datos para trabajar sin tocar producción.
+
+---
+
+## ⚠️ REGLA: en desarrollo se trabaja SIEMPRE contra una base de desarrollo
+
+**Nunca** apuntes el `.env` a la base de producción. Ni "un momento", ni "solo para mirar
+una cosa": `NODE_ENV` sigue valiendo `development`, y cualquier `npm run dev`, cualquier
+migración lanzada por error, cualquier test y cualquier script de `scripts/` escriben
+directamente en los datos del cliente.
+
+**Y sobre todo en EscalApp Intelligence.** Este trabajo *crea esquemas y tablas nuevas*
+(`platform`, `intelligence`), hace backfills sobre tablas existentes y escribe en un Ledger
+particionado. No es código que consulta: es código que modifica la forma de la base. Correrlo
+contra producción no se deshace con un `Ctrl+Z`.
+
+Tienes **dos** bases de desarrollo válidas, y ninguna es producción:
+
+| | Cuándo usarla | `DB_PORT` |
+|---|---|---|
+| **Local** (tu PC) | Tests (`npx jest`), migraciones nuevas, experimentos destructivos | `5432` |
+| **Compartida** (VPS) | Trabajo de Intelligence en equipo, datos comunes con el otro dev | `5433` (túnel) |
+
+> **El puerto es lo único que las distingue**: nombre de base y usuario son idénticos en las
+> dos. Antes de lanzar cualquier script destructivo, mira `DB_PORT`.
+
+Cómo comprobar contra qué estás apuntando, antes de ejecutar nada:
+
+```bash
+grep -E '^DB_(HOST|PORT|NAME)=' .env
+```
+
+---
+
+## Base compartida en el VPS (recomendada para Intelligence)
+
+Existe `escalapp_dev` en el PostgreSQL del VPS (17.10), **aislada de producción**: se revocó
+`CONNECT` de `PUBLIC` en ambas bases, así que el rol de desarrollo no alcanza la de producción.
+Contiene el esquema completo (74 tablas) con **cero filas reales**, más catálogos, seed,
+fixtures y las migraciones de Intelligence.
+
+No expone ningún puerto a internet; se llega por **túnel SSH**:
+
+```bash
+ssh -f -N -o ExitOnForwardFailure=yes -L 5433:localhost:5432 escalapp
+```
+
+```ini
+DB_HOST=localhost
+DB_PORT=5433
+DB_NAME=escalapp_dev
+DB_USER=escalapp_dev
+DB_PASS=<en el VPS: /home/escalapp/.dbpass_dev>
+DB_SSL=false
+```
+
+Reglas de convivencia, porque la comparten dos personas:
+
+- **No lances `npx jest` contra ella.** Son ~200 tests que escriben; dos personas a la vez se
+  pisan. Los tests van contra tu base **local**.
+- **Avisa antes de correr una migración**: le cambias el esquema al otro a media sesión.
+- **Jamás copies datos de producción** (ADR-024, Ley 1581). Esquema + seeds + fixtures.
+- ⚠️ **La salvaguarda de `seed_dev_local.js` no protege aquí.** Aborta si `DB_HOST` no es local,
+  pero a través del túnel la base remota *también* es `localhost`.
+- Vive en la misma máquina que producción (1 vCPU): un backfill pesado compite con el cliente.
+
+**Ventaja no obvia:** el VPS corre PostgreSQL **17.10** y las máquinas locales **18**. Esa
+diferencia ya mordió una vez (`uuidv7()` no existe en PG17). Probar aquí caza esos casos antes
+de que lleguen a producción.
+
+---
 
 > **Por qué existe este documento.** Hasta 2026-07-31 el `.env` de desarrollo apuntaba
-> directamente a la RDS de producción con el usuario `postgres`. Es decir: cualquier
-> `npm run dev`, cualquier migración lanzada por error y cualquier test escribían en
+> directamente a la base de producción (entonces en RDS) con el usuario `postgres`. Es decir:
+> cualquier `npm run dev`, cualquier migración lanzada por error y cualquier test escribían en
 > producción. El trabajo de EscalApp Intelligence (F0 en adelante) crea esquemas y tablas
 > nuevas, así que trabajar contra local dejó de ser opcional.
 

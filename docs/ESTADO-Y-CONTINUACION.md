@@ -88,10 +88,30 @@ procedimiento de despliegue.
 
 ## 3. Cómo volver a tener un entorno que funcione
 
+> ## ⚠️ REGLA INNEGOCIABLE: nunca contra producción
+>
+> Todo lo de Intelligence **crea esquemas y tablas** (`platform`, `intelligence`), hace
+> backfills y escribe en un Ledger particionado. No es código que consulta: modifica la forma
+> de la base. Antes de lanzar cualquier comando de esta sección, comprueba a dónde apuntas:
+>
+> ```bash
+> grep -E '^DB_(HOST|PORT|NAME)=' .env
+> ```
+>
+> Hay **dos** bases de desarrollo válidas: la **local** (`DB_PORT=5432`, para tests y
+> experimentos destructivos) y la **compartida en el VPS** (`DB_PORT=5433` vía túnel SSH, para
+> trabajar en equipo sobre los mismos datos). **El puerto es lo único que las distingue**:
+> nombre y usuario son idénticos. Detalle en [`desarrollo-local.md`](desarrollo-local.md).
+>
+> Para la compartida hay que abrir antes el túnel, o todo falla con `ECONNREFUSED`:
+> `ssh -f -N -o ExitOnForwardFailure=yes -L 5433:localhost:5432 escalapp`
+
 ```bash
 cd admin_ws
 
-# 1. Base local (si ya existe, saltar) — detalle en docs/desarrollo-local.md
+# 1. Base de desarrollo (si ya existe, saltar) — detalle en docs/desarrollo-local.md
+#    ⚠️ Los fixtures van ANTES de las migraciones: si no, el backfill de personas
+#    corre sobre tablas vacías y hay que repetirlo.
 npm run migrate
 node scripts/seed_dev_local.js
 psql -U escalapp_dev -h localhost -d escalapp_dev -f scripts/fixtures/dev_segundo_negocio.sql
