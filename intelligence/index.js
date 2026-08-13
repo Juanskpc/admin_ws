@@ -98,5 +98,9 @@ module.exports = {
     motor,
     gateway,
     mensajeCanonico: require('./core/mensajeCanonico'),
+    /** El andamio de F5-B. Se queda como manejador de pruebas del motor, no como producto. */
     manejadorEco: require('./engine/manejadorEco'),
+    /** El motor determinista de F5-D (ADR-015). Es el manejador de verdad. */
+    manejadorDeterminista: require('./engine/manejadorDeterminista'),
+    identidad: require('./engine/identidad'),
 };

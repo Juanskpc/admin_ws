@@ -272,7 +272,14 @@ async function main() {
     // cosas encolaba la misma conversación dos veces y la segunda pisaba el contador de
     // intentos de la primera, así que el turno revivido se presentaba como intento 1.
     if (['enviar', 'rafaga', 'recuperar'].includes(comando)) {
-        await intelligence.arrancarMotor(intelligence.manejadorEco.manejarEco, { recuperar: false });
+        // Desde F5-D conduce la FSM determinista, no el eco: la CLI es el banco de pruebas
+        // del camino completo (canal → motor → Policy Gate → capacidad → dominio) y con el
+        // eco solo se ejercitaba la mecánica. `--eco` recupera el andamio para aislar fallos
+        // del motor de fallos de la conversación, que es justo lo que ADR-015 quiere separar.
+        const manejador = opciones.eco
+            ? intelligence.manejadorEco.manejarEco
+            : intelligence.manejadorDeterminista.manejarDeterminista;
+        await intelligence.arrancarMotor(manejador, { recuperar: false });
     }
 
     switch (comando) {

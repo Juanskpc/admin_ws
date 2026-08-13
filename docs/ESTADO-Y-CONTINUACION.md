@@ -55,7 +55,7 @@ por su cuenta y así el histórico cuenta el orden real en que se descubrieron l
 | **F5-A** | Esquema `intelligence` + Ledger (particionado, retención, las 12 preguntas) | ✅ **Completa en local** |
 | **F5-B** | Conversation Engine (FIFO + lock + debounce) | ✅ **Completa en local** |
 | **F5-C** | Channel Gateway + WebChat hostil | ✅ **Completa en local** |
-| **F5-D** | Motor determinista + Identity Resolver | ⬜ Es lo siguiente |
+| **F5-D** | Motor determinista + Identity Resolver | ✅ **Completa en local** |
 | **F5-E** | Intelligence Console → **MVP interno** | ⬜ |
 | F6–F10 | Ver [`architecture/roadmap.md`](architecture/roadmap.md) | ⬜ |
 
@@ -357,12 +357,41 @@ haber salido siempre. Revisar entonces
 
 **Dos avisos de lo que se acaba de construir:**
 
-- **El manejador es lo único que no está probado a fondo**, porque el andamio de eco no
-  decide nada. Los 200 tests cubren mecánica; la lógica de conversación llega con la FSM y
-  necesitará sus propios tests hostiles.
+- ~~El manejador es lo único que no está probado a fondo~~ → **resuelto en F5-D**: 45 tests,
+  todos hostiles (hold caducado, entrada fuera de menú en cada paso, cancelar desde cualquier
+  sitio, paso de otra versión, idempotencia).
 - **`consultar_mis_citas` sigue sin existir**, así que el asistente solo puede tocar citas
   cuyo código ya conoce. Es el límite correcto hasta que `reserva` adopte `persona`, y la FSM
-  tiene que diseñarse **sabiéndolo** en vez de tropezar con ello a mitad.
+  se diseñó **sabiéndolo**: guarda `variables.ultima_cita` al crear la cita, que es la única
+  forma de poder reagendarla o cancelarla después.
+
+---
+
+### ✅ Lo que F5-D entregó (2026-08-12)
+
+`intelligence/engine/identidad.js` + `manejadorDeterminista.js`, 45 tests que corren **sin
+Postgres** (el Gate y el resolver se inyectan). El motor no se tocó: la frontera que fijó F5-B
+aguantó, que era justo lo que había que comprobar.
+
+**Lo que apareció al implementar, y no estaba previsto:**
+
+1. **El Principal `contacto` no tenía productor.** `principal.js` lo reservaba desde F4 con esa
+   nota, y resultó ser un bloqueo duro: el Policy Gate no ejecuta nada sin Principal, y un
+   cliente anónimo de WebChat no tiene usuario. Sin resolverlo, la FSM no podía invocar ni
+   `consultar_servicios`. Por eso el Identity Resolver se hizo **primero**, aunque el roadmap
+   lo listara segundo. Se emite con **un solo negocio y sin roles**, para que la frontera
+   multi-inquilino de F2 valga igual en un canal público, por el mismo código.
+2. **La clave de idempotencia = id del turno impone una regla que el plan no decía.** El Gate
+   guarda por `(negocio, capacidad, clave)`: si un turno invocara dos veces la misma capacidad,
+   la segunda recibiría el resultado de la primera. De ahí que la FSM avance **un paso por
+   turno** y no encadene mutaciones. Hay un test que lo vigila en los cuatro pasos.
+3. **El hold caducado es conversación, no avería.** `reservar_turno` lanza `HOLD_NO_VIGENTE`
+   cuando el cliente tarda en confirmar. Se trata volviendo al paso de fecha. Cualquier **otro**
+   error sí se propaga: tragárselos convertiría una avería real en un mensaje amable y el
+   Ledger no registraría nada.
+4. **El orden de las preguntas lo decide el TTL del hold.** El nombre se pide **antes** de
+   apartar la hora. Al revés, el formulario se come los minutos del hold y caduca justo cuando
+   el cliente iba a confirmar.
 
 ---
 
