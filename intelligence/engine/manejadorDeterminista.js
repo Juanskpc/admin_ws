@@ -176,14 +176,38 @@ function crearManejadorDeterminista({
      * —porque el proceso murió, o porque la conversación estaba ocupada— devuelve lo que ya
      * hizo en vez de volver a hacerlo.
      */
-    async function invocar({ capacidad, args, principal, idNegocio, turno }) {
-        return gate.ejecutar({
-            capacidad,
-            principal,
-            idNegocio,
-            args,
-            claveIdempotencia: turno?.id_turno ? String(turno.id_turno) : undefined,
-        });
+    async function invocar({ capacidad, args, principal, idNegocio, turno, invocaciones }) {
+        const iniciado = Date.now();
+        try {
+            const sobre = await gate.ejecutar({
+                capacidad,
+                principal,
+                idNegocio,
+                args,
+                claveIdempotencia: turno?.id_turno ? String(turno.id_turno) : undefined,
+            });
+            invocaciones?.push({
+                capacidad,
+                vertical: sobre?.vertical ?? null,
+                argumentos: args,
+                resultado: 'ok',
+                latenciaMs: Date.now() - iniciado,
+                dryRun: Boolean(sobre?.dry_run),
+            });
+            return sobre;
+        } catch (error) {
+            // Las que fallan se registran igual, y son las que más importan: una capacidad
+            // denegada o rota es media respuesta a «¿por qué el bot hizo eso?».
+            invocaciones?.push({
+                capacidad,
+                vertical: null,
+                argumentos: args,
+                resultado: error.code && error.statusCode === 403 ? 'denegado' : 'error',
+                errorCodigo: error.code ?? null,
+                latenciaMs: Date.now() - iniciado,
+            });
+            throw error;
+        }
     }
 
     // ── Menú inicial ────────────────────────────────────────────────────────────────────
@@ -486,12 +510,17 @@ function crearManejadorDeterminista({
 
     return async function manejarDeterminista({ conversacion, mensajes, turno, texto }) {
         const identidad = await identidad_(conversacion);
+        // Se acumulan aquí y se adjuntan al final en UN solo sitio: hacerlo en cada rama sería
+        // olvidarlo en la rama que nadie probó, y el Ledger quedaría con agujeros que no
+        // parecen agujeros.
+        const invocaciones = [];
         const ctx = {
             conversacion,
             mensajes,
             turno,
             texto,
             identidad,
+            invocaciones,
             principal: identidad.principal,
             idNegocio: Number(conversacion.id_negocio),
         };
@@ -518,25 +547,32 @@ function crearManejadorDeterminista({
         }
 
         if (!hayTarea || esComando(texto, COMANDO.MENU)) {
-            return ofrecerServicios(ctx, [paso('inicio_conversacion')]);
+            return conRastro(await ofrecerServicios(ctx, [paso('inicio_conversacion')]));
         }
 
         switch (datos.paso) {
             case PASO.SERVICIO:
-                return elegirServicio(ctx, datos);
+                return conRastro(await elegirServicio(ctx, datos));
             case PASO.FECHA:
-                return elegirFecha(ctx, datos);
+                return conRastro(await elegirFecha(ctx, datos));
             case PASO.HORA:
-                return elegirHora(ctx, datos);
+                return conRastro(await elegirHora(ctx, datos));
             case PASO.NOMBRE:
-                return recibirNombre(ctx, datos);
+                return conRastro(await recibirNombre(ctx, datos));
             case PASO.CONFIRMAR:
-                return confirmar(ctx, datos);
+                return conRastro(await confirmar(ctx, datos));
             default:
                 // Tarea con un paso que esta versión no conoce: puede pasar si se despliega
                 // una FSM nueva con conversaciones vivas a medias. Se vuelve al menú en vez
                 // de reventar, que es lo que un cliente a mitad de camino merece.
-                return ofrecerServicios(ctx, [paso('paso_desconocido', { paso: datos.paso ?? null })]);
+                return conRastro(
+                    await ofrecerServicios(ctx, [paso('paso_desconocido', { paso: datos.paso ?? null })])
+                );
+        }
+
+        /** Adjunta al Ledger lo que se invocó. Un solo sitio para todas las ramas. */
+        function conRastro(decision) {
+            return invocaciones.length ? { ...decision, invocaciones } : decision;
         }
     };
 

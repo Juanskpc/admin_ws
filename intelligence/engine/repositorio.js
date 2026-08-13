@@ -499,6 +499,65 @@ async function registrarPaso(
 }
 
 /**
+ * Registra en el Ledger que un turno invocó una capacidad (F5-E).
+ *
+ * ## Por qué lo escribe el motor y no el Policy Gate
+ *
+ * «Capacidades ejecutadas» es una de las doce preguntas de ADR-022, y hasta F5-E nadie
+ * llenaba esta tabla: el Gate audita en `auditoria.audit_evento`, que es forense de
+ * plataforma —quién hizo qué, para responder después de un incidente— y no observabilidad de
+ * conversación. Son dos preguntas distintas y por eso son dos tablas distintas.
+ *
+ * El Gate no puede escribir aquí aunque quisiera: **no sabe que lo llaman desde una
+ * conversación**. No recibe `id_turno` ni `id_conversacion`, y además lo usa la CLI de
+ * capacidades fuera de todo turno. Enseñarle esos ids solo para el Ledger lo ataría a
+ * Intelligence sin necesidad.
+ *
+ * Así que se resuelve con la frontera que ya existía: **el manejador devuelve lo que hizo y
+ * el motor lo escribe**, igual que con los pasos. El manejador sigue sin tocar la base.
+ */
+async function registrarInvocacion(
+    {
+        idTurno,
+        idConversacion,
+        idNegocio,
+        capacidad,
+        vertical = null,
+        argumentos = null,
+        resultado,
+        errorCodigo = null,
+        dryRun = false,
+        latenciaMs = null,
+    },
+    { transaction }
+) {
+    await sequelize.query(
+        `
+        INSERT INTO intelligence.invocacion_capacidad
+            (id_turno, id_conversacion, id_negocio, capacidad, vertical, argumentos,
+             resultado, error_codigo, dry_run, latencia_ms)
+        VALUES (:idTurno, :idConversacion, :idNegocio, :capacidad, :vertical,
+                CAST(:argumentos AS jsonb), :resultado, :errorCodigo, :dryRun, :latenciaMs);
+        `,
+        {
+            replacements: {
+                idTurno,
+                idConversacion,
+                idNegocio,
+                capacidad,
+                vertical,
+                argumentos: JSON.stringify(argumentos ?? {}),
+                resultado,
+                errorCodigo,
+                dryRun: Boolean(dryRun),
+                latenciaMs,
+            },
+            transaction,
+        }
+    );
+}
+
+/**
  * Turnos que se quedaron en `procesando`: el proceso murió con la transacción abierta, así
  * que Postgres deshizo sus escrituras pero la fila del turno —escrita y confirmada al
  * abrirlo— quedó huérfana.
@@ -573,6 +632,7 @@ module.exports = {
     abrirTurno,
     cerrarTurno,
     registrarPaso,
+    registrarInvocacion,
     recuperarTurnosColgados,
     conversacionesConPendientes,
 };

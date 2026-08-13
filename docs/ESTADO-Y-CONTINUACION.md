@@ -56,7 +56,7 @@ por su cuenta y así el histórico cuenta el orden real en que se descubrieron l
 | **F5-B** | Conversation Engine (FIFO + lock + debounce) | ✅ **Completa en local** |
 | **F5-C** | Channel Gateway + WebChat hostil | ✅ **Completa en local** |
 | **F5-D** | Motor determinista + Identity Resolver | ✅ **Completa en local** |
-| **F5-E** | Intelligence Console → **MVP interno** | ⬜ |
+| **F5-E** | Intelligence Console → **MVP interno** | 🟡 **API completa en local**; falta la vista Angular |
 | F6–F10 | Ver [`architecture/roadmap.md`](architecture/roadmap.md) | ⬜ |
 
 **F5 se partió en cinco.** Es la fase más grande del plan y su parte irreversible es el
@@ -427,6 +427,56 @@ lo que está:
 - Barre los holds `activo` del día antes y después. `proponer_turno` no es idempotente y una
   ejecución cortada a mitad deja holds vivos con minutos de TTL: **la primera pasada va bien y
   las siguientes fallan**, que parece intermitencia y no lo es.
+
+---
+
+---
+
+## 4-ter. F5-E — Intelligence Console (API hecha, vista pendiente)
+
+Tres endpoints de **solo lectura** bajo `requireSuperAdmin`, en
+`app_admin_api/controllers/intelligenceConsolaController.js`:
+
+| Endpoint | Para qué |
+|---|---|
+| `GET /admin/intelligence/conversaciones` | La tabla de entrada. Filtros por negocio, canal, estado, fecha y **`con_error=true`**, que es el que más se usa depurando |
+| `GET /admin/intelligence/conversaciones/:id` | El rastro completo: mensajes, turnos, **pasos** (el porqué) e **invocaciones** (el qué hizo, con argumentos) |
+| `GET /admin/intelligence/metricas` | Las doce preguntas de ADR-022 hasta donde F5 llega: tasa de resolución, ratio determinista, errores, reintentos, latencias p95, capacidades y costo |
+
+Sigue el patrón de la Ficha 360: **lee el esquema con SQL y no importa `intelligence/`**, así
+que el test del apagón de ADR-005 sigue siendo literal. Si el esquema no está migrado responde
+503 con el motivo, en vez de reventar con un error de SQL — un panel que se cae porque una fase
+no está desplegada es un panel que nadie abre.
+
+Los tests **no insertan filas a mano**: conversan de verdad por el WebChat y luego comprueban
+que la consola enseña eso. Es lo que exige `revision-01.md` §2 («prohibido datos simulados»), y
+además es lo que hace que el test valga: con filas inventadas seguiría pasando sin probar nada.
+
+### ⚠️ Lo que destapó: `intelligence.invocacion_capacidad` no tenía productor
+
+F5-A creó la tabla, F5-E la leyó, y estaba **vacía**. «Capacidades ejecutadas» es una de las
+doce preguntas de ADR-022 y el Ledger no podía responderla.
+
+La causa no era un olvido: **el Policy Gate no sabe que lo llaman desde una conversación**. No
+recibe `id_turno` ni `id_conversacion`, y encima lo usa la CLI fuera de todo turno. Lo que sí
+hace es auditar en `auditoria.audit_evento`, que responde otra pregunta — forense de plataforma,
+no observabilidad de conversación.
+
+Se resolvió con la frontera que ya existía: **el manejador devuelve lo que invocó y el motor lo
+escribe**, igual que con los pasos. El contrato de `motor.js#registrarManejador` gana un campo
+`invocaciones`, y el Gate devuelve además la `vertical` en su sobre. El manejador sigue sin
+tocar la base.
+
+**Límite conocido y aceptado:** si el manejador lanza, la decisión no vuelve y esas invocaciones
+no llegan al Ledger. El turno queda con su `error_codigo` y `error_detalle`, y el Gate ya auditó
+la invocación fallida con argumentos completos. El Ledger cuenta la conversación; la auditoría,
+los hechos. Las que fallan **pero se manejan** —el hold caducado— sí quedan registradas.
+
+### Lo que falta de F5-E
+
+La **vista Angular** en `admin_app-v21` (rama `feature/escalapp_intelligence`, donde ya vive la
+Ficha 360): listado con el filtro de error, detalle con la línea de tiempo del turno, y la tira
+de métricas. Con eso se cierra el **MVP interno**.
 
 ---
 

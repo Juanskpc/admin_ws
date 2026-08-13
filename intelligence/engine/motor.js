@@ -73,6 +73,8 @@ let cola = null;
  * ```
  * async manejar({ conversacion, mensajes, turno }) => {
  *     pasos?:      [{ tipo, decision, motivo }]   // el porqué, para el Ledger
+ *     invocaciones?: [{ capacidad, vertical, argumentos, resultado, errorCodigo, latenciaMs }]
+ *                                                 // qué capacidades ejecutó (ADR-022)
  *     respuestas?: ['texto', ...]                 // lo que se le dice a la persona
  *     variables?:  {}                             // memoria de sesión (reemplaza, no fusiona)
  *     tarea?:      { nombre, datos } | null       // null cierra la tarea en curso
@@ -317,6 +319,28 @@ async function decidir({ conversacion, mensajes, turno, transaction }) {
                         decision: paso.decision,
                         motivo: paso.motivo,
                         latenciaMs: paso.latenciaMs ?? null,
+                    },
+                    { transaction: savepoint }
+                );
+            }
+
+            // Las capacidades que el manejador invocó en este turno. Va en la misma
+            // transacción que el resto del turno: si el turno se deshace, su rastro también.
+            // (La ejecución en sí ya la confirmó el Gate por su cuenta, y eso es correcto:
+            // una cita creada no se deshace porque falle una escritura del Ledger.)
+            for (const invocacion of decision.invocaciones || []) {
+                await repositorio.registrarInvocacion(
+                    {
+                        idTurno: turno.id_turno,
+                        idConversacion: conversacion.id_conversacion,
+                        idNegocio: conversacion.id_negocio,
+                        capacidad: invocacion.capacidad,
+                        vertical: invocacion.vertical ?? null,
+                        argumentos: invocacion.argumentos,
+                        resultado: invocacion.resultado,
+                        errorCodigo: invocacion.errorCodigo ?? null,
+                        dryRun: invocacion.dryRun ?? false,
+                        latenciaMs: invocacion.latenciaMs ?? null,
                     },
                     { transaction: savepoint }
                 );

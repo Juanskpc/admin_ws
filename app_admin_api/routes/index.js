@@ -309,4 +309,32 @@ router.get('/personas/:id/ficha', requireSuperAdmin, [
     param('id').isUUID().withMessage('ID de persona inválido'),
 ], FichaPersonaController.getFicha);
 
+// --- Intelligence Console (F5-E) — solo lectura, Super Admin ---
+// Lee el esquema `intelligence` con SQL y NO importa `intelligence/`: el test del apagón de
+// ADR-005 sigue siendo literal (borrar ese directorio deja el backend, y esta consola, en pie).
+const IntelligenceConsolaController = require('../controllers/intelligenceConsolaController');
+
+const consolaFiltrosComunes = [
+    query('id_negocio').optional().isInt({ min: 1 }).withMessage('ID de negocio inválido'),
+    query('desde').optional().isISO8601().withMessage('Fecha "desde" inválida'),
+    query('hasta').optional().isISO8601().withMessage('Fecha "hasta" inválida'),
+];
+
+router.get('/intelligence/conversaciones', requireSuperAdmin, [
+    ...consolaFiltrosComunes,
+    query('canal').optional().isLength({ max: 40 }).withMessage('Canal inválido'),
+    query('estado').optional().isLength({ max: 30 }).withMessage('Estado inválido'),
+    query('con_error').optional().isIn(['true', 'false']).withMessage('con_error debe ser true o false'),
+    query('q').optional().isLength({ max: 100 }).withMessage('Búsqueda demasiado larga'),
+    query('limit').optional().isInt({ min: 1, max: 100 }).withMessage('Límite inválido'),
+    query('offset').optional().isInt({ min: 0 }).withMessage('Offset inválido'),
+], IntelligenceConsolaController.listarConversaciones);
+
+router.get('/intelligence/conversaciones/:id', requireSuperAdmin, [
+    param('id').isUUID().withMessage('ID de conversación inválido'),
+], IntelligenceConsolaController.detalleConversacion);
+
+router.get('/intelligence/metricas', requireSuperAdmin, consolaFiltrosComunes,
+    IntelligenceConsolaController.metricas);
+
 module.exports = router;

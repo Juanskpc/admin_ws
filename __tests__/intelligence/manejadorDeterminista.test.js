@@ -404,6 +404,75 @@ describe('texto agrupado por el debounce', () => {
     });
 });
 
+describe('rastro para el Ledger (ADR-022)', () => {
+    // «Capacidades ejecutadas» es una de las doce preguntas, y hasta F5-E nadie llenaba
+    // `intelligence.invocacion_capacidad`: el Gate audita en `auditoria`, que responde otra
+    // pregunta. Lo destapó la Consola al no encontrar nada que enseñar.
+    test('devuelve lo que invocó, con su vertical y su latencia', async () => {
+        const gate = gateCompleto();
+        gate.ejecutar = (async (original) => original)(gate.ejecutar);
+        const manejar = crearManejadorDeterminista({
+            gate: {
+                ...gate,
+                async ejecutar(args) {
+                    const r = await gateCompleto().ejecutar(args);
+                    return { ...r, vertical: 'reserva' };
+                },
+            },
+            identidad: identidadFalsa(),
+        });
+
+        const d = await manejar(entrada('hola', conversacion()));
+
+        expect(d.invocaciones).toHaveLength(1);
+        expect(d.invocaciones[0]).toMatchObject({
+            capacidad: 'consultar_servicios',
+            vertical: 'reserva',
+            resultado: 'ok',
+        });
+        expect(typeof d.invocaciones[0].latenciaMs).toBe('number');
+    });
+
+    test('una capacidad que falla PERO se maneja sí llega al Ledger', async () => {
+        // El hold caducado es el caso real: la capacidad falla, la FSM lo trata como
+        // conversación y devuelve decisión. Esa invocación fallida es media respuesta a
+        // «¿por qué el bot dijo eso?», así que tiene que quedar registrada.
+        const caducado = Object.assign(new Error('caducó'), { code: 'HOLD_NO_VIGENTE' });
+        const gate = gateFalso({ reservar_turno: caducado });
+        const manejar = crearManejadorDeterminista({ gate, identidad: identidadFalsa() });
+
+        const datos = { paso: PASO.CONFIRMAR, fecha: '2026-08-20', hora: '10:00', codigo_hold: 'H', nombre: 'Ana' };
+        const d = await manejar(entrada('sí', conversacion({ tarea: TAREA_AGENDAR, datos })));
+
+        expect(d.invocaciones).toHaveLength(1);
+        expect(d.invocaciones[0]).toMatchObject({
+            capacidad: 'reservar_turno',
+            resultado: 'error',
+            errorCodigo: 'HOLD_NO_VIGENTE',
+        });
+    });
+
+    test('si el error se propaga, la decisión no vuelve y el rastro se queda en la auditoría', async () => {
+        // Límite conocido y aceptado: cuando el manejador lanza, el motor escribe el turno
+        // como `error` (con su código y su detalle) pero no hay decisión que traiga
+        // invocaciones. No se pierde nada importante: el Gate ya audita cada invocación
+        // fallida en `auditoria.audit_evento` con argumentos completos, que es donde un
+        // incidente se investiga. El Ledger cuenta la conversación; la auditoría, los hechos.
+        const gate = gateFalso({ consultar_servicios: new Error('la base se cayó') });
+        const manejar = crearManejadorDeterminista({ gate, identidad: identidadFalsa() });
+
+        await expect(manejar(entrada('hola', conversacion()))).rejects.toThrow(/la base se cayó/);
+    });
+
+    test('sin invocaciones no ensucia la decisión con un array vacío', async () => {
+        const manejar = crearManejadorDeterminista({ gate: gateCompleto(), identidad: identidadFalsa() });
+        const conv = conversacion({ tarea: TAREA_AGENDAR, datos: { paso: PASO.SERVICIO } });
+        const d = await manejar(entrada('cancelar', conv));
+
+        expect(d.invocaciones).toBeUndefined();
+    });
+});
+
 describe('memoria de conversación', () => {
     test('las variables se devuelven completas, porque reemplazan y no fusionan', async () => {
         // Si una rama devolviera solo lo que cambia, el resto se perdería en silencio. Este

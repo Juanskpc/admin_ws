@@ -279,7 +279,7 @@ async function ejecutar({
                 dryRun,
                 detalle: { reintento_idempotente: true, clave: claveIdempotencia },
             });
-            return { capacidad: nombre, dry_run: false, reintento: true, resultado: guardado };
+            return { capacidad: nombre, vertical: capacidad.vertical, dry_run: false, reintento: true, resultado: guardado };
         }
     }
 
@@ -341,7 +341,7 @@ async function ejecutar({
             },
         });
 
-        return { capacidad: nombre, dry_run: Boolean(dryRun), resultado };
+        return { capacidad: nombre, vertical: capacidad.vertical, dry_run: Boolean(dryRun), resultado };
     } catch (error) {
         await transaction.rollback();
 
@@ -366,7 +366,7 @@ async function ejecutar({
                     dryRun,
                     detalle: { reintento_idempotente: true, carrera: true, clave: claveIdempotencia },
                 });
-                return { capacidad: nombre, dry_run: false, reintento: true, resultado: guardado };
+                return { capacidad: nombre, vertical: capacidad.vertical, dry_run: false, reintento: true, resultado: guardado };
             }
         }
 
