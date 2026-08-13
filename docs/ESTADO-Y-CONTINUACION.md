@@ -1,6 +1,6 @@
 # EscalApp Intelligence — estado y cómo continuar
 
-**Última actualización:** 2026-08-06
+**Última actualización:** 2026-08-12
 **Propósito:** que retomar el trabajo no cueste una sesión de arqueología. Si vuelves a este
 proyecto después de semanas, **lee este documento primero** y sigue por donde diga.
 
@@ -14,31 +14,23 @@ proyecto después de semanas, **lee este documento primero** y sigue por donde d
 | Repo | Rama | Qué contiene |
 |---|---|---|
 | `admin_ws` | `feature/escalapp_intelligence` | Todo el backend + el corpus de arquitectura en `docs/` |
-| `admin_app-v21` | `feature/escalapp_intelligence` | La vista Ficha 360 |
+| `admin_app-v21` | `feature/escalapp_intelligence` | La Ficha 360 y la **Intelligence Console** |
 | `reserva_app` | *(sin rama propia)* | Un cambio pequeño de F3: mostrar el motivo del rechazo del dominio en vez de un texto fijo |
 
 Ninguna rama está fusionada a `master`.
 
-### ⚠️ Hay trabajo SIN COMMITEAR (2026-08-06)
+### Todo commiteado (2026-08-12)
 
-El último commit de `admin_ws` es **`714547c` (la guía de estado)**. Todo lo de F3, F4-A,
-F4-B, F5-A, F5-B y F5-C está **solo en el árbol de trabajo**, junto con el cambio de `reserva_app`.
+La advertencia de trabajo sin commitear que vivía aquí está **resuelta**: F3, F4, F5-A..E
+tienen su commit propio en `feature/escalapp_intelligence`, en ambos repos, y el árbol está
+limpio. El troceado siguió la sugerencia original —un commit por bloque— así que el histórico
+cuenta el orden real en que se descubrieron las cosas.
 
-**Antes de tocar nada, mira qué hay:**
-
-```bash
-cd admin_ws && git status --short          # 28 rutas, todas de esta sesión
-cd ../reserva_app && git status --short    # 12 rutas, pero solo UNA es de Intelligence
-```
-
-⚠️ **Cuidado con `reserva_app`:** de sus 12 archivos modificados, **solo
-`src/app/reserva/citas/citas.ts` pertenece a F3**. Los otros 11 (tema, sidebar, layout,
-`_theme.scss`…) venían ya sucios de la migración de identidad visual de las verticales, de
-una sesión anterior y ajena a esto. Un `git add .` ahí mezclaría dos trabajos sin relación.
-
-Sugerencia de troceado si se decide commitear: un commit por bloque
-(`feat(f4a)`, `feat(f3)`, `feat(f4b)`, `feat(f5a)`, `feat(f5b)`, `feat(f5c)`), porque cada uno es coherente
-por su cuenta y así el histórico cuenta el orden real en que se descubrieron las cosas.
+⚠️ **Sigue pendiente `reserva_app`:** su cambio de F3 (mostrar el motivo del rechazo del
+dominio en vez de un texto fijo) está sin rama y sin commitear, mezclado con 11 archivos
+sucios de la migración de identidad visual de las verticales. Solo
+`src/app/reserva/citas/citas.ts` pertenece a F3; un `git add .` ahí mezclaría dos trabajos
+sin relación.
 
 ---
 
@@ -56,7 +48,7 @@ por su cuenta y así el histórico cuenta el orden real en que se descubrieron l
 | **F5-B** | Conversation Engine (FIFO + lock + debounce) | ✅ **Completa en local** |
 | **F5-C** | Channel Gateway + WebChat hostil | ✅ **Completa en local** |
 | **F5-D** | Motor determinista + Identity Resolver | ✅ **Completa en local** |
-| **F5-E** | Intelligence Console → **MVP interno** | 🟡 **API completa en local**; falta la vista Angular |
+| **F5-E** | Intelligence Console → **MVP interno** | ✅ **Completa en local** (API + vista Angular) |
 | F6–F10 | Ver [`architecture/roadmap.md`](architecture/roadmap.md) | ⬜ |
 
 **F5 se partió en cinco.** Es la fase más grande del plan y su parte irreversible es el
@@ -68,8 +60,12 @@ en él.
 una cita entera desde una CLI, sin IA, sin frontend y sin gastar un token; y ya hay un motor
 conversacional que ordena, agrupa y aísla los mensajes, con su rastro completo en el Ledger.
 Y desde F5-C hay un canal de verdad: se abre `http://localhost:3000/intelligence/webchat/`, se
-escribe, y la respuesta llega **por el camino asíncrono completo**. Lo que falta para el MVP
-interno es la última mitad: **algo que decida qué contestar** (F5-D). Hoy contesta un eco.
+escribe, y la respuesta llega **por el camino asíncrono completo**. Desde F5-D **decide de
+verdad**: agenda una cita entera con menús y sin un token de LLM. Y desde F5-E se puede mirar
+lo que hizo, turno a turno, desde el panel.
+
+**► El MVP INTERNO está cerrado en local.** La Ola B termina aquí; lo siguiente es F6, que es
+donde entra el primer modelo — y solo de lectura.
 
 **Por qué F3 se hizo después de F4-A.** Se había saltado porque `reserva` tiene 0 filas en
 producción, pero al implementar F4 apareció que el adaptador piloto *es* de `reserva` y sus
@@ -80,8 +76,8 @@ primero y F3 después.
 
 ### ⚠️ NADA está desplegado en producción
 
-Los nueve bloques funcionan y están probados **solo contra la base local** (200 tests; ver la
-nota del flake de `reportes` en §8). Producción sigue exactamente como estaba. Ver §5 para el
+Los once bloques funcionan y están probados **solo contra la base local** (222 tests entre
+`intelligence` y `platform`; ver la nota del flake de `reportes` en §8). Producción sigue exactamente como estaba. Ver §5 para el
 procedimiento de despliegue.
 
 ---
@@ -432,7 +428,7 @@ lo que está:
 
 ---
 
-## 4-ter. F5-E — Intelligence Console (API hecha, vista pendiente)
+## 4-ter. F5-E — Intelligence Console
 
 Tres endpoints de **solo lectura** bajo `requireSuperAdmin`, en
 `app_admin_api/controllers/intelligenceConsolaController.js`:
