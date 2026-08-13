@@ -330,13 +330,30 @@ eso es un criterio de aceptación, no una casualidad.
    es la del turno, y eso es correcto (una cita creada no debe deshacerse porque falle una
    escritura del Ledger).
 
-**Y aquí ya no hay excusa para el outbox.** Lleva tres fases construido y sin consumidores.
-F5-B lo aplazó a F5-C y F5-C a F5-D, cada vez por una razón buena: no había con qué decidir.
-Con la FSM la hay — la confirmación proactiva («tu cita quedó agendada») es una conversación
-que **el negocio inicia**, y es un consumidor de `cita.creada.v1`. Toca revisar
-[`domain-events.md`](architecture/domain-events.md), activar los eventos que tengan productor
-*y* consumidor, y que `reserva` empiece a emitir. Si en F5-D vuelve a aplazarse, la pregunta
-ya no es cuándo sino si el outbox hacía falta.
+**El outbox: por qué sigue sin consumidor, y esta vez con la razón concreta.** Lleva tres
+fases construido y sin consumidores. F5-B lo aplazó a F5-C y F5-C a F5-D. Al implementar F5-D
+apareció el motivo real, que no es falta de ganas ni de FSM:
+
+El consumidor propuesto era la **confirmación proactiva** de `cita.creada.v1` («tu cita quedó
+agendada»), una conversación que **el negocio inicia**. Pero:
+
+- Si la cita se crea **dentro** de la conversación, la confirmación es la respuesta del propio
+  turno. No hace falta outbox para contestar algo que acabas de hacer.
+- El outbox solo aporta cuando la cita se crea **fuera** —el negocio la agenda desde
+  `reserva_app`—, y entonces hay que saber **a qué conversación escribir**. Eso exige un enlace
+  persona↔cita que **no existe**: `reserva.reservar_turno` recibe `cliente_nombre` y
+  `cliente_telefono` como texto suelto, no un `id_persona_negocio`.
+
+O sea: el consumidor está bloqueado por la misma costura que deja fuera a
+`consultar_mis_citas`. **Lo que lo desbloquea es que `reserva` adopte `persona`**, no una fase
+más de espera. Hasta entonces, activar el outbox con un consumidor que solo escribe en el
+Ledger cumpliría la letra del roadmap sin aportar nada, y dejaría un consumidor falso que
+alguien tendría que borrar después.
+
+Decidido el 2026-08-12: **se documenta el bloqueo y no se activa**. Cuando `reserva` adopte
+`persona`, el consumidor proactivo y `consultar_mis_citas` salen juntos, que es como debían
+haber salido siempre. Revisar entonces
+[`domain-events.md`](architecture/domain-events.md).
 
 **Dos avisos de lo que se acaba de construir:**
 
