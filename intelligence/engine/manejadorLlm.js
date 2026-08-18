@@ -49,7 +49,13 @@ const CONFIG = {
     /** Tope de gasto por turno, en centavos de dólar. 5 ¢ es ~10× un turno normal. */
     maxCentavosPorTurno: Number(process.env.LLM_MAX_CENTAVOS_TURNO) || 5,
     maxTokensRespuesta: Number(process.env.LLM_MAX_TOKENS) || 1024,
-    /** ADR-018 no fija el modelo; ver docs/nivel-4.md sobre por qué este y no `claude-opus-4-8`. */
+    /**
+     * Qué modelo. **Lo inyecta la composición**, no el entorno: el proveedor y el modelo se
+     * resuelven juntos en `model/adaptadores/index.js`, porque pedir un modelo de OpenAI a
+     * través del adaptador de Anthropic no falla al arrancar — falla en el primer turno, con un
+     * error del proveedor que no menciona el desajuste. Este valor es solo el respaldo para
+     * quien construya el manejador a mano.
+     */
     modelo: process.env.LLM_MODELO || 'claude-opus-5',
     /**
      * El esfuerzo lo decide la evidencia, no la intuición: el arnés mide acierto, costo y

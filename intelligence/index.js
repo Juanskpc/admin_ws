@@ -78,64 +78,75 @@ async function arrancarMotor(manejador, { recuperar = true } = {}) {
  *
  * Es composición: elegir proveedor es exactamente lo que el resto del núcleo no puede hacer. El
  * manejador de Nivel 4 recibe un adaptador ya construido y no sabe de quién es; `orquestador.js`
- * decide niveles sin saber qué modelo los sirve. La única línea del proyecto que dice
- * «Anthropic» fuera del propio adaptador está aquí abajo.
+ * decide niveles sin saber qué modelo los sirve. Ni una línea del núcleo nombra a un proveedor.
  *
  * ## Degrada, no revienta
  *
- * Sin `ANTHROPIC_API_KEY` —o con `LLM_HABILITADO=false`— devuelve la escalera **de un solo
+ * Sin ninguna credencial —o con `LLM_HABILITADO=false`— devuelve la escalera **de un solo
  * peldaño**, que es literalmente el sistema de F5 y sigue siendo correcto: se contesta con la
  * FSM, gratis, y el Ledger lo registra como determinista. Un backend que no arranca porque falta
  * una clave de un modelo convertiría una capacidad opcional (ADR-005) en un requisito.
  *
+ * @param {Object} [opciones]
+ * @param {Object} [opciones.adaptador] — adaptador ya construido (los tests).
+ * @param {string} [opciones.proveedor] — fuerza proveedor; si no, lo decide la fábrica.
+ * @param {string} [opciones.modelo]    — fuerza modelo; su proveedor se deduce del precio.
  * @returns {{manejador: Function, nivel4: string|null}}
  */
-function montarEscalera({ adaptador = null } = {}) {
+function montarEscalera({ adaptador = null, proveedor = null, modelo = null } = {}) {
     const { crearManejadorEscalera } = require('./engine/manejadorEscalera');
     const { manejarDeterminista } = require('./engine/manejadorDeterminista');
+    const fabrica = require('./model/adaptadores');
 
-    const habilitado = process.env.LLM_HABILITADO !== 'false';
-    const hayCredencial = Boolean(process.env.ANTHROPIC_API_KEY);
-
-    if (!adaptador && (!habilitado || !hayCredencial)) {
+    const soloNivel1 = (motivo) => {
         console.log(
-            `[intelligence] Nivel 4 apagado (${!habilitado ? 'LLM_HABILITADO=false' : 'sin ANTHROPIC_API_KEY'}). ` +
-                'La escalera se queda en el Nivel 1 determinista: $0.00 por turno.'
+            `[intelligence] Nivel 4 apagado (${motivo}). La escalera se queda en el Nivel 1 ` +
+                'determinista: $0.00 por turno.'
         );
         return { manejador: crearManejadorEscalera({ determinista: manejarDeterminista }), nivel4: null };
-    }
+    };
 
-    const { crearAdaptadorAnthropic } = require('./model/adaptadores/anthropic');
-    const { crearManejadorLlm, CONFIG } = require('./engine/manejadorLlm');
-    const puerto = require('./model/puerto');
-    const precios = require('./model/precios');
+    if (process.env.LLM_HABILITADO === 'false') return soloNivel1('LLM_HABILITADO=false');
 
-    const elegido = adaptador || crearAdaptadorAnthropic();
-
-    // Un modelo que se puede ejecutar y no se puede facturar es peor que uno que no se puede
-    // ejecutar: el turno sale, el costo no, y la pregunta 1 del Ledger empieza a mentir sin que
-    // nadie lo note. Se comprueba al arrancar y no en el primer turno.
-    for (const modelo of elegido.modelos) {
-        if (!precios.modelosConocidos().includes(modelo)) {
-            throw new Error(
-                `El adaptador "${elegido.nombre}" sirve el modelo "${modelo}" y precios.js no ` +
-                    'tiene su tarifa. Un turno ejecutable y no facturable rompe ADR-022.'
+    let elegido = adaptador ? { adaptador, modelo: modelo || fabrica.resolver({ proveedor, modelo })?.modelo } : null;
+    if (!elegido) {
+        elegido = fabrica.crearAdaptador({ proveedor, modelo });
+        if (!elegido) {
+            return soloNivel1(
+                `sin credencial — se busca ${Object.values(fabrica.CREDENCIAL).join(' o ')}`
             );
         }
     }
 
-    puerto.registrarAdaptador(elegido);
-    const llm = crearManejadorLlm({ adaptador: elegido });
+    const { crearManejadorLlm, CONFIG } = require('./engine/manejadorLlm');
+    const puerto = require('./model/puerto');
+    const precios = require('./model/precios');
 
+    // Un modelo que se puede ejecutar y no se puede facturar es peor que uno que no se puede
+    // ejecutar: el turno sale, el costo no, y la pregunta 1 del Ledger empieza a mentir sin que
+    // nadie lo note. Se comprueba al arrancar y no en el primer turno.
+    for (const m of elegido.adaptador.modelos) {
+        if (!precios.modelosConocidos().includes(m)) {
+            throw new Error(
+                `El adaptador "${elegido.adaptador.nombre}" sirve el modelo "${m}" y precios.js ` +
+                    'no tiene su tarifa. Un turno ejecutable y no facturable rompe ADR-022.'
+            );
+        }
+    }
+
+    puerto.registrarAdaptador(elegido.adaptador);
+    const config = { ...CONFIG, modelo: elegido.modelo };
+    const llm = crearManejadorLlm({ adaptador: elegido.adaptador, config });
+
+    const etiqueta = `${elegido.adaptador.nombre}/${config.modelo}`;
     console.log(
-        `[intelligence] Nivel 4 montado: ${elegido.nombre}/${CONFIG.modelo} ` +
-            `(esfuerzo ${CONFIG.esfuerzo}, tope ${CONFIG.maxCentavosPorTurno} centavos por turno). ` +
-            'Solo capacidades de CONSULTA.'
+        `[intelligence] Nivel 4 montado: ${etiqueta} (esfuerzo ${config.esfuerzo}, tope ` +
+            `${config.maxCentavosPorTurno} centavos por turno). Solo capacidades de CONSULTA.`
     );
 
     return {
         manejador: crearManejadorEscalera({ determinista: manejarDeterminista, llm }),
-        nivel4: `${elegido.nombre}/${CONFIG.modelo}`,
+        nivel4: etiqueta,
     };
 }
 

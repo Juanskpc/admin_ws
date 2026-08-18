@@ -42,51 +42,128 @@ const TOKENS_POR_MTOK = 1_000_000;
 
 /**
  * Convierte «dólares por millón de tokens» a nanodólares por token, exigiendo que el resultado
- * sea entero.
+ * sea un **múltiplo de 10**.
  *
- * El `throw` no es paranoia decorativa: si un precio futuro no cae en un entero de nanodólares,
- * la suma dejaría de ser exacta y el descuadre aparecería meses después en una factura, no aquí.
- * Mejor que reviente al cargar el módulo.
+ * El `throw` no es paranoia decorativa. Entero garantiza que la suma sea exacta; múltiplo de 10
+ * garantiza además que el total **quepa exacto en los 8 decimales de la columna**. Sin la
+ * segunda condición hay precios que pasan el filtro y luego revientan a mitad de un turno
+ * cualquiera: `gpt-4o-mini` cobra la caché a $0.075/MTok, que son 7.5 nanodólares por token y
+ * son 9 decimales. Con un número impar de tokens el importe no cabe, y el fallo aparecería en
+ * producción, en el primer turno con la paridad equivocada.
+ *
+ * Que reviente al cargar el módulo es exactamente lo que se quiere: un modelo que no se puede
+ * facturar exacto no debe estar en el catálogo.
  */
 function aNanoPorToken(usdPorMTok, etiqueta) {
     const nano = (usdPorMTok * NANO_POR_USD) / TOKENS_POR_MTOK;
-    if (!Number.isInteger(nano)) {
+    if (!Number.isInteger(nano) || nano % 10 !== 0) {
         throw new Error(
-            `El precio ${etiqueta} (${usdPorMTok} USD/MTok) no cae en un número entero de ` +
-                'nanodólares por token. La aritmética de costos es entera a propósito ' +
-                '(numeric(14,8) factura): hay que subir la resolución antes de admitirlo.'
+            `El precio ${etiqueta} (${usdPorMTok} USD/MTok) son ${nano} nanodólares por token, ` +
+                'y no es un múltiplo de 10. La aritmética de costos es entera a propósito ' +
+                '(numeric(14,8) factura): un modelo que no cabe exacto en 8 decimales no entra ' +
+                'al catálogo hasta que se suba la resolución de la columna.'
         );
     }
     return nano;
 }
 
 /**
- * Multiplicadores de la caché de prefijo, que son del proveedor y no del modelo.
+ * Catálogo de modelos con su precio de lista, en dólares por millón de tokens.
  *
- * Leer de caché cuesta ~0.1× la entrada y escribirla 1.25× con TTL de 5 minutos (2× con el de
- * una hora, que no usamos). El Prompt Builder existe precisamente para que la primera cifra
- * domine (ADR-019).
- */
-const MULT_CACHE_LECTURA = 0.1;
-const MULT_CACHE_ESCRITURA_5M = 1.25;
-
-/**
- * Catálogo de modelos con su precio de lista.
+ * ## Las cuatro tarifas se declaran, no se derivan
+ *
+ * La primera versión calculaba la caché como un multiplicador de la entrada (0.1× leer, 1.25×
+ * escribir), porque con un solo proveedor eso era verdad. Con el segundo dejó de serlo: OpenAI
+ * cobra la caché a 0.1× en los modelos nuevos y a 0.5× en `gpt-4o`, y **no cobra la escritura**
+ * porque su caché es automática. Un multiplicador global habría cobrado de más en un caso y de
+ * menos en otro, en silencio y sin que ningún test lo notara.
+ *
+ * Así que cada modelo declara sus cuatro tarifas tal como las publica el proveedor. Es más
+ * verboso y es la única forma de que el número cuadre con la factura.
  *
  * `nivel` no es una etiqueta comercial: es el peldaño de la escalera de ADR-018 al que este
- * modelo sirve. Hoy solo hay uno con LLM (el 4); el 1 es determinista y no aparece aquí porque
- * no cuesta nada, que es exactamente su gracia.
+ * modelo sirve. El Nivel 1 es determinista y no aparece aquí porque no cuesta nada, que es
+ * exactamente su gracia.
  */
 const MODELOS = {
+    // ── Anthropic ────────────────────────────────────────────────────────────────────────
     // Opus 5 es el modelo más capaz de la línea Opus y entra al mismo precio que el 4.8, que es
-    // el que nombra ADR-018 con un «hoy» delante. Ver `intelligence/model/README-nivel4.md`.
-    'claude-opus-5': { proveedor: 'anthropic', entradaMTok: 5, salidaMTok: 25, nivel: 4 },
-    'claude-opus-4-8': { proveedor: 'anthropic', entradaMTok: 5, salidaMTok: 25, nivel: 4 },
-    'claude-haiku-4-5': { proveedor: 'anthropic', entradaMTok: 1, salidaMTok: 5, nivel: 2 },
+    // el que nombra ADR-018 con un «hoy» delante. Ver `docs/nivel-4.md`.
+    'claude-opus-5': {
+        proveedor: 'anthropic',
+        entradaMTok: 5,
+        salidaMTok: 25,
+        cacheLecturaMTok: 0.5,
+        cacheEscrituraMTok: 6.25, // TTL de 5 minutos; el de 1 h sería 10 y no lo usamos
+        nivel: 4,
+    },
+    'claude-opus-4-8': {
+        proveedor: 'anthropic',
+        entradaMTok: 5,
+        salidaMTok: 25,
+        cacheLecturaMTok: 0.5,
+        cacheEscrituraMTok: 6.25,
+        nivel: 4,
+    },
+    'claude-haiku-4-5': {
+        proveedor: 'anthropic',
+        entradaMTok: 1,
+        salidaMTok: 5,
+        cacheLecturaMTok: 0.1,
+        cacheEscrituraMTok: 1.25,
+        nivel: 2,
+    },
+
+    // ── OpenAI ───────────────────────────────────────────────────────────────────────────
+    // La caché de OpenAI es automática y no se cobra por escribirla: no hay marca que poner en
+    // el prompt ni tarifa de escritura. La disciplina de ADR-019 sigue valiendo igual —lo
+    // estable delante, lo volátil detrás— porque el descuento depende de que el prefijo
+    // coincida, no de cómo se pida.
+    'gpt-5.6-sol': {
+        proveedor: 'openai',
+        entradaMTok: 5,
+        salidaMTok: 30,
+        cacheLecturaMTok: 0.5,
+        cacheEscrituraMTok: 0,
+        nivel: 4,
+    },
+    'gpt-5.6-terra': {
+        proveedor: 'openai',
+        entradaMTok: 2,
+        salidaMTok: 12,
+        cacheLecturaMTok: 0.2,
+        cacheEscrituraMTok: 0,
+        nivel: 4,
+    },
+    // El barato. Sirve para responder con datos una pregunta que ADR-018 dejó abierta: si un
+    // modelo 25 veces más barato hace bien este trabajo, el nivel intermedio se justifica; si
+    // no, queda desmentido. Es exactamente lo que el ADR quería que el registro por-nivel
+    // acabara decidiendo, en vez de una corazonada.
+    'gpt-5.6-luna': {
+        proveedor: 'openai',
+        entradaMTok: 0.2,
+        salidaMTok: 1.2,
+        cacheLecturaMTok: 0.02,
+        cacheEscrituraMTok: 0,
+        nivel: 2,
+    },
+    'gpt-4o': {
+        proveedor: 'openai',
+        entradaMTok: 2.5,
+        salidaMTok: 10,
+        cacheLecturaMTok: 1.25,
+        cacheEscrituraMTok: 0,
+        nivel: 4,
+    },
 };
 
 /** Fecha en que se comprobaron los precios contra la documentación del proveedor. */
 const PRECIOS_VERIFICADOS_EN = '2026-08-17';
+
+/** El proveedor que sirve un modelo. Lo usa la composición para elegir adaptador. */
+function proveedorDe(modelo) {
+    return MODELOS[modelo]?.proveedor ?? null;
+}
 
 /** Tarifa por token, en nanodólares, de las cuatro clases de token que factura Anthropic. */
 function tarifa(modelo) {
@@ -104,11 +181,8 @@ function tarifa(modelo) {
     return {
         entrada: aNanoPorToken(m.entradaMTok, `${modelo}.entrada`),
         salida: aNanoPorToken(m.salidaMTok, `${modelo}.salida`),
-        cacheLectura: aNanoPorToken(m.entradaMTok * MULT_CACHE_LECTURA, `${modelo}.cacheLectura`),
-        cacheEscritura: aNanoPorToken(
-            m.entradaMTok * MULT_CACHE_ESCRITURA_5M,
-            `${modelo}.cacheEscritura`
-        ),
+        cacheLectura: aNanoPorToken(m.cacheLecturaMTok, `${modelo}.cacheLectura`),
+        cacheEscritura: aNanoPorToken(m.cacheEscrituraMTok, `${modelo}.cacheEscritura`),
     };
 }
 
@@ -180,5 +254,6 @@ module.exports = {
     costoUsd,
     formatearUsd,
     nivelDe,
+    proveedorDe,
     modelosConocidos,
 };

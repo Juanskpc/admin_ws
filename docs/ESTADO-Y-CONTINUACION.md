@@ -1,6 +1,6 @@
 # EscalApp Intelligence — estado y cómo continuar
 
-**Última actualización:** 2026-08-17
+**Última actualización:** 2026-08-17 (2.ª: segundo proveedor)
 **Propósito:** que retomar el trabajo no cueste una sesión de arqueología. Si vuelves a este
 proyecto después de semanas, **lee este documento primero** y sigue por donde diga.
 
@@ -85,13 +85,20 @@ la suite (contable con `grep -rhoE '^\s*(it|test)\(' __tests__/`):
 
 | Suite | Archivos | Casos declarados |
 |---|---:|---:|
-| `__tests__/intelligence/` | 9 | 146 |
-| `__tests__/platform/` | 5 | 66 |
-| `__tests__/reserva/` | 1 | 27 |
+| `__tests__/intelligence/` | 9 | 164 |
+| `__tests__/platform/` | 5 | 71 |
+| `__tests__/reserva/` | 1 | 28 |
 | `__tests__/reportes/` | 2 | 20 |
 
-En ejecución salen más: hay 10 usos de `.each` que expanden. Ver la nota del flake de `reportes`
-en §8. Producción sigue exactamente como estaba; §5 tiene el procedimiento de despliegue.
+En ejecución salen más: los usos de `.each` expanden. Ver la nota del flake de `reportes` en §8.
+
+**Corrida completa del 2026-08-17 contra la base compartida del VPS: 308 de 318 en verde.** Los
+10 fallos **no son regresiones**: se reprodujeron uno a uno aislados y los tres motivos son de
+entorno —timeout de 5 s por la latencia del túnel, ventana de *debounce* agotada entre mensajes,
+y 2 s de desfase de reloj entre el PC y el servidor—. Está medido y explicado en §8. La suite
+sensible al tiempo hay que correrla contra la base **local**.
+
+Producción sigue exactamente como estaba; §5 tiene el procedimiento de despliegue.
 
 ---
 
@@ -139,7 +146,9 @@ npm run migrate:intelligence-canal
 
 # 3. Comprobar que todo sigue verde
 npx jest --runInBand                           # suite completa (inventario en §2; flake en §8)
-#    ⚠️ Los tests van SIEMPRE contra la base local (5432), nunca contra la compartida.
+#    ⚠️ Los tests van SIEMPRE contra la base local (5432), nunca contra la compartida — y ya no
+#       es solo por no pisarse: contra la compartida fallan 10 por latencia y desfase de reloj,
+#       de forma determinista. Medido el 2026-08-17; el detalle está en §8.
 
 # 4. Levantar
 npm run dev                                    # backend  :3000
@@ -647,7 +656,7 @@ Lo que entró (todo en `intelligence/`, fuera de `app.js` salvo la línea de com
 | Pieza | Dónde | Qué es |
 |---|---|---|
 | `ModelPort` | `model/puerto.js` | Petición y respuesta canónicas **de EscalApp**. La palabra «tool» no existe aquí. Incluye la **matriz de capacidades del proveedor**: un proveedor sin function-calling queda descalificado para un turno con capacidades *antes* de gastar un token. |
-| Adaptador Anthropic | `model/adaptadores/anthropic.js` | **El único archivo que importa el SDK de un proveedor**, y con `require` tardío: sin el paquete o sin clave, `intelligence/` carga igual. |
+| Adaptadores de proveedor | `model/adaptadores/anthropic.js` · `openai.js` · `index.js` (fábrica) | Los **únicos archivos que importan el SDK de un proveedor**, con `require` tardío: sin el paquete o sin clave, `intelligence/` carga igual. Hay **dos y es transitorio**: se comparan con el arnés y el que pierda se borra (ver [`nivel-4.md`](nivel-4.md)). |
 | Precios y costo | `model/precios.js` | Aritmética **entera en nanodólares**. Ni un `float` en el camino: la columna es `numeric(14,8)` porque esto factura, y mandarle un `Number` de JS deshacía la precaución. |
 | Prompt Builder | `model/promptBuilder.js` + `model/prompts/sistema.v1.md` | Orden estable→volátil con la fecha al final. El prompt es un **artefacto versionado**, no una cadena concatenada en una función. |
 | Orquestador | `model/orquestador.js` | La escalera de ADR-018 como **tabla de reglas**, no como `if/else`. Añadir un nivel es añadir filas. |
@@ -674,7 +683,11 @@ caché. F6 solo les puso productor.
 3. **Nada de clave de idempotencia en las consultas del LLM.** La FSM usa el id del turno como
    clave; aquí sería un bug: el Gate guarda por `(negocio, capacidad, clave)`, así que preguntar
    disponibilidad de dos fechas en el mismo turno —lo normal— devolvería dos veces la primera.
-4. **El modelo usado es `claude-opus-5` y ADR-018 nombra `claude-opus-4-8`.** El ADR dice «el LLM
+4. **`prompt_tokens` de OpenAI incluye los cacheados; los de Anthropic son disjuntos.** Copiar
+   el mapeo de un adaptador al otro cobra dos veces la parte cacheada —y la segunda a precio de
+   entrada, que es 10× la de caché—. **No falla nada**: el Ledger dice un número y el proveedor
+   cobra otro. Tiene test propio y se comprobó rompiéndolo.
+5. **El modelo usado es `claude-opus-5` y ADR-018 nombra `claude-opus-4-8`.** El ADR dice «el LLM
    más capaz, **hoy** `claude-opus-4-8`»: lo congelado es la regla, no el id, y Opus 5 es el
    sucesor de la misma línea al mismo precio de lista. Está escrito y razonado en
    [`nivel-4.md`](nivel-4.md), y volver atrás es `LLM_MODELO=claude-opus-4-8`.
@@ -688,14 +701,31 @@ como dato no confiable (`<mensaje_del_cliente>`, con el cierre saneado para que 
 escapar del sobre), pero eso es la defensa secundaria: las instrucciones se eluden, la ausencia
 de una herramienta no.
 
+### Dos proveedores montados, y es transitorio
+
+Están `anthropic` y `openai`. **No es una contradicción con ADR-018**, que descartó *mantener
+cinco integraciones vivas*, no comparar antes de elegir — y elegir proveedor sin medirlo es
+justo la corazonada que el ADR quiere sustituir por datos. Tiene fecha de caducidad: se mide, se
+decide, y el que pierda se borra del disco y de `model/adaptadores/index.js`.
+
+El segundo adaptador sirvió además de prueba del puerto: enchufar un proveedor con otra forma de
+API **no obligó a tocar el núcleo** —ni el Prompt Builder, ni el orquestador, ni el manejador, ni
+el Ledger, ni un solo test de los que ya existían—. Lo único que se generalizó fue la tabla de
+precios, y por un motivo del mundo real: OpenAI cobra la caché de otra manera. Las cuatro
+diferencias que muerden están en [`nivel-4.md`](nivel-4.md).
+
+**Basta con poner una clave**: el proveedor se deduce del modelo, y el modelo del proveedor que
+tenga credencial. `LLM_PROVEEDOR` solo hace falta con las dos puestas, y si contradice a
+`LLM_MODELO` el arranque falla en vez de elegir en silencio.
+
 ### Cómo usarlo
 
 ```bash
 # Sin credencial: la escalera se queda en el Nivel 1 y todo sigue a $0.00. No es un fallo.
 INTELLIGENCE_HTTP_ENABLED=true FEATURES_FORZADAS=asistente_ia npm run dev
 
-# Con Nivel 4:
-ANTHROPIC_API_KEY=sk-... INTELLIGENCE_HTTP_ENABLED=true FEATURES_FORZADAS=asistente_ia npm run dev
+# Con Nivel 4 (basta una de las dos claves en el .env):
+INTELLIGENCE_HTTP_ENABLED=true FEATURES_FORZADAS=asistente_ia npm run dev
 #  → «hola» / «quiero agendar» siguen yendo a la FSM, gratis.
 #  → «¿cuánto cuesta un corte?» va al modelo, que consulta las capacidades y contesta.
 
@@ -703,6 +733,10 @@ ANTHROPIC_API_KEY=sk-... INTELLIGENCE_HTTP_ENABLED=true FEATURES_FORZADAS=asiste
 npm run evaluar enrutado
 FEATURES_FORZADAS=asistente_ia node scripts/evaluar.js respuestas --negocio 1
 FEATURES_FORZADAS=asistente_ia node scripts/evaluar.js inyeccion  --negocio 1
+
+# La comparación que decide el proveedor: mismas conversaciones, distinto modelo.
+FEATURES_FORZADAS=asistente_ia node scripts/evaluar.js respuestas --negocio 1 \
+    --comparar gpt-5.6-luna,gpt-5.6-terra,claude-opus-5
 ```
 
 ### Lo que hay que vigilar
@@ -714,6 +748,18 @@ FEATURES_FORZADAS=asistente_ia node scripts/evaluar.js inyeccion  --negocio 1
   tabla de enrutado empezó a mandar al modelo lo que la FSM hacía gratis.
 - El barrido de `LLM_ESFUERZO` está **sin hacer**: `low` es el punto de partida razonado, no una
   medición. Es exactamente para lo que existe el arnés.
+
+### ⚠️ Lo que le falta a F6 para estar terminada
+
+Al 2026-08-17 el código está completo y probado **en seco**: 164 casos en `intelligence/`, todos
+con adaptador de mentira. **El asistente no ha hablado nunca con un modelo real**, así que estos
+tres puntos siguen abiertos y son los primeros de la próxima sesión:
+
+1. **Correr `respuestas` e `inyeccion` con una clave de verdad.** Es lo único que valida el
+   adaptador contra la API real; un cliente falso no descubre un campo mal mapeado.
+2. **Comprobar que `cache_read` sube.** ADR-019 lo convierte en criterio de aceptación: con eso a
+   cero de forma sostenida, **la fase no está terminada**. El arnés lo avisa por pantalla.
+3. **Elegir proveedor, modelo y esfuerzo con la tabla de `--comparar`**, no a ojo.
 
 ---
 
@@ -776,10 +822,10 @@ ahora mismo. F0 y F1 son funcionalidad nueva y pueden esperar.
     **antes** que el resto es seguro. Requiere desplegar también `admin_app-v21` para que la vista
     exista.
 
-13. **F6: código y una dependencia nueva, y la bandera del modelo se queda apagada.** No hay
-    migración. `npm install` traerá `@anthropic-ai/sdk`, que se carga con `require` tardío: sin
-    `ANTHROPIC_API_KEY` la escalera se queda en el Nivel 1 y el backend arranca igual. **No
-    poner la clave en el `.env` de producción** hasta que se decidan dos cosas que no son de
+13. **F6: código y dos dependencias nuevas, y la clave del modelo se queda fuera.** No hay
+    migración. `npm install` traerá `@anthropic-ai/sdk` y `openai`, los dos con `require`
+    tardío: sin credencial la escalera se queda en el Nivel 1 y el backend arranca igual. **No
+    poner ninguna clave en el `.env` de producción** hasta que se decidan dos cosas que no son de
     código: (a) sigue en pie la decisión 9 de §6 —el WebChat no está autenticado— y encender el
     modelo sobre un canal abierto es pagarle los tokens a cualquiera; (b) el asistente no está
     en ningún plan comercial, así que hoy solo se enciende con `FEATURES_FORZADAS`, que en
@@ -911,6 +957,7 @@ estado por consumidor y la Ficha 360 no agrega verticales vacías.
 | **El costo no puede viajar en el retorno del manejador** | Parece natural devolverlo con la decisión, como los pasos y las invocaciones. Y funciona… hasta que el manejador falla, que es justo cuando los tokens **ya se pagaron** y la decisión no vuelve. El gasto viaja en un recolector que aporta el motor y se escribe fuera del savepoint. Sin eso, los turnos que fallan salen gratis en el Ledger y carísimos en la factura. |
 | **La clave de idempotencia es veneno en una consulta** | La FSM usa el id del turno y está bien: evita crear dos citas. Copiar el patrón al bucle del LLM haría que dos consultas de disponibilidad en el mismo turno —dos fechas, el caso normal— devolvieran las dos el resultado de la primera, porque el Gate guarda por `(negocio, capacidad, clave)`. Las lecturas no necesitan idempotencia: no tienen efecto que repetir. |
 | **`cache_read` a cero no significa «no hay caché»** | Significa que algo volátil se coló delante del punto de corte y el prefijo se invalida en cada turno. No hay error, no hay aviso: solo una factura ~10× más alta. ADR-019 lo convierte en criterio de aceptación de F6 y el arnés lo avisa por pantalla. La prueba que lo caza no necesita credencial: dos turnos a horas distintas tienen que dar un prefijo **idéntico byte a byte**. |
+| **La base compartida no puede correr los tests sensibles al tiempo** | Medido el 2026-08-17 contra `escalapp_dev` del VPS por el túnel: **138 ms de latencia mediana por consulta** (frente a ~1 ms en local) y **2,1 s de desfase de reloj** entre el PC y el servidor. Eso rompe tres familias de tests de forma **determinista, no intermitente** (10 de 318, y fallan igual aislados que en tanda): (a) los que hacen decenas de consultas y no declaran timeout propio — se pasan de los 5 s por defecto de Jest sin llegar a evaluar ninguna aserción (`reserva/dominio`, `capacidades_mutaciones`); (b) los de *debounce*, porque los 250 ms de la ventana de prueba se agotan entre un mensaje y el siguiente y la ráfaga se parte en varios turnos; (c) los que comparan una marca de tiempo escrita por Postgres (`now() + backoff`) contra `Date.now()` del PC, porque el servidor va 2 s atrasado y el futuro parece pasado. **No son fallos del producto ni de los tests**: son tests correctos que suponen una base local. La regla de §3 —los tests van contra la base local— tenía una segunda razón mejor que «no pisarse». |
 | **Procesos zombis en el puerto** | Ver §3. |
 
 ---
@@ -951,7 +998,7 @@ estado por consumidor y la Ficha 360 no agrega verticales vacías.
 | Prompt como artefacto versionado | `intelligence/model/prompts/sistema.v1.md` |
 | Nivel 4 y la escalera (F6) | `intelligence/engine/manejadorLlm.js` · `manejadorEscalera.js` |
 | Arnés de evaluación (F6) | `intelligence/evaluacion/` · CLI: `scripts/evaluar.js` (`npm run evaluar`) |
-| Por qué `claude-opus-5` y no el id de ADR-018 | `docs/nivel-4.md` |
+| Proveedores, modelos, tarifas y cómo se elige | `docs/nivel-4.md` |
 | Tests | `__tests__/intelligence/` (9) · `__tests__/platform/` (5) · `__tests__/reserva/` (1) — inventario en §2 |
 
 **Desde F5-C `intelligence` sí se monta en `app.js`, pero detrás de dos guardas.** Una es que

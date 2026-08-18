@@ -19,6 +19,8 @@ const puerto = require('../../intelligence/model/puerto');
 const promptBuilder = require('../../intelligence/model/promptBuilder');
 const orquestador = require('../../intelligence/model/orquestador');
 const anthropic = require('../../intelligence/model/adaptadores/anthropic');
+const openai = require('../../intelligence/model/adaptadores/openai');
+const fabrica = require('../../intelligence/model/adaptadores');
 const { crearManejadorLlm, CONFIG, RESPUESTA_HANDOFF } = require('../../intelligence/engine/manejadorLlm');
 const { crearManejadorEscalera } = require('../../intelligence/engine/manejadorEscalera');
 
@@ -568,5 +570,215 @@ describe('manejadorEscalera', () => {
         const { decision } = await correr(manejador, '¿tienen parqueadero?');
         expect(decision.respuestas).toEqual(['menú']);
         expect(decision.pasos[0].decision).toBe('nivel4_no_disponible');
+    });
+});
+
+// ── Adaptador OpenAI: el segundo proveedor ───────────────────────────────────────────────
+
+describe('adaptador openai', () => {
+    it('NO cuenta dos veces los tokens cacheados (prompt_tokens ya los incluye)', () => {
+        // Éste es el test que justifica el archivo entero. En Anthropic los contadores son
+        // disjuntos; aquí `prompt_tokens` incluye los cacheados. Sin la resta, la parte cacheada
+        // se cobra dos veces —y la segunda a precio de entrada, que es 10× la de caché— sin que
+        // nada falle: el Ledger diría una cifra y el proveedor cobraría otra.
+        const uso = openai.traducirUso({
+            prompt_tokens: 1000,
+            completion_tokens: 50,
+            prompt_tokens_details: { cached_tokens: 900 },
+        });
+
+        expect(uso.tokensEntrada).toBe(100); // 1000 - 900, no 1000
+        expect(uso.tokensCacheLectura).toBe(900);
+        expect(uso.tokensEntrada + uso.tokensCacheLectura).toBe(1000);
+        expect(uso.tokensCacheEscritura).toBe(0); // su caché no cobra escritura
+
+        // Y el importe: si se contara mal, saldría 10 veces más caro.
+        const bien = precios.costoNano('gpt-5.6-terra', uso);
+        const mal = precios.costoNano('gpt-5.6-terra', { ...uso, tokensEntrada: 1000 });
+        expect(mal).toBeGreaterThan(bien * 2);
+    });
+
+    it('tolera un uso sin detalle de caché sin inventarse números', () => {
+        const uso = openai.traducirUso({ prompt_tokens: 300, completion_tokens: 10 });
+        expect(uso).toEqual({
+            tokensEntrada: 300,
+            tokensSalida: 10,
+            tokensCacheLectura: 0,
+            tokensCacheEscritura: 0,
+        });
+    });
+
+    it('parsea los argumentos, que llegan como texto y pueden venir rotos', () => {
+        const bueno = openai.interpretarRespuesta({
+            choices: [
+                {
+                    finish_reason: 'tool_calls',
+                    message: {
+                        content: null,
+                        tool_calls: [
+                            {
+                                id: 'call_1',
+                                type: 'function',
+                                function: {
+                                    name: 'consultar_disponibilidad',
+                                    arguments: '{"id_servicio":1,"fecha":"2026-09-01"}',
+                                },
+                            },
+                        ],
+                    },
+                },
+            ],
+        });
+        expect(bueno.razonFin).toBe(puerto.FIN.CAPACIDADES);
+        expect(bueno.invocacionesSolicitadas[0].argumentos).toEqual({
+            id_servicio: 1,
+            fecha: '2026-09-01',
+        });
+
+        // El propio SDK avisa de que el modelo «no siempre genera JSON válido». Cuando pasa, la
+        // invocación sigue viva y el Gate la rechaza con un error legible que vuelve al modelo:
+        // se corrige en la vuelta siguiente. Un JSON.parse suelto habría tumbado el turno.
+        const roto = openai.interpretarRespuesta({
+            choices: [
+                {
+                    finish_reason: 'tool_calls',
+                    message: {
+                        tool_calls: [
+                            { id: 'call_2', type: 'function', function: { name: 'x', arguments: '{no' } },
+                        ],
+                    },
+                },
+            ],
+        });
+        expect(roto.invocacionesSolicitadas).toHaveLength(1);
+        expect(roto.invocacionesSolicitadas[0].argumentos.__json_invalido).toBeDefined();
+    });
+
+    it('manda cada resultado en SU propio mensaje (aquí no se agrupan)', () => {
+        const mensajes = openai.renderizarMensajes(
+            [],
+            [
+                {
+                    rol: puerto.ROL.RESULTADOS,
+                    resultados: [
+                        { id: 'call_1', contenido: 'a' },
+                        { id: 'call_2', contenido: 'b' },
+                    ],
+                },
+            ]
+        );
+        expect(mensajes).toHaveLength(2);
+        expect(mensajes.every((m) => m.role === 'tool')).toBe(true);
+        expect(mensajes.map((m) => m.tool_call_id)).toEqual(['call_1', 'call_2']);
+    });
+
+    it('pone las instrucciones al principio, que es lo que hace que la caché sirva', () => {
+        const mensajes = openai.renderizarMensajes(
+            [{ texto: 'eres un asistente', cacheable: false }, { texto: 'el negocio es X', cacheable: true }],
+            [{ rol: puerto.ROL.CLIENTE, texto: 'hola' }]
+        );
+        expect(mensajes.slice(0, 2).every((m) => m.role === 'system')).toBe(true);
+        expect(mensajes[2]).toEqual({ role: 'user', content: 'hola' });
+    });
+
+    it('traduce los motivos de parada de este proveedor', () => {
+        const de = (finish, message = {}) =>
+            openai.interpretarRespuesta({ choices: [{ finish_reason: finish, message }] }).razonFin;
+        expect(de('stop')).toBe(puerto.FIN.TURNO);
+        expect(de('tool_calls', { tool_calls: [] })).toBe(puerto.FIN.CAPACIDADES);
+        expect(de('length')).toBe(puerto.FIN.LIMITE_TOKENS);
+        expect(de('content_filter')).toBe(puerto.FIN.RECHAZO);
+        // El rechazo también puede venir por el campo `refusal`, con finish_reason normal.
+        expect(de('stop', { refusal: 'no puedo ayudar con eso' })).toBe(puerto.FIN.RECHAZO);
+    });
+
+    it('no manda reasoning_effort a un modelo que lo rechaza', async () => {
+        const vistos = [];
+        const cli = {
+            chat: {
+                completions: {
+                    create: async (cuerpo) => {
+                        vistos.push(cuerpo);
+                        return {
+                            choices: [{ finish_reason: 'stop', message: { content: 'ok' } }],
+                            usage: { prompt_tokens: 10, completion_tokens: 2 },
+                        };
+                    },
+                },
+            },
+        };
+        const adaptador = openai.crearAdaptadorOpenai({ cliente: cli });
+        const peticionCon = (modelo) =>
+            promptBuilder.construir({ negocio: NEGOCIO, capacidades: [], mensaje: 'hola', modelo });
+
+        await adaptador.generar(peticionCon('gpt-5.6-terra'));
+        await adaptador.generar(peticionCon('gpt-4o'));
+
+        expect(vistos[0].reasoning_effort).toBe('low');
+        // Los modelos de generación anterior devuelven 400 si se les manda. El turno se quedaría
+        // sin respuesta, y no hay test con cliente falso que lo vea si no se comprueba aquí.
+        expect(vistos[1].reasoning_effort).toBeUndefined();
+    });
+
+    it('los modelos que sirve tienen todos tarifa: ejecutable implica facturable', () => {
+        for (const modelo of openai.MODELOS) {
+            expect(precios.modelosConocidos()).toContain(modelo);
+        }
+        for (const modelo of anthropic.MODELOS) {
+            expect(precios.modelosConocidos()).toContain(modelo);
+        }
+    });
+
+    it('el mismo turno cuesta distinto en cada proveedor, y el cálculo lo refleja', () => {
+        const uso = { tokensEntrada: 1000, tokensSalida: 500 };
+        const barato = Number(precios.costoUsd('gpt-5.6-luna', uso));
+        const caro = Number(precios.costoUsd('claude-opus-5', uso));
+        expect(barato).toBeLessThan(caro);
+    });
+});
+
+// ── La fábrica: quién sirve qué ──────────────────────────────────────────────────────────
+
+describe('fábrica de adaptadores', () => {
+    const entornoOriginal = { ...process.env };
+    afterEach(() => {
+        process.env = { ...entornoOriginal };
+    });
+
+    it('deduce el proveedor del modelo, sin que haya que decirlo', () => {
+        process.env.OPENAI_API_KEY = 'sk-x';
+        expect(fabrica.resolver({ modelo: 'gpt-5.6-luna' }).proveedor).toBe('openai');
+        expect(fabrica.resolver({ modelo: 'claude-opus-5' }).proveedor).toBe('anthropic');
+    });
+
+    it('falla si el modelo y el proveedor se contradicen, en vez de elegir en silencio', () => {
+        // Elegir uno callando sería peor que no arrancar: acabarías midiendo un proveedor
+        // creyendo que mediste el otro, y la conclusión saldría al revés.
+        expect(() => fabrica.resolver({ proveedor: 'anthropic', modelo: 'gpt-5.6-sol' })).toThrow(
+            /NO_CUADRAN|es de openai/i
+        );
+    });
+
+    it('rechaza un modelo que no está en la tabla de precios', () => {
+        expect(() => fabrica.resolver({ modelo: 'gpt-inventado-9' })).toThrow(/precios|MODELO_SIN_PRECIO/i);
+    });
+
+    it('sin ninguna credencial devuelve null: quedarse sin Nivel 4 es válido, no un error', () => {
+        delete process.env.OPENAI_API_KEY;
+        delete process.env.ANTHROPIC_API_KEY;
+        delete process.env.LLM_PROVEEDOR;
+        delete process.env.LLM_MODELO;
+        expect(fabrica.crearAdaptador()).toBeNull();
+    });
+
+    it('construye el adaptador del proveedor cuya clave esté puesta', () => {
+        delete process.env.ANTHROPIC_API_KEY;
+        delete process.env.LLM_PROVEEDOR;
+        delete process.env.LLM_MODELO;
+        process.env.OPENAI_API_KEY = 'sk-x';
+        const montado = fabrica.crearAdaptador();
+        expect(montado.proveedor).toBe('openai');
+        expect(montado.adaptador.nombre).toBe('openai');
+        expect(montado.adaptador.capacidades.invocarCapacidades).toBe(true);
     });
 });
