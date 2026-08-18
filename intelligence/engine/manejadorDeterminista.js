@@ -57,6 +57,7 @@
 
 const policyGateReal = require('../core/policyGate');
 const identidadReal = require('./identidad');
+const contextoNegocioReal = require('../core/contextoNegocio');
 
 /** Pasos de la tarea de agendar. Enum-like: se registran en el Ledger y se miden. */
 const PASO = {
@@ -144,16 +145,41 @@ function interpretarFecha(texto, ahora = new Date()) {
     const iso = t.match(/(\d{4})-(\d{2})-(\d{2})/);
     if (iso) return iso[0];
 
-    const enBogota = new Date(ahora.toLocaleString('en-US', { timeZone: 'America/Bogota' }));
-    const aISO = (d) => d.toISOString().slice(0, 10);
+    // `en-CA` formatea como YYYY-MM-DD, así que se lee la fecha de pared de Bogotá **sin pasar
+    // nunca por UTC**. La versión anterior hacía `new Date(toLocaleString(...))` y luego
+    // `toISOString()`: dos conversiones que solo se cancelan si el proceso corre en UTC. En un
+    // PC en Bogotá, a partir de las 19:00 la fecha UTC ya ha cambiado y tanto «hoy» como
+    // «mañana» devolvían un día de más — un cliente que pedía «hoy» veía la agenda de mañana.
+    const hoyISO = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'America/Bogota',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+    }).format(ahora);
 
-    if (t === 'hoy') return aISO(enBogota);
+    if (t === 'hoy') return hoyISO;
     if (t === 'manana' || t === 'mañana') {
-        const d = new Date(enBogota);
-        d.setDate(d.getDate() + 1);
-        return aISO(d);
+        // Aritmética de calendario en UTC sobre una fecha sin hora: `Date.UTC` normaliza el
+        // desbordamiento de mes y año, y como se construye y se lee en UTC no hay sesgo de zona.
+        const [anio, mes, dia] = hoyISO.split('-').map(Number);
+        return new Date(Date.UTC(anio, mes - 1, dia + 1)).toISOString().slice(0, 10);
     }
     return null;
+}
+
+/** Día siguiente a una fecha `YYYY-MM-DD`, en el mismo calendario y sin tocar zonas horarias. */
+function diaSiguiente(fechaISO) {
+    const [anio, mes, dia] = fechaISO.split('-').map(Number);
+    return new Date(Date.UTC(anio, mes - 1, dia + 1)).toISOString().slice(0, 10);
+}
+
+const DIAS = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
+
+/** «viernes 15» — una fecha ISO no se lee, y el chip tiene que poder leerse de un vistazo. */
+function etiquetaDia(fechaISO) {
+    const [anio, mes, dia] = fechaISO.split('-').map(Number);
+    const d = new Date(Date.UTC(anio, mes - 1, dia));
+    return `${DIAS[d.getUTCDay()]} ${dia}`;
 }
 
 function formatearPrecio(valor) {
@@ -169,6 +195,9 @@ function formatearPrecio(valor) {
 function crearManejadorDeterminista({
     gate = policyGateReal,
     identidad = identidadReal,
+    // Quién es el negocio para el que hablamos. Inyectable como los otros dos: los tests de la
+    // FSM corren sin Postgres y esto es lo único nuevo que tocaría la base.
+    contextoNegocio = contextoNegocioReal,
     ahora = () => new Date(),
 } = {}) {
     /**
@@ -212,14 +241,35 @@ function crearManejadorDeterminista({
 
     // ── Menú inicial ────────────────────────────────────────────────────────────────────
 
-    async function ofrecerServicios(ctx, pasosPrevios = []) {
+    /**
+     * Saludo de apertura. Dice **con quién** está hablando el cliente, que es lo primero que
+     * pregunta cualquiera al escribir a un negocio y lo que el bot no contestaba: arrancaba con
+     * «¿Qué servicio quieres agendar?», idéntico en una barbería y en un consultorio.
+     *
+     * El nombre sale del contexto del inquilino, no de una constante ni del texto de la FSM: el
+     * día que sea configurable por negocio (Business Context, ADR-020/F6) cambia de origen sin
+     * tocar esto. Y si no se conoce, `tratamiento` ya trae una fórmula neutra — aquí no se
+     * comprueba si hay nombre, porque el olvido saldría publicado como «te comunicas con null».
+     */
+    function saludo(ctx) {
+        const nombre = (ctx.conversacion.variables || {}).nombre;
+        const quien = ctx.negocio?.tratamiento || 'el negocio';
+        return nombre
+            ? `¡Hola de nuevo, ${nombre}! Te comunicas con ${quien}.`
+            : `¡Hola! Te comunicas con ${quien}.`;
+    }
+
+    async function ofrecerServicios(ctx, pasosPrevios = [], { saludar = false } = {}) {
         const { resultado } = await invocar({ ...ctx, capacidad: 'consultar_servicios', args: {} });
         const servicios = (resultado?.servicios || []).slice(0, MAX_OPCIONES);
+        const apertura = saludar ? `${saludo(ctx)} ` : '';
 
         if (servicios.length === 0) {
             return {
                 pasos: [...pasosPrevios, paso('sin_servicios')],
-                respuestas: ['Ahora mismo no hay servicios disponibles para agendar.'],
+                // También se saluda aquí: que no haya agenda no es motivo para que el cliente
+                // no sepa a dónde escribió.
+                respuestas: [`${apertura}Ahora mismo no tenemos servicios disponibles para agendar.`],
                 variables: conMemoria(ctx.conversacion),
                 tarea: null,
                 resultado: 'sin_respuesta',
@@ -231,7 +281,7 @@ function crearManejadorDeterminista({
             pasos: [...pasosPrevios, paso('menu_servicios', { cuantos: servicios.length })],
             respuestas: [
                 {
-                    texto: '¿Qué servicio quieres agendar?',
+                    texto: `${apertura}¿Qué servicio te gustaría agendar?`,
                     // Nunca numerado dentro del texto: va en `opciones` y cada canal lo pinta
                     // como sabe (ADR-017). El WebChat los hace chips; WhatsApp, botones.
                     opciones: servicios.map((s) => ({
@@ -241,7 +291,16 @@ function crearManejadorDeterminista({
                 },
             ],
             variables: conMemoria(ctx.conversacion),
-            tarea: { nombre: TAREA_AGENDAR, datos: { paso: PASO.SERVICIO } },
+            tarea: {
+                nombre: TAREA_AGENDAR,
+                datos: {
+                    paso: PASO.SERVICIO,
+                    // Se recuerda QUÉ se ofreció para poder resolver la respuesta contra la
+                    // lista real en vez de adivinar. Sin esto había que sacar un número del
+                    // texto libre, y «Corte de cabello (30 min) — $35.000» daba el servicio 30.
+                    ofrecidos: servicios.map((s) => ({ id: s.id_servicio, nombre: s.nombre })),
+                },
+            },
             resultado: 'resuelto',
             nivel: 'determinista',
         };
@@ -249,11 +308,55 @@ function crearManejadorDeterminista({
 
     // ── Pasos de la tarea ───────────────────────────────────────────────────────────────
 
+    /**
+     * Resuelve la respuesta contra los servicios que se ofrecieron, en tres pasadas.
+     *
+     * Antes se hacía `texto.match(/\d+/)` —el primer número del texto— y era un cristal:
+     * el WebChat manda la etiqueta del chip al pulsarlo, así que «Corte de cabello (30 min) —
+     * $35.000» se leía como el servicio **30**. La conversación seguía tan campante hasta el
+     * paso de fecha, donde `consultar_disponibilidad` devolvía cero horas para cualquier día y
+     * parecía que el negocio no tenía agenda. Un fallo de interpretación disfrazado de fallo de
+     * datos, tres pasos más adelante.
+     *
+     * El orden importa: primero el id exacto (lo que manda un chip), después el nombre (lo que
+     * escribe una persona en WhatsApp) y solo al final un número dentro de la frase — «mejor 2»
+     * es una respuesta legítima.
+     *
+     * Lo que salva esa última pasada de repetir el bug es **validar contra la lista**: en
+     * «Corte de cabello (30 min)» el 30 no es un id ofrecido, así que se descarta en vez de
+     * inventarse un servicio. Antes se aceptaba cualquier número por el hecho de serlo.
+     */
+    function resolverServicio(texto, ofrecidos) {
+        if (!ofrecidos || ofrecidos.length === 0) return null;
+        const t = normalizar(texto);
+
+        const porId = ofrecidos.find((s) => t === String(s.id));
+        if (porId) return porId;
+
+        const porNombre = ofrecidos.find((s) => t.includes(normalizar(s.nombre)));
+        if (porNombre) return porNombre;
+
+        for (const n of t.match(/\d+/g) || []) {
+            const s = ofrecidos.find((x) => x.id === Number(n));
+            if (s) return s;
+        }
+        return null;
+    }
+
     async function elegirServicio(ctx, datos) {
-        const elegido = normalizar(ultimaLinea(ctx.texto)).match(/\d+/);
-        if (!elegido) {
+        // Una conversación abierta ANTES de que se guardara `ofrecidos` no lo tiene: su
+        // `tarea_datos` está persistido en la base y no se migra solo. Sin lista contra la que
+        // validar no se puede resolver sin adivinar, así que se vuelve a ofrecer el menú —que
+        // la repuebla— en vez de arriesgar otra elección inventada.
+        if (!datos.ofrecidos) {
+            return ofrecerServicios(ctx, [paso('menu_repetido', { motivo: 'sin_ofrecidos' })]);
+        }
+
+        const servicio = resolverServicio(ultimaLinea(ctx.texto), datos.ofrecidos);
+        if (!servicio) {
             return reintentar(ctx, datos, 'Elige uno de los servicios de la lista, por favor.');
         }
+        const elegido = [String(servicio.id)];
         return {
             pasos: [paso('servicio_elegido', { id_servicio: Number(elegido[0]) })],
             respuestas: [
@@ -289,12 +392,19 @@ function crearManejadorDeterminista({
         const horas = (resultado?.horas || []).slice(0, MAX_OPCIONES);
 
         if (horas.length === 0) {
+            // El chip lleva el día siguiente **al consultado**, no «mañana». Ofrecer «Mañana»
+            // aquí era un callejón sin salida: se resuelve contra HOY, así que quien acababa de
+            // oír «no hay horas el 14» pulsaba «Mañana» y volvía a preguntar por el 14, en
+            // bucle. Se avanza de día en día porque `consultar_disponibilidad` mira una sola
+            // fecha y la FSM invoca una capacidad por turno (clave de idempotencia = id del
+            // turno): sondear varios días de golpe exige otra capacidad, no otro parche aquí.
+            const siguiente = diaSiguiente(fecha);
             return {
                 pasos: [paso('sin_disponibilidad', { fecha })],
                 respuestas: [
                     {
-                        texto: `No hay horas libres el ${fecha}. ¿Probamos otro día?`,
-                        opciones: [{ id: 'mañana', etiqueta: 'Mañana' }],
+                        texto: `No hay horas libres el ${fecha}. ¿Probamos el ${siguiente}?`,
+                        opciones: [{ id: siguiente, etiqueta: etiquetaDia(siguiente) }],
                     },
                 ],
                 variables: conMemoria(ctx.conversacion),
@@ -510,6 +620,7 @@ function crearManejadorDeterminista({
 
     return async function manejarDeterminista({ conversacion, mensajes, turno, texto }) {
         const identidad = await identidad_(conversacion);
+        const negocio = await contextoNegocio.obtener(conversacion.id_negocio);
         // Se acumulan aquí y se adjuntan al final en UN solo sitio: hacerlo en cada rama sería
         // olvidarlo en la rama que nadie probó, y el Ledger quedaría con agujeros que no
         // parecen agujeros.
@@ -520,6 +631,7 @@ function crearManejadorDeterminista({
             turno,
             texto,
             identidad,
+            negocio,
             invocaciones,
             principal: identidad.principal,
             idNegocio: Number(conversacion.id_negocio),
@@ -547,7 +659,12 @@ function crearManejadorDeterminista({
         }
 
         if (!hayTarea || esComando(texto, COMANDO.MENU)) {
-            return conRastro(await ofrecerServicios(ctx, [paso('inicio_conversacion')]));
+            // Se saluda cuando NO había tarea —es decir, alguien que llega, no alguien que
+            // vuelve al menú a mitad de un agendamiento—. Repetir «¡Hola! Te comunicas con…»
+            // a quien lleva cinco turnos hablando suena a que el bot se olvidó de él.
+            return conRastro(
+                await ofrecerServicios(ctx, [paso('inicio_conversacion')], { saludar: !hayTarea })
+            );
         }
 
         switch (datos.paso) {

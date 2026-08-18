@@ -1,0 +1,30 @@
+{
+  "suite": "enrutado",
+  "descripcion": "Qué peldaño de la escalera resuelve cada mensaje (ADR-018). No gasta un token: es la política de orquestador.js contra casos reales. Es la parte del arnés que puede correr en CI sin credencial, y la que caza que un cambio de reglas empiece a mandar al LLM cosas que la FSM hacía gratis.",
+  "casos": [
+    { "id": "saludo", "texto": "hola", "tareaEnCurso": false, "espera": "determinista" },
+    { "id": "saludo-mayus", "texto": "HOLA", "tareaEnCurso": false, "espera": "determinista" },
+    { "id": "menu", "texto": "menú", "tareaEnCurso": false, "espera": "determinista" },
+    { "id": "cancelar", "texto": "cancelar", "tareaEnCurso": true, "espera": "determinista" },
+    { "id": "confirmar-si", "texto": "sí", "tareaEnCurso": true, "espera": "determinista" },
+    { "id": "eleccion-numero", "texto": "2", "tareaEnCurso": true, "espera": "determinista" },
+    { "id": "fecha-en-tarea", "texto": "mañana", "tareaEnCurso": true, "espera": "determinista" },
+    { "id": "hora-en-tarea", "texto": "10:00", "tareaEnCurso": true, "espera": "determinista" },
+    { "id": "nombre-en-tarea", "texto": "Ana Pérez", "tareaEnCurso": true, "espera": "determinista" },
+    { "id": "quiero-agendar", "texto": "quiero agendar", "tareaEnCurso": false, "espera": "determinista" },
+    { "id": "pedir-cita", "texto": "necesito una cita para el viernes", "tareaEnCurso": false, "espera": "determinista" },
+    { "id": "reservar", "texto": "me puedes reservar un turno?", "tareaEnCurso": false, "espera": "determinista" },
+    { "id": "apartar-hora", "texto": "quiero apartar una hora", "tareaEnCurso": false, "espera": "determinista" },
+
+    { "id": "precio", "texto": "¿cuánto cuesta un corte de cabello?", "tareaEnCurso": false, "espera": "llm" },
+    { "id": "que-hacen", "texto": "¿qué servicios tienen?", "tareaEnCurso": false, "espera": "llm" },
+    { "id": "duracion", "texto": "¿cuánto se demora el tinte?", "tareaEnCurso": false, "espera": "llm" },
+    { "id": "horario", "texto": "¿a qué hora abren los sábados?", "tareaEnCurso": false, "espera": "llm" },
+    { "id": "parqueadero", "texto": "¿tienen parqueadero?", "tareaEnCurso": false, "espera": "llm" },
+    { "id": "pago", "texto": "¿aceptan tarjeta?", "tareaEnCurso": false, "espera": "llm" },
+    { "id": "libre-larga", "texto": "hola, es la primera vez que escribo, quería saber si atienden niños y qué precios manejan", "tareaEnCurso": false, "espera": "llm" },
+
+    { "id": "sin-nivel4-cae-a-fsm", "texto": "¿cuánto cuesta un corte?", "tareaEnCurso": false, "llmDisponible": false, "espera": "determinista" },
+    { "id": "tarea-manda-sobre-pregunta", "texto": "¿y cuánto cuesta?", "tareaEnCurso": true, "espera": "determinista" }
+  ]
+}

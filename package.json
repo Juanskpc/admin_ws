@@ -41,13 +41,15 @@
     "migrate:reserva-hold": "node migrations/migrate_reserva_hold.js",
     "migrate:platform-idempotencia": "node migrations/migrate_platform_idempotencia.js",
     "migrate:intelligence-ledger": "node migrations/migrate_intelligence_ledger.js",
-    "migrate:intelligence-canal": "node migrations/migrate_intelligence_canal.js"
+    "migrate:intelligence-canal": "node migrations/migrate_intelligence_canal.js",
+    "evaluar": "node scripts/evaluar.js"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "description": "Admin Web Service - Plataforma de administración multi-negocio",
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.117.1",
     "bcrypt": "^6.0.0",
     "bullmq": "^5.70.4",
     "bwip-js": "^4.8.0",

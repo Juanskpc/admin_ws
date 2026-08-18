@@ -71,7 +71,7 @@ let cola = null;
  * Instala el manejador de turnos. Es el punto de extensión del motor y su contrato completo:
  *
  * ```
- * async manejar({ conversacion, mensajes, turno }) => {
+ * async manejar({ conversacion, mensajes, turno, consumo }) => {
  *     pasos?:      [{ tipo, decision, motivo }]   // el porqué, para el Ledger
  *     invocaciones?: [{ capacidad, vertical, argumentos, resultado, errorCodigo, latenciaMs }]
  *                                                 // qué capacidades ejecutó (ADR-022)
@@ -83,6 +83,12 @@ let cola = null;
  *     nivel?:      'determinista' | 'llm' | 'humano'
  * }
  * ```
+ *
+ * `consumo` es un **recolector que aporta el motor**: `consumo.costos.push({...})` por cada
+ * llamada a un modelo (ver `intelligence/model/precios.js` para la forma). Es un array y no un
+ * valor de retorno por una razón de ADR-022: el costo **factura**, y si viajara en la decisión
+ * se perdería justo cuando el manejador falla — que es cuando ya se gastaron los tokens. El
+ * motor lo escribe pase lo que pase, fuera del savepoint. El manejador sigue sin tocar la base.
  *
  * El manejador **no toca la base de datos ni conoce el esquema**: devuelve una decisión y el
  * motor la escribe. Esa frontera es la que permite que F5-D enchufe una FSM y F6 un LLM sin
@@ -258,6 +264,7 @@ async function procesarConversacion(idConversacion, contexto = {}) {
                 errorCodigo: decision.errorCodigo,
                 errorDetalle: decision.errorDetalle,
                 latenciaMs: Date.now() - iniciado,
+                nivel: decision.nivel,
             },
             { transaction: t }
         );
@@ -294,7 +301,13 @@ async function decidir({ conversacion, mensajes, turno, transaction }) {
         resultado: 'resuelto',
         errorCodigo: null,
         errorDetalle: null,
+        nivel: null,
     };
+
+    // Lo que el manejador gastó en modelos. Vive FUERA del savepoint a propósito: si el
+    // manejador revienta después de llamar al LLM, la decisión se pierde pero el gasto ya
+    // ocurrió, y un gasto sin registrar es un agujero en la factura (ADR-022).
+    const consumo = { costos: [] };
 
     try {
         await sequelize.transaction({ transaction }, async (savepoint) => {
@@ -303,6 +316,7 @@ async function decidir({ conversacion, mensajes, turno, transaction }) {
                     conversacion,
                     mensajes,
                     turno,
+                    consumo,
                     // El texto agrupado, que es lo que el debounce existe para producir.
                     texto: mensajes.map((m) => m.contenido).join('\n'),
                 })) || {};
@@ -395,6 +409,10 @@ async function decidir({ conversacion, mensajes, turno, transaction }) {
                 { transaction: savepoint }
             );
 
+            if (decision.nivel) salida.nivel = decision.nivel;
+            // Compatibilidad: un manejador puede devolver sus costos en vez de empujarlos.
+            for (const costo of decision.costos || []) consumo.costos.push(costo);
+
             if (decision.resultado) salida.resultado = decision.resultado;
             if (salida.respuestas.length === 0 && !decision.resultado) {
                 // Un turno que no dice nada no es un turno resuelto. Distinguirlo importa
@@ -420,6 +438,31 @@ async function decidir({ conversacion, mensajes, turno, transaction }) {
             { transaction }
         );
     }
+
+    // Se escribe DESPUÉS del try/catch y en la transacción del turno, no en el savepoint: es
+    // lo único de esta función que sobrevive a que el manejador falle, y tiene que hacerlo.
+    for (const costo of consumo.costos) {
+        await repositorio.registrarCosto(
+            {
+                idTurno: turno.id_turno,
+                idConversacion: conversacion.id_conversacion,
+                idNegocio: conversacion.id_negocio,
+                proveedor: costo.proveedor,
+                modelo: costo.modelo,
+                tokensEntrada: costo.tokensEntrada ?? 0,
+                tokensSalida: costo.tokensSalida ?? 0,
+                tokensCacheLectura: costo.tokensCacheLectura ?? 0,
+                tokensCacheEscritura: costo.tokensCacheEscritura ?? 0,
+                costoUsd: costo.costoUsd,
+                latenciaMs: costo.latenciaMs ?? null,
+            },
+            { transaction }
+        );
+    }
+
+    // Gastar tokens y declararse determinista no puede pasar: la pregunta 12 del Ledger es
+    // justamente el ratio entre los dos, y sería la primera en mentir.
+    if (consumo.costos.length > 0 && salida.nivel !== 'llm') salida.nivel = 'llm';
 
     return salida;
 }

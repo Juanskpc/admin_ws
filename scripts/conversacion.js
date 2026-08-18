@@ -224,7 +224,10 @@ async function comandoVer(opciones) {
         { replacements: { id: conversacion.id_conversacion }, ...SELECT }
     );
     if (salida.n > 0) {
-        console.log(`  ${salida.n} respuesta(s) sin entregar — el Channel Gateway llega en F5-C.`);
+        console.log(
+            `  ${salida.n} respuesta(s) sin entregar — esta CLI no arranca el gateway. ` +
+                'Para verlas entregadas usa el canal real (§4-quater.B de ESTADO-Y-CONTINUACION).'
+        );
     }
     console.log();
 }
@@ -279,6 +282,14 @@ async function main() {
         const manejador = opciones.eco
             ? intelligence.manejadorEco.manejarEco
             : intelligence.manejadorDeterminista.manejarDeterminista;
+
+        // El catálogo de capacidades es código (el manifiesto del adaptador) y hay que
+        // registrarlo antes de que la FSM invoque nada: sin esto el Policy Gate deniega con
+        // CAPACIDAD_NO_EXISTE aunque `capacidad.js listar` la muestre —ésa la registra por su
+        // cuenta—. No hizo falta hasta F5-D porque el eco no invoca capacidades, y los tests de
+        // la FSM inyectan el Gate. `arrancar()` es idempotente a propósito.
+        intelligence.arrancar();
+
         await intelligence.arrancarMotor(manejador, { recuperar: false });
     }
 

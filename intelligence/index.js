@@ -42,6 +42,7 @@ function arrancar() {
 /** Solo para tests: vuelve al estado previo al arranque. */
 function _reiniciar() {
     registry._limpiar();
+    require('./model/puerto')._limpiar();
     motor._reiniciar();
     gateway.detener();
     gateway.limpiar();
@@ -71,6 +72,74 @@ async function arrancarMotor(manejador, { recuperar = true } = {}) {
 }
 
 /**
+ * Monta la escalera de costo con su Nivel 4, si hay con qué (F6, ADR-018).
+ *
+ * ## Por qué esto vive aquí y no en el manejador
+ *
+ * Es composición: elegir proveedor es exactamente lo que el resto del núcleo no puede hacer. El
+ * manejador de Nivel 4 recibe un adaptador ya construido y no sabe de quién es; `orquestador.js`
+ * decide niveles sin saber qué modelo los sirve. La única línea del proyecto que dice
+ * «Anthropic» fuera del propio adaptador está aquí abajo.
+ *
+ * ## Degrada, no revienta
+ *
+ * Sin `ANTHROPIC_API_KEY` —o con `LLM_HABILITADO=false`— devuelve la escalera **de un solo
+ * peldaño**, que es literalmente el sistema de F5 y sigue siendo correcto: se contesta con la
+ * FSM, gratis, y el Ledger lo registra como determinista. Un backend que no arranca porque falta
+ * una clave de un modelo convertiría una capacidad opcional (ADR-005) en un requisito.
+ *
+ * @returns {{manejador: Function, nivel4: string|null}}
+ */
+function montarEscalera({ adaptador = null } = {}) {
+    const { crearManejadorEscalera } = require('./engine/manejadorEscalera');
+    const { manejarDeterminista } = require('./engine/manejadorDeterminista');
+
+    const habilitado = process.env.LLM_HABILITADO !== 'false';
+    const hayCredencial = Boolean(process.env.ANTHROPIC_API_KEY);
+
+    if (!adaptador && (!habilitado || !hayCredencial)) {
+        console.log(
+            `[intelligence] Nivel 4 apagado (${!habilitado ? 'LLM_HABILITADO=false' : 'sin ANTHROPIC_API_KEY'}). ` +
+                'La escalera se queda en el Nivel 1 determinista: $0.00 por turno.'
+        );
+        return { manejador: crearManejadorEscalera({ determinista: manejarDeterminista }), nivel4: null };
+    }
+
+    const { crearAdaptadorAnthropic } = require('./model/adaptadores/anthropic');
+    const { crearManejadorLlm, CONFIG } = require('./engine/manejadorLlm');
+    const puerto = require('./model/puerto');
+    const precios = require('./model/precios');
+
+    const elegido = adaptador || crearAdaptadorAnthropic();
+
+    // Un modelo que se puede ejecutar y no se puede facturar es peor que uno que no se puede
+    // ejecutar: el turno sale, el costo no, y la pregunta 1 del Ledger empieza a mentir sin que
+    // nadie lo note. Se comprueba al arrancar y no en el primer turno.
+    for (const modelo of elegido.modelos) {
+        if (!precios.modelosConocidos().includes(modelo)) {
+            throw new Error(
+                `El adaptador "${elegido.nombre}" sirve el modelo "${modelo}" y precios.js no ` +
+                    'tiene su tarifa. Un turno ejecutable y no facturable rompe ADR-022.'
+            );
+        }
+    }
+
+    puerto.registrarAdaptador(elegido);
+    const llm = crearManejadorLlm({ adaptador: elegido });
+
+    console.log(
+        `[intelligence] Nivel 4 montado: ${elegido.nombre}/${CONFIG.modelo} ` +
+            `(esfuerzo ${CONFIG.esfuerzo}, tope ${CONFIG.maxCentavosPorTurno} centavos por turno). ` +
+            'Solo capacidades de CONSULTA.'
+    );
+
+    return {
+        manejador: crearManejadorEscalera({ determinista: manejarDeterminista, llm }),
+        nivel4: `${elegido.nombre}/${CONFIG.modelo}`,
+    };
+}
+
+/**
  * Arranca los canales (F5-C): registra los adaptadores y pone en marcha el entregador.
  *
  * La lista de canales vive **aquí y en ningún otro sitio**, por la misma razón que la de
@@ -91,6 +160,7 @@ module.exports = {
     arrancar,
     arrancarMotor,
     arrancarCanales,
+    montarEscalera,
     _reiniciar,
     registry,
     policyGate: require('./core/policyGate'),
@@ -103,4 +173,9 @@ module.exports = {
     /** El motor determinista de F5-D (ADR-015). Es el manejador de verdad. */
     manejadorDeterminista: require('./engine/manejadorDeterminista'),
     identidad: require('./engine/identidad'),
+    /** El `ModelPort` y su alrededor (F6). El núcleo nunca importa el SDK de un proveedor. */
+    modelPort: require('./model/puerto'),
+    orquestador: require('./model/orquestador'),
+    promptBuilder: require('./model/promptBuilder'),
+    precios: require('./model/precios'),
 };

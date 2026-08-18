@@ -38,16 +38,37 @@ const allowedOrigins = (process.env.CORS_ORIGIN || 'http://localhost:4002,http:/
     .split(',')
     .map(o => o.trim());
 
-app.use(cors({
-    origin: (origin, callback) => {
-        // Permitir peticiones sin origin (Postman, curl, server-to-server)
-        if (!origin) return callback(null, true);
-        if (allowedOrigins.includes(origin)) return callback(null, true);
-        callback(new Error(`CORS: origen no permitido — ${origin}`));
-    },
-    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
-    credentials: true,
+// Se resuelve por petición (forma `cors(fn)`) para poder comparar el Origin con el host real
+// que atendió la petición, cosa que la forma estática no permite.
+app.use(cors((req, callback) => {
+    // Una petición cuyo Origin es el propio servidor NO es cross-origin: el navegador ya la
+    // permite y CORS no gobierna ese caso. Hay que declararlo porque el widget del WebChat se
+    // sirve desde este mismo backend (/intelligence/webchat/) y Chrome manda Origin también en
+    // un POST del mismo origen — así que el servidor se rechazaba a sí mismo. Meter
+    // "http://localhost:3000" en el allowlist habría tapado el síntoma en local y repetido el
+    // fallo en producción, donde el origen propio es otro. Detrás de Caddy esto depende de
+    // `trust proxy` (ya activo más abajo) para que req.protocol sea el de fuera, no el interno.
+    const origenPropio = `${req.protocol}://${req.headers.host}`;
+
+    callback(null, {
+        origin: (origin, cb) => {
+            // Peticiones sin origin: Postman, curl, server-to-server.
+            if (!origin) return cb(null, true);
+            if (origin === origenPropio) return cb(null, true);
+            if (allowedOrigins.includes(origin)) return cb(null, true);
+
+            const error = new Error(`CORS: origen no permitido — ${origin}`);
+            error.code = 'CORS_ORIGEN_NO_PERMITIDO';
+            // 403, no 500: un origen fuera del allowlist es un cliente equivocado, no una
+            // avería del servidor. Como 500, ensuciaba los logs de errores y cualquier alerta
+            // basada en 5xx con lo que en realidad es una configuración de frontend.
+            error.statusCode = 403;
+            cb(error);
+        },
+        methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
+        allowedHeaders: ['Content-Type', 'Authorization'],
+        credentials: true,
+    });
 }));
 
 // Rate limiting global:
@@ -187,13 +208,30 @@ app.use(errorHandler);
             // encender un motor sin combustible.
             if (intelligenceHabilitado) {
                 const intelligence = require('./intelligence');
-                // El manejador es todavía el andamio de eco: el motor determinista es F5-D.
+
+                // Registrar el catálogo va PRIMERO: el manejador determinista invoca
+                // capacidades y sin esto el Policy Gate deniega con CAPACIDAD_NO_EXISTE.
+                intelligence.arrancar();
+
+                // Desde F5-D conduce la FSM determinista. Hasta 2026-08-13 esto seguía
+                // montando el andamio de eco: el test e2e monta su propia composición
+                // (`arrancar()` + `registrarManejador`) y nunca arranca este archivo, así que
+                // la suite quedaba verde mientras el canal real contestaba «Recibí 1
+                // mensaje(s)». Si algún día se añade otro manejador, este es el único sitio
+                // donde se elige — el motor sigue sin decidir qué se contesta.
+                // Desde F6 lo que se monta es la ESCALERA (ADR-018), no un manejador suelto:
+                // Nivel 1 determinista siempre, Nivel 4 solo si hay credencial. Es el mismo
+                // sitio y el mismo motivo que en F5-D — si esto vuelve a divergir de lo que
+                // ejercitan los tests, el canal real contestará algo que la suite nunca vio.
+                const escalera = intelligence.montarEscalera();
+
                 intelligence
-                    .arrancarMotor(intelligence.manejadorEco.manejarEco)
+                    .arrancarMotor(escalera.manejador)
                     .then(() => {
                         const canales = intelligence.arrancarCanales();
                         console.log(
                             `[intelligence] HTTP en /intelligence — canal(es): ${canales.join(', ')}. ` +
+                                `Escalera: nivel 1 + ${escalera.nivel4 || 'sin nivel 4'}. ` +
                                 'Widget de pruebas en /intelligence/webchat/'
                         );
                     })
@@ -205,7 +243,21 @@ app.use(errorHandler);
             }
         });
     } catch (error) {
-        console.error('Error al iniciar el servidor:', error.message);
+        // `error.message` puede venir vacio: pg deja ECONNREFUSED solo en `code` y Sequelize
+        // copia el mensaje vacio tal cual, asi que el log salia como «Error al iniciar el
+        // servidor:» a secas. Se imprime tambien el nombre y el codigo del error original.
+        const codigo = error.original?.code || error.parent?.code || error.code;
+        const detalle = [error.name, error.message, codigo && `(${codigo})`]
+            .filter(Boolean)
+            .join(' ');
+        console.error('Error al iniciar el servidor:', detalle || error);
+        if (codigo === 'ECONNREFUSED') {
+            console.error(
+                `  → No hay nadie escuchando en ${process.env.DB_HOST}:${process.env.DB_PORT}. ` +
+                    'Si DB_PORT=5433 es la base compartida del VPS: abre el tunel con ' +
+                    '`ssh -f -N -o ExitOnForwardFailure=yes -L 5433:localhost:5432 escalapp`.'
+            );
+        }
         process.exit(1);
     }
 })();

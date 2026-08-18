@@ -258,6 +258,49 @@ async function mensajesPendientes(idConversacion, { ventanaDias, transaction }) 
     );
 }
 
+/**
+ * El historial reciente de la conversación, para dárselo al modelo (F6, ADR-019).
+ *
+ * ## Por qué NO se lee todo
+ *
+ * Una conversación de WhatsApp puede llevar meses. Mandarla entera cada turno es caro, y además
+ * es contraproducente: lo de hace tres semanas no ayuda a contestar lo de ahora y sí desplaza al
+ * contexto útil. `limite` acota por número de mensajes y no por tokens a propósito — contar
+ * tokens exigiría una llamada al proveedor solo para decidir qué mandarle, que es peor negocio.
+ *
+ * ## Por qué se excluyen los mensajes del turno en curso
+ *
+ * Los pendientes ya se los llevó `mensajesPendientes()` y el manejador los recibe aparte, como
+ * el mensaje **nuevo**. Si además salieran aquí, el modelo vería el mensaje del cliente dos
+ * veces: una en el historial y otra al final. Se filtran por `id_turno`, que a estas alturas del
+ * turno ya está asignado (`asignarMensajesATurno` corre antes de decidir).
+ *
+ * Los salientes sin entregar sí entran: el cliente aún no los ha visto, pero el asistente ya los
+ * dijo, y omitirlos haría que se repitiera.
+ */
+async function historialReciente(idConversacion, { idTurno = null, limite = 20, transaction = null }) {
+    const filas = await sequelize.query(
+        `
+        SELECT direccion, contenido
+          FROM (
+            SELECT direccion, contenido, COALESCE(enviado_en, creado_en) AS orden, creado_en, id_mensaje
+              FROM intelligence.mensaje
+             WHERE id_conversacion = :idConversacion
+               AND (:idTurno::uuid IS NULL OR id_turno IS DISTINCT FROM :idTurno::uuid)
+             ORDER BY orden DESC, creado_en DESC, id_mensaje DESC
+             LIMIT :limite
+          ) reciente
+         ORDER BY orden, creado_en, id_mensaje;
+        `,
+        { replacements: { idConversacion, idTurno, limite }, transaction, ...SELECT }
+    );
+
+    return filas.map((f) => ({
+        rol: f.direccion === 'entrante' ? 'cliente' : 'asistente',
+        texto: f.contenido,
+    }));
+}
+
 async function asignarMensajesATurno(mensajes, idTurno, { transaction }) {
     if (mensajes.length === 0) return;
 
@@ -426,9 +469,20 @@ async function abrirTurno(
     );
 }
 
+/**
+ * Cierra el turno con su resultado y —desde F6— con el **nivel que lo resolvió**.
+ *
+ * El nivel se escribe al cerrar y no al abrir porque al abrir todavía no se sabe: la escalera de
+ * ADR-018 la recorre el manejador, que empieza por el Nivel 1 y solo escala si hace falta. Un
+ * `nivel` fijado al abrir sería una predicción, y la pregunta 12 del Ledger (ratio
+ * determinista-vs-IA) necesita el hecho.
+ *
+ * `nivel = null` deja el valor con el que se abrió el turno (`determinista`), que es lo correcto
+ * para un manejador que no escala y para un turno que falló antes de decidir nada.
+ */
 async function cerrarTurno(
     turno,
-    { resultado, errorCodigo = null, errorDetalle = null, latenciaMs },
+    { resultado, errorCodigo = null, errorDetalle = null, latenciaMs, nivel = null },
     { transaction }
 ) {
     // Se comprueba el número de filas porque el modo en que esto falla es **en silencio**:
@@ -442,6 +496,7 @@ async function cerrarTurno(
                error_codigo = :errorCodigo,
                error_detalle = :errorDetalle,
                latencia_ms = :latenciaMs,
+               nivel = COALESCE(:nivel, nivel),
                terminado_en = now()
          WHERE id_turno = :idTurno AND creado_en = CAST(:creadoEn AS timestamptz);
         `,
@@ -454,6 +509,7 @@ async function cerrarTurno(
                 errorCodigo,
                 errorDetalle: errorDetalle ? String(errorDetalle).slice(0, 2000) : null,
                 latenciaMs,
+                nivel,
             },
             transaction,
         }
@@ -558,6 +614,79 @@ async function registrarInvocacion(
 }
 
 /**
+ * El consumo de un modelo en este turno (ADR-022, preguntas 1-4: costo por conversación, por
+ * negocio, modelo usado y tokens).
+ *
+ * ## Por qué el costo se escribe DENTRO de la transacción del turno
+ *
+ * ADR-022 separa dos cosas que se implementan igual de fácil y se rompen distinto: los logs se
+ * pueden perder y esto no, porque **factura**. Va en la misma transacción que el turno, así que
+ * o están los dos o no está ninguno; nunca un turno cuyo costo se perdió por un fallo posterior.
+ *
+ * El caso contrario —costo sin turno— tampoco puede ocurrir, y no por casualidad: el turno se
+ * abre y confirma antes de que se llame al modelo.
+ *
+ * ⚠️ `costoUsd` llega como **cadena**, no como número, y así se manda al driver. La columna es
+ * `numeric(14,8)` justo para que no la toque un `double`; convertirla a `Number` aquí para «que
+ * quede más limpio» deshace la precaución entera (ver `intelligence/model/precios.js`).
+ *
+ * Una fila por llamada al modelo, no por turno: un turno con bucle de capacidades llama varias
+ * veces, cada una con su uso, y sumarlas en memoria antes de escribir perdería el detalle que
+ * responde «¿cuántas vueltas dio y cuánto costó cada una?».
+ */
+async function registrarCosto(
+    {
+        idTurno,
+        idConversacion,
+        idNegocio,
+        proveedor,
+        modelo,
+        tokensEntrada = 0,
+        tokensSalida = 0,
+        tokensCacheLectura = 0,
+        tokensCacheEscritura = 0,
+        costoUsd,
+        latenciaMs = null,
+    },
+    { transaction }
+) {
+    if (typeof costoUsd !== 'string') {
+        throw new Error(
+            `El costo del turno ${idTurno} llegó como ${typeof costoUsd} y debe ser una cadena ` +
+                'decimal. Ver intelligence/model/precios.js: el número no pasa por coma flotante.'
+        );
+    }
+
+    await sequelize.query(
+        `
+        INSERT INTO intelligence.costo
+            (id_turno, id_conversacion, id_negocio, proveedor, modelo,
+             tokens_entrada, tokens_salida, tokens_cache_lectura, tokens_cache_escritura,
+             costo_usd, latencia_ms)
+        VALUES (:idTurno, :idConversacion, :idNegocio, :proveedor, :modelo,
+                :tokensEntrada, :tokensSalida, :tokensCacheLectura, :tokensCacheEscritura,
+                CAST(:costoUsd AS numeric), :latenciaMs);
+        `,
+        {
+            replacements: {
+                idTurno,
+                idConversacion,
+                idNegocio,
+                proveedor,
+                modelo,
+                tokensEntrada,
+                tokensSalida,
+                tokensCacheLectura,
+                tokensCacheEscritura,
+                costoUsd,
+                latenciaMs,
+            },
+            transaction,
+        }
+    );
+}
+
+/**
  * Turnos que se quedaron en `procesando`: el proceso murió con la transacción abierta, así
  * que Postgres deshizo sus escrituras pero la fila del turno —escrita y confirmada al
  * abrirlo— quedó huérfana.
@@ -628,11 +757,13 @@ module.exports = {
     reclamarSalientesPendientes,
     marcarEntrega,
     mensajesPendientes,
+    historialReciente,
     asignarMensajesATurno,
     abrirTurno,
     cerrarTurno,
     registrarPaso,
     registrarInvocacion,
+    registrarCosto,
     recuperarTurnosColgados,
     conversacionesConPendientes,
 };

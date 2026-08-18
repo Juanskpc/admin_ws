@@ -29,6 +29,15 @@ const SERVICIOS = {
     ],
 };
 
+/**
+ * Lo que la FSM guarda en `tarea_datos` al pintar el menú, para poder resolver la respuesta
+ * contra la lista real en vez de sacar un número del texto libre.
+ */
+const SERVICIOS_OFRECIDOS = SERVICIOS.servicios.map((s) => ({
+    id: s.id_servicio,
+    nombre: s.nombre,
+}));
+
 const DISPONIBILIDAD = {
     fecha: '2026-08-20',
     duracion_min: 30,
@@ -75,6 +84,23 @@ function identidadFalsa({ nombre = null, telefono = null } = {}) {
     };
 }
 
+/**
+ * Contexto del inquilino. Se dobla como el Gate y el resolver para que la suite siga corriendo
+ * sin Postgres: es lo único nuevo del saludo que toca la base.
+ */
+const NEGOCIO_FALSO = {
+    async obtener() {
+        return { id: 7, nombre: 'Barbería Don Nico', tratamiento: 'Barbería Don Nico' };
+    },
+};
+
+/** Un negocio que no se pudo leer: el saludo tiene que seguir siendo una frase, no «null». */
+const NEGOCIO_ANONIMO = {
+    async obtener() {
+        return { id: null, nombre: null, tratamiento: 'el negocio' };
+    },
+};
+
 function conversacion({ variables = {}, tarea = null, datos = {} } = {}) {
     return {
         id_conversacion: 'conv-1',
@@ -103,7 +129,7 @@ const gateCompleto = () =>
 describe('agendar una cita de principio a fin', () => {
     test('cinco turnos: servicio, fecha, hora, nombre, confirmar', async () => {
         const gate = gateCompleto();
-        const manejar = crearManejadorDeterminista({ gate, identidad: identidadFalsa() });
+        const manejar = crearManejadorDeterminista({ gate, contextoNegocio: NEGOCIO_FALSO, identidad: identidadFalsa() });
 
         // 1. Saluda → menú de servicios
         let conv = conversacion();
@@ -144,7 +170,7 @@ describe('agendar una cita de principio a fin', () => {
         const gate = gateCompleto();
         const manejar = crearManejadorDeterminista({
             gate,
-            identidad: identidadFalsa({ nombre: 'Nicolás', telefono: '+573114682492' }),
+            contextoNegocio: NEGOCIO_FALSO, identidad: identidadFalsa({ nombre: 'Nicolás', telefono: '+573114682492' }),
         });
 
         const conv = conversacion({
@@ -162,7 +188,7 @@ describe('agendar una cita de principio a fin', () => {
         const gate = gateCompleto();
         const manejar = crearManejadorDeterminista({
             gate,
-            identidad: identidadFalsa({ nombre: 'Nicolás', telefono: '+573114682492' }),
+            contextoNegocio: NEGOCIO_FALSO, identidad: identidadFalsa({ nombre: 'Nicolás', telefono: '+573114682492' }),
         });
 
         const conv = conversacion({
@@ -176,6 +202,66 @@ describe('agendar una cita de principio a fin', () => {
     });
 });
 
+// ── Quién habla ─────────────────────────────────────────────────────────────────────────
+
+describe('el saludo dice a qué negocio escribiste', () => {
+    const texto = (d) => (typeof d.respuestas[0] === 'string' ? d.respuestas[0] : d.respuestas[0].texto);
+
+    test('en el primer contacto se presenta con el nombre del negocio', async () => {
+        const manejar = crearManejadorDeterminista({
+            gate: gateCompleto(),
+            contextoNegocio: NEGOCIO_FALSO,
+            identidad: identidadFalsa(),
+        });
+        const d = await manejar(entrada('hola', conversacion()));
+
+        expect(texto(d)).toContain('Barbería Don Nico');
+        expect(d.respuestas[0].opciones).toHaveLength(2); // sigue ofreciendo, no gasta un turno
+    });
+
+    test('a quien ya conoce lo saluda por su nombre', async () => {
+        const manejar = crearManejadorDeterminista({
+            gate: gateCompleto(),
+            contextoNegocio: NEGOCIO_FALSO,
+            identidad: identidadFalsa(),
+        });
+        const d = await manejar(entrada('hola', conversacion({ variables: { nombre: 'Ana' } })));
+
+        expect(texto(d)).toContain('Ana');
+        expect(texto(d)).toContain('Barbería Don Nico');
+    });
+
+    test('sin nombre de negocio dice una frase, nunca "null"', async () => {
+        const manejar = crearManejadorDeterminista({
+            gate: gateCompleto(),
+            contextoNegocio: NEGOCIO_ANONIMO,
+            identidad: identidadFalsa(),
+        });
+        const d = await manejar(entrada('hola', conversacion()));
+
+        expect(texto(d)).not.toMatch(/null|undefined/);
+        expect(texto(d)).toContain('el negocio');
+    });
+
+    test('volver al menú a mitad de una tarea NO vuelve a saludar', async () => {
+        // Repetir «¡Hola! Te comunicas con…» a quien lleva cinco turnos hablando suena a que
+        // el bot se olvidó de él.
+        const manejar = crearManejadorDeterminista({
+            gate: gateCompleto(),
+            contextoNegocio: NEGOCIO_FALSO,
+            identidad: identidadFalsa(),
+        });
+        const conv = conversacion({
+            tarea: TAREA_AGENDAR,
+            datos: { paso: PASO.FECHA, id_servicio: 1, ofrecidos: SERVICIOS_OFRECIDOS },
+        });
+        const d = await manejar(entrada('menu', conv));
+
+        expect(texto(d)).not.toContain('Te comunicas con');
+        expect(d.respuestas[0].opciones).toHaveLength(2); // pero sí reofrece el menú
+    });
+});
+
 // ── Lo hostil ───────────────────────────────────────────────────────────────────────────
 
 describe('el hold caduca mientras el cliente decide', () => {
@@ -184,7 +270,7 @@ describe('el hold caduca mientras el cliente decide', () => {
             code: 'HOLD_NO_VIGENTE',
         });
         const gate = gateFalso({ reservar_turno: caducado });
-        const manejar = crearManejadorDeterminista({ gate, identidad: identidadFalsa() });
+        const manejar = crearManejadorDeterminista({ gate, contextoNegocio: NEGOCIO_FALSO, identidad: identidadFalsa() });
 
         const conv = conversacion({
             tarea: TAREA_AGENDAR,
@@ -202,7 +288,7 @@ describe('el hold caduca mientras el cliente decide', () => {
         // Tragarse cualquier excepción convertiría una avería real en un mensaje amable y
         // el Ledger no registraría nada. Solo el hold caducado es conversación.
         const gate = gateFalso({ reservar_turno: new Error('la base se cayó') });
-        const manejar = crearManejadorDeterminista({ gate, identidad: identidadFalsa() });
+        const manejar = crearManejadorDeterminista({ gate, contextoNegocio: NEGOCIO_FALSO, identidad: identidadFalsa() });
 
         const conv = conversacion({
             tarea: TAREA_AGENDAR,
@@ -220,9 +306,16 @@ describe('entradas que no están en el menú', () => {
         [PASO.CONFIRMAR, 'mmm'],
     ])('en el paso %s repregunta sin perder la tarea', async (pasoActual, texto) => {
         const gate = gateCompleto();
-        const manejar = crearManejadorDeterminista({ gate, identidad: identidadFalsa() });
+        const manejar = crearManejadorDeterminista({ gate, contextoNegocio: NEGOCIO_FALSO, identidad: identidadFalsa() });
 
-        const datos = { paso: pasoActual, id_servicio: 1, fecha: '2026-08-20', codigo_hold: 'H', nombre: 'Ana' };
+        const datos = {
+            paso: pasoActual,
+            id_servicio: 1,
+            fecha: '2026-08-20',
+            codigo_hold: 'H',
+            nombre: 'Ana',
+            ofrecidos: SERVICIOS_OFRECIDOS,
+        };
         const d = await manejar(entrada(texto, conversacion({ tarea: TAREA_AGENDAR, datos })));
 
         expect(d.pasos[0].decision).toBe('entrada_no_entendida');
@@ -230,7 +323,7 @@ describe('entradas que no están en el menú', () => {
     });
 
     test('un nombre de una sola letra no se acepta', async () => {
-        const manejar = crearManejadorDeterminista({ gate: gateCompleto(), identidad: identidadFalsa() });
+        const manejar = crearManejadorDeterminista({ gate: gateCompleto(), contextoNegocio: NEGOCIO_FALSO, identidad: identidadFalsa() });
         const datos = { paso: PASO.NOMBRE, id_servicio: 1, fecha: '2026-08-20', hora: '10:00' };
         const d = await manejar(entrada('x', conversacion({ tarea: TAREA_AGENDAR, datos })));
 
@@ -242,7 +335,7 @@ describe('entradas que no están en el menú', () => {
             consultar_disponibilidad: { fecha: '2026-08-20', horas: [] },
             consultar_servicios: SERVICIOS,
         });
-        const manejar = crearManejadorDeterminista({ gate, identidad: identidadFalsa() });
+        const manejar = crearManejadorDeterminista({ gate, contextoNegocio: NEGOCIO_FALSO, identidad: identidadFalsa() });
 
         const datos = { paso: PASO.FECHA, id_servicio: 1 };
         const d = await manejar(entrada('2026-08-20', conversacion({ tarea: TAREA_AGENDAR, datos })));
@@ -254,7 +347,7 @@ describe('entradas que no están en el menú', () => {
 
 describe('salir y volver', () => {
     test('cancelar manda en cualquier paso y cierra la tarea', async () => {
-        const manejar = crearManejadorDeterminista({ gate: gateCompleto(), identidad: identidadFalsa() });
+        const manejar = crearManejadorDeterminista({ gate: gateCompleto(), contextoNegocio: NEGOCIO_FALSO, identidad: identidadFalsa() });
 
         for (const pasoActual of Object.values(PASO)) {
             const conv = conversacion({ tarea: TAREA_AGENDAR, datos: { paso: pasoActual } });
@@ -267,7 +360,7 @@ describe('salir y volver', () => {
     test('«seguimos» retoma el paso exacto donde se quedó', async () => {
         // Es el «lo dejamos a medias el martes» de ADR-014: la tarea vive en la fila de la
         // conversación, así que esto vale igual tras reiniciar el proceso.
-        const manejar = crearManejadorDeterminista({ gate: gateCompleto(), identidad: identidadFalsa() });
+        const manejar = crearManejadorDeterminista({ gate: gateCompleto(), contextoNegocio: NEGOCIO_FALSO, identidad: identidadFalsa() });
         const datos = { paso: PASO.HORA, id_servicio: 1, fecha: '2026-08-20' };
         const d = await manejar(entrada('seguimos', conversacion({ tarea: TAREA_AGENDAR, datos })));
 
@@ -277,7 +370,7 @@ describe('salir y volver', () => {
 
     test('una tarea con un paso desconocido vuelve al menú en vez de reventar', async () => {
         // Pasa al desplegar una FSM nueva con conversaciones vivas a medias.
-        const manejar = crearManejadorDeterminista({ gate: gateCompleto(), identidad: identidadFalsa() });
+        const manejar = crearManejadorDeterminista({ gate: gateCompleto(), contextoNegocio: NEGOCIO_FALSO, identidad: identidadFalsa() });
         // Con un texto cualquiera, no con un comando: «hola» es MENU y saldría por otra rama.
         const conv = conversacion({ tarea: TAREA_AGENDAR, datos: { paso: 'paso_de_otra_version' } });
         const d = await manejar(entrada('lo que sea', conv));
@@ -292,7 +385,7 @@ describe('salir y volver', () => {
 describe('idempotencia y capacidades', () => {
     test('la clave de idempotencia es el id del turno', async () => {
         const gate = gateCompleto();
-        const manejar = crearManejadorDeterminista({ gate, identidad: identidadFalsa({ nombre: 'Ana' }) });
+        const manejar = crearManejadorDeterminista({ gate, contextoNegocio: NEGOCIO_FALSO, identidad: identidadFalsa({ nombre: 'Ana' }) });
 
         const datos = { paso: PASO.CONFIRMAR, fecha: '2026-08-20', hora: '10:00', codigo_hold: 'H', nombre: 'Ana' };
         await manejar(entrada('sí', conversacion({ tarea: TAREA_AGENDAR, datos }), { id_turno: 'turno-42' }));
@@ -305,7 +398,7 @@ describe('idempotencia y capacidades', () => {
         // (negocio, capacidad, clave), así que repetir capacidad dentro de un turno haría
         // que la segunda llamada recibiera el resultado de la primera.
         const gate = gateCompleto();
-        const manejar = crearManejadorDeterminista({ gate, identidad: identidadFalsa({ nombre: 'Ana' }) });
+        const manejar = crearManejadorDeterminista({ gate, contextoNegocio: NEGOCIO_FALSO, identidad: identidadFalsa({ nombre: 'Ana' }) });
 
         const pasosDeLaTarea = [
             [{ paso: PASO.SERVICIO }, '1'],
@@ -328,7 +421,7 @@ describe('idempotencia y capacidades', () => {
         // `proponer_turno` vuelve a elegir y puede caer en uno que acaba de ocuparse —
         // SLOT_NO_DISPONIBLE sobre una hora que el propio bot acababa de ofrecer.
         const gate = gateCompleto();
-        const manejar = crearManejadorDeterminista({ gate, identidad: identidadFalsa({ nombre: 'Ana' }) });
+        const manejar = crearManejadorDeterminista({ gate, contextoNegocio: NEGOCIO_FALSO, identidad: identidadFalsa({ nombre: 'Ana' }) });
 
         const datos = {
             paso: PASO.HORA,
@@ -344,7 +437,7 @@ describe('idempotencia y capacidades', () => {
 
     test('sin profesional conocido no lo inventa: deja elegir al adaptador', async () => {
         const gate = gateCompleto();
-        const manejar = crearManejadorDeterminista({ gate, identidad: identidadFalsa({ nombre: 'Ana' }) });
+        const manejar = crearManejadorDeterminista({ gate, contextoNegocio: NEGOCIO_FALSO, identidad: identidadFalsa({ nombre: 'Ana' }) });
 
         const datos = { paso: PASO.HORA, id_servicio: 1, fecha: '2026-08-20' };
         await manejar(entrada('10:00', conversacion({ tarea: TAREA_AGENDAR, datos })));
@@ -355,7 +448,7 @@ describe('idempotencia y capacidades', () => {
 
     test('toda invocación lleva el Principal y el negocio de la conversación', async () => {
         const gate = gateCompleto();
-        const manejar = crearManejadorDeterminista({ gate, identidad: identidadFalsa() });
+        const manejar = crearManejadorDeterminista({ gate, contextoNegocio: NEGOCIO_FALSO, identidad: identidadFalsa() });
         await manejar(entrada('hola', conversacion()));
 
         expect(gate.llamadas[0].idNegocio).toBe(7);
@@ -369,7 +462,7 @@ describe('texto agrupado por el debounce', () => {
     // entero contra «sí» no casaba y la cita no se creaba.
     test('tres «sí» seguidos confirman', async () => {
         const gate = gateCompleto();
-        const manejar = crearManejadorDeterminista({ gate, identidad: identidadFalsa() });
+        const manejar = crearManejadorDeterminista({ gate, contextoNegocio: NEGOCIO_FALSO, identidad: identidadFalsa() });
         const datos = { paso: PASO.CONFIRMAR, fecha: '2026-08-20', hora: '10:00', codigo_hold: 'H', nombre: 'Ana' };
         const d = await manejar(entrada('sí\nsí\nsí', conversacion({ tarea: TAREA_AGENDAR, datos })));
 
@@ -378,7 +471,7 @@ describe('texto agrupado por el debounce', () => {
 
     test('manda la ÚLTIMA línea, que es la intención actual', async () => {
         // «cancelar… no, espera» no debe cancelar: si valiera cualquier línea, sí lo haría.
-        const manejar = crearManejadorDeterminista({ gate: gateCompleto(), identidad: identidadFalsa() });
+        const manejar = crearManejadorDeterminista({ gate: gateCompleto(), contextoNegocio: NEGOCIO_FALSO, identidad: identidadFalsa() });
         const conv = conversacion({ tarea: TAREA_AGENDAR, datos: { paso: PASO.CONFIRMAR, codigo_hold: 'H', nombre: 'Ana', fecha: '2026-08-20', hora: '10:00' } });
         const d = await manejar(entrada('cancelar\nno, espera\nsí', conv));
 
@@ -386,17 +479,40 @@ describe('texto agrupado por el debounce', () => {
     });
 
     test('un cambio de opinión en la ráfaga elige lo último', async () => {
-        const manejar = crearManejadorDeterminista({ gate: gateCompleto(), identidad: identidadFalsa() });
-        const conv = conversacion({ tarea: TAREA_AGENDAR, datos: { paso: PASO.SERVICIO } });
+        const manejar = crearManejadorDeterminista({ gate: gateCompleto(), contextoNegocio: NEGOCIO_FALSO, identidad: identidadFalsa() });
+        const conv = conversacion({
+            tarea: TAREA_AGENDAR,
+            datos: { paso: PASO.SERVICIO, ofrecidos: SERVICIOS_OFRECIDOS },
+        });
         const d = await manejar(entrada('1\nmejor 2', conv));
 
         expect(d.tarea.datos.id_servicio).toBe(2);
     });
 
+    test('pulsar un chip manda el id, no la etiqueta con su "(30 min)"', async () => {
+        // La regresión que rompió el agendamiento desde el navegador: el widget mandaba la
+        // etiqueta y el motor sacaba «el primer número», así que «Corte de cabello (30 min) —
+        // $35.000» se leía como el servicio 30. La conversación seguía y solo fallaba tres
+        // pasos después, sin horas libres ningún día.
+        const manejar = crearManejadorDeterminista({ gate: gateCompleto(), contextoNegocio: NEGOCIO_FALSO, identidad: identidadFalsa() });
+        const conv = conversacion({
+            tarea: TAREA_AGENDAR,
+            datos: { paso: PASO.SERVICIO, ofrecidos: SERVICIOS_OFRECIDOS },
+        });
+
+        // Lo que manda el chip arreglado.
+        const porId = await manejar(entrada('1', conv));
+        expect(porId.tarea.datos.id_servicio).toBe(1);
+
+        // Y aunque llegue la etiqueta entera, manda el NOMBRE, nunca el 30 de «(30 min)».
+        const porEtiqueta = await manejar(entrada('Corte de cabello (30 min) — $35.000', conv));
+        expect(porEtiqueta.tarea.datos.id_servicio).toBe(1);
+    });
+
     test('un nombre partido en dos mensajes se une, no se recorta', async () => {
         // La excepción a la regla: «Nicolás\nPaez» son dos trozos de UN nombre, no dos
         // intenciones distintas.
-        const manejar = crearManejadorDeterminista({ gate: gateCompleto(), identidad: identidadFalsa() });
+        const manejar = crearManejadorDeterminista({ gate: gateCompleto(), contextoNegocio: NEGOCIO_FALSO, identidad: identidadFalsa() });
         const datos = { paso: PASO.NOMBRE, id_servicio: 1, fecha: '2026-08-20', hora: '10:00' };
         const d = await manejar(entrada('Nicolás\nPaez', conversacion({ tarea: TAREA_AGENDAR, datos })));
 
@@ -419,7 +535,7 @@ describe('rastro para el Ledger (ADR-022)', () => {
                     return { ...r, vertical: 'reserva' };
                 },
             },
-            identidad: identidadFalsa(),
+            contextoNegocio: NEGOCIO_FALSO, identidad: identidadFalsa(),
         });
 
         const d = await manejar(entrada('hola', conversacion()));
@@ -439,7 +555,7 @@ describe('rastro para el Ledger (ADR-022)', () => {
         // «¿por qué el bot dijo eso?», así que tiene que quedar registrada.
         const caducado = Object.assign(new Error('caducó'), { code: 'HOLD_NO_VIGENTE' });
         const gate = gateFalso({ reservar_turno: caducado });
-        const manejar = crearManejadorDeterminista({ gate, identidad: identidadFalsa() });
+        const manejar = crearManejadorDeterminista({ gate, contextoNegocio: NEGOCIO_FALSO, identidad: identidadFalsa() });
 
         const datos = { paso: PASO.CONFIRMAR, fecha: '2026-08-20', hora: '10:00', codigo_hold: 'H', nombre: 'Ana' };
         const d = await manejar(entrada('sí', conversacion({ tarea: TAREA_AGENDAR, datos })));
@@ -459,13 +575,13 @@ describe('rastro para el Ledger (ADR-022)', () => {
         // fallida en `auditoria.audit_evento` con argumentos completos, que es donde un
         // incidente se investiga. El Ledger cuenta la conversación; la auditoría, los hechos.
         const gate = gateFalso({ consultar_servicios: new Error('la base se cayó') });
-        const manejar = crearManejadorDeterminista({ gate, identidad: identidadFalsa() });
+        const manejar = crearManejadorDeterminista({ gate, contextoNegocio: NEGOCIO_FALSO, identidad: identidadFalsa() });
 
         await expect(manejar(entrada('hola', conversacion()))).rejects.toThrow(/la base se cayó/);
     });
 
     test('sin invocaciones no ensucia la decisión con un array vacío', async () => {
-        const manejar = crearManejadorDeterminista({ gate: gateCompleto(), identidad: identidadFalsa() });
+        const manejar = crearManejadorDeterminista({ gate: gateCompleto(), contextoNegocio: NEGOCIO_FALSO, identidad: identidadFalsa() });
         const conv = conversacion({ tarea: TAREA_AGENDAR, datos: { paso: PASO.SERVICIO } });
         const d = await manejar(entrada('cancelar', conv));
 
@@ -477,7 +593,7 @@ describe('memoria de conversación', () => {
     test('las variables se devuelven completas, porque reemplazan y no fusionan', async () => {
         // Si una rama devolviera solo lo que cambia, el resto se perdería en silencio. Este
         // test recorre el paso donde es más fácil olvidarlo.
-        const manejar = crearManejadorDeterminista({ gate: gateCompleto(), identidad: identidadFalsa() });
+        const manejar = crearManejadorDeterminista({ gate: gateCompleto(), contextoNegocio: NEGOCIO_FALSO, identidad: identidadFalsa() });
         const conv = conversacion({
             variables: { nombre: 'Ana', telefono: '+573114682492', ultima_cita: 'CITA-1', turnos: 3 },
             tarea: TAREA_AGENDAR,
@@ -495,7 +611,7 @@ describe('memoria de conversación', () => {
 
     test('el código de la cita queda guardado: sin él no se puede reagendar ni cancelar', async () => {
         // No existe `consultar_mis_citas`. Este test es el recordatorio de por qué.
-        const manejar = crearManejadorDeterminista({ gate: gateCompleto(), identidad: identidadFalsa() });
+        const manejar = crearManejadorDeterminista({ gate: gateCompleto(), contextoNegocio: NEGOCIO_FALSO, identidad: identidadFalsa() });
         const datos = { paso: PASO.CONFIRMAR, fecha: '2026-08-20', hora: '10:00', codigo_hold: 'H', nombre: 'Ana' };
         const d = await manejar(entrada('sí', conversacion({ tarea: TAREA_AGENDAR, datos })));
 
@@ -507,7 +623,7 @@ describe('presentación (ADR-017)', () => {
     test('los menús van en opciones, nunca numerados dentro del texto', async () => {
         // Cada canal pinta las opciones como sabe: chips en WebChat, botones en WhatsApp, y
         // la voz las enumera. Un «1) Corte 2) Tinte» escrito en el texto rompe los tres.
-        const manejar = crearManejadorDeterminista({ gate: gateCompleto(), identidad: identidadFalsa() });
+        const manejar = crearManejadorDeterminista({ gate: gateCompleto(), contextoNegocio: NEGOCIO_FALSO, identidad: identidadFalsa() });
         const d = await manejar(entrada('hola', conversacion()));
 
         expect(d.respuestas[0].opciones).toBeDefined();
@@ -516,7 +632,7 @@ describe('presentación (ADR-017)', () => {
     });
 
     test('marca el nivel como determinista, que es lo que mide el coste en el Ledger', async () => {
-        const manejar = crearManejadorDeterminista({ gate: gateCompleto(), identidad: identidadFalsa() });
+        const manejar = crearManejadorDeterminista({ gate: gateCompleto(), contextoNegocio: NEGOCIO_FALSO, identidad: identidadFalsa() });
         const d = await manejar(entrada('hola', conversacion()));
 
         expect(d.nivel).toBe('determinista');
@@ -524,7 +640,7 @@ describe('presentación (ADR-017)', () => {
 
     test('sin servicios activos lo dice y no abre tarea', async () => {
         const gate = gateFalso({ consultar_servicios: { servicios: [] } });
-        const manejar = crearManejadorDeterminista({ gate, identidad: identidadFalsa() });
+        const manejar = crearManejadorDeterminista({ gate, contextoNegocio: NEGOCIO_FALSO, identidad: identidadFalsa() });
         const d = await manejar(entrada('hola', conversacion()));
 
         expect(d.tarea).toBeNull();
