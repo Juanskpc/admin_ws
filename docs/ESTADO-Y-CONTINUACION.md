@@ -980,6 +980,32 @@ ejecutarlo en producción. Lo verificado en local fueron 2 personas sintéticas.
     - **Falta decidir la otra mitad de ADR-023**, el handoff cuando no hay nadie al otro lado. La
       regla de «no inventar» no dice qué se le contesta al cliente a las 11 de la noche.
 
+13. **Handoff sin humano: decidido por el dueño (2026-08-18).** Es la otra mitad de ADR-023 y lo
+    que faltaba para poder mover el ADR a *Aceptado* en F7. Las tres respuestas, textuales:
+
+    1. **Decir que no hay nadie, y cuándo lo habrá.** Si el negocio tiene horario configurado, se
+       toma de ahí; si no, *«en el transcurso del día»*. Explícito: **«no hay que complicarnos
+       tanto por estas cosas»** — nada de calendarios de festivos ni de turnos por empleado.
+    2. **La bandeja está sin resolver, y el canal de destino es WhatsApp.** Ver el aviso de abajo:
+       la suposición de que el dueño verá la conversación en su propio WhatsApp **depende de cómo
+       esté conectado el número** y hay que comprobarla antes de diseñar nada.
+    3. **El bot NO vuelve.** Si se escaló, responde una persona. Nada de recuperar la conversación
+       pasadas unas horas: sería contradecir lo que ya se le prometió al cliente.
+
+    **Lo que hoy existe y lo que no.** El estado `handoff_humano` está en el esquema desde F5-A
+    (`migrate_intelligence_ledger.js`) y el motor ya lo trata como pasivo a propósito —en él no
+    contesta el bot, porque uno hablando encima de una persona es peor que uno mudo—. Pero
+    **nadie lo escribe nunca**: `manejadorLlm.js` devuelve `resultado: 'resuelto'` y suelta una
+    frase fija, así que la conversación sigue `activa` y el bot sigue contestando. El handoff de
+    hoy es una frase, no un estado.
+
+    ⚠️ **Comprobar antes de construir la bandeja.** Un número conectado a la Cloud API de Meta
+    históricamente **no** puede usarse a la vez en la app de WhatsApp Business: los mensajes van a
+    la API, no al teléfono del dueño. Si eso sigue siendo así, «lo verá en su WhatsApp» es falso y
+    hace falta una bandeja de verdad. Meta ha ido añadiendo un modo de coexistencia; **hay que
+    verificarlo con la documentación vigente**, no darlo por hecho, porque de esa respuesta
+    depende si la bandeja es un entregable o no existe.
+
 ---
 
 ## 7. Cómo se trabaja aquí
