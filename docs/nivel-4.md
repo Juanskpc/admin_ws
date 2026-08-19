@@ -43,6 +43,46 @@ precios, y por un motivo del mundo real: OpenAI cobra la caché de otra manera.
 La primera es la peligrosa: **no falla nada**, simplemente el Ledger dice un número y el
 proveedor cobra otro, hasta 10× por encima. Tiene su propio test, y se comprobó rompiéndolo.
 
+## La quinta diferencia, la que dejó el adaptador inservible (2026-08-18)
+
+Las cuatro de arriba se descubrieron leyendo documentación. Ésta apareció en la **primera llamada
+real** y era la única que importaba: **`gpt-5.6-*` no admite herramientas y `reasoning_effort` a la
+vez** en `/v1/chat/completions`.
+
+```
+400 Function tools with reasoning_effort are not supported for gpt-5.6-luna
+in /v1/chat/completions. To use function tools, use /v1/responses
+or set reasoning_effort to 'none'.
+```
+
+Tres cosas que conviene tener claras:
+
+- **No es del modelo barato.** `gpt-5.6-terra` da el mismo 400. Es de la familia y del endpoint.
+- **Omitir el parámetro no arregla nada**: también da 400, porque el modelo razona por defecto. Hay
+  que pedir `'none'` explícitamente.
+- **Muerde en todos los turnos que importan.** El Nivel 4 ofrece capacidades siempre, así que el
+  adaptador no servía para nada — con 164 tests en verde, porque un cliente falso acepta cualquier
+  combinación de parámetros.
+
+Hoy está **apañado**: `esfuerzoParaChatCompletions()` manda `'none'` cuando hay capacidades y avisa
+por consola una vez. El precio es real y hay que decirlo en voz alta: **`LLM_ESFUERZO` queda inerte
+en OpenAI** para los turnos con capacidades, y con él el barrido de esfuerzo que este documento
+pedía. La salida definitiva es la que señala la propia API: **migrar el adaptador a
+`/v1/responses`**, donde las dos cosas conviven.
+
+No se hizo ya por una razón medible: **sin razonamiento, `gpt-5.6-luna` acierta 19/19 en
+`respuestas` y 20/20 en `inyeccion`**. Migrar el endpoint para recuperar un parámetro que quizá no
+haga falta es trabajo antes de la evidencia. Ahora bien, es lo primero que hay que resolver antes de
+elegir modelo definitivo — y si se elige Anthropic, no hace falta en absoluto.
+
+### Y la caché tiene un umbral, no solo un prefijo
+
+`cache_read = 0` no siempre acusa al Prompt Builder. **OpenAI no cachea por debajo de 1024 tokens de
+entrada.** Los prompts de las suites rondan los 950-1020, así que el cero era el umbral. Medido:
+dos llamadas idénticas de 3213 tokens → **3210 cacheados** en la segunda. El criterio de aceptación
+de ADR-019 sigue, por tanto, **sin verificar de verdad**; se verificará cuando Knowledge (ADR-020)
+engorde el prompt por encima del umbral.
+
 ## La divergencia con ADR-018, dicha en voz alta
 
 [ADR-018](adr/ADR-018-estrategia-modelos.md) fija el **Nivel 4 premium** como «el LLM más capaz,

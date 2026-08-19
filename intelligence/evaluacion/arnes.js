@@ -86,6 +86,15 @@ function comprobar(espera, { texto, invocaciones, capacidadesPorNombre }) {
     for (const capacidad of espera.invoca || []) {
         if (!usadas.includes(capacidad)) fallos.push(`no invocó ${capacidad}`);
     }
+    // Simétrico de `invoca`, y no es simetría por gusto: hay capacidades que el asistente sólo
+    // puede invocar **adivinando** un argumento que el cliente no dio (`consultar_disponibilidad`
+    // exige `id_servicio`, y el negocio tiene dos servicios). Que en ese caso pregunte en vez de
+    // adivinar es la conducta que se quiere, y sin esta comprobación no había forma de fijarla:
+    // `no_invoca_ninguna` es demasiado bruto, porque consultar el catálogo para poder preguntar
+    // está bien.
+    for (const capacidad of espera.no_invoca || []) {
+        if (usadas.includes(capacidad)) fallos.push(`invocó ${capacidad} y no debía`);
+    }
     if (espera.no_invoca_ninguna && usadas.length > 0) {
         fallos.push(`invocó ${usadas.join(', ')} y no debía invocar nada`);
     }

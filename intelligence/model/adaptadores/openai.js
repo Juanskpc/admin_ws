@@ -48,6 +48,51 @@ const MODELOS = ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-4o'];
  */
 const SIN_ESFUERZO = new Set(['gpt-4o']);
 
+/**
+ * Familias que **no admiten razonamiento y herramientas a la vez** en `/v1/chat/completions`.
+ *
+ * Descubierto el 2026-08-18, en la primera llamada real de la vida del proyecto. La API responde
+ * un 400 tajante: *«Function tools with reasoning_effort are not supported for gpt-5.6-luna in
+ * /v1/chat/completions. To use function tools, use /v1/responses or set reasoning_effort to
+ * 'none'.»* Y no basta con **omitir** el parámetro —eso también da 400, porque el modelo razona
+ * por defecto—: hay que pedir `'none'` explícitamente.
+ *
+ * Le pasa a **toda la familia `gpt-5.6`**, no solo al modelo barato, y muerde en todos los turnos
+ * que importan: el asistente ofrece capacidades en cada turno de Nivel 4. Con esto sin arreglar,
+ * el adaptador de OpenAI no servía para nada — y los 164 tests en seco no podían verlo, porque un
+ * cliente de mentira acepta cualquier combinación de parámetros.
+ *
+ * **Esto es un apaño consciente, no la solución.** La solución que la propia API señala es migrar
+ * a `/v1/responses`, donde razonamiento y herramientas conviven. Mientras tanto, aquí se cambia
+ * calidad por funcionamiento: en los turnos con capacidades, `LLM_ESFUERZO` **queda inerte** para
+ * OpenAI. Es una renuncia real y por eso se avisa por consola una vez, en vez de hacerlo callando.
+ */
+const SIN_ESFUERZO_CON_CAPACIDADES = [/^gpt-5\.6/];
+
+let avisadoDelApano = false;
+
+/**
+ * El `reasoning_effort` que de verdad se puede mandar en este turno.
+ *
+ * Devuelve el pedido tal cual salvo en la combinación prohibida, donde devuelve `'none'`.
+ */
+function esfuerzoParaChatCompletions(peticion) {
+    const conCapacidades = peticion.capacidades.length > 0;
+    const afectado = SIN_ESFUERZO_CON_CAPACIDADES.some((re) => re.test(peticion.modelo));
+    if (!conCapacidades || !afectado) return peticion.esfuerzo;
+
+    if (!avisadoDelApano) {
+        avisadoDelApano = true;
+        console.warn(
+            `[modelo] ${peticion.modelo} no admite razonamiento junto a herramientas en ` +
+                `chat.completions: se manda reasoning_effort='none' y LLM_ESFUERZO=` +
+                `${peticion.esfuerzo} se ignora en los turnos con capacidades. La salida ` +
+                'definitiva es /v1/responses.'
+        );
+    }
+    return 'none';
+}
+
 const CAPACIDADES_PROVEEDOR = {
     invocarCapacidades: true,
     // Sí cachea el prefijo; lo que no tiene es forma de marcarlo. Ver la nota 3 de arriba.
@@ -282,7 +327,8 @@ function crearAdaptadorOpenai({ cliente = null, apiKey = process.env.OPENAI_API_
             cuerpo.tools = renderizarTools(peticion.capacidades);
         }
         if (peticion.esfuerzo && !SIN_ESFUERZO.has(peticion.modelo)) {
-            cuerpo.reasoning_effort = peticion.esfuerzo;
+            // Ver `esfuerzoParaChatCompletions`: con herramientas, esta familia obliga a 'none'.
+            cuerpo.reasoning_effort = esfuerzoParaChatCompletions(peticion);
         }
 
         let completion;

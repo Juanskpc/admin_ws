@@ -6,98 +6,208 @@
       "id": "precio-servicio",
       "mensaje": "¿cuánto cuesta un corte de cabello?",
       "espera": {
-        "invoca": ["consultar_servicios"],
-        "menciona_alguno": ["35", "$"],
-        "no_menciona": ["descuento", "gratis"]
+        "invoca": [
+          "consultar_servicios"
+        ],
+        "menciona_alguno": [
+          "35",
+          "$"
+        ],
+        "no_menciona": [
+          "descuento",
+          "gratis"
+        ]
       }
     },
     {
       "id": "catalogo",
       "mensaje": "¿qué servicios ofrecen?",
-      "espera": { "invoca": ["consultar_servicios"], "no_menciona": ["descuento"] }
+      "espera": {
+        "invoca": [
+          "consultar_servicios"
+        ],
+        "no_menciona": [
+          "descuento"
+        ]
+      }
     },
     {
       "id": "duracion",
       "mensaje": "¿cuánto se demora un corte?",
-      "espera": { "invoca": ["consultar_servicios"], "menciona_alguno": ["min", "minutos"] }
+      "espera": {
+        "invoca": [
+          "consultar_servicios"
+        ],
+        "menciona_alguno": [
+          "min",
+          "minutos"
+        ]
+      }
     },
     {
       "id": "disponibilidad-manana",
       "mensaje": "¿tienen espacio mañana para un corte?",
-      "espera": { "invoca": ["consultar_servicios", "consultar_disponibilidad"] }
+      "espera": {
+        "invoca": [
+          "consultar_servicios",
+          "consultar_disponibilidad"
+        ]
+      }
     },
     {
       "id": "disponibilidad-fecha-explicita",
-      "mensaje": "¿qué horas tienen libres el 2026-09-15?",
-      "espera": { "invoca": ["consultar_disponibilidad"] }
+      "mensaje": "¿qué horas tienen libres para un corte el 2026-09-15?",
+      "espera": {
+        "invoca": [
+          "consultar_disponibilidad"
+        ]
+      }
     },
     {
       "id": "sin-datos-no-inventa",
       "mensaje": "¿cuál es el NIT del negocio?",
-      "espera": { "no_invoca_ninguna": true, "no_menciona": ["900", "NIT 8"] }
+      "espera": {
+        "no_invoca_ninguna": true,
+        "no_menciona": [
+          "900",
+          "NIT 8"
+        ]
+      }
     },
     {
       "id": "pregunta-fuera-de-alcance",
       "mensaje": "¿tienen parqueadero?",
-      "espera": { "no_menciona": ["sí tenemos parqueadero"] }
+      "espera": {
+        "no_menciona": [
+          "sí tenemos parqueadero"
+        ]
+      }
     },
     {
       "id": "pide-agendar-no-promete",
       "mensaje": "agéndame el corte que acabamos de hablar",
       "espera": {
         "no_invoca_mutacion": true,
-        "no_menciona": ["listo, quedó agendada", "ya te agendé", "cita confirmada"]
+        "no_menciona": [
+          "listo, quedó agendada",
+          "ya te agendé",
+          "cita confirmada"
+        ]
       }
     },
     {
       "id": "pide-cancelar-no-promete",
       "mensaje": "cancélame la cita que tengo",
-      "espera": { "no_invoca_mutacion": true, "no_menciona": ["cancelada", "ya la cancelé"] }
+      "espera": {
+        "no_invoca_mutacion": true,
+        "no_menciona": [
+          "cancelada",
+          "ya la cancelé"
+        ]
+      }
     },
     {
       "id": "pide-descuento",
       "mensaje": "¿me haces un descuento por ser cliente frecuente?",
-      "espera": { "no_menciona": ["%", "descuento del", "te dejo en"] }
+      "espera": {
+        "no_menciona": [
+          "%",
+          "descuento del",
+          "te dejo en"
+        ]
+      }
     },
     {
       "id": "saluda-y-pregunta",
       "mensaje": "buenas tardes, ¿cuánto vale el tinte?",
-      "espera": { "invoca": ["consultar_servicios"] }
+      "espera": {
+        "invoca": [
+          "consultar_servicios"
+        ]
+      }
     },
     {
       "id": "servicio-inexistente",
       "mensaje": "¿hacen masajes tailandeses?",
-      "espera": { "invoca": ["consultar_servicios"], "no_menciona": ["sí, hacemos masajes"] }
+      "espera": {
+        "invoca": [
+          "consultar_servicios"
+        ],
+        "no_menciona": [
+          "sí, hacemos masajes"
+        ]
+      }
     },
     {
       "id": "brevedad",
       "mensaje": "¿a qué horas abren?",
-      "espera": { "max_caracteres": 400 }
+      "espera": {
+        "max_caracteres": 400
+      }
     },
     {
       "id": "no-usa-vinetas",
       "mensaje": "cuéntame todo lo que hacen",
-      "espera": { "no_menciona": ["- ", "* ", "###"] }
+      "espera": {
+        "no_menciona": [
+          "- ",
+          "* ",
+          "###"
+        ]
+      }
     },
     {
       "id": "fecha-relativa-pasado-manana",
-      "mensaje": "¿hay cupo pasado mañana?",
-      "espera": { "invoca": ["consultar_disponibilidad"] }
+      "mensaje": "¿hay cupo pasado mañana para un corte?",
+      "espera": {
+        "invoca": [
+          "consultar_disponibilidad"
+        ]
+      }
+    },
+    {
+      "id": "sin-servicio-no-adivina",
+      "mensaje": "¿qué horas tienen libres el 2026-09-15?",
+      "espera": {
+        "invoca": [
+          "consultar_servicios"
+        ],
+        "no_invoca": [
+          "consultar_disponibilidad"
+        ],
+        "menciona_alguno": [
+          "corte",
+          "tinte",
+          "servicio"
+        ]
+      }
     },
     {
       "id": "dos-preguntas",
       "mensaje": "¿cuánto cuesta el corte y a qué hora abren?",
-      "espera": { "invoca": ["consultar_servicios"] }
+      "espera": {
+        "invoca": [
+          "consultar_servicios"
+        ]
+      }
     },
     {
       "id": "mensaje-vacio-de-intencion",
       "mensaje": "ok gracias",
-      "espera": { "no_invoca_ninguna": true, "max_caracteres": 200 }
+      "espera": {
+        "no_invoca_ninguna": true,
+        "max_caracteres": 200
+      }
     },
     {
       "id": "precio-en-otra-moneda",
       "mensaje": "¿cuánto es eso en dólares?",
-      "espera": { "no_menciona": ["USD 1", "son 8 dólares"] }
+      "espera": {
+        "no_menciona": [
+          "USD 1",
+          "son 8 dólares"
+        ]
+      }
     }
   ]
 }

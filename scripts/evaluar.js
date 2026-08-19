@@ -66,10 +66,23 @@ function pintar(resumen, etiqueta = '') {
     // El aviso que ADR-019 convierte en criterio de aceptación: caché a cero de forma
     // sostenida no es «no hay caché», es un invalidador silencioso, y la fase no está terminada.
     if (resumen.llamadasAlModelo > 2 && resumen.aciertoDeCache === 0) {
+        const tokensPorLlamada = Math.round(resumen.tokens.entrada / resumen.llamadasAlModelo);
         console.log(
             '\n   ⚠️  cache_read = 0 en toda la tanda. Con varias llamadas eso NO es normal: ' +
                 'hay algo volátil delante del punto de corte (ADR-019). Revisa promptBuilder.js.'
         );
+        // Salvo que el prompt sea demasiado corto para que haya caché siquiera. Medido el
+        // 2026-08-18: OpenAI **no cachea por debajo de 1024 tokens de entrada**, y con dos
+        // llamadas idénticas de 3213 tokens la segunda trajo 3210 cacheados. Los prompts reales
+        // de esta suite rondan los 950-1020, justo debajo del umbral, así que el cero no
+        // acusaba a nadie. Sin esta nota se pierde una tarde buscando un bug en el prefijo.
+        if (tokensPorLlamada < 1024) {
+            console.log(
+                `       …aunque el prompt son ~${tokensPorLlamada} tokens por llamada, y OpenAI ` +
+                    'no cachea por debajo de 1024. Ahí el cero es el umbral, no un prefijo roto: ' +
+                    'compruébalo con dos llamadas largas idénticas antes de tocar el prompt.'
+            );
+        }
     }
 }
 
