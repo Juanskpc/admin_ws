@@ -1020,12 +1020,35 @@ ejecutarlo en producción. Lo verificado en local fueron 2 personas sintéticas.
     sea: **en la práctica todos los negocios dicen hoy «en el transcurso del día»**. La rama de la
     hora está implementada y probada; le falta la fuente.
 
-    ⚠️ **Comprobar antes de construir la bandeja.** Un número conectado a la Cloud API de Meta
-    históricamente **no** puede usarse a la vez en la app de WhatsApp Business: los mensajes van a
-    la API, no al teléfono del dueño. Si eso sigue siendo así, «lo verá en su WhatsApp» es falso y
-    hace falta una bandeja de verdad. Meta ha ido añadiendo un modo de coexistencia; **hay que
-    verificarlo con la documentación vigente**, no darlo por hecho, porque de esa respuesta
-    depende si la bandeja es un entregable o no existe.
+    ✅ **Comprobado el 2026-08-18: la bandeja probablemente NO hay que construirla.** El temor
+    era que un número en la Cloud API dejara de funcionar en la app de WhatsApp Business —los
+    mensajes irían a la API y no al teléfono del dueño, y escalar seria mandar la conversación a
+    un sitio que nadie mira—. Ya no es así: Meta tiene **Coexistence** desde mayo de 2025, el
+    mismo número funciona a la vez en la app y en la Cloud API, y **el historial se sincroniza en
+    los dos sentidos**. El dueño ve la conversación escalada en su WhatsApp de siempre y responde
+    desde ahí.
+
+    Eso valida la decisión del dueño: **el handoff aterriza en WhatsApp y no hace falta pantalla
+    nueva.** Pero la coexistencia trae condiciones que hay que tener en cuenta **antes de F8**, no
+    después:
+
+    | Condición | De dónde sale |
+    |---|---|
+    | Se entra por **Embedded Signup**, no por el alta normal de un número | docs de Meta |
+    | App WhatsApp Business **≥ 2.24.17** | docs de Meta |
+    | Rendimiento fijo de **20 mensajes/segundo** con coexistencia | docs de Meta |
+    | La sincronización inicial del historial tarda minutos | docs de Meta |
+    | **Si pasan ~14 días sin abrir la app, se corta la conexión con la API** | fuentes de terceros, sin confirmar en Meta |
+    | El nombre del negocio puede no verse sin Meta Verified | fuentes de terceros, sin confirmar |
+
+    La de los 14 días es la que más muerde para un cliente pequeño: si el dueño se va de
+    vacaciones, el bot deja de funcionar. **Confirmarla en la documentación de Meta antes de
+    prometer nada**, que viene de blogs de proveedores y no de la fuente.
+
+    Queda una pregunta más pequeña, y es de producto: cuando el dueño responda desde su WhatsApp,
+    ese mensaje llega por el webhook como cualquier otro. Hay que **no confundirlo con un mensaje
+    del cliente** — pero eso es trabajo de F8, no de ahora, y la conversación ya está en
+    `handoff_humano`, donde el motor no procesa nada.
 
 ---
 
