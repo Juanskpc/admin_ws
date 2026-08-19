@@ -75,6 +75,10 @@ const CONFIG = {
 // El texto del handoff y su decisión viven en `handoff.js`: son producto, no mecánica del Nivel 4,
 // y los usará también la FSM el día que escale. Aquí se importa, no se reimplementa.
 const handoff = require('./handoff');
+// El guardarrail de promesas (ADR-023) es una comprobacion POSTERIOR a la generacion: se le pasa
+// lo que el asistente va a decir y lo que las capacidades devolvieron, y dice si hay cifras que
+// nadie respalda. Arranca en observacion, como F2.
+const guardarrail = require('./guardarrailPromesas');
 
 /**
  * Convierte el resultado de una capacidad en el texto que vuelve al modelo.
@@ -111,6 +115,10 @@ function crearManejadorLlm({
         const idNegocio = Number(conversacion.id_negocio);
         const pasos = [];
         const invocaciones = [];
+        // Lo que devolvieron las capacidades de ESTE turno. Vive aparte de `invocaciones` porque
+        // aquello se persiste en el Ledger y aqui hay datos del cliente que no deben acabar ahi
+        // (ADR-024): estos numeros se miran al cerrar el turno y se tiran.
+        const respaldoDelTurno = [];
         let gastoNano = 0;
 
         // 1. Qué puede hacer este negocio hoy, filtrado a consultas. Las tres capas del Gate
@@ -225,6 +233,22 @@ function crearManejadorLlm({
             if (respuesta.razonFin !== puerto.FIN.CAPACIDADES) {
                 const dicho = respuesta.texto.trim();
                 if (!dicho) return decisionDeHandoff(pasos, invocaciones);
+
+                // ── Guardarrail de promesas (ADR-023) ────────────────────────────────────
+                // Va aqui y no antes: es una comprobacion POSTERIOR a la generacion, sobre el
+                // texto exacto que va a leer el cliente. En `observacion` solo deja el rastro en
+                // el Ledger; en `bloqueo` la frase no sale y se escala a una persona.
+                const revision = guardarrail.revisar({
+                    texto: dicho,
+                    resultados: respaldoDelTurno,
+                    mensajeCliente: texto,
+                    negocio,
+                });
+                if (!revision.limpio) {
+                    pasos.push(guardarrail.paso(revision));
+                    if (guardarrail.bloquea()) return decisionDeHandoff(pasos, invocaciones);
+                }
+
                 return {
                     pasos,
                     invocaciones,
@@ -240,6 +264,7 @@ function crearManejadorLlm({
             for (const solicitada of respuesta.invocacionesSolicitadas) {
                 resultados.push(
                     await ejecutarSolicitud({
+                        respaldoDelTurno,
                         solicitada,
                         permitidas,
                         idNegocio,
@@ -314,6 +339,10 @@ async function ejecutarSolicitud({
     principal,
     gate,
     invocaciones,
+    // Donde se acumula lo que la capacidad DEVOLVIO, para que el guardarrail de promesas pueda
+    // comprobar al cerrar el turno que las cifras de la respuesta salen de algun sitio. No entra
+    // en `invocaciones` a proposito: eso se persiste y aqui hay datos del cliente (ADR-024).
+    respaldoDelTurno = [],
     dryRun = false,
 }) {
     const iniciado = Date.now();
@@ -355,6 +384,7 @@ async function ejecutarSolicitud({
             latenciaMs: Date.now() - iniciado,
             dryRun: Boolean(sobre?.dry_run),
         });
+        respaldoDelTurno.push(sobre.resultado);
         return { id: solicitada.id, contenido: comoResultado(sobre.resultado) };
     } catch (error) {
         invocaciones.push({

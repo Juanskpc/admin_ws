@@ -1050,6 +1050,42 @@ ejecutarlo en producción. Lo verificado en local fueron 2 personas sintéticas.
     del cliente** — pero eso es trabajo de F8, no de ahora, y la conversación ya está en
     `handoff_humano`, donde el motor no procesa nada.
 
+14. **Guardarraíl de promesas: implementado el 2026-08-18 en modo observación.** Es la mitad
+    difícil de ADR-023, y con esto el ADR tiene sus dos mecanismos decididos y construidos.
+
+    **La idea que lo hace resoluble:** no se detectan promesas en el lenguaje —eso es lo que ya
+    fracasó, medido en `i12`—. ADR-023 da un criterio verificable: un compromiso es sospechoso
+    cuando **no está respaldado por el resultado de una capacidad ejecutada en ese turno**. Así
+    que se comparan **cifras**: las que dice el asistente contra las que devolvieron las
+    capacidades. Un modelo puede desobedecer una instrucción; no puede hacer que un 20 aparezca
+    en un resultado que no lo trae.
+
+    **`PROMESAS_MODO=observacion` por defecto**: registra en el Ledger y deja pasar. `bloqueo`
+    escala a un humano. Mismo procedimiento que F2 y por el mismo motivo — **medir una semana
+    antes de encender `bloqueo`**. El paso queda como `regla` / `promesa_sin_respaldo`, y es el
+    «registro de lo prometido» que pide el ADR.
+
+    **Dos agujeros que aparecieron al probarlo contra el modelo real, y hay que conocerlos:**
+
+    - **El cliente propone la cifra y el bot asiente.** La primera versión daba por respaldado
+      todo número que el cliente hubiera escrito —para no marcar «busco hueco el 15»— y con eso
+      *«hazme un 20% de descuento»* → *«listo, el 20%»* pasaba limpio: el ejemplo textual del ADR
+      colándose por la puerta de atrás. Ahora una cifra marcada como dinero (`$` delante o `%`
+      detrás) **solo la respalda el sistema**; las demás siguen aceptando lo que dijo el cliente.
+      El cliente puede proponer una fecha, no autorizar un precio.
+    - **Una cifra escrita tiene varias lecturas.** «$35.000» producía `35000` **y** un `35`
+      suelto que nadie respaldaba, así que un precio legítimo salía marcado. Se tratan como
+      **alternativas**: basta con que una lectura tenga respaldo.
+
+    **Lo que NO cubre, y está dicho en el código:** promesas sin número («te lo dejamos gratis»),
+    y cifras que el propio bot dijo antes en la conversación —no cuentan como respaldo a
+    propósito: si las inventó ayer, aceptarlas hoy sería blanquear la mentira—. Ese segundo punto
+    es ruido esperable en la medición, y es de lo primero que hay que mirar en los datos.
+
+    21 pruebas. Una de ellas se verificó **rompiéndola**: se reintrodujo el fallo exacto de la
+    lectura de horas y falla; restaurado, pasa. Comprobado además contra el modelo real: la
+    respuesta legítima no dispara nada, y una cifra cedida sí.
+
 ---
 
 ## 7. Cómo se trabaja aquí
