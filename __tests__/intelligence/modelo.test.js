@@ -21,7 +21,8 @@ const orquestador = require('../../intelligence/model/orquestador');
 const anthropic = require('../../intelligence/model/adaptadores/anthropic');
 const openai = require('../../intelligence/model/adaptadores/openai');
 const fabrica = require('../../intelligence/model/adaptadores');
-const { crearManejadorLlm, CONFIG, RESPUESTA_HANDOFF } = require('../../intelligence/engine/manejadorLlm');
+const { crearManejadorLlm, CONFIG } = require('../../intelligence/engine/manejadorLlm');
+const handoff = require('../../intelligence/engine/handoff');
 const { crearManejadorEscalera } = require('../../intelligence/engine/manejadorEscalera');
 
 // ── Dobles ──────────────────────────────────────────────────────────────────────────────
@@ -478,7 +479,7 @@ describe('manejadorLlm', () => {
 
         expect(consumo.costos).toHaveLength(1);
         expect(consumo.costos[0].costoUsd).toMatch(/^\d+\.\d{8}$/);
-        expect(decision.respuestas).toEqual([RESPUESTA_HANDOFF]);
+        expect(decision.respuestas).toEqual([handoff.mensaje(NEGOCIO)]);
     });
 
     it('el cortacircuitos de presupuesto corta y responde en vez de seguir gastando', async () => {
@@ -492,7 +493,7 @@ describe('manejadorLlm', () => {
         const { decision, consumo } = await correr(manejador);
 
         expect(consumo.costos).toHaveLength(1); // se cortó tras la primera vuelta cara
-        expect(decision.respuestas).toEqual([RESPUESTA_HANDOFF]);
+        expect(decision.respuestas).toEqual([handoff.mensaje(NEGOCIO)]);
         expect(decision.pasos.some((p) => p.decision === 'presupuesto_turno')).toBe(true);
     });
 
@@ -512,14 +513,14 @@ describe('manejadorLlm', () => {
 
         expect(consumo.costos).toHaveLength(3);
         expect(decision.pasos.some((p) => p.decision === 'max_vueltas')).toBe(true);
-        expect(decision.respuestas).toEqual([RESPUESTA_HANDOFF]);
+        expect(decision.respuestas).toEqual([handoff.mensaje(NEGOCIO)]);
     });
 
     it('un rechazo del proveedor no deja al cliente sin respuesta', async () => {
         const adaptador = adaptadorFalso([{ texto: '', razonFin: puerto.FIN.RECHAZO }]);
         const manejador = crearManejadorLlm({ ...DEPS_BASE, gate: gateFalso(), adaptador });
         const { decision } = await correr(manejador);
-        expect(decision.respuestas).toEqual([RESPUESTA_HANDOFF]);
+        expect(decision.respuestas).toEqual([handoff.mensaje(NEGOCIO)]);
     });
 
     it('usa solo tipos de paso que el CHECK del Ledger admite', async () => {

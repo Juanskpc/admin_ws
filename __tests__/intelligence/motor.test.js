@@ -459,6 +459,28 @@ describe('estados que no se procesan', () => {
         expect(await mensajesDe(id_conversacion, 'entrante')).toHaveLength(1);
     }, 20000);
 
+    test('escalar deja la conversación en handoff_humano y el bot no vuelve', async () => {
+        // La decisión 3 del dueño (2026-08-18): si se escaló, contesta una persona. Que el
+        // manejador devuelva `estado` no sirve de nada si el motor no lo persiste, y hasta hoy
+        // el handoff era solo una frase: la conversación seguía activa y el bot contestaba el
+        // turno siguiente, después de haber prometido que intervenía alguien.
+        const handoff = require('../../intelligence/engine/handoff');
+        const quien = nuevoInterlocutor('escala');
+
+        motor.registrarManejador(async () => handoff.decision({ pasos: [], invocaciones: [] }, null));
+
+        const { id_conversacion } = await guardarMensaje(quien, 'quiero hablar con una persona');
+        const primero = await motor.procesarConversacion(id_conversacion);
+        expect(primero.resultado).toBe('handoff');
+        expect((await conversacionDe(quien)).estado).toBe('handoff_humano');
+
+        // Y ahora lo que de verdad importa: el siguiente mensaje ya no lo contesta el bot.
+        await guardarMensaje(quien, '¿hola?');
+        const segundo = await motor.procesarConversacion(id_conversacion);
+        expect(segundo.omitido).toBe(motor.OMITIDO.ESTADO_NO_PROCESABLE);
+        expect(await turnosDe(id_conversacion)).toHaveLength(1);
+    }, 20000);
+
     test('una conversación dormida se reactiva al llegar un mensaje', async () => {
         const quien = nuevoInterlocutor('dormida');
         await guardarMensaje(quien, 'hola');

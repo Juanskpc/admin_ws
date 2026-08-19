@@ -30,7 +30,38 @@
 const Models = require('../../app_core/models/conection');
 
 /** Lo que se enseña cuando el negocio no se puede leer. Neutro y sin mentir. */
-const GENERICO = { id: null, nombre: null, tratamiento: 'el negocio' };
+const GENERICO = { id: null, nombre: null, tratamiento: 'el negocio', atencion: null };
+
+/**
+ * Horario de atención del negocio — hoy **siempre `null`**, y es un estado correcto.
+ *
+ * Lo usa el handoff para decir *cuándo* habrá alguien en vez de prometer un «en un momento» que a
+ * las once de la noche no cumple nadie. Con `null`, el mensaje cae a «en el transcurso del día»,
+ * que es la decisión del dueño del 2026-08-18: si el negocio no tiene horario, no inventarse uno.
+ *
+ * ## Por qué no se lee de ningún sitio todavía
+ *
+ * Porque el sitio correcto no existe aún. [ADR-020](../../docs/adr/ADR-020-knowledge.md) lista
+ * los **horarios** como *Business Context* —configuración del inquilino, pequeña, escrita a mano,
+ * parte del prefijo estable del prompt— y `platform.business_context` está sin crear.
+ *
+ * Los dos atajos disponibles se descartaron a propósito:
+ *
+ * - **Leer `reserva.reserva_horario`.** Es el esquema de una vertical, e `intelligence/` no lo
+ *   toca: el acoplamiento con el dominio vive en los adaptadores y en ningún otro sitio
+ *   ([ADR-005](../../docs/adr/ADR-005-independencia-verticales.md)). Además esas filas son el
+ *   horario **de cada profesional**, no el de atención del negocio: parecido no es lo mismo, y
+ *   usarlo diría una hora que nadie prometió.
+ * - **Una capacidad `consultar_horario`.** Contradice la categoría que ADR-020 congeló: el
+ *   horario es configuración que va **siempre** en el prefijo, no un dato que se consulta por
+ *   turno. Y una capacidad para componer una frase es un viaje al Gate por nada.
+ *
+ * Cuando exista `business_context`, esto se rellena **aquí dentro** y ni el handoff ni el motor
+ * se enteran. La forma que espera quien lo consume: `{ desde: 'HH:MM', hasta: 'HH:MM' }`.
+ */
+function leerAtencion(/* fila */) {
+    return null;
+}
 
 /**
  * @param {number} idNegocio
@@ -57,7 +88,12 @@ async function obtener(idNegocio) {
     if (!fila) return GENERICO;
 
     const nombre = String(fila.nombre || '').trim() || null;
-    return { id, nombre, tratamiento: nombre || GENERICO.tratamiento };
+    return {
+        id,
+        nombre,
+        tratamiento: nombre || GENERICO.tratamiento,
+        atencion: leerAtencion(fila),
+    };
 }
 
 module.exports = { obtener, GENERICO };

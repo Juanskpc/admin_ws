@@ -72,8 +72,9 @@ const CONFIG = {
     dryRun: false,
 };
 
-const RESPUESTA_HANDOFF =
-    'Déjame consultarlo con alguien del negocio y te confirmo en un momento.';
+// El texto del handoff y su decisión viven en `handoff.js`: son producto, no mecánica del Nivel 4,
+// y los usará también la FSM el día que escale. Aquí se importa, no se reimplementa.
+const handoff = require('./handoff');
 
 /**
  * Convierte el resultado de una capacidad en el texto que vuelve al modelo.
@@ -279,18 +280,21 @@ function crearManejadorLlm({
         });
         return decisionDeHandoff(pasos, invocaciones);
 
+        // Antes esto devolvía `resultado: 'resuelto'` y una frase fija, a propósito: el escalado
+        // no apagaba al bot, así que contarlo como handoff habría inflado la pregunta 11 del
+        // Ledger con escalados que nadie atendía. Desde que `handoff.decision` pone la
+        // conversación en `handoff_humano` —y el motor deja de contestar en ese estado— el
+        // escalado es real y ese motivo desaparece.
         function decisionDeHandoff(pasosAcumulados, invocacionesAcumuladas) {
-            return {
-                pasos: pasosAcumulados,
-                invocaciones: invocacionesAcumuladas,
-                respuestas: [RESPUESTA_HANDOFF],
-                variables: conversacion.variables || {},
-                // `resultado` sigue siendo 'resuelto': hubo respuesta al cliente. El handoff de
-                // verdad —con un humano al otro lado— es F7 (ADR-023), y decir aquí 'handoff'
-                // haría que la pregunta 11 del Ledger contara handoffs que nadie atiende.
-                resultado: 'resuelto',
-                nivel: 'llm',
-            };
+            return handoff.decision(
+                {
+                    pasos: pasosAcumulados,
+                    invocaciones: invocacionesAcumuladas,
+                    variables: conversacion.variables || {},
+                    nivel: 'llm',
+                },
+                negocio
+            );
         }
     };
 }
@@ -371,4 +375,4 @@ async function ejecutarSolicitud({
     }
 }
 
-module.exports = { crearManejadorLlm, CONFIG, RESPUESTA_HANDOFF, comoResultado };
+module.exports = { crearManejadorLlm, CONFIG, comoResultado };

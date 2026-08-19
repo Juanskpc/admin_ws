@@ -992,12 +992,33 @@ ejecutarlo en producción. Lo verificado en local fueron 2 personas sintéticas.
     3. **El bot NO vuelve.** Si se escaló, responde una persona. Nada de recuperar la conversación
        pasadas unas horas: sería contradecir lo que ya se le prometió al cliente.
 
-    **Lo que hoy existe y lo que no.** El estado `handoff_humano` está en el esquema desde F5-A
-    (`migrate_intelligence_ledger.js`) y el motor ya lo trata como pasivo a propósito —en él no
-    contesta el bot, porque uno hablando encima de una persona es peor que uno mudo—. Pero
-    **nadie lo escribe nunca**: `manejadorLlm.js` devuelve `resultado: 'resuelto'` y suelta una
-    frase fija, así que la conversación sigue `activa` y el bot sigue contestando. El handoff de
-    hoy es una frase, no un estado.
+    **Implementado el 2026-08-18** en `intelligence/engine/handoff.js`, sin migración: el estado
+    `handoff_humano` ya estaba en el esquema desde F5-A y el motor ya lo trataba como pasivo. Lo
+    que faltaba era **que alguien lo escribiera**: `manejadorLlm.js` devolvía `resultado:
+    'resuelto'` y una frase fija, así que el bot prometía que intervenía una persona y **seguía
+    contestando él**. Ahora:
+
+    - La frase dice la verdad: *«Ahora mismo no tengo a nadie del negocio disponible para
+      responderte. Le paso tu mensaje y te contestan…»* — con la hora del negocio si la hay, y
+      «en el transcurso del día» si no.
+    - La decisión pone la conversación en `handoff_humano`, y ahí el motor **deja de contestar**.
+    - El turno se cuenta como `handoff` y no como `resuelto`: la pregunta 11 del Ledger es la tasa
+      de resolución y un escalado no lo es. Antes se contaba como resuelto a propósito, para no
+      inflarla con escalados que nadie atendía; ahora que el escalado apaga al bot de verdad, ese
+      motivo desaparece.
+
+    9 pruebas nuevas (`__tests__/intelligence/handoff.test.js` y una de extremo a extremo en
+    `motor.test.js`: escalar, y comprobar que el mensaje siguiente **ya no lo contesta el bot**).
+
+    ⚠️ **El horario todavía llega siempre `null`, y eso es correcto, no un pendiente escondido.**
+    `contextoNegocio.leerAtencion()` es la costura y hoy devuelve `null` porque el sitio donde
+    viven los horarios —`platform.business_context`, ADR-020— **no existe aún**. Los dos atajos se
+    descartaron por escrito: leer `reserva.reserva_horario` sería `intelligence/` metiendo la mano
+    en el esquema de una vertical (ADR-005) y además son horarios **de cada profesional**, no de
+    atención del negocio; y una capacidad `consultar_horario` contradice la categoría que ADR-020
+    congeló (configuración que va siempre en el prefijo, no dato que se consulta por turno). O
+    sea: **en la práctica todos los negocios dicen hoy «en el transcurso del día»**. La rama de la
+    hora está implementada y probada; le falta la fuente.
 
     ⚠️ **Comprobar antes de construir la bandeja.** Un número conectado a la Cloud API de Meta
     históricamente **no** puede usarse a la vez en la app de WhatsApp Business: los mensajes van a
