@@ -915,15 +915,24 @@ ejecutarlo en producción. Lo verificado en local fueron 2 personas sintéticas.
    de las personas está en un solo negocio, así que el "cero solapamiento entre inquilinos"
    es *ausencia de evidencia*, no evidencia de ausencia. Ver
    [`mediciones/2026-07-31-calidad-telefonos-restaurante.md`](mediciones/2026-07-31-calidad-telefonos-restaurante.md).
-5. **La Ficha 360 nunca se vio renderizada.** El build compila y el guard responde, pero la
-   extensión de Chrome no estaba conectada. Mírala tú antes de darla por buena.
+5. ~~**La Ficha 360 nunca se vio renderizada.**~~ **Cerrada (2026-08-18): abierta y correcta.**
+   Lista y ficha pintan los datos reales. Lo único que hubo que arreglar fue de forma: abría como
+   panel lateral y las otras tres pantallas de la consola abren tarjeta centrada; ya está alineada.
 6. ~~**Ni el WebChat ni la Console existen todavía**~~ **Cerrada (2026-08-12): existen los dos.**
    El WebChat en `http://localhost:3000/intelligence/webchat/` (detrás de dos guardas, F5-C) y la
    Console en `/admin/intelligence` (F5-E). El aviso de ADR-015 —«semanas sin nada de IA
    demo-able»— se cumplió y ya pasó. **Cómo ejercitar ambos está en §4-quater.**
-7. **`reserva_app` no se ha ejecutado con los cambios de F3.** Compila y el typecheck pasa,
-   pero nadie ha visto un rechazo del dominio pintado en la pantalla. Mismo caso que la
-   Ficha 360.
+7. ~~**`reserva_app` no se ha ejecutado con los cambios de F3.**~~ **Cerrada (2026-08-18):
+   verificada en pantalla.** Se provocó el rechazo de verdad —cancelar la cita en una pestaña y
+   confirmarla desde otra con la lista ya vieja— y **sale el motivo del dominio**, no el texto
+   fijo. Es el escenario real: dos empleados con la agenda abierta a la vez.
+
+   Llegar hasta ahí destapó **tres fallos que ninguna prueba veía**, los tres solo visibles
+   abriendo la pantalla: la vertical no arrancaba porque la base local nunca tuvo catálogo de
+   permisos (`migrate_niveles` existía sin registrar en `package.json`); los permisos de acción
+   llegaban en `false` para todo el mundo en **los cuatro verticales**, que dejaba la app sin un
+   solo botón; y el nombre del servicio no se pintaba nunca, porque la interfaz del frontend
+   declaraba la forma del catálogo y no la de una cita. Detalle en `CLAUDE.md` §Things to watch.
 8. **El manejador de eco (`intelligence/engine/manejadorEco.js`) es un andamio.** Cuando F5-D
    traiga la FSM hay que decidir si se borra o se queda como manejador de pruebas. Los tests
    del motor lo usan, así que borrarlo sin más obliga a reescribirlos.
@@ -941,8 +950,9 @@ ejecutarlo en producción. Lo verificado en local fueron 2 personas sintéticas.
     bug, es cuánto tardó en aparecer:** el canal llevaba desde F5-C con toda su API probada
     extremo a extremo por HTTP —y una cita agendada por `curl`— mientras la única superficie que
     ve un cliente no funcionaba. Un entregable de interfaz no está verificado hasta que alguien
-    lo abre. Quedan en la misma situación la **Ficha 360** (decisión 5) y **`reserva_app`**
-    (decisión 7): ninguna se ha ejecutado nunca en un navegador.
+    lo abre. **Las tres que quedaban se abrieron el 2026-08-18** —Ficha 360, Intelligence Console
+    y la pantalla de citas de `reserva_app`— y las tres tenían algo que ninguna prueba veía. La
+    lección se confirma: un entregable de interfaz no está verificado hasta que alguien lo abre.
 
 11. **El tono del asistente: hecho el paso 1 de 2 (2026-08-13).** El bot ya se presenta —«¡Hola!
     Te comunicas con Barbería Don Nico. ¿Qué servicio te gustaría agendar?»— y saluda por su
