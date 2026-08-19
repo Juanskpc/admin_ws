@@ -27,7 +27,7 @@ limpio. El troceado siguió la sugerencia original —un commit por bloque— as
 cuenta el orden real en que se descubrieron las cosas.
 
 ✅ **`reserva_app` cerrado (2026-08-18).** Su cambio de F3 vive ya en la rama
-`feature/escalapp_intelligence` de ese repo (`ee5f36e`), con **solo** `src/app/reserva/citas/citas.ts`
+`feature/escalapp_intelligence` de ese repo (`77f9064`), con **solo** `src/app/reserva/citas/citas.ts`
 dentro. Los otros 11 archivos sucios son la migración de identidad visual de las verticales y
 siguen sin commitear a propósito: son otro trabajo y les toca su propia rama.
 
@@ -907,7 +907,7 @@ ejecutarlo en producción. Lo verificado en local fueron 2 personas sintéticas.
 2. ~~**¿Se commitea el trabajo acumulado?**~~ **Cerrada del todo (2026-08-18).** `admin_ws` y
    `admin_app-v21` quedaron commiteados el 2026-08-12, un commit por bloque, y `reserva_app`
    cerró el 2026-08-18 con su propia rama `feature/escalapp_intelligence` y **solo** `citas.ts`
-   dentro (`ee5f36e`). Los 11 archivos de la migración de identidad visual siguen sucios en su
+   dentro (`77f9064`). Los 11 archivos de la migración de identidad visual siguen sucios en su
    `main`: son otro trabajo y les toca su propia rama.
 3. **Confirmar formalmente las 6 decisiones de `architecture/freeze.md` §D.** ADR-006 y
    ADR-024 ya las tratan como aceptadas, pero el acta pide confirmación explícita.
