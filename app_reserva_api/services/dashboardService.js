@@ -19,44 +19,68 @@ function normalizeRoutePath(url) {
     return withSlash.replace(/\/+/g, '/').replace(/\/+$/, '') || '/';
 }
 
+/**
+ * Permisos de vista de un usuario dentro de un negocio.
+ *
+ * ## Las dos tablas responden preguntas distintas, y confundirlas dejaba la app en solo lectura
+ *
+ * - `gener_rol_nivel` es la **plantilla del rol**: qué puede *hacer* un ADMINISTRADOR. Tiene las
+ *   cuatro banderas (ver, crear, editar, eliminar).
+ * - `gener_nivel_negocio` es el **ajuste por negocio**: qué vistas están habilitadas en *este*
+ *   negocio. Solo tiene `puede_ver` — no existen columnas para las otras tres.
+ *
+ * Antes se leía la segunda tabla **en lugar de** la primera cuando había filas, y como de ahí solo
+ * sale `puede_ver`, las otras tres quedaban en `false` para todo el mundo, incluido el
+ * administrador. En la interfaz eso se ve como una pantalla sin un solo botón de acción: se puede
+ * mirar la agenda y no se puede confirmar ni cancelar una cita. La plantilla del rol decía que sí
+ * y nadie la leía.
+ *
+ * Y no saltaba siempre, que es lo que lo hizo difícil de ver: la consulta de respaldo solo corría
+ * **cuando la primera no devolvía nada**. Un negocio sin ajustes propios funcionaba perfecto; uno
+ * con ajustes —los que crea `migrate_reserva.js` para cada negocio del tipo— quedaba mudo.
+ *
+ * Ahora cada tabla hace lo suyo: la plantilla del rol aporta **lo que se puede hacer**, y los
+ * ajustes del negocio actúan como **filtro de qué vistas se ven**. Sin ajustes, se ve todo lo que
+ * el rol permita, que es el comportamiento que ya había.
+ *
+ * ⚠️ Esta misma función está copiada en `app_gym_api`, `app_restaurante_api` y `app_tienda_api`
+ * con el mismo fallo. Se arregla aquí porque es donde se detectó; las otras tres siguen igual.
+ */
 async function getPermisosVistaNegocio({ idNegocio, idTipoNegocio, rolesNegocio }) {
     const roleIds = [...new Set((rolesNegocio || []).map(r => Number(r.id_rol)).filter(Number.isInteger))];
-    let rolePermisos = [];
+    if (roleIds.length === 0) return [];
 
-    if (idNegocio && roleIds.length > 0) {
-        rolePermisos = await Models.GenerNivelNegocio.findAll({
+    // Qué puede hacer cada rol. Única fuente de las cuatro banderas.
+    const rolePermisos = await Models.GenerRolNivel.findAll({
+        where: { id_rol: roleIds, estado: 'A', puede_ver: true },
+        attributes: ['id_rol', 'id_nivel', 'puede_ver', 'puede_crear', 'puede_editar', 'puede_eliminar'],
+        include: [
+            {
+                model: Models.GenerNivel, as: 'nivel', required: true,
+                where: { estado: 'A', id_tipo_negocio: idTipoNegocio, id_tipo_nivel: 1, url: { [Op.ne]: null } },
+                attributes: ['id_nivel', 'descripcion', 'url'],
+            },
+            { model: Models.GenerRol, as: 'rol', required: false, attributes: ['descripcion'] },
+        ],
+    });
+
+    // Qué vistas habilita este negocio. Si no dice nada, no recorta nada.
+    let habilitadasPorNegocio = null;
+    if (idNegocio) {
+        const ajustes = await Models.GenerNivelNegocio.findAll({
             where: { id_negocio: idNegocio, id_rol: roleIds, estado: 'A', puede_ver: true },
-            attributes: ['id_rol', 'id_nivel', 'puede_ver'],
-            include: [
-                {
-                    model: Models.GenerNivel, as: 'nivel', required: true,
-                    where: { estado: 'A', id_tipo_negocio: idTipoNegocio, id_tipo_nivel: 1, url: { [Op.ne]: null } },
-                    attributes: ['id_nivel', 'descripcion', 'url'],
-                },
-                { model: Models.GenerRol, as: 'rol', required: false, attributes: ['descripcion'] },
-            ],
+            attributes: ['id_rol', 'id_nivel'],
         });
-    }
-
-    if (rolePermisos.length === 0 && roleIds.length > 0) {
-        rolePermisos = await Models.GenerRolNivel.findAll({
-            where: { id_rol: roleIds, estado: 'A', puede_ver: true },
-            attributes: ['id_rol', 'id_nivel', 'puede_ver', 'puede_crear', 'puede_editar', 'puede_eliminar'],
-            include: [
-                {
-                    model: Models.GenerNivel, as: 'nivel', required: true,
-                    where: { estado: 'A', id_tipo_negocio: idTipoNegocio, id_tipo_nivel: 1, url: { [Op.ne]: null } },
-                    attributes: ['id_nivel', 'descripcion', 'url'],
-                },
-                { model: Models.GenerRol, as: 'rol', required: false, attributes: ['descripcion'] },
-            ],
-        });
+        if (ajustes.length > 0) {
+            habilitadasPorNegocio = new Set(ajustes.map(a => `${a.id_rol}:${a.id_nivel}`));
+        }
     }
 
     const grouped = new Map();
     rolePermisos.forEach((p) => {
         const url = normalizeRoutePath(p.nivel?.url);
         if (!url || url === '/reserva') return;
+        if (habilitadasPorNegocio && !habilitadasPorNegocio.has(`${p.id_rol}:${p.id_nivel}`)) return;
         const cur = grouped.get(url) || {
             id_nivel: p.nivel?.id_nivel,
             vista: p.nivel?.descripcion || 'Vista',

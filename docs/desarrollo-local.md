@@ -150,8 +150,25 @@ guardas las credenciales de producción en un `.env.produccion.bak`, queda ignor
 
 ```bash
 npm run migrate                  # catálogos: 7 tipos de negocio + 29 roles
+npm run migrate:niveles          # ⚠️ el catálogo de PERMISOS — sin esto las verticales no abren
 node scripts/seed_dev_local.js   # planes, negocio demo, usuarios y roles
 ```
+
+> ### ⚠️ `migrate:niveles` no existía como script hasta el 2026-08-18
+>
+> La migración estaba en `migrations/migrate_niveles.js` desde siempre, pero **sin registrar en
+> `package.json`** y sin aparecer en esta guía, así que nadie la corría. Resultado: una base local
+> montada desde cero se queda con **cero permisos** (`gener_tipo_nivel`, `gener_nivel` y
+> `gener_rol_nivel` vacías).
+>
+> Y el síntoma no dice nada de permisos. La consola de admin funciona igual —sus guardas van por
+> rol, no por permisos—, así que todo parece bien hasta que entras a una vertical: la sesión llega
+> sin un solo permiso, el guardia bloquea todas las rutas, la navegación se cancela **sin lanzar
+> ningún error** y la pantalla se queda para siempre en *«Verificando acceso…»*. Costó una sesión
+> entera de 2026-08-18 llegar hasta aquí.
+>
+> Ya está registrada. Si te encuentras esa pantalla colgada, lo primero que hay que mirar es
+> `select count(*) from general.gener_nivel;`.
 
 `seed_dev_local.js` es idempotente y **aborta si `DB_HOST` no es local**, así que no puede
 ejecutarse contra producción por accidente.
@@ -169,6 +186,23 @@ Dos migraciones **no** sirven para sembrar sobre una base vacía, y por eso el s
   administrador que ya exista.
 - `migrate:planes-base` inserta en `gener_negocio_plan` con `id_negocio = 6` hardcodeado,
   que en local no existe: viola la FK y hace rollback.
+
+## 4a. La vertical `reserva`, si vas a tocarla
+
+`reserva` no existe hasta que se corre su migración: **crea el tipo de negocio RESERVA, sus tres
+roles, el esquema con sus 8 tablas, los niveles y los permisos**, todo en un paso.
+
+```bash
+npm run migrate:reserva
+```
+
+Sin ella, `general.gener_tipo_negocio` no tiene una fila `RESERVA` — y el panel de admin decide a
+qué app manda a cada negocio **por el nombre de su tipo**, así que la app de reservas queda
+inalcanzable aunque esté levantada. Crear el tipo a mano no sirve: te quedas sin los permisos, que
+es la mitad que duele.
+
+Deja además un negocio demo propio, «Salón Demo EscalApp». Para tener una agenda con la que
+trabajar, el fixture de §4c monta servicios, profesionales y horarios.
 
 ## 4b. Órdenes de prueba para F0 (opcional)
 

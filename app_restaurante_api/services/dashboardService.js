@@ -28,45 +28,39 @@ function normalizeSubnivelCode(rawCode) {
         .replace(/\//g, '_');
 }
 
+/**
+ * Permisos de vista de un usuario dentro de un negocio.
+ *
+ * ## Las dos tablas responden preguntas distintas, y confundirlas dejaba la app en solo lectura
+ *
+ * - `gener_rol_nivel` es la **plantilla del rol**: que puede *hacer* un ADMINISTRADOR. Tiene las
+ *   cuatro banderas (ver, crear, editar, eliminar).
+ * - `gener_nivel_negocio` es el **ajuste por negocio**: que vistas estan habilitadas en *este*
+ *   negocio. Solo tiene `puede_ver` -- no existen columnas para las otras tres.
+ *
+ * Antes se leia la segunda **en lugar de** la primera cuando habia filas, y como de ahi solo sale
+ * `puede_ver`, las otras tres quedaban en `false` para todo el mundo, incluido el administrador.
+ * En pantalla eso es un modulo sin un solo boton de accion. El comentario que decia
+ * "por no bloquear accesos existentes" describia justo el efecto contrario al que tenia: la
+ * consulta de respaldo solo corria **cuando la primera no devolvia nada**, asi que un negocio con
+ * ajustes propios quedaba mudo y uno sin ellos funcionaba perfecto.
+ *
+ * Ahora cada tabla hace lo suyo: la plantilla del rol aporta **lo que se puede hacer**, y los
+ * ajustes del negocio actuan como **filtro de que vistas se ven**. Sin ajustes, se ve todo lo que
+ * el rol permita -- identico a lo que ya pasaba.
+ *
+ * Detectado en `reserva` el 2026-08-18 y corregido igual en los cuatro verticales, porque la
+ * funcion estaba copiada tal cual en todos.
+ *
+ * Nota: `getPermisosSubnivelNegocio`, aqui abajo, tiene la misma forma y **no** tiene el fallo:
+ * solo usa `puede_ver`, que es lo unico que las dos tablas saben responder.
+ */
 async function getPermisosVistaNegocio({ idUsuario, idNegocio, idTipoNegocio, rolesNegocio }) {
     const roleIds = [...new Set((rolesNegocio || []).map((r) => Number(r.id_rol)).filter(Number.isInteger))];
 
+    // Que puede hacer cada rol. Unica fuente de las cuatro banderas.
     let rolePermisos = [];
-    if (roleIds.length > 0 && idNegocio) {
-        rolePermisos = await Models.GenerNivelNegocio.findAll({
-            where: {
-                id_negocio: idNegocio,
-                id_rol: roleIds,
-                estado: 'A',
-                puede_ver: true,
-            },
-            attributes: ['id_rol', 'id_nivel', 'puede_ver'],
-            include: [
-                {
-                    model: Models.GenerNivel,
-                    as: 'nivel',
-                    required: true,
-                    where: {
-                        estado: 'A',
-                        id_tipo_negocio: idTipoNegocio,
-                        id_tipo_nivel: 1,
-                        url: { [Op.ne]: null },
-                    },
-                    attributes: ['id_nivel', 'descripcion', 'url'],
-                },
-                {
-                    model: Models.GenerRol,
-                    as: 'rol',
-                    required: false,
-                    attributes: ['descripcion'],
-                },
-            ],
-        });
-    }
-
-    // Compatibilidad: si no hay parametrización en gener_nivel_negocio,
-    // usa la matriz global por rol para no bloquear accesos existentes.
-    if (rolePermisos.length === 0 && roleIds.length > 0) {
+    if (roleIds.length > 0) {
         rolePermisos = await Models.GenerRolNivel.findAll({
             where: {
                 id_rol: roleIds,
@@ -97,6 +91,23 @@ async function getPermisosVistaNegocio({ idUsuario, idNegocio, idTipoNegocio, ro
         });
     }
 
+    // Que vistas habilita este negocio. Si no dice nada, no recorta nada.
+    let habilitadasPorNegocio = null;
+    if (roleIds.length > 0 && idNegocio) {
+        const ajustes = await Models.GenerNivelNegocio.findAll({
+            where: {
+                id_negocio: idNegocio,
+                id_rol: roleIds,
+                estado: 'A',
+                puede_ver: true,
+            },
+            attributes: ['id_rol', 'id_nivel'],
+        });
+        if (ajustes.length > 0) {
+            habilitadasPorNegocio = new Set(ajustes.map((a) => a.id_rol + ':' + a.id_nivel));
+        }
+    }
+
     const permisosUsuarioDirectos = await Models.GenerNivelUsuario.findAll({
         where: { id_usuario: idUsuario },
         attributes: ['id_nivel'],
@@ -121,6 +132,7 @@ async function getPermisosVistaNegocio({ idUsuario, idNegocio, idTipoNegocio, ro
         const urlRaw = permiso.nivel?.url;
         const normalizedUrl = normalizeRoutePath(urlRaw);
         if (!normalizedUrl || normalizedUrl === '/auth') return;
+        if (habilitadasPorNegocio && !habilitadasPorNegocio.has(permiso.id_rol + ':' + permiso.id_nivel)) return;
 
         const current = groupedByUrl.get(normalizedUrl) || {
             id_nivel: permiso.nivel?.id_nivel,
