@@ -1,11 +1,57 @@
 # EscalApp Intelligence — estado y cómo continuar
 
-**Última actualización:** 2026-08-17 (2.ª: segundo proveedor)
+**Última actualización:** 2026-08-18 (F6 contra la API real · los dos guardarraíles de ADR-023)
 **Propósito:** que retomar el trabajo no cueste una sesión de arqueología. Si vuelves a este
 proyecto después de semanas, **lee este documento primero** y sigue por donde diga.
 
 > **Documento vivo.** Actualízalo al terminar cada fase. Si contradice al `roadmap.md`, gana
 > el roadmap: esto es un resumen operativo, no una fuente de verdad arquitectónica.
+
+---
+
+## 4-0. POR DÓNDE SE SIGUE (cierre del 2026-08-18)
+
+> Esta sección es lo primero que hay que leer al retomar. Las de más abajo son historia de fases
+> ya cerradas y se conservan porque explican **por qué** las cosas están como están.
+
+**Estado en una frase:** F0–F6 completas en local, **los dos guardarraíles de ADR-023 construidos**,
+**361 pruebas en verde**, y **nada desplegado**.
+
+### Lo que se puede hacer ya, en orden de valor
+
+1. **Desplegar F2.** Es lo único de toda la lista que arregla algo **roto en producción ahora
+   mismo**: la fuga entre negocios. Procedimiento en §5. Lleva semanas esperando y no depende de
+   nada de lo que viene después.
+2. **Medir el guardarraíl de promesas una semana** antes de encender `PROMESAS_MODO=bloqueo`
+   (§6.14). Mismo procedimiento que F2 con `AUTHZ_MODO`. Sin datos, encender el bloqueo es
+   adivinar.
+3. **Empezar F7 de verdad: las mutaciones vía IA.** Los dos guardarraíles que la bloqueaban ya
+   están. Lo que falta es dejar que el Nivel 4 invoque capacidades de `tipo: 'mutacion'` con
+   confirmación humana explícita en el canal. Hoy `manejadorLlm.js` filtra por `tipo === 'consulta'`
+   al construir el prompt **y lo vuelve a comprobar** antes de ejecutar: son las dos líneas que
+   F7 tiene que cambiar, y hacerlo sin la confirmación humana es romper la frontera a propósito.
+
+### Lo que hay que decidir antes de tocar F7
+
+- **ADR-023 sigue formalmente en *Propuesto*.** Sus dos mecanismos ya están decididos (§6.13) y
+  construidos, así que sólo queda el gesto: el roadmap dice que pasa a *Aceptado* al empezar F7.
+  **No se cambió el estado por iniciativa propia** — un ADR lo acepta quien lo decide, no quien lo
+  implementa.
+- **La confirmación humana de las mutaciones**: qué forma tiene en el canal. «¿Confirmas la cita
+  del martes a las 10:00?» y esperar un sí, ¿con qué tiempo de espera y qué pasa si no llega?
+- **Ningún plan comercial incluye `asistente_ia`.** Hoy hay que forzarlo con `FEATURES_FORZADAS`.
+  Antes de vender el asistente, alguien tiene que meterlo en un plan.
+
+### Deudas conocidas, ninguna bloqueante
+
+| Deuda | Dónde |
+|---|---|
+| El adaptador de OpenAI no puede razonar con herramientas; la salida es `/v1/responses` | §4-quinquies |
+| Elegir proveedor es imposible sin `ANTHROPIC_API_KEY` | §4-quinquies |
+| `cache_read` no se ha visto funcionar en un prompt real (los prompts no llegan a 1024 tokens) | §4-quinquies |
+| El horario del handoff llega siempre `null`: falta `platform.business_context` | §6.13 |
+| El guardarraíl no ve promesas sin número, ni cifras que el bot dijo en turnos anteriores | §6.14 |
+| La coexistencia de WhatsApp corta la API a los ~14 días sin abrir la app — **sin confirmar en Meta** | §6.13 |
 
 ---
 
@@ -49,7 +95,8 @@ siguen sin commitear a propósito: son otro trabajo y les toca su propia rama.
 | **F5-D** | Motor determinista + Identity Resolver | ✅ **Completa en local** |
 | **F5-E** | Intelligence Console → **MVP interno** | ✅ **Completa en local** (API + vista Angular en `/admin/intelligence`) |
 | **F6** | `ModelPort` + Prompt Builder + orquestador + Nivel 4 **solo lectura** + arnés | ✅ **Completa en local** (ver §4-quinquies) |
-| F7–F10 | Ver [`architecture/roadmap.md`](architecture/roadmap.md) | ⬜ |
+| **F7** | Mutaciones vía IA + guardarraíles de ADR-023 + Consola de Handoff | 🟡 **A medias**: los **dos guardarraíles están construidos** (§6.13 y §6.14); las mutaciones vía IA, no |
+| F8–F10 | Ver [`architecture/roadmap.md`](architecture/roadmap.md) | ⬜ |
 
 **F5 se partió en cinco.** Es la fase más grande del plan y su parte irreversible es el
 Ledger: ADR-022 dice que su esquema debe nacer completo porque lo que no se registre hoy no
@@ -84,15 +131,15 @@ la suite (contable con `grep -rhoE '^\s*(it|test)\(' __tests__/`):
 
 | Suite | Archivos | Casos declarados |
 |---|---:|---:|
-| `__tests__/intelligence/` | 9 | 164 |
+| `__tests__/intelligence/` | 11 | 194 |
 | `__tests__/platform/` | 5 | 71 |
 | `__tests__/reserva/` | 1 | 28 |
 | `__tests__/reportes/` | 2 | 20 |
 
-En ejecución salen más (332 al 2026-08-18): los usos de `.each` expanden, y F6 sumó las suyas.
+En ejecución salen más (361 al cierre del 2026-08-18): los usos de `.each` expanden, y F6 sumó las suyas.
 Ver la nota del flake de `reportes` en §8.
 
-**Corrida completa del 2026-08-18 contra la base LOCAL: 332 de 332 en verde, en 24 s.** Es la
+**Corrida completa del 2026-08-18 contra la base LOCAL: 361 de 361 en verde, en 24 s.** Es la
 primera corrida entera limpia. Dos veces seguidas, y una tercera con `npx jest` pelado después de
 añadir `jest.config.js`.
 
@@ -327,7 +374,7 @@ node scripts/conversacion.js recuperar                      # turnos colgados de
 
 ---
 
-## 4-bis. Por dónde se sigue: F5-D (motor determinista + Identity Resolver)
+## 4-bis. Historia: cómo se planteó F5-D (motor determinista + Identity Resolver)
 
 Lo siguiente es **F5-D**, y es **la última pieza del MVP interno**: lo único que falta para
 que un cliente agende una cita entera hablando con la máquina. Antes de escribir una línea,
