@@ -138,6 +138,22 @@ const opcionesDe = (mensaje) => {
     return typeof o === 'string' ? JSON.parse(o) : o;
 };
 
+/**
+ * Las horas libres, comprobando que LO SON.
+ *
+ * `opcionesDe` a secas no vale aquí: cuando no hay agenda ese día, el bot responde «no hay
+ * horas, ¿probamos el X?» con **una** opción —la del día siguiente—, así que un
+ * `expect(horas.length).toBeGreaterThan(0)` pasa sin que haya ni una hora. La conversación
+ * seguía entonces dos turnos más y reventaba en una aserción que no tenía nada que ver.
+ * Una hora se reconoce por su `id`: `HH:MM`.
+ */
+const horasDe = (mensaje) => {
+    const opciones = opcionesDe(mensaje);
+    expect(opciones.length).toBeGreaterThan(0);
+    expect(opciones[0].id).toMatch(/^\d{1,2}:\d{2}$/);
+    return opciones;
+};
+
 beforeAll(async () => {
     const negocio = await unaFila(
         `SELECT id_negocio FROM general.gener_negocio WHERE estado = 'A' ORDER BY id_negocio LIMIT 1;`
@@ -163,11 +179,28 @@ beforeAll(async () => {
         )
     ).map((f) => Number(f.dia_semana));
 
-    const hoy = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Bogota' }));
+    // ⚠️ La fecha de pared de Bogotá se lee con `en-CA` y NUNCA pasando por UTC.
+    //
+    // Antes esto hacia `new Date(toLocaleString(...))` y luego `toISOString()`: dos
+    // conversiones que solo se cancelan si el proceso corre en UTC. En un PC en Bogota, a
+    // partir de las 19:00 la fecha UTC ya cambió, así que el bucle contaba los días sobre un
+    // calendario y escribía la fecha sobre el otro: `getDay()` decía viernes y la cadena
+    // resultante era el sábado. Con el fixture de lunes a viernes eso elige un día sin
+    // horario, la conversación se va por la rama de «no hay horas» y los tres criterios
+    // fallan lejos de la causa. La suite pasaba de día y fallaba de noche. Es la misma
+    // trampa que ya se pagó dentro de `interpretarFecha`; aquí seguía viva su copia.
+    const hoyISO = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'America/Bogota',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+    }).format(new Date());
+    const [anio, mes, dia] = hoyISO.split('-').map(Number);
     for (let i = 1; i <= 14 && !fechaConAgenda; i++) {
-        const d = new Date(hoy);
-        d.setDate(d.getDate() + i);
-        const iso = d.getDay() === 0 ? 7 : d.getDay();
+        // Medianoche UTC de un día de calendario: `getUTCDay()` y `toISOString()` leen
+        // entonces el mismo día, que es lo que aquí fallaba.
+        const d = new Date(Date.UTC(anio, mes - 1, dia + i));
+        const iso = d.getUTCDay() === 0 ? 7 : d.getUTCDay();
         if (dias.includes(iso)) fechaConAgenda = d.toISOString().slice(0, 10);
     }
     if (!fechaConAgenda) throw new Error('No hay ningún día con horario en las próximas 2 semanas.');
@@ -272,7 +305,7 @@ describe('criterio 1: una cita completa por WebChat', () => {
         expect(menu.contenido).not.toMatch(/1\)/);
 
         await decir(s, servicios[0].id, 2);
-        const horas = opcionesDe(await decir(s, fechaConAgenda, 3));
+        const horas = horasDe(await decir(s, fechaConAgenda, 3));
         expect(horas.length).toBeGreaterThan(0);
 
         await decir(s, horas[0].id, 4);
@@ -373,7 +406,7 @@ describe('criterio 2: la ráfaga', () => {
 
         const menu = await decir(s, 'hola', 1);
         await decir(s, opcionesDe(menu)[0].id, 2);
-        const horas = opcionesDe(await decir(s, fechaConAgenda, 3));
+        const horas = horasDe(await decir(s, fechaConAgenda, 3));
         await decir(s, horas[0].id, 4);
         await decir(s, 'E2E Doble', 5);
 
@@ -434,7 +467,7 @@ describe('criterio 3: la continuidad', () => {
         motor._reiniciar();
         motor.registrarManejador(manejarDeterminista);
 
-        const horas = opcionesDe(await decir(s, fechaConAgenda, 3));
+        const horas = horasDe(await decir(s, fechaConAgenda, 3));
         await decir(s, horas[0].id, 4);
         await decir(s, 'E2E Retomada', 5);
         await decir(s, 'sí', 6);
