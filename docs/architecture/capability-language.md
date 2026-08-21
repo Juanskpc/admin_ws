@@ -27,6 +27,7 @@ Su declaración contiene:
 | `parametros` | Esquema de entrada que el modelo llena | **Nunca** incluye `id_negocio` (lo inyecta la plataforma, ADR-010) |
 | `tipo` | `consulta` \| `mutacion` | Las `mutacion` siguen propose→hold→confirm (ADR-010) |
 | `idempotente` | ¿Repetirla produce el mismo efecto? | Ver §4: aquí divergen reserva y restaurante |
+| `confirmacion` | Solo en `mutacion`: ¿hace falta un sí explícito del cliente? | **Obligatorio declararlo** (F7). `NO_REQUIERE` si el efecto se deshace solo (un *hold* con TTL); si no, `{ pregunta, hecho }` — el texto con el que se pide el sí y el que se da después. Lo hace cumplir el Policy Gate, no el manejador |
 | `politica` | Límites de Business Policy que aplica | Ej. `descuento_maximo` (ADR-011) |
 | `vertical` | A qué adaptador pertenece | El adaptador vive en `intelligence/adapters/<vertical>` (ADR-009) |
 | `feature` | Entitlement requerido | Se consulta con `estaHabilitado` (ADR-021) |
@@ -38,14 +39,14 @@ son detalle de implementación privado de la capacidad ([ADR-008](../adr/ADR-008
 
 ## 2. Manifiesto: `reserva` (borrador en papel)
 
-| Capacidad | tipo | idempotente | Parámetros (sin `id_negocio`) | Emite | Estado |
-|---|---|---|---|---|---|
-| `consultar_servicios` | consulta | — | `{}` | — | ✅ F4-A |
-| `consultar_disponibilidad` | consulta | — | `{ id_servicio, fecha, id_profesional? }` | — | ✅ F4-A |
-| `proponer_turno` | mutacion | **no** (cada llamada aparta un hueco nuevo) | `{ id_servicio, inicio, id_profesional? }` | — | ✅ F4-B |
-| `reservar_turno` | mutacion | **sí** (el hold se consume al confirmarlo) | `{ codigo_hold, cliente_nombre, cliente_telefono?, notas? }` | *(pendiente de consumidor)* | ✅ F4-B |
-| `reagendar_cita` | mutacion | sí | `{ codigo_cita, codigo_hold }` | *(pendiente de consumidor)* | ✅ F4-B |
-| `cancelar_cita` | mutacion | sí | `{ codigo_cita, motivo? }` · política `ventana_cancelacion_horas` | *(pendiente de consumidor)* | ✅ F4-B |
+| Capacidad | tipo | idempotente | confirmación | Parámetros (sin `id_negocio`) | Emite | Estado |
+|---|---|---|---|---|---|---|
+| `consultar_servicios` | consulta | — | — | `{}` | — | ✅ F4-A |
+| `consultar_disponibilidad` | consulta | — | — | `{ id_servicio, fecha, id_profesional? }` | — | ✅ F4-A |
+| `proponer_turno` | mutacion | **no** (cada llamada aparta un hueco nuevo) | **no** (el hold caduca solo) | `{ id_servicio, inicio, id_profesional? }` | — | ✅ F4-B |
+| `reservar_turno` | mutacion | **sí** (el hold se consume al confirmarlo) | **sí** | `{ codigo_hold, cliente_nombre, cliente_telefono?, notas? }` | *(pendiente de consumidor)* | ✅ F4-B |
+| `reagendar_cita` | mutacion | sí | **sí** | `{ codigo_cita, codigo_hold }` | *(pendiente de consumidor)* | ✅ F4-B |
+| `cancelar_cita` | mutacion | sí | **sí** | `{ codigo_cita, motivo? }` · política `ventana_cancelacion_horas` | *(pendiente de consumidor)* | ✅ F4-B |
 | `consultar_mis_citas` | consulta | — | `{ id_persona_negocio }` | — | ⬜ bloqueada: `reserva_cita` no tiene `id_persona_negocio` |
 
 **Seis capacidades, techo diez.** Queda margen, y conviene defenderlo.
@@ -54,6 +55,15 @@ son detalle de implementación privado de la capacidad ([ADR-008](../adr/ADR-008
 `reservar_turno`. Pasa el test que el plan impone —«si una capacidad obliga a llamar a otra
 después para dejar el sistema consistente, están mal cortadas»— porque **no obliga a nada**:
 si `reservar_turno` no llega nunca, el hold expira solo y la agenda queda como estaba.
+
+**Y ese corte es también el que decide quién exige confirmación** (F7). `proponer_turno` es la
+mitad *propose*: existe precisamente para poder preguntarle al cliente antes de comprometer nada,
+y su efecto se deshace solo. Exigirle confirmación obligaría a preguntar «¿confirmas que aparte la
+hora?» y luego «¿confirmo la cita?» — dos preguntas para una decisión. Las otras tres sí la exigen,
+y el que la exige **no se ejecuta sin ella**: el Policy Gate deniega con `CONFIRMACION_REQUERIDA`.
+La conversación que consigue ese sí vive en `intelligence/engine/confirmacion.js`, y la lee el
+Nivel 1 —leer «sí» no necesita un modelo, y dejarle al modelo la decisión de disparar lo
+irreversible es justo lo que ADR-010 prohíbe.
 
 **Los eventos siguen sin emitirse**, aunque las mutaciones ya existan. Un evento se define
 cuando hay productor **y** consumidor ([ADR-013](../adr/ADR-013-catalogo-eventos.md) regla 4)
@@ -87,6 +97,11 @@ idempotente (el mismo cliente, mismo slot → una cita). El objetivo se cumple e
 | `quitar_item` | mutacion | no | `{ id_orden, id_linea }` | — |
 | `confirmar_pedido` | mutacion | sí | `{ id_orden, direccion?, metodo_pago }` | `pedido.pagado.v1` |
 | `consultar_estado_pedido` | consulta | — | `{ id_orden }` | — |
+
+Cuando `restaurante` se implemente (F9) tendrá que declarar `confirmacion` en sus cuatro
+mutaciones. El reparto se ve solo: `iniciar_pedido`, `agregar_item` y `quitar_item` son el *hold*
+acumulativo —el carrito, que es lo que en `reserva` hace el hold con TTL— y no la exigen;
+`confirmar_pedido` es la que cobra, y sí.
 
 **Forma dominante:** un pedido es un **carrito acumulativo**. `agregar_item` se ejecuta muchas veces en
 la misma conversación, mutando estado que crece. El objetivo se cumple en N capacidades encadenadas.

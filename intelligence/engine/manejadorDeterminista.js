@@ -58,6 +58,11 @@
 const policyGateReal = require('../core/policyGate');
 const identidadReal = require('./identidad');
 const contextoNegocioReal = require('../core/contextoNegocio');
+// Leer «sí», «cancelar» y la última línea de una ráfaga vive en `texto.js` desde F7: la
+// confirmación de una mutación necesita exactamente la misma lectura, y dos lecturas distintas
+// de «sí» sería un bot que confirma en un sitio y repregunta en el otro.
+const { COMANDO, normalizar, ultimaLinea, esComando } = require('./texto');
+const confirmacion = require('./confirmacion');
 
 /** Pasos de la tarea de agendar. Enum-like: se registran en el Ledger y se miden. */
 const PASO = {
@@ -70,47 +75,7 @@ const PASO = {
 
 const TAREA_AGENDAR = 'agendar_cita';
 
-/** Palabras que valen en cualquier paso. Son pocas a propósito: cada una hay que probarla. */
-const COMANDO = {
-    MENU: ['menu', 'menú', 'inicio', 'empezar', 'hola'],
-    CANCELAR: ['cancelar', 'salir', 'olvidalo', 'olvídalo', 'nada'],
-    SEGUIMOS: ['seguimos', 'continuar', 'sigamos', 'retomar'],
-    SI: ['si', 'sí', 'confirmo', 'dale', 'ok', 'vale', 'listo'],
-    NO: ['no', 'otra', 'cambiar'],
-};
-
 const MAX_OPCIONES = 8;
-
-function normalizar(texto) {
-    return String(texto || '')
-        .trim()
-        .toLowerCase()
-        .normalize('NFD')
-        .replace(/[̀-ͯ]/g, '');
-}
-
-/**
- * La última línea no vacía del texto agrupado.
- *
- * El debounce junta la ráfaga en **un** turno, así que aquí no llega «sí» sino «sí\nsí\nsí»,
- * y comparar el bloque entero contra «sí» no casa: el bot repreguntaba y la cita no se creaba.
- * Lo cazó el test de ráfaga en el paso de confirmar, que es exactamente para lo que está.
- *
- * Se toma la **última** y no «alguna»: dentro de un turno, lo último que dijo la persona es su
- * intención actual. Con «alguna» valdría, un «cancelar… no, espera, sigue» cancelaría.
- */
-function ultimaLinea(texto) {
-    const lineas = String(texto || '')
-        .split('\n')
-        .map((l) => l.trim())
-        .filter(Boolean);
-    return lineas[lineas.length - 1] ?? '';
-}
-
-function esComando(texto, lista) {
-    const t = normalizar(ultimaLinea(texto));
-    return lista.some((palabra) => t === normalizar(palabra));
-}
 
 /**
  * Memoria de conversación completa. Existe porque `variables` reemplaza en vez de fusionar:
@@ -205,7 +170,15 @@ function crearManejadorDeterminista({
      * —porque el proceso murió, o porque la conversación estaba ocupada— devuelve lo que ya
      * hizo en vez de volver a hacerlo.
      */
-    async function invocar({ capacidad, args, principal, idNegocio, turno, invocaciones }) {
+    async function invocar({
+        capacidad,
+        args,
+        principal,
+        idNegocio,
+        turno,
+        invocaciones,
+        confirmadoPor = null,
+    }) {
         const iniciado = Date.now();
         try {
             const sobre = await gate.ejecutar({
@@ -214,6 +187,10 @@ function crearManejadorDeterminista({
                 idNegocio,
                 args,
                 claveIdempotencia: turno?.id_turno ? String(turno.id_turno) : undefined,
+                // Las mutaciones que comprometen al negocio no se ejecutan sin el sí del
+                // cliente (ADR-010). La FSM lo tiene delante —acaba de leerlo en el paso de
+                // confirmar— y lo pasa; el Gate es quien lo exige.
+                ...(confirmadoPor ? { confirmadoPor } : {}),
             });
             invocaciones?.push({
                 capacidad,
@@ -284,9 +261,14 @@ function crearManejadorDeterminista({
                     texto: `${apertura}¿Qué servicio te gustaría agendar?`,
                     // Nunca numerado dentro del texto: va en `opciones` y cada canal lo pinta
                     // como sabe (ADR-017). El WebChat los hace chips; WhatsApp, botones.
+                    // El nombre va en `etiqueta` y lo demás en `detalle` (F8-A): en el WebChat
+                    // se pintan juntos como antes, y en WhatsApp el detalle cabe en la
+                    // descripción de la fila en vez de morir en el recorte de 20 caracteres del
+                    // título de un botón, que se comía justo el precio.
                     opciones: servicios.map((s) => ({
                         id: String(s.id_servicio),
-                        etiqueta: `${s.nombre} (${s.duracion_min} min)${formatearPrecio(s.precio)}`,
+                        etiqueta: s.nombre,
+                        detalle: `${s.duracion_min} min${formatearPrecio(s.precio)}`,
                     })),
                 },
             ],
@@ -565,6 +547,8 @@ function crearManejadorDeterminista({
                     cliente_nombre: datos.nombre,
                     cliente_telefono: ctx.identidad.telefono || undefined,
                 },
+                // Éste es el sí: el texto que acaba de pasar por `COMANDO.SI` dos líneas arriba.
+                confirmadoPor: { idTurno: ctx.turno?.id_turno, texto: ctx.texto },
             });
 
             return {
@@ -639,6 +623,13 @@ function crearManejadorDeterminista({
 
         const datos = conversacion.tarea_datos || {};
         const hayTarea = conversacion.tarea_actual === TAREA_AGENDAR;
+
+        // Una mutación esperando el sí del cliente manda sobre todo lo demás, incluso sobre
+        // «cancelar»: ahí esa palabra no significa «sal del flujo», significa «no lo hagas»
+        // — y las dos lecturas acaban en el mismo sitio, que es no ejecutar nada.
+        if (confirmacion.pendiente(conversacion)) {
+            return conRastro(await confirmacion.resolver(ctx, { gate, ahora }));
+        }
 
         // Cancelar manda en cualquier paso. Es lo primero que se mira a propósito: un cliente
         // que quiere salir tiene que poder salir, aunque esté a mitad de un formulario.

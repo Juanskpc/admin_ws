@@ -17,6 +17,8 @@
  *   --id-mensaje <id>  identificador del mensaje en el canal; repetirlo prueba la
  *                      deduplicación (el segundo envío no crea nada)
  *   --no-esperar       no esperar al turno; deja el mensaje pendiente y sale
+ *   --fsm              solo el Nivel 1 determinista, sin escalera ni modelo (gratis)
+ *   --eco              el andamio de F5-B, para aislar fallos del motor
  *
  * ## Qué mirar
  *
@@ -40,6 +42,8 @@ function parsearArgv(argv) {
     for (let i = 0; i < argv.length; i++) {
         const a = argv[i];
         if (a === '--no-esperar') opciones.noEsperar = true;
+        else if (a === '--fsm') opciones.fsm = true;
+        else if (a === '--eco') opciones.eco = true;
         else if (a.startsWith('--')) opciones[a.slice(2)] = argv[++i];
         else posicionales.push(a);
     }
@@ -279,9 +283,16 @@ async function main() {
         // del camino completo (canal → motor → Policy Gate → capacidad → dominio) y con el
         // eco solo se ejercitaba la mecánica. `--eco` recupera el andamio para aislar fallos
         // del motor de fallos de la conversación, que es justo lo que ADR-015 quiere separar.
+        // Desde F6 la CLI conduce la **escalera entera**, no solo la FSM. Si hay credencial de
+        // modelo, un «¿cuánto cuesta un corte?» va al Nivel 4 y un «cancélame la cita» acaba en
+        // la confirmación de F7; si no la hay, `montarEscalera` devuelve la escalera de un
+        // peldaño y todo sigue siendo gratis y determinista. Que la CLI se quedara en la FSM
+        // significaba que el camino nuevo solo se podía ejercitar abriendo el WebChat.
         const manejador = opciones.eco
             ? intelligence.manejadorEco.manejarEco
-            : intelligence.manejadorDeterminista.manejarDeterminista;
+            : opciones.fsm
+              ? intelligence.manejadorDeterminista.manejarDeterminista
+              : intelligence.montarEscalera().manejador;
 
         // El catálogo de capacidades es código (el manifiesto del adaptador) y hay que
         // registrarlo antes de que la FSM invoque nada: sin esto el Policy Gate deniega con

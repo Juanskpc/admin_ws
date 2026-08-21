@@ -126,6 +126,66 @@ async function asegurarConversacion({ idNegocio, canal, idExterno }, { transacti
 }
 
 /**
+ * Busca una conversación sin crearla (F8-A).
+ *
+ * Existe porque `asegurarConversacion` **escribe**, y hay un caso que solo necesita mirar: cuando
+ * el dueño contesta desde su propio WhatsApp, el canal quiere silenciar esa conversación *si
+ * existe*. Crear una conversación vacía porque el negocio escribió a alguien que nunca le escribió
+ * sería inventarse un hilo que nadie abrió.
+ */
+async function buscarConversacion({ idNegocio, canal, idExterno }, { transaction = null } = {}) {
+    return unaFila(
+        `
+        SELECT id_conversacion, id_negocio, canal, id_externo, estado,
+               variables, tarea_actual, tarea_datos
+          FROM intelligence.conversacion
+         WHERE id_negocio = :idNegocio AND canal = :canal AND id_externo = :idExterno;
+        `,
+        { idNegocio, canal, idExterno },
+        transaction
+    );
+}
+
+/**
+ * Cambia el estado de una conversación, y **solo** el estado.
+ *
+ * Aparte de `guardarEstado` a propósito: aquélla la llama el motor al cerrar un turno y reemplaza
+ * variables y tarea. Esto lo llama quien no está en un turno —el canal, cuando un humano toma la
+ * conversación— y pisar la tarea a medias le borraría el hilo al cliente si el humano no lo remata.
+ *
+ * El estado se valida contra el CHECK de la tabla (F5-A). Un valor fuera de la lista aborta la
+ * transacción entera, y por eso se comprueba antes en vez de descubrirlo en el rollback.
+ */
+const ESTADOS_CONVERSACION = [
+    'activa',
+    'dormida',
+    'handoff_humano',
+    'bloqueada',
+    'suspendida',
+    'cerrada',
+];
+
+async function cambiarEstadoConversacion(idConversacion, estado, { transaction = null } = {}) {
+    if (!ESTADOS_CONVERSACION.includes(estado)) {
+        throw new Error(
+            `Estado de conversación inválido: "${estado}". El CHECK de intelligence.conversacion ` +
+                `admite ${ESTADOS_CONVERSACION.join(', ')}.`
+        );
+    }
+    return unaFila(
+        `
+        UPDATE intelligence.conversacion
+           SET estado = :estado,
+               cerrado_en = CASE WHEN :estado = 'cerrada' THEN now() ELSE cerrado_en END
+         WHERE id_conversacion = :idConversacion
+        RETURNING id_conversacion, estado;
+        `,
+        { idConversacion, estado },
+        transaction
+    );
+}
+
+/**
  * Toma el lock pesimista de la conversación (ADR-014, mecanismo 2).
  *
  * `NOWAIT` y no una espera: si otro proceso tiene la conversación, este vuelve a encolarla y
@@ -381,6 +441,12 @@ async function reclamarSalientesPendientes({ lote, ventanaHoras, transaction }) 
          WHERE m.direccion = 'saliente'
            AND m.estado_entrega = 'pendiente'
            AND m.creado_en > now() - (:ventanaHoras || ' hours')::interval
+           -- A quien pidió la baja no se le escribe más, ni lo que ya estaba en la cola (F8-A).
+           -- El caso real: el cliente escribe STOP mientras un turno anterior tenía respuesta
+           -- encolada. Ese mensaje se queda pendiente y caduca solo al salir de la ventana de
+           -- horas, que es más limpio que borrarlo: el Ledger conserva que se decidió y que no
+           -- se entregó. Una conversacion bloqueada no vuelve a activa sola (ver optout.js).
+           AND c.estado <> 'bloqueada'
          ORDER BY m.creado_en
          LIMIT :lote
            FOR UPDATE OF m SKIP LOCKED;
@@ -747,9 +813,12 @@ async function conversacionesConPendientes({ ventanaDias, transaction = null }) 
 
 module.exports = {
     ESTADOS_PROCESABLES,
+    ESTADOS_CONVERSACION,
     esErrorDeLock,
     reservarIngesta,
     asegurarConversacion,
+    buscarConversacion,
+    cambiarEstadoConversacion,
     bloquear,
     guardarEstado,
     insertarMensajeEntrante,

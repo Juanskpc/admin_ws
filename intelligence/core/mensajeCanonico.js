@@ -18,6 +18,11 @@
  * no puede pasar es que aquí aparezca un `\n1) …\n2) …` ya formateado, porque entonces el
  * formato de un canal se habría filtrado al núcleo y los demás heredarían su forma.
  *
+ * Una opción es `{ id, etiqueta, detalle? }`. El `detalle` llegó en F8-A y es el ejemplo de la
+ * evolución aditiva que este ADR pide: WhatsApp recorta el título de un botón a 20 caracteres y
+ * «Corte de cabello (30 min) — $35.000» perdía justo el precio. Separar el nombre de su detalle no
+ * le enseña al núcleo qué es un botón: le permite decir qué es lo importante y qué es el resto.
+ *
  * El riesgo declarado en el ADR es el contrario —el **mínimo común denominador**, quedarse en
  * lo que soportan *todos* los canales—, y se mitiga dejando que cada adaptador aproveche lo
  * que su canal sepa hacer, siempre que degrade con gracia donde no exista.
@@ -122,7 +127,18 @@ function normalizarSalida(respuesta) {
         if (typeof etiqueta !== 'string' || etiqueta.length === 0) {
             throw error('OPCION_SIN_ETIQUETA', 'Cada opción necesita una etiqueta.');
         }
-        return { id: String(id), etiqueta };
+        // `detalle` es opcional y es la evolución aditiva que ADR-017 permite (F8-A). Nació de un
+        // problema real del canal: WhatsApp recorta el título de un botón a 20 caracteres, así que
+        // «Corte de cabello (30 min) — $35.000» llegaba como «Corte de cabello (3…» y el precio
+        // —lo que el cliente quiere saber— desaparecía. Partirlo en nombre y detalle deja que cada
+        // canal decida: la lista de WhatsApp pinta el detalle debajo, el chip del WebChat al lado,
+        // y la voz lo leería después. El núcleo sigue sin saber cómo se pinta ninguno.
+        const detalle = opcion?.detalle;
+        return {
+            id: String(id),
+            etiqueta,
+            ...(typeof detalle === 'string' && detalle.length > 0 ? { detalle } : {}),
+        };
     });
 
     return { texto: bruto.texto, opciones };

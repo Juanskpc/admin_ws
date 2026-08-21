@@ -36,6 +36,41 @@ const TIPO = {
 };
 
 /**
+ * Confirmación humana: la mitad declarativa del ciclo propose → hold → confirm (ADR-010, F7).
+ *
+ * ## Por qué es un campo del manifiesto y no una regla del manejador
+ *
+ * El paso 5 del Policy Gate del plan pregunta «¿requiere confirmación humana?», y esa pregunta
+ * la contesta **la capacidad**, no quien la invoca: es una propiedad de su efecto, no del canal
+ * ni del nivel de la escalera. Si viviera en el manejador, cada camino nuevo hacia una mutación
+ * —otra FSM, un webhook, una capacidad que llama a otra— tendría que acordarse de aplicarla, y
+ * la primera que se olvidara sería un disparo silencioso sobre datos reales.
+ *
+ * ## Dos valores, y el silencio no es uno de ellos
+ *
+ * Toda `mutacion` debe declararlo. No hay valor por defecto porque el único seguro sería exigir
+ * confirmación siempre, y eso convierte `proponer_turno` —la mitad *propose*, un hold que caduca
+ * solo— en «¿confirmas que aparte la hora?» antes de «¿confirmas la cita?». Dos preguntas para
+ * una decisión. Así que se declara, y declararlo `NO_REQUIERE` obliga a escribir por qué.
+ *
+ *   - `NO_REQUIERE` — el efecto es reversible por sí solo (un hold con TTL, un carrito abierto).
+ *   - `{ pregunta, hecho }` — el efecto compromete al negocio. **La plataforma no la ejecuta**
+ *     hasta que el cliente diga sí en el canal. Las dos funciones son texto de producto y viven
+ *     en el adaptador de la vertical porque hablan de citas y de pedidos, cosas que el núcleo no
+ *     sabe qué son (ADR-009). Que el texto lo escriba el adaptador y no el modelo es deliberado:
+ *     la frase en la que el cliente se compromete no puede ser prosa generada.
+ */
+const CONFIRMACION = {
+    NO_REQUIERE: 'no_requiere',
+};
+
+/** ¿Esta capacidad no se puede ejecutar sin un sí explícito del cliente? */
+function requiereConfirmacion(capacidad) {
+    if (!capacidad || capacidad.tipo !== TIPO.MUTACION) return false;
+    return capacidad.confirmacion !== CONFIRMACION.NO_REQUIERE;
+}
+
+/**
  * Techo blando de ADR-008. No es un límite técnico: es un forzador de disciplina. Si una
  * vertical necesita más de 10, casi siempre significa que las capacidades están cortadas
  * como CRUD y no como acciones de negocio.
@@ -88,6 +123,38 @@ function validarParametro(nombreCapacidad, nombre, decl) {
     }
     if (decl.tipo === 'enum' && (!Array.isArray(decl.valores) || decl.valores.length === 0)) {
         fallo(`Parámetro "${nombre}" de "${nombreCapacidad}": un enum debe declarar "valores".`);
+    }
+}
+
+/**
+ * Valida la declaración de confirmación humana de una mutación.
+ *
+ * Estricto y sin valor por defecto: una mutación que se olvide de declararlo no llega a
+ * existir. Es la única forma de que el paso 5 del Policy Gate no dependa de que alguien se
+ * acuerde — el olvido se paga con una cita cancelada sin que el cliente lo pidiera.
+ */
+function validarConfirmacion(nombreCapacidad, confirmacion) {
+    if (confirmacion === CONFIRMACION.NO_REQUIERE) return;
+
+    if (!confirmacion || typeof confirmacion !== 'object') {
+        fallo(
+            `La mutación "${nombreCapacidad}" debe declarar "confirmacion": o ` +
+                `registry.CONFIRMACION.NO_REQUIERE —y entonces su efecto tiene que ser ` +
+                'reversible por sí solo, como un hold con TTL— o `{ pregunta, hecho }` con el ' +
+                'texto con el que se le pide el sí al cliente y el que se le da después ' +
+                '(ADR-010, paso 5 del Policy Gate). No hay valor por defecto: el único seguro ' +
+                'sería exigir confirmación siempre, y eso obliga a preguntar dos veces por una ' +
+                'sola decisión.'
+        );
+    }
+    for (const cual of ['pregunta', 'hecho']) {
+        if (typeof confirmacion[cual] !== 'function') {
+            fallo(
+                `La confirmación de "${nombreCapacidad}" debe declarar "${cual}" como función ` +
+                    '`({ args, resultado }) => string`. El texto vive en el adaptador porque ' +
+                    'habla de citas y de pedidos, y el núcleo no sabe qué son (ADR-009).'
+            );
+        }
     }
 }
 
@@ -146,6 +213,8 @@ function registrar(capacidad) {
         );
     }
 
+    if (tipo === TIPO.MUTACION) validarConfirmacion(nombre, capacidad.confirmacion);
+
     for (const [nombreParam, decl] of Object.entries(parametros)) {
         validarParametro(nombre, nombreParam, decl);
     }
@@ -186,6 +255,10 @@ function describir(nombre) {
         vertical: c.vertical,
         tipo: c.tipo,
         idempotente: c.idempotente ?? null,
+        // El modelo necesita saberlo para no prometer que ya está hecho: pide la mutación, y
+        // lo que sale al canal es una pregunta. El adaptador del `ModelPort` lo cuenta en la
+        // descripción de la herramienta; el manejador lo usa para no ejecutar.
+        requiere_confirmacion: requiereConfirmacion(c),
         parametros: c.parametros,
         politica: c.politica,
     };
@@ -201,7 +274,9 @@ module.exports = {
     obtener,
     listar,
     describir,
+    requiereConfirmacion,
     TIPO,
+    CONFIRMACION,
     MAX_CAPACIDADES_POR_VERTICAL,
     PARAMETROS_PROHIBIDOS,
     _limpiar,

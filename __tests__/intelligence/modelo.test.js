@@ -47,11 +47,22 @@ const CAPACIDADES = [
         },
     },
     {
+        nombre: 'proponer_turno',
+        descripcion: 'Aparta una hora unos minutos y devuelve el resumen para confirmar.',
+        vertical: 'reserva',
+        tipo: 'mutacion',
+        idempotente: false,
+        // La mitad *propose* de ADR-010: su efecto caduca solo, así que no se pregunta por ella.
+        requiere_confirmacion: false,
+        parametros: { inicio: { tipo: 'string', requerido: true } },
+    },
+    {
         nombre: 'reservar_turno',
         descripcion: 'Confirma una cita a partir de un hold vigente.',
         vertical: 'reserva',
         tipo: 'mutacion',
         idempotente: true,
+        requiere_confirmacion: true,
         parametros: { codigo_hold: { tipo: 'string', requerido: true } },
     },
 ];
@@ -68,6 +79,16 @@ function gateFalso({ resultados = {}, errores = {} } = {}) {
         },
         async ejecutar(invocacion) {
             llamadas.push(invocacion);
+            // El Gate de verdad deniega una mutación con confirmación si no le llega la prueba
+            // (F7). El de mentira tiene que hacer lo mismo, o los tests del manejador probarían
+            // un mundo donde esa regla no existe.
+            const exige = CAPACIDADES.find((c) => c.nombre === invocacion.capacidad)?.requiere_confirmacion;
+            if (exige && !invocacion.confirmadoPor) {
+                const e = new Error('Esa capacidad exige confirmación humana explícita.');
+                e.code = 'CONFIRMACION_REQUERIDA';
+                e.statusCode = 403;
+                throw e;
+            }
             if (errores[invocacion.capacidad]) throw errores[invocacion.capacidad];
             return {
                 capacidad: invocacion.capacidad,
@@ -374,14 +395,17 @@ describe('orquestador', () => {
 // ── Manejador de Nivel 4 ─────────────────────────────────────────────────────────────────
 
 describe('manejadorLlm', () => {
-    it('solo le ofrece al modelo capacidades de CONSULTA', async () => {
+    it('le ofrece al modelo TAMBIÉN las mutaciones (F7), que en F6 no veía', async () => {
         const adaptador = adaptadorFalso([{ texto: 'Un corte cuesta $35.000.', razonFin: puerto.FIN.TURNO }]);
         const manejador = crearManejadorLlm({ ...DEPS_BASE, gate: gateFalso(), adaptador });
         await correr(manejador);
 
         const ofrecidas = adaptador.peticiones[0].capacidades.map((c) => c.nombre);
         expect(ofrecidas).toContain('consultar_servicios');
-        expect(ofrecidas).not.toContain('reservar_turno');
+        // El filtro por tipo era la defensa de F6. Desde F7 la da el Gate, que no ejecuta una
+        // mutación con confirmación sin el sí del cliente — y el modelo necesita verla para
+        // poder pedirla.
+        expect(ofrecidas).toContain('reservar_turno');
     });
 
     it('NO ejecuta una capacidad que no se le ofreció, aunque el modelo la pida', async () => {
@@ -390,13 +414,13 @@ describe('manejadorLlm', () => {
             {
                 razonFin: puerto.FIN.CAPACIDADES,
                 invocacionesSolicitadas: [
-                    { id: 't1', capacidad: 'reservar_turno', argumentos: { codigo_hold: 'x' } },
+                    { id: 't1', capacidad: 'borrar_agenda', argumentos: { todo: 'sí' } },
                 ],
             },
-            { texto: 'No puedo agendar por aquí.', razonFin: puerto.FIN.TURNO },
+            { texto: 'Eso no lo puedo hacer.', razonFin: puerto.FIN.TURNO },
         ]);
         const manejador = crearManejadorLlm({ ...DEPS_BASE, gate, adaptador });
-        const { decision } = await correr(manejador, 'agéndame la cita');
+        const { decision } = await correr(manejador, 'bórrame la agenda entera');
 
         expect(gate.llamadas).toHaveLength(0);
         expect(decision.invocaciones[0].resultado).toBe('denegado');

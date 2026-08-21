@@ -21,7 +21,10 @@ const gateway = require('./channels/gateway');
 const ADAPTADORES = [require('./adapters/reserva')];
 
 /** Los canales, por el mismo motivo y con la misma regla que los adaptadores de vertical. */
-const CANALES = [require('./channels/webchat/adaptador')];
+const CANALES = [
+    require('./channels/webchat/adaptador'),
+    require('./channels/whatsapp/adaptador'),
+];
 
 let arrancado = false;
 
@@ -141,7 +144,8 @@ function montarEscalera({ adaptador = null, proveedor = null, modelo = null } = 
     const etiqueta = `${elegido.adaptador.nombre}/${config.modelo}`;
     console.log(
         `[intelligence] Nivel 4 montado: ${etiqueta} (esfuerzo ${config.esfuerzo}, tope ` +
-            `${config.maxCentavosPorTurno} centavos por turno). Solo capacidades de CONSULTA.`
+            `${config.maxCentavosPorTurno} centavos por turno). Consultas y mutaciones: las que ` +
+            'comprometen al negocio no se ejecutan sin el sí del cliente en el canal (F7, ADR-010).'
     );
 
     return {
@@ -164,6 +168,17 @@ function montarEscalera({ adaptador = null, proveedor = null, modelo = null } = 
 function arrancarCanales({ iniciarEntrega = true } = {}) {
     for (const adaptador of CANALES) gateway.registrar(adaptador);
     if (iniciarEntrega) gateway.iniciar();
+
+    // El de WhatsApp se registra siempre, pero solo **funciona** con sus cinco variables puestas.
+    // Se dice al arrancar y no en el primer webhook: un canal a medio configurar recibe mensajes y
+    // no contesta, y desde fuera eso es un negocio que ignora a sus clientes.
+    const whatsapp = require('./channels/whatsapp/config').estado();
+    console.log(
+        whatsapp.habilitado
+            ? `[whatsapp] canal listo: ${whatsapp.resumen}`
+            : `[whatsapp] canal APAGADO (${whatsapp.resumen}). El webhook rechazará todo.`
+    );
+
     return CANALES.map((c) => c.nombre);
 }
 

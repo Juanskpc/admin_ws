@@ -115,6 +115,26 @@ if (rateLimitEnabled) {
     console.log('⚠️  Rate limiting DESACTIVADO (RATE_LIMIT_ENABLED != true)');
 }
 
+// ========================
+// El webhook de WhatsApp va ANTES del parser global (F8-A)
+// ========================
+// No es una preferencia de orden: Meta firma el **cuerpo crudo** con HMAC-SHA256, y
+// `express.json()` lee los bytes, los parsea y los descarta. Reserializar el objeto produce
+// otros bytes —otro orden de claves, otro escapado— así que la firma no casa y el canal entero
+// queda inservible con un error que no menciona nada de esto. El master-plan lo anticipó:
+// «hace falta una rama de parseo específica *antes* del parser global; es un cambio en la
+// composición del servidor, no un detalle del gateway».
+//
+// Las mismas dos guardas que el resto de Intelligence, para que el test del apagón siga siendo
+// literal: si el directorio no está, aquí no se monta nada.
+const intelligenceDisponible =
+    process.env.INTELLIGENCE_HTTP_ENABLED === 'true' &&
+    require('fs').existsSync(path.join(__dirname, 'intelligence'));
+
+if (intelligenceDisponible) {
+    app.use('/intelligence/whatsapp/webhook', require('./intelligence/channels/whatsapp/rutas').router);
+}
+
 // Parser JSON con límite de tamaño
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
@@ -163,11 +183,8 @@ app.use('/reserva', reservaRoutes);
 //      feature comercial del negocio. No encenderlo en producción hasta F8.
 //
 // La flecha de dependencia no cambia: ninguna vertical importa esto ni sabe que existe.
-const intelligenceHabilitado =
-    process.env.INTELLIGENCE_HTTP_ENABLED === 'true' &&
-    require('fs').existsSync(path.join(__dirname, 'intelligence'));
-
-if (intelligenceHabilitado) {
+// El webhook de WhatsApp ya se montó arriba, antes del parser global: necesita el cuerpo crudo.
+if (intelligenceDisponible) {
     app.use('/intelligence', require('./intelligence/http'));
 }
 
@@ -227,7 +244,7 @@ app.use(errorHandler);
             // Conversation Engine + canales (F5-B, F5-C). Solo si el HTTP está encendido:
             // sin canal no puede entrarle un mensaje, así que arrancar el motor sería
             // encender un motor sin combustible.
-            if (intelligenceHabilitado) {
+            if (intelligenceDisponible) {
                 const intelligence = require('./intelligence');
 
                 // Registrar el catálogo va PRIMERO: el manejador determinista invoca

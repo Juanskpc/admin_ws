@@ -45,6 +45,19 @@
  * implementación por capacidad es una implementación que alguien olvidará. Es el cimiento
  * del arnés de evaluación de F6 y de la depuración para siempre.
  *
+ * ## Confirmación humana (F7)
+ *
+ * El paso 5 del Policy Gate del plan: **si la capacidad declara que exige confirmación, aquí no
+ * se ejecuta sin la prueba de que el cliente dijo sí en el canal.** La prueba viaja en el sobre
+ * (`confirmadoPor`), nunca en los argumentos, y va a la auditoría: qué turno la trajo y qué
+ * escribió exactamente la persona.
+ *
+ * Está en el Gate y no en el manejador a propósito. Un manejador es un camino; el Gate es **el**
+ * camino. Con la regla aquí, un nivel nuevo de la escalera, otra FSM o una capacidad que llame a
+ * otra no pueden saltársela por olvido — y el olvido, en esta regla concreta, es una cita
+ * cancelada que nadie pidió. El manejador sigue teniendo trabajo: preguntar y esperar el sí es
+ * conversación, y eso vive en `intelligence/engine/confirmacion.js`.
+ *
  * ## Idempotencia (F4-B)
  *
  * Una invocación puede traer `claveIdempotencia` en el sobre —nunca en los parámetros que
@@ -69,6 +82,7 @@ const DENEGADO = {
     FEATURE_APAGADA: 'FEATURE_NO_HABILITADA',
     CAPACIDAD_NO_HABILITADA: 'CAPACIDAD_NO_HABILITADA',
     ARGUMENTOS: 'ARGUMENTOS_INVALIDOS',
+    SIN_CONFIRMAR: 'CONFIRMACION_REQUERIDA',
 };
 
 function denegar(codigo, mensaje) {
@@ -106,6 +120,34 @@ async function capacidadHabilitada(idNegocio, nombre) {
  */
 function declararPolitica(capacidad) {
     return capacidad.politica && capacidad.politica.length > 0 ? [...capacidad.politica] : [];
+}
+
+/**
+ * ¿La prueba de confirmación es una prueba?
+ *
+ * Lo que el Gate puede comprobar y lo que no, dicho sin adornos: **no puede verificar que una
+ * persona dijera sí.** Nadie puede, desde aquí. Lo que sí hace, y es lo que vale:
+ *
+ *   - **Falla cerrado.** Omitir la prueba no ejecuta. El modo de fallo real de esta regla no es
+ *     que alguien la falsifique —el modelo no construye el sobre, ni lo ve— es que un camino
+ *     nuevo se olvide de ella, y el olvido aquí no pasa desapercibido: no funciona.
+ *   - **Deja rastro de quién lo afirmó.** Va a la auditoría, así que «¿yo pedí esto?» tiene
+ *     respuesta: el turno donde contestó y lo que escribió, palabra por palabra.
+ *
+ * Dos formas válidas, por los dos tipos de humano que confirman:
+ *
+ *   - `{ idTurno, texto }` — el cliente en el canal. Es el caso de producto.
+ *   - `{ origen, texto }` — un operador ejecutando a mano (la CLI de `scripts/`, un test). El
+ *     humano está delante del teclado; lo que se registra es de dónde vino.
+ *
+ * ⚠️ `idTurno` **es un uuid**, no un entero (`intelligence.turno`, F5-A). La primera versión de
+ * esta función pedía un entero positivo y con eso la confirmación quedaba denegada **siempre**:
+ * el camino feliz de F7 entero, muerto por una comprobación de tipo escrita de memoria.
+ */
+function esConfirmacionValida(confirmadoPor) {
+    if (!confirmadoPor || typeof confirmadoPor !== 'object') return false;
+    if (String(confirmadoPor.texto || '').trim() === '') return false;
+    return String(confirmadoPor.idTurno || confirmadoPor.origen || '').trim() !== '';
 }
 
 /**
@@ -159,6 +201,9 @@ async function auditar({ nombre, idNegocio, principal, args, resultado, detalle,
  * @param {boolean} [invocacion.dryRun]  — ejecuta y deshace: no deja rastro en el dominio.
  * @param {string}  [invocacion.claveIdempotencia] — reintentar con la misma clave devuelve
  *                  el resultado guardado sin volver a ejecutar. Va en el sobre, no en `args`.
+ * @param {Object}  [invocacion.confirmadoPor] — la prueba de que el cliente dijo sí:
+ *                  `{ idTurno, texto }`. Obligatoria para las capacidades que declaran
+ *                  confirmación; va en el sobre y jamás la rellena el modelo.
  */
 async function ejecutar({
     capacidad: nombre,
@@ -167,6 +212,7 @@ async function ejecutar({
     args = {},
     dryRun = false,
     claveIdempotencia = null,
+    confirmadoPor = null,
 }) {
     const capacidad = registry.obtener(nombre);
 
@@ -259,6 +305,28 @@ async function ejecutar({
         throw error;
     }
 
+    // ── Paso 5: ¿el cliente dijo sí? ───────────────────────────────────────────────────
+    // Va después de validar los argumentos porque la prueba se ata a **estos** argumentos: no
+    // sirve un sí genérico, sirve el sí a lo que se le preguntó. Y va antes de ejecutar, que es
+    // lo único que de verdad importa aquí.
+    if (registry.requiereConfirmacion(capacidad) && !esConfirmacionValida(confirmadoPor)) {
+        const error = denegar(
+            DENEGADO.SIN_CONFIRMAR,
+            `La capacidad "${nombre}" exige confirmación humana explícita y la invocación no ` +
+                'la trae. El modelo puede proponer; solo el cliente dispara (ADR-010).'
+        );
+        await auditar({
+            nombre,
+            idNegocio,
+            principal,
+            args: limpios,
+            resultado: 'denegado',
+            dryRun,
+            detalle: { motivo: error.code },
+        });
+        throw error;
+    }
+
     // ── Capa 3: económica ──────────────────────────────────────────────────────────────
     const politica = declararPolitica(capacidad);
 
@@ -338,6 +406,14 @@ async function ejecutar({
                 tipo: capacidad.tipo,
                 ...(politica.length ? { politica } : {}),
                 ...(usaClave ? { clave: claveIdempotencia } : {}),
+                // Quién autorizó esto, para el día que alguien pregunte «¿yo pedí esto?».
+                ...(confirmadoPor
+                    ? {
+                          confirmado_en_turno: confirmadoPor.idTurno ?? null,
+                          confirmado_origen: confirmadoPor.origen ?? null,
+                          confirmado_con: confirmadoPor.texto,
+                      }
+                    : {}),
             },
         });
 
@@ -394,4 +470,11 @@ async function capacidadesDisponibles(idNegocio) {
     return disponibles;
 }
 
-module.exports = { ejecutar, capacidadesDisponibles, capacidadHabilitada, DENEGADO, MODULO_AUDITORIA };
+module.exports = {
+    ejecutar,
+    capacidadesDisponibles,
+    capacidadHabilitada,
+    esConfirmacionValida,
+    DENEGADO,
+    MODULO_AUDITORIA,
+};

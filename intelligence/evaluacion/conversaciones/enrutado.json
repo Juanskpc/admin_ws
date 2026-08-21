@@ -24,7 +24,14 @@
     { "id": "pago", "texto": "¿aceptan tarjeta?", "tareaEnCurso": false, "espera": "llm" },
     { "id": "libre-larga", "texto": "hola, es la primera vez que escribo, quería saber si atienden niños y qué precios manejan", "tareaEnCurso": false, "espera": "llm" },
 
+    { "id": "cancelar-cita-va-al-modelo", "texto": "quiero cancelar mi cita del martes", "tareaEnCurso": false, "espera": "llm" },
+    { "id": "reagendar-va-al-modelo", "texto": "me puedes mover la cita a otro día?", "tareaEnCurso": false, "espera": "llm" },
+    { "id": "anular-va-al-modelo", "texto": "necesito anular la reserva", "tareaEnCurso": false, "espera": "llm" },
+    { "id": "muevela-conjugado", "texto": "muéveme la cita del martes", "tareaEnCurso": false, "espera": "llm" },
+
     { "id": "sin-nivel4-cae-a-fsm", "texto": "¿cuánto cuesta un corte?", "tareaEnCurso": false, "llmDisponible": false, "espera": "determinista" },
-    { "id": "tarea-manda-sobre-pregunta", "texto": "¿y cuánto cuesta?", "tareaEnCurso": true, "espera": "determinista" }
+    { "id": "tarea-manda-sobre-pregunta", "texto": "¿y cuánto cuesta?", "tareaEnCurso": true, "espera": "determinista" },
+    { "id": "si-con-confirmacion-pendiente", "texto": "sí", "tareaEnCurso": false, "confirmacionPendiente": true, "espera": "determinista" },
+    { "id": "pregunta-con-confirmacion-pendiente", "texto": "¿y cuánto cuesta un corte?", "tareaEnCurso": false, "confirmacionPendiente": true, "espera": "determinista" }
   ]
 }

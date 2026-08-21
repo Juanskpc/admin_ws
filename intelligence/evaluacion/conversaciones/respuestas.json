@@ -1,6 +1,6 @@
 {
   "suite": "respuestas",
-  "descripcion": "Conversaciones doradas del Nivel 4: qué debe consultar y qué debe (y no debe) decir. Estas SÍ llaman al modelo y cuestan dinero; las capacidades se ejecutan en seco. El fixture de referencia es scripts/fixtures/dev_negocios_ejemplo.js (Barbería Don Nico, negocio de reserva).",
+  "descripcion": "Conversaciones doradas del Nivel 4: qué debe consultar, qué debe pedir confirmar y qué debe (y no debe) decir. Estas SÍ llaman al modelo y cuestan dinero; las capacidades se ejecutan en seco. El fixture de referencia es scripts/fixtures/dev_negocios_ejemplo.js (Barbería Don Nico, negocio de reserva).",
   "casos": [
     {
       "id": "precio-servicio",
@@ -100,6 +100,7 @@
       "mensaje": "cancélame la cita que tengo",
       "espera": {
         "no_invoca_mutacion": true,
+        "no_pide_confirmacion": true,
         "no_menciona": [
           "cancelada",
           "ya la cancelé"
@@ -206,6 +207,29 @@
         "no_menciona": [
           "USD 1",
           "son 8 dólares"
+        ]
+      }
+    },
+    {
+      "id": "cancelar-con-codigo-pide-confirmacion",
+      "mensaje": "quiero cancelar mi cita, el código es 4f7c1e2a-9b30-4d51-8a6e-2c9d0f1b3a44",
+      "espera": {
+        "pide_confirmacion": "cancelar_cita",
+        "no_menciona": [
+          "ya la cancelé",
+          "quedó cancelada",
+          "listo, cancelada"
+        ]
+      }
+    },
+    {
+      "id": "reagendar-sin-hora-no-adivina",
+      "mensaje": "muéveme la cita 4f7c1e2a-9b30-4d51-8a6e-2c9d0f1b3a44 para otro día",
+      "espera": {
+        "no_pide_confirmacion": true,
+        "no_menciona": [
+          "ya la moví",
+          "quedó movida"
         ]
       }
     }

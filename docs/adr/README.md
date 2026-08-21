@@ -72,7 +72,7 @@ Si eres nuevo en el proyecto, lee en orden ADR-001 → ADR-006. Con eso entiende
 ### Transversales
 - [ADR-021 — Features / entitlements](ADR-021-features.md) · Aceptado
 - [ADR-022 — Observabilidad y Ledger de costos](ADR-022-observabilidad.md) · Aceptado
-- [ADR-023 — Guardarraíles de producto: promesas y handoff](ADR-023-guardarrailes.md) · Propuesto
+- [ADR-023 — Guardarraíles de producto: promesas y handoff](ADR-023-guardarrailes.md) · Aceptado *(2026-08-19, al empezar F7)*
 - [ADR-024 — Convenciones de persistencia y gobierno de datos](ADR-024-persistencia.md) · Aceptado
 
 ## Documentos relacionados (en `/docs/architecture`)

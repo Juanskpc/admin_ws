@@ -48,8 +48,15 @@ const path = require('path');
 
 const puerto = require('./puerto');
 
-/** Versión del prompt del sistema que se está usando. Viaja al Ledger con cada turno. */
-const PROMPT_SISTEMA = 'sistema.v1';
+/**
+ * Versión del prompt del sistema que se está usando. Viaja al Ledger con cada turno.
+ *
+ * `v2` (F7) es `v1` con una diferencia de comportamiento, no de estilo: el asistente ya puede
+ * **pedir** mutaciones, y lo que se le prohíbe ahora es decir que ya están hechas. La `v1` sigue
+ * en el repositorio a propósito — es lo que hace que el arnés pueda comparar las dos y decir si
+ * la nueva mejora o empeora, que es la razón de que los prompts sean archivos versionados.
+ */
+const PROMPT_SISTEMA = 'sistema.v2';
 
 /**
  * Los prompts se leen una vez y se quedan en memoria.
@@ -117,10 +124,11 @@ function textoDeAhora(ahora, zona = 'America/Bogota') {
  * Envuelve el texto de una persona como **dato no confiable**.
  *
  * Es la primera de las tres defensas contra inyección de prompt del master-plan, y la única que
- * vive aquí: las otras dos son que en F6 **no existe ninguna capacidad de mutación expuesta al
- * modelo** (así que el peor resultado posible es una respuesta equivocada) y la confirmación
- * humana de F7. Marcar el texto no es la defensa principal — las instrucciones se eluden — pero
- * sin marcarlo el modelo no tiene ni forma de distinguir.
+ * vive aquí. Las otras dos: que el catálogo del modelo sea corto y explícito —no hay herramienta
+ * para nada que no sea una capacidad registrada— y, desde F7, que **ninguna mutación se ejecute
+ * sin que el cliente diga sí** (ADR-010). Hasta F6 la segunda era más fuerte todavía: no existía
+ * ninguna mutación expuesta al modelo. Marcar el texto no es la defensa principal — las
+ * instrucciones se eluden — pero sin marcarlo el modelo no tiene ni forma de distinguir.
  *
  * Se sanean los cierres de etiqueta para que el propio texto no pueda cerrar el sobre y escribir
  * fuera de él, que es el truco obvio.

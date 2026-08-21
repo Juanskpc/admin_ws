@@ -19,17 +19,29 @@
  * corriendo— entregarle el volante a un modelo cambia un flujo determinista y probado por uno
  * que puede irse por otro lado. El LLM entra donde la FSM no llega: preguntas libres.
  *
- * ## Lo que esta fase NO enruta
+ * ## Qué cambió en F7, y qué no
  *
- * Nada de mutación. En F6 el modelo **solo ve capacidades de consulta** (`tipo === 'consulta'`),
- * así que un cliente que quiere agendar acaba siempre en la FSM. No es una limitación del
- * enrutado: es que las capacidades de mutación no existen para el modelo, que es la defensa
- * arquitectónica contra inyección de prompt del master-plan —«el peor error posible es una
- * respuesta equivocada, no una cita destruida»—.
+ * En F6 el modelo **solo veía consultas**, así que todo lo que oliera a mutación tenía que acabar
+ * en la FSM. Desde F7 el modelo puede pedir mutaciones —y la plataforma le pregunta al cliente
+ * antes de ejecutarlas (ADR-010)—, así que el enrutado deja de ser una jaula y vuelve a ser lo
+ * que dice ser: una política de costo.
+ *
+ * Dos filas nuevas, y una que **no** se tocó:
+ *
+ *   - `confirmacion_pendiente` va primera: si hay una mutación esperando un sí, el turno es un
+ *     «sí» o un «no», y eso lo lee el Nivel 1 gratis. Mandarlo al modelo sería pagar por leer
+ *     una palabra y, peor, dejarle decidir si se ejecuta lo irreversible.
+ *   - `intencion_mutacion` manda al modelo lo que la FSM **no sabe hacer**: cancelar y reagendar.
+ *     Antes caían en `intencion_agendar` —«cancelar mi cita» contiene «cita»— y el cliente
+ *     recibía un menú de servicios cuando lo que quería era anular. Era el agujero de producto
+ *     más visible que dejó F6.
+ *   - `intencion_agendar` **sigue yendo a la FSM**. Agendar funciona, es gratis y está probado de
+ *     extremo a extremo; sustituirlo por el modelo sería cambiar lo probado por lo probable sin
+ *     que nadie lo haya pedido. El día que se quiera, es mover una fila de esta tabla.
  */
 'use strict';
 
-const { COMANDO } = require('../engine/manejadorDeterminista');
+const { COMANDO } = require('../engine/texto');
 
 /** Los peldaños. Se nombran por lo que son, no por el modelo que los sirve hoy. */
 const NIVEL = {
@@ -70,6 +82,22 @@ const INTENCION_AGENDAR = [
 ];
 
 /**
+ * Palabras que significan «cambia o quita algo que ya tengo». Van **antes** de las de agendar
+ * porque casi todas arrastran la palabra «cita» detrás.
+ *
+ * Ojo con «cancelar» a secas: ésa es un `COMANDO` y la fila `comando_conocido` la caza antes que
+ * ésta, que es lo correcto — a mitad de un agendamiento, «cancelar» significa salir del flujo, no
+ * anular una cita que todavía no existe.
+ *
+ * Son **principios de palabra**, no palabras enteras como las de agendar, y la diferencia importa:
+ * nadie escribe «mover», escribe «muéveme la cita» o «cancélame lo del martes». Con palabra entera
+ * eso caía en la FSM y el cliente recibía un menú de servicios. El riesgo del prefijo es mandar al
+ * modelo a alguien que solo preguntaba «¿puedo cancelar si me surge algo?», y eso cuesta unos
+ * céntimos y una respuesta correcta.
+ */
+const INTENCION_MUTACION = ['cancel', 'anul', 'reagend', 'muev', 'mover', 'cambi'];
+
+/**
  * La política de enrutado. Cada fila: por qué existe, cuándo casa y a qué nivel manda.
  *
  * `regla` es enum-like porque se registra como paso en el Ledger: saber **por qué** un turno
@@ -77,6 +105,14 @@ const INTENCION_AGENDAR = [
  * (ADR-018: «el registro por-nivel convierte la decisión de crecer en un dato»).
  */
 const POLITICA = [
+    {
+        regla: 'confirmacion_pendiente',
+        motivo:
+            'Hay una mutación esperando el sí del cliente. Leer «sí» no necesita un modelo, y ' +
+            'dejarle al modelo la decisión de disparar lo irreversible es lo que ADR-010 prohíbe.',
+        nivel: NIVEL.DETERMINISTA,
+        cuando: (ctx) => Boolean(ctx.confirmacionPendiente),
+    },
     {
         regla: 'nivel4_no_disponible',
         motivo:
@@ -98,6 +134,18 @@ const POLITICA = [
         motivo: 'Saludo, menú, cancelar, sí/no: el Nivel 1 lo resuelve sin gastar un token.',
         nivel: NIVEL.DETERMINISTA,
         cuando: (ctx) => TODOS_LOS_COMANDOS.has(normalizar(ctx.texto)),
+    },
+    {
+        regla: 'intencion_mutacion',
+        motivo:
+            'Quiere cancelar o mover una cita, y la FSM no sabe hacer ni lo uno ni lo otro. ' +
+            'Antes esto caía en «intencion_agendar» —la palabra «cita» está en las dos— y el ' +
+            'cliente recibía un menú de servicios cuando pedía anular.',
+        nivel: NIVEL.LLM,
+        cuando: (ctx) => {
+            const t = normalizar(ctx.texto);
+            return INTENCION_MUTACION.some((p) => new RegExp(`\\b${p}`).test(t));
+        },
     },
     {
         regla: 'intencion_agendar',
@@ -124,6 +172,7 @@ const POLITICA = [
  * @param {Object}  ctx
  * @param {string}  ctx.texto          — el mensaje agrupado del cliente.
  * @param {boolean} ctx.tareaEnCurso
+ * @param {boolean} ctx.confirmacionPendiente — hay una mutación esperando el sí del cliente.
  * @param {boolean} ctx.llmDisponible  — lo decide la composición, no este archivo.
  * @returns {{nivel: string, regla: string, motivo: string}}
  */
@@ -138,4 +187,4 @@ function enrutar(ctx) {
     throw new Error('La política de enrutado no tiene fila por defecto.');
 }
 
-module.exports = { NIVEL, POLITICA, enrutar, INTENCION_AGENDAR };
+module.exports = { NIVEL, POLITICA, enrutar, INTENCION_AGENDAR, INTENCION_MUTACION };

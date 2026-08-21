@@ -142,8 +142,8 @@ ajustarse, la espina dorsal no.
 | Fase | Qué | ADRs clave | Corrección |
 |---|---|---|---|
 | **F6** | Primer LLM **solo-lectura** por el `ModelPort` + Prompt Builder con disciplina de caché + arnés de evaluación (dry-run por defecto). | 018, 019, 020 | Escalera de 2 niveles; Knowledge reservado (ranura vacía) |
-| **F7** | Mutaciones vía IA (propose→hold→confirm) + **guardarraíl de promesas** + Consola de Handoff (con comportamiento sin-humano). | 010, 023 | ADR-023 pasa de Propuesto a Aceptado aquí |
-| **F8** | WhatsApp como canal (mismo `ChannelPort`; captura de body crudo para firma de Meta). **→ MVP COMERCIAL.** | 016, 017 | — |
+| **F7** | Mutaciones vía IA (propose→hold→confirm) + **guardarraíl de promesas** + Consola de Handoff (con comportamiento sin-humano). **Hecha en local 2026-08-19.** | 010, 023 | ADR-023 **Aceptado** (2026-08-19). La confirmación humana la exige el **Policy Gate**, declarada por capacidad en el manifiesto. La «Consola de Handoff» no se construyó: §6.13 del estado decidió que el escalado aterriza en WhatsApp (F8) |
+| **F8** | WhatsApp como canal (mismo `ChannelPort`; captura de body crudo para firma de Meta). **→ MVP COMERCIAL.** | 016, 017 | **Partida en tres (2026-08-19)**: **F8-A** el canal —firma, webhook, traducción, opt-out— **hecha en local**; **F8-B** ventana de 24 h, plantillas, multimedia y recordatorios; **F8-C** conectar el número, **bloqueada por el trámite con Meta**. El corte se puso donde acaba lo que se puede verificar sin cuenta. Detalle en `docs/canal-whatsapp.md` |
 
 ### Ola D — plataforma
 
@@ -157,7 +157,7 @@ ajustarse, la espina dorsal no.
 1. `platform.persona` global existe vacío desde el día uno. **(recomendado sí)**
 2. El cliente final nunca vive en `gener_usuario`. **(confirmado)**
 3. Tool Registry eliminado. **(sí)**
-4. Riesgo de promesas no respaldadas: anotado hoy, mecanismo antes de F7.
+4. Riesgo de promesas no respaldadas: anotado hoy, mecanismo antes de F7. **Cumplido**: los dos mecanismos de ADR-023 se decidieron y construyeron el 2026-08-18, y el ADR pasó a Aceptado al empezar F7.
 5. `persona_identificador` como tabla hija (bloqueó la congelación hasta corregirlo).
 6. ~~Tarea de media hora previa a F0: **medir la calidad de los teléfonos en `restaurante`**~~
    **HECHO (2026-07-31)** → [`mediciones/2026-07-31-calidad-telefonos-restaurante.md`](../mediciones/2026-07-31-calidad-telefonos-restaurante.md).

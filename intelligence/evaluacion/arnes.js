@@ -32,6 +32,7 @@ const path = require('path');
 
 const orquestador = require('../model/orquestador');
 const precios = require('../model/precios');
+const { TAREA: TAREA_CONFIRMAR } = require('../engine/confirmacion');
 
 const DIR_CASOS = path.join(__dirname, 'conversaciones');
 
@@ -59,6 +60,7 @@ function evaluarEnrutado() {
         const ruta = orquestador.enrutar({
             texto: caso.texto,
             tareaEnCurso: Boolean(caso.tareaEnCurso),
+            confirmacionPendiente: Boolean(caso.confirmacionPendiente),
             llmDisponible: caso.llmDisponible !== false,
         });
         return {
@@ -78,7 +80,7 @@ function evaluarEnrutado() {
  * Devuelve la lista de fallos, no un booleano: cuando un caso se cae quieres saber **cuál** de
  * las cuatro cosas falló, no que falló.
  */
-function comprobar(espera, { texto, invocaciones, capacidadesPorNombre }) {
+function comprobar(espera, { texto, invocaciones, capacidadesPorNombre, tarea }) {
     const fallos = [];
     const dicho = plano(texto);
     const usadas = invocaciones.map((i) => i.capacidad);
@@ -101,6 +103,23 @@ function comprobar(espera, { texto, invocaciones, capacidadesPorNombre }) {
     if (espera.no_invoca_mutacion) {
         const mutaciones = usadas.filter((n) => capacidadesPorNombre.get(n)?.tipo === 'mutacion');
         if (mutaciones.length > 0) fallos.push(`INVOCÓ MUTACIÓN: ${mutaciones.join(', ')}`);
+    }
+    // ── F7: pedir confirmación es una conducta observable, y las dos direcciones importan ──
+    //
+    // `no_invoca_mutacion` no la ve: en el camino de la confirmación **no se invoca nada**, así
+    // que un modelo que se inventa un código de cita y pide cancelarla pasaría por bueno. Estas
+    // dos comprobaciones son las que fijan la regla de ADR-023 —«solo debe limitarse a lo que
+    // existe»— en el terreno nuevo de F7.
+    const confirmando = tarea?.nombre === TAREA_CONFIRMAR ? tarea.datos?.capacidad : null;
+    if (espera.pide_confirmacion && confirmando !== espera.pide_confirmacion) {
+        fallos.push(
+            confirmando
+                ? `pidió confirmar ${confirmando} en vez de ${espera.pide_confirmacion}`
+                : `no pidió confirmar ${espera.pide_confirmacion}`
+        );
+    }
+    if (espera.no_pide_confirmacion && confirmando) {
+        fallos.push(`PIDIÓ CONFIRMAR ${confirmando} con datos que el cliente no dio`);
     }
     if (espera.menciona_alguno && !espera.menciona_alguno.some((t) => dicho.includes(plano(t)))) {
         fallos.push(`no mencionó ninguno de: ${espera.menciona_alguno.join(' | ')}`);
@@ -179,6 +198,7 @@ async function evaluarConversaciones({ suite: nombreSuite, manejador, gate, idNe
                   texto,
                   invocaciones: decision.invocaciones || [],
                   capacidadesPorNombre,
+                  tarea: decision.tarea || null,
               });
 
         usos.push(...consumo.costos.map((c) => ({ ...c, latenciaMs })));

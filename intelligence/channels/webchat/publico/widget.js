@@ -42,7 +42,10 @@ function pintar(clase, texto, opciones) {
         // chips; en WhatsApp serían botones nativos; en voz, una enumeración hablada.
         for (const o of opciones) {
             const b = document.createElement('button');
-            b.textContent = o.etiqueta;
+            // El chip los pinta juntos: aquí caben. `detalle` viaja aparte desde F8-A porque
+            // WhatsApp recorta el título de un botón a 20 caracteres y se comía el precio; el
+            // WebChat no tiene ese límite, así que su renderizado no cambia.
+            b.textContent = o.detalle ? `${o.etiqueta} (${o.detalle})` : o.etiqueta;
             // Se manda el `id`, no la etiqueta, y se pinta la etiqueta. Mandar la etiqueta
             // tiraba justo el dato que ADR-017 pone ahí para esto, y el motor tenía que
             // adivinar: de «Corte de cabello (30 min) — $35.000» sacaba el servicio 30.

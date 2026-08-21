@@ -121,6 +121,10 @@ beforeAll(async () => {
         vertical: 'pruebas',
         tipo: registry.TIPO.MUTACION,
         idempotente: false,
+        // La suite la ejecuta sin pasar por ninguna conversación, así que declara que no exige
+        // confirmación (F7). Lo que se prueba aquí es el Gate, no el ciclo de ADR-010: eso vive
+        // en `capacidades_mutaciones.test.js` y en `confirmacion.test.js`.
+        confirmacion: registry.CONFIRMACION.NO_REQUIERE,
         feature: 'asistente_ia',
         parametros: { nombre: { tipo: 'string', requerido: true, max_longitud: 100 } },
         async ejecutar({ idNegocio, args, contexto }) {
@@ -185,10 +189,43 @@ describe('Capability Registry (ADR-008)', () => {
                 descripcion: 'Una mutación que no dice si repetirla es seguro.',
                 vertical: 'pruebas',
                 tipo: registry.TIPO.MUTACION,
+                confirmacion: registry.CONFIRMACION.NO_REQUIERE,
                 feature: 'asistente_ia',
                 ejecutar: async () => ({}),
             })
         ).toThrow(/idempotente/i);
+    });
+
+    it('exige declarar la confirmación humana en toda mutación (ADR-010, F7)', () => {
+        // Sin valor por defecto y a propósito: el único seguro sería exigir confirmación siempre,
+        // y eso convierte el hold de `proponer_turno` en una pregunta de más. Que se declare es lo
+        // que evita que una mutación nueva se ejecute sola porque nadie se acordó.
+        expect(() =>
+            registry.registrar({
+                nombre: 'mutacion_sin_confirmacion',
+                descripcion: 'Una mutación que no dice si hay que preguntarle al cliente.',
+                vertical: 'pruebas',
+                tipo: registry.TIPO.MUTACION,
+                idempotente: true,
+                feature: 'asistente_ia',
+                ejecutar: async () => ({}),
+            })
+        ).toThrow(/confirmacion/i);
+    });
+
+    it('rechaza una confirmación declarada a medias', () => {
+        expect(() =>
+            registry.registrar({
+                nombre: 'mutacion_media_confirmacion',
+                descripcion: 'Declara la pregunta pero no qué se le dice al cliente después.',
+                vertical: 'pruebas',
+                tipo: registry.TIPO.MUTACION,
+                idempotente: true,
+                confirmacion: { pregunta: () => '¿Seguro?' },
+                feature: 'asistente_ia',
+                ejecutar: async () => ({}),
+            })
+        ).toThrow(/hecho/i);
     });
 
     it('rechaza nombres que no sean verbos de negocio en minúsculas', () => {

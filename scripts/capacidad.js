@@ -11,7 +11,8 @@
  *   node scripts/capacidad.js describir <capacidad>
  *   node scripts/capacidad.js habilitar <capacidad> --negocio <id>
  *   node scripts/capacidad.js deshabilitar <capacidad> --negocio <id>
- *   node scripts/capacidad.js ejecutar <capacidad> --negocio <id> --usuario <id> [--args '<json>'] [--dry-run] [--clave <k>]
+ *   node scripts/capacidad.js ejecutar <capacidad> --negocio <id> --usuario <id> [--args '<json>']
+ *        [--dry-run] [--clave <k>] [--confirmado]
  *
  * Ejemplo:
  *   node scripts/capacidad.js ejecutar consultar_disponibilidad \
@@ -20,6 +21,10 @@
  * `--clave` es la clave de idempotencia: repetir la misma invocación con la misma clave
  * devuelve el resultado guardado sin volver a ejecutar. En F5 la pondrá el turno de
  * conversación; aquí se pone a mano para poder probarlo.
+ *
+ * `--confirmado` es el sí humano que exigen las mutaciones que comprometen al negocio (F7,
+ * ADR-010): en el canal lo dice el cliente en un turno, y aquí lo dice quien teclea. Sin él el
+ * Gate deniega, y eso es lo correcto — nadie había confirmado nada.
  */
 require('dotenv').config();
 const Models = require('../app_core/models/conection');
@@ -32,6 +37,7 @@ function parsearArgv(argv) {
     for (let i = 0; i < argv.length; i++) {
         const a = argv[i];
         if (a === '--dry-run') opciones.dryRun = true;
+        else if (a === '--confirmado') opciones.confirmado = true;
         else if (a.startsWith('--')) opciones[a.slice(2)] = argv[++i];
         else posicionales.push(a);
     }
@@ -135,6 +141,19 @@ async function comandoEjecutar(nombre, opciones) {
 
     if (opciones.dryRun) console.log('\n[dry-run] la transacción se deshará al terminar.');
 
+    // Las mutaciones que comprometen al negocio no se ejecutan sin un sí humano (F7, ADR-010).
+    // En el canal ese sí es un turno de la conversación; aquí es la persona que escribió el
+    // comando, y lo dice con `--confirmado`. Que haya que teclearlo es el punto: si el Gate
+    // deniega, es porque nadie ha confirmado nada.
+    const exigeConfirmacion = intelligence.registry.describir(nombre)?.requiere_confirmacion;
+    if (exigeConfirmacion && !opciones.confirmado) {
+        console.error(
+            `\n✗ "${nombre}" exige confirmación humana explícita (ADR-010). Añade --confirmado ` +
+                'si de verdad quieres ejecutarla desde la CLI.\n'
+        );
+        process.exit(1);
+    }
+
     const salida = await intelligence.policyGate.ejecutar({
         capacidad: nombre,
         principal,
@@ -142,6 +161,9 @@ async function comandoEjecutar(nombre, opciones) {
         args,
         dryRun: Boolean(opciones.dryRun),
         claveIdempotencia: opciones.clave || null,
+        ...(exigeConfirmacion
+            ? { confirmadoPor: { origen: `cli:usuario-${idUsuario}`, texto: '--confirmado' } }
+            : {}),
     });
 
     if (salida.reintento) console.log('\n[idempotencia] resultado guardado; no se volvió a ejecutar.');

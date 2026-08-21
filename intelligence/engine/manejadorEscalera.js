@@ -18,12 +18,20 @@
  * No decide a qué nivel va nada: eso es la tabla del orquestador, y está en un archivo aparte
  * precisamente para que añadir un nivel sea añadir filas y no editar este `if`. Aquí solo se
  * ejecuta lo que la tabla dijo.
+ *
+ * **Con una excepción, y es la única:** la baja (`STOP`/`BAJA`) se atiende antes de consultar la
+ * tabla. No es una decisión de costo —no hay peldaño que elegir— sino una obligación legal, y
+ * ponerla como una fila más implicaría que algún día otra fila podría ganarle. Ver `optout.js`.
  */
 'use strict';
 
 const { NIVEL, enrutar } = require('../model/orquestador');
 const { manejarDeterminista } = require('./manejadorDeterminista');
 const { TAREA_AGENDAR } = require('./manejadorDeterminista');
+const confirmacion = require('./confirmacion');
+// La baja (STOP/BAJA) va por encima de la tabla de enrutado: no es una decisión de costo, es una
+// obligación legal, y ninguna otra regla puede ganarle. Ver la cabecera de `optout.js`.
+const optout = require('./optout');
 
 /**
  * @param {Object}   deps
@@ -33,9 +41,18 @@ const { TAREA_AGENDAR } = require('./manejadorDeterminista');
  */
 function crearManejadorEscalera({ determinista = manejarDeterminista, llm = null } = {}) {
     return async function manejarEscalera(ctx) {
+        // Antes de enrutar, antes de leer la tarea, antes de todo. Un turno que pide la baja no se
+        // enruta a ningún peldaño: se bloquea y se calla (F8-A, master-plan §Fase 8).
+        if (optout.pedida(ctx.texto)) {
+            return optout.decision(ctx.conversacion);
+        }
+
         const ruta = enrutar({
             texto: ctx.texto,
             tareaEnCurso: ctx.conversacion?.tarea_actual === TAREA_AGENDAR,
+            // Una mutación esperando el sí del cliente (F7). Se calcula aquí y se le pasa a la
+            // tabla como un hecho más: el enrutado no lee la base ni sabe qué es una tarea.
+            confirmacionPendiente: Boolean(confirmacion.pendiente(ctx.conversacion)),
             llmDisponible: Boolean(llm),
         });
 

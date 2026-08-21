@@ -63,12 +63,21 @@ function lunes(semanas = 3) {
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
+/**
+ * Ejecuta por el Gate, con la confirmación puesta cuando la capacidad la exige (F7).
+ *
+ * Esta suite es la del ciclo sin IA ni frontend: aquí el humano que confirma es quien corre el
+ * test, igual que en la CLI de `scripts/`, y por eso la prueba lleva `origen` en vez del turno de
+ * una conversación. Los tests que comprueban que **sin** confirmación se deniega la pasan a mano.
+ */
 function ejecutar(capacidad, args, extra = {}) {
+    const exige = intelligence.registry.describir(capacidad)?.requiere_confirmacion;
     return policyGate.ejecutar({
         capacidad,
         principal: principalDemo,
         idNegocio: negocioDemo,
         args,
+        ...(exige ? { confirmadoPor: { origen: 'test', texto: 'sí' } } : {}),
         ...extra,
     });
 }
@@ -332,6 +341,94 @@ describe('propose → hold → confirm (ADR-010)', () => {
 });
 
 // ────────────────────────────────────────────────────────────────────────────────────────
+describe('Confirmación humana en el Gate de verdad (ADR-010, paso 5 — F7)', () => {
+    it('sin la prueba del sí, la mutación NO se ejecuta y la cita queda intacta', async () => {
+        const hold = await proponer('10:00');
+        const { resultado: cita } = await ejecutar('reservar_turno', {
+            codigo_hold: hold,
+            cliente_nombre: `${CLIENTE} sin confirmar`,
+        });
+
+        // Exactamente la misma invocación que arriba, menos el sobre de confirmación.
+        await expect(
+            policyGate.ejecutar({
+                capacidad: 'cancelar_cita',
+                principal: principalDemo,
+                idNegocio: negocioDemo,
+                args: { codigo_cita: cita.codigo_cita },
+            })
+        ).rejects.toMatchObject({ code: 'CONFIRMACION_REQUERIDA', statusCode: 403 });
+
+        const fila = await unaFila(`SELECT estado FROM reserva.reserva_cita WHERE codigo_publico = :c;`, {
+            c: cita.codigo_cita,
+        });
+        expect(fila.estado).toBe('pendiente'); // nadie la canceló
+    });
+
+    it('una prueba a medias tampoco vale: hay que decir dónde se confirmó y con qué', async () => {
+        const hold = await proponer('11:00');
+        const { resultado: cita } = await ejecutar('reservar_turno', {
+            codigo_hold: hold,
+            cliente_nombre: `${CLIENTE} media prueba`,
+        });
+
+        await expect(
+            policyGate.ejecutar({
+                capacidad: 'cancelar_cita',
+                principal: principalDemo,
+                idNegocio: negocioDemo,
+                args: { codigo_cita: cita.codigo_cita },
+                // Sin `texto` ni identificador: es un «confirmado: true» disfrazado.
+                confirmadoPor: {},
+            })
+        ).rejects.toMatchObject({ code: 'CONFIRMACION_REQUERIDA' });
+    });
+
+    it('el hold NO exige confirmación: es la mitad *propose* del ciclo', async () => {
+        // Si la exigiera, agendar sería «¿confirmas que aparte la hora?» y luego «¿confirmo la
+        // cita?»: dos preguntas para una decisión. Su efecto se deshace solo al caducar.
+        const { resultado } = await policyGate.ejecutar({
+            capacidad: 'proponer_turno',
+            principal: principalDemo,
+            idNegocio: negocioDemo,
+            args: { id_servicio: idServicio, inicio: `${lunes()}T12:00:00` },
+        });
+        expect(resultado.codigo_hold).toBeTruthy();
+    });
+
+    it('quién autorizó qué queda en la auditoría', async () => {
+        const hold = await proponer('09:00');
+        const { resultado: cita } = await ejecutar('reservar_turno', {
+            codigo_hold: hold,
+            cliente_nombre: `${CLIENTE} auditada`,
+        });
+
+        await policyGate.ejecutar({
+            capacidad: 'cancelar_cita',
+            principal: principalDemo,
+            idNegocio: negocioDemo,
+            args: { codigo_cita: cita.codigo_cita },
+            confirmadoPor: { idTurno: 'turno-de-prueba', texto: 'sí, cancélala' },
+        });
+
+        // Es la mitad del valor de la regla: el Gate no puede verificar que una persona dijera
+        // sí, pero sí puede dejar por escrito quién lo afirmó y con qué palabras.
+        const fila = await unaFila(
+            `
+            SELECT detalle
+              FROM auditoria.audit_evento
+             WHERE modulo = :modulo AND accion = 'cancelar_cita' AND resultado = 'ok'
+             ORDER BY id_evento DESC
+             LIMIT 1;
+            `,
+            { modulo: policyGate.MODULO_AUDITORIA }
+        );
+        expect(fila.detalle.confirmado_en_turno).toBe('turno-de-prueba');
+        expect(fila.detalle.confirmado_con).toBe('sí, cancélala');
+    });
+});
+
+// ────────────────────────────────────────────────────────────────────────────────────────
 describe('Aislamiento: los handles públicos no cruzan inquilinos', () => {
     it('el código de una cita de otro negocio no se encuentra', async () => {
         const hold = await proponer('10:00');
@@ -348,6 +445,9 @@ describe('Aislamiento: los handles públicos no cruzan inquilinos', () => {
                 principal: principalRival,
                 idNegocio: negocioRival,
                 args: { codigo_cita: cita.codigo_cita },
+                // Con la confirmación puesta: sin ella el Gate denegaría antes de llegar al
+                // dominio y el test dejaría de probar el aislamiento, que es lo que dice probar.
+                confirmadoPor: { origen: 'test', texto: 'sí' },
             })
         ).rejects.toMatchObject({ code: 'CITA_NO_ENCONTRADA' });
 
@@ -366,6 +466,7 @@ describe('Aislamiento: los handles públicos no cruzan inquilinos', () => {
                 principal: principalRival,
                 idNegocio: negocioRival,
                 args: { codigo_hold: hold, cliente_nombre: `${CLIENTE} ajeno` },
+                confirmadoPor: { origen: 'test', texto: 'sí' },
             })
         ).rejects.toMatchObject({ code: 'HOLD_NO_VIGENTE' });
     });

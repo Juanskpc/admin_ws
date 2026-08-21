@@ -33,6 +33,15 @@ let idNegocio;
 let idSesion;
 let idConversacion;
 let contador = 0;
+/**
+ * Cuándo empezó esta suite. Acota la ventana de las métricas a **sus** turnos.
+ *
+ * Hizo falta en F7: desde que el asistente puede mutar, una base de desarrollo tiene turnos de
+ * Nivel 4 legítimos —los deja cualquiera que pruebe el asistente a mano, o el arnés— y las
+ * afirmaciones «ratio determinista = 1, costo = 0» son de **esta** conversación, no del negocio
+ * entero. Sin la ventana, el test castigaba a quien hubiera usado el bot antes de correrlo.
+ */
+const arranque = new Date();
 
 const dormir = (ms) => new Promise((r) => setTimeout(r, ms));
 const consulta = (sql, r = {}) => sequelize.query(sql, { replacements: r, ...SELECT });
@@ -245,9 +254,10 @@ describe('GET /admin/intelligence/conversaciones/:id', () => {
 
 describe('GET /admin/intelligence/metricas', () => {
     test('el ratio determinista es 1 y el costo total es 0 — criterios de F5', async () => {
-        // No son columnas vacías esperando a llenarse: son el resultado que F5 promete.
+        // No son columnas vacías esperando a llenarse: son el resultado que F5 promete. La ventana
+        // acota a los turnos de esta suite: ver el comentario de `arranque`.
         const { statusCode, cuerpo } = await llamar(Consola.metricas, {
-            query: { id_negocio: String(idNegocio) },
+            query: { id_negocio: String(idNegocio), desde: arranque.toISOString() },
         });
 
         expect(statusCode).toBe(200);

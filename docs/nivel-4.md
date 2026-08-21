@@ -1,6 +1,6 @@
 # El Nivel 4: qué proveedor, qué modelo, y cómo se decide
 
-**Fase:** F6 · **Gobierna:** [ADR-018](adr/ADR-018-estrategia-modelos.md), [ADR-019](adr/ADR-019-prompt-builder.md)
+**Fases:** F6 · F7 · **Gobierna:** [ADR-018](adr/ADR-018-estrategia-modelos.md), [ADR-019](adr/ADR-019-prompt-builder.md)
 
 ## Hay dos proveedores montados, y es transitorio
 
@@ -147,15 +147,23 @@ FEATURES_FORZADAS=asistente_ia LLM_ESFUERZO=medium node scripts/evaluar.js respu
 
 | Señal | Valor esperado | Qué significa si cambia |
 |---|---|---|
-| `cache_read_input_tokens` sostenido | **> 0** | Cero de forma sostenida **no** es «no hay caché»: es un invalidador silencioso delante del punto de corte, y ADR-019 lo convierte en criterio de aceptación — con eso a cero, **la fase no está terminada**. |
-| Capacidades invocadas por el LLM | solo `tipo = consulta` | Una mutación invocada desde el Nivel 4 es la frontera de F7 rota. |
+| `cache_read_input_tokens` sostenido | **> 0** | Cero de forma sostenida **no** es «no hay caché»: es un invalidador silencioso delante del punto de corte, y ADR-019 lo convierte en criterio de aceptación. Ojo al umbral: OpenAI no cachea por debajo de 1024 tokens de prefijo, y el prompt de F6 se quedaba corto. Con el catálogo de F7 (seis herramientas) la caché aparece: **88.8%** en la tanda del 2026-08-19. |
+| Capacidades invocadas por el LLM | consultas, y mutaciones **solo hasta pedir confirmación** | En F6 la línea era el tipo; desde F7 es la confirmación: una mutación **ejecutada** en el mismo turno en que la pidió el modelo, sin el sí del cliente, es la frontera de ADR-010 rota. Se ve en la auditoría: toda ejecución legítima lleva `confirmado_en_turno` o `confirmado_origen`. |
 | Filas en `intelligence.costo` por turno `llm` | ≥ 1 | Un turno con LLM sin costo es un agujero en la factura. |
 | `ratio_determinista` en la Consola | **< 1** y estable | Que baje es lo esperado en F6 (antes era 1 por definición). Que se desplome significa que la tabla de enrutado está mandando al modelo lo que la FSM hacía gratis. |
 
-## La frontera que F6 no cruza
+## La frontera que F6 no cruzaba, y dónde quedó en F7
 
-El modelo **no tiene ninguna capacidad de mutación**. No es una restricción de configuración que
-alguien pueda relajar con una variable: `manejadorLlm.js` filtra por `tipo === 'consulta'` al
-construir el prompt y **vuelve a comprobarlo** antes de ejecutar. El día que F7 lo cambie, lo hará
-con confirmación humana explícita en el canal y con el guardarraíl de
-[ADR-023](adr/ADR-023-guardarrailes.md) decidido — que a día de hoy sigue en estado *Propuesto*.
+En F6 el modelo **no tenía ninguna capacidad de mutación**: `manejadorLlm.js` filtraba por
+`tipo === 'consulta'` al construir el prompt y volvía a comprobarlo antes de ejecutar.
+
+**F7 (2026-08-19) movió la frontera de sitio, no la quitó.** El modelo ya ve las mutaciones, pero
+pedirlas no las ejecuta: el **Policy Gate** deniega con `CONFIRMACION_REQUERIDA` cualquier capacidad
+que declare confirmación y no traiga la prueba del sí del cliente, y lo que sale al canal es una
+pregunta escrita por el adaptador de la vertical. El sí lo lee el Nivel 1 en el turno siguiente, sin
+gastar un token.
+
+Que la regla viva en el Gate y no en este manejador es el punto: un manejador es *un* camino, el
+Gate es *el* camino, y el modo de fallo real de esta regla es que un camino nuevo se olvide de
+ella. [ADR-023](adr/ADR-023-guardarrailes.md) pasó a *Aceptado* con F7; el detalle está en
+`ESTADO-Y-CONTINUACION.md` §4-sexies.

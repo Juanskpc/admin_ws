@@ -185,6 +185,11 @@ function registrarCapacidades() {
         // Volver a proponer el mismo hueco NO devuelve el mismo hold: el primero sigue vivo
         // y el segundo choca con él. Repetir tiene efecto distinto, así que no es idempotente.
         idempotente: false,
+        // Ésta **es** la mitad *propose* del ciclo de ADR-010: existe precisamente para poder
+        // preguntarle al cliente antes de comprometer nada. Exigirle confirmación a ella sería
+        // preguntar «¿confirmas que aparte la hora?» para luego preguntar «¿confirmo la cita?»
+        // — dos preguntas para una decisión. Y su efecto se deshace solo: el hold caduca.
+        confirmacion: registry.CONFIRMACION.NO_REQUIERE,
         feature: FEATURE.ASISTENTE_IA,
         parametros: {
             id_servicio: { tipo: 'entero', requerido: true, min: 1 },
@@ -228,13 +233,24 @@ function registrarCapacidades() {
         nombre: 'reservar_turno',
         descripcion:
             'Confirma la hora apartada con proponer_turno y crea la cita definitiva. Úsala ' +
-            'solo cuando el cliente haya dicho que sí y te haya dado su nombre. Devuelve el ' +
-            'código de la cita, que hace falta para reagendarla o cancelarla después.',
+            'cuando el cliente haya elegido hora y te haya dado su nombre. Devuelve el ' +
+            'código de la cita, que hace falta para reagendarla o cancelarla después. ' +
+            'Al pedirla, el negocio le enseña al cliente una pregunta de confirmación y no se ' +
+            'ejecuta hasta que diga sí: no le digas que ya está hecha.',
         vertical: VERTICAL,
         tipo: registry.TIPO.MUTACION,
         // Sí: el hold se consume al confirmarlo, así que una segunda llamada con el mismo
         // código no encuentra hold vigente y no crea una segunda cita.
         idempotente: true,
+        // Aquí nace una cita en la agenda de un negocio real. No se ejecuta sin un sí explícito
+        // del cliente en el canal (ADR-010, paso 5 del Policy Gate).
+        confirmacion: {
+            pregunta: ({ args }) =>
+                `¿Confirmo la cita a nombre de ${args.cliente_nombre}?`,
+            hecho: ({ resultado }) =>
+                `¡Listo! Tu cita quedó agendada. El código es ${resultado.codigo_cita} — ` +
+                'guárdalo por si quieres cambiarla o cancelarla.',
+        },
         feature: FEATURE.ASISTENTE_IA,
         parametros: {
             codigo_hold: { tipo: 'string', requerido: true, max_longitud: 40 },
@@ -289,10 +305,19 @@ function registrarCapacidades() {
         descripcion:
             'Mueve una cita existente a otra hora ya apartada con proponer_turno. Úsala ' +
             'cuando el cliente quiera cambiar la hora de una cita que ya tiene. Necesitas el ' +
-            'código de la cita y el código de la nueva hora apartada.',
+            'código de la cita y el código de la nueva hora apartada. Al pedirla, el negocio ' +
+            'le enseña al cliente una pregunta de confirmación y no se ejecuta hasta que diga ' +
+            'sí: no le digas que ya está hecha.',
         vertical: VERTICAL,
         tipo: registry.TIPO.MUTACION,
         idempotente: true,
+        // Mover una cita le quita la hora a quien la tenía y se la da a otra: dos efectos, y el
+        // cliente solo pidió uno. Con confirmación.
+        confirmacion: {
+            pregunta: ({ args }) =>
+                `¿Confirmo que muevo tu cita ${args.codigo_cita} a la hora nueva que aparté?`,
+            hecho: ({ resultado }) => `Hecho, tu cita ${resultado.codigo_cita} quedó movida.`,
+        },
         feature: FEATURE.ASISTENTE_IA,
         parametros: {
             codigo_cita: { tipo: 'string', requerido: true, max_longitud: 40 },
@@ -333,14 +358,25 @@ function registrarCapacidades() {
     registry.registrar({
         nombre: 'cancelar_cita',
         descripcion:
-            'Cancela una cita del cliente. Úsala cuando pida anular su reserva. El negocio ' +
-            'tiene una ventana mínima de cancelación: si ya pasó, la cancelación se rechaza ' +
-            'y hay que decirle al cliente que llame.',
+            'Cancela una cita del cliente. Úsala cuando pida anular su reserva; necesitas el ' +
+            'código de la cita y si no lo tienes, pídeselo. El negocio tiene una ventana ' +
+            'mínima de cancelación: si ya pasó, la cancelación se rechaza y hay que decirle al ' +
+            'cliente que llame. Al pedirla, el negocio le enseña al cliente una pregunta de ' +
+            'confirmación y no se ejecuta hasta que diga sí: no le digas que ya está hecha.',
         vertical: VERTICAL,
         tipo: registry.TIPO.MUTACION,
         // Cancelar algo ya cancelado no cambia nada; la máquina de estados lo distingue con
         // TRANSICION_REDUNDANTE en vez de crear un segundo efecto.
         idempotente: true,
+        // La irreversible de las cuatro: una cita cancelada por error no se «descancela», hay
+        // que volver a buscar hueco y puede que ya no esté. La pregunta nombra el código y no
+        // la hora porque el asistente no tiene ninguna capacidad para consultar una cita: decir
+        // «tu cita del martes a las 10» sería recitar lo que el modelo cree recordar, y el
+        // contexto es una pista, nunca un hecho (ADR-010).
+        confirmacion: {
+            pregunta: ({ args }) => `¿Confirmo que cancelo tu cita ${args.codigo_cita}?`,
+            hecho: ({ resultado }) => `Tu cita ${resultado.codigo_cita} quedó cancelada.`,
+        },
         feature: FEATURE.ASISTENTE_IA,
         // El único límite económico real del proyecto hoy (ADR-011). Lo aplica el dominio
         // dentro de su transacción, no el Gate: aquí solo se declara para que la auditoría
