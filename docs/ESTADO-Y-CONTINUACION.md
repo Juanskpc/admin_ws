@@ -15,7 +15,7 @@ proyecto después de semanas, **lee este documento primero** y sigue por donde d
 > ya cerradas y se conservan porque explican **por qué** las cosas están como están.
 
 **Estado en una frase:** F0–F7 completas y **F8-A + F8-B hechas** en local — falta la cuenta de
-Meta, que no depende del código—, **ADR-023 Aceptado**, **455 pruebas en verde**, y **nada
+Meta, que no depende del código—, **ADR-023 Aceptado**, **457 pruebas en verde**, y **nada
 desplegado**.
 
 ### Lo que se puede hacer ya, en orden de valor
@@ -35,9 +35,9 @@ desplegado**.
 4. **Meter `asistente_ia` en un plan comercial.** Ningún plan lo incluye; hoy hay que forzarlo con
    `FEATURES_FORZADAS`. Es media hora de trabajo y una decisión comercial —en qué plan y por cuánto—
    que no es del código. Sin ello el asistente no se puede vender.
-5. **Lo que queda de F8-B**, todo pequeño y ninguno bloqueante: el botón para deshacer una baja
-   desde la Consola, la tabla de números para el segundo inquilino, y multimedia/visión —que se
-   dejó fuera a propósito: no se puede verificar sin descargar medios de Meta.
+5. **Lo que queda de F8-B**, pequeño y no bloqueante: la tabla de números para el segundo
+   inquilino, y multimedia/visión —que se dejó fuera a propósito: no se puede verificar sin
+   descargar medios de Meta.
 
 ### Deudas conocidas, ninguna bloqueante
 
@@ -50,7 +50,6 @@ desplegado**.
 | El guardarraíl no ve promesas sin número, ni cifras que el bot dijo en turnos anteriores | §6.14 |
 | El caso `i12` del arnés falla una de cada dos tandas: es una aserción de redacción | §4-sexies |
 | Al encender `INTELLIGENCE_HTTP_ENABLED` en producción se enciende también el WebChat, que sigue sin autenticar | §6 decisión 9 |
-| Una baja por error sigue necesitando un `UPDATE` a mano | §4-octies |
 | Un `sent`/`delivered`/`read` de Meta no se guarda: solo los fallos | §4-octies |
 
 **Cerrada:** los **~14 días** de la coexistencia están **confirmados en la documentación de Meta**
@@ -149,17 +148,17 @@ la suite (contable con `grep -rhoE '^\s*(it|test)\(' __tests__/`):
 
 | Suite | Archivos | Casos declarados |
 |---|---:|---:|
-| `__tests__/intelligence/` | 16 | 271 |
+| `__tests__/intelligence/` | 16 | 273 |
 | `__tests__/platform/` | 5 | 71 |
 | `__tests__/reserva/` | 1 | 28 |
 | `__tests__/reportes/` | 2 | 20 |
 
-En ejecución salen más (**455** al cierre del 2026-08-20): los usos de `.each` expanden, y F6, F7 y F8 sumaron las suyas.
+En ejecución salen más (**457** al cierre del 2026-08-20): los usos de `.each` expanden, y F6, F7 y F8 sumaron las suyas.
 Ver la nota del flake de `reportes` en §8.
 
-**Corrida completa del 2026-08-20 contra la base LOCAL: 455 de 455 en verde, en 26 s.** Las 24
-nuevas son de F8-B: 13 de la ventana, el backoff y los acuses (`ventana.test.js`) y 11 de los
-recordatorios (`recordatorios.test.js`). Cuatro de ellas se verificaron **rompiéndolas** — ver
+**Corrida completa del 2026-08-20 contra la base LOCAL: 457 de 457 en verde, en 27 s.** Las 26
+nuevas son de F8-B: 13 de la ventana, el backoff y los acuses (`ventana.test.js`), 11 de los
+recordatorios (`recordatorios.test.js`) y 2 del botón de deshacer una baja (`consola.test.js`). Cuatro de ellas se verificaron **rompiéndolas** — ver
 §4-octies.
 
 **Corrida del 2026-08-19: 386 de 386 en verde, en 58 s.** Las 25
@@ -1229,8 +1228,11 @@ de aceptación 2 del master-plan comprobado sin cuenta.
 1. **La plantilla `recordatorio_cita` hay que registrarla en Meta**, categoría UTILITY, con el texto
    exacto de `intelligence/core/plantillas.js`. Tiene su propio plazo de aprobación: entra en la
    lista de F8-C y conviene empezarlo con el resto del trámite.
-2. **Una baja por error sigue necesitando un `UPDATE` a mano.** El botón en la Consola no se
-   construyó.
+2. ⚠️ **El botón de deshacer una baja está construido pero NADIE HA ABIERTO LA PANTALLA.** La API
+   se ejercitó por HTTP con un JWT real —400 sin motivo, 200 con motivo, 409 al repetir, y la fila
+   en `auditoria`— y el build de Angular pasa, pero la extensión del navegador no estaba conectada
+   y la pantalla no se miró. En este proyecto abrir la pantalla ha destapado algo **las cuatro
+   veces** que se ha hecho. Hay conversaciones `bloqueada` en la base local para probarlo.
 3. **`sent`/`delivered`/`read` no se guardan**, solo los fallos. Son tres escrituras por mensaje en
    una tabla particionada a cambio de un dato que hoy no responde ninguna pregunta.
 4. **Multimedia/visión queda fuera**, y es coherente con el criterio con el que se partió F8: exige
@@ -1626,7 +1628,7 @@ estado por consumidor y la Ficha 360 no agrega verticales vacías.
 | Las doce preguntas del Ledger | `scripts/ledger_doce_preguntas.js` |
 | Particiones y retención | `scripts/intelligence_mantenimiento.js` |
 | Reglas de la agenda (F3) | `app_reserva_api/services/reglasAgenda.js` · `estadoCita.js` · `holdService.js` |
-| Consola de Intelligence (F5-E) | API: `app_admin_api/controllers/intelligenceConsolaController.js` · vista: `admin_app-v21` → `/admin/intelligence` |
+| Consola de Intelligence (F5-E) | API: `app_admin_api/controllers/intelligenceConsolaController.js` · vista: `admin_app-v21` → `/admin/intelligence`. Desde F8-B tiene **una** escritura: deshacer una baja, con motivo y auditada |
 | `ModelPort` y proveedor (F6) | `intelligence/model/` — `puerto.js` · `precios.js` · `promptBuilder.js` · `orquestador.js` · `adaptadores/anthropic.js` |
 | Prompt como artefacto versionado | `intelligence/model/prompts/sistema.v1.md` (F6) · `sistema.v2.md` (F7, el que se usa) |
 | Nivel 4 y la escalera (F6) | `intelligence/engine/manejadorLlm.js` · `manejadorEscalera.js` |

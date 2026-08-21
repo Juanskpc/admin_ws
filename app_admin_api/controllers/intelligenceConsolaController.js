@@ -2,6 +2,7 @@
 const { validationResult } = require('express-validator');
 const Respuesta = require('../../app_core/helpers/respuesta');
 const Models = require('../../app_core/models/conection');
+const Audit = require('../../app_core/helpers/auditHelper');
 
 /**
  * Intelligence Console — F5-E, la superficie de visualización de la Observabilidad.
@@ -34,8 +35,19 @@ const Models = require('../../app_core/models/conection');
  * resultado, no un hueco. Las columnas de modelo, tokens y caché existen en el Ledger desde
  * F5-A y se llenarán solas en F6; esta consola ya las lee, así que crecerá sin reescribirse.
  *
- * Solo lectura y solo super admin, como la Ficha 360 y la Auditoría. Un panel por inquilino
- * es otra conversación (y otra decisión de producto).
+ * Solo super admin, como la Ficha 360 y la Auditoría. Un panel por inquilino es otra
+ * conversación (y otra decisión de producto).
+ *
+ * ## La única escritura, y por qué existe (F8-B)
+ *
+ * Nació de solo lectura y casi lo sigue siendo. La excepción es `desbloquearConversacion`, y no
+ * es una grieta: un `STOP` es **irrevocable por el cliente** a propósito (ADR-023, `optout.js`),
+ * así que escribir de nuevo no reactiva nada y hace falta un humano. Sin este botón, deshacer una
+ * baja puesta por error es un `UPDATE` a mano en producción.
+ *
+ * Por eso pide **motivo** y se **audita con el usuario que la hizo**: volver a escribirle a alguien
+ * que pidió que no le escribieran es exactamente lo que hay que poder justificar después. Un botón
+ * sin rastro sería peor que no tenerlo.
  */
 
 const LIMITE_POR_DEFECTO = 25;
@@ -392,10 +404,68 @@ async function metricas(req, res) {
     }
 }
 
+/**
+ * Deshace una baja: `bloqueada` → `activa`.
+ *
+ * Deliberadamente estrecho. Solo actúa sobre una conversación **bloqueada** —no es un cambiador
+ * de estados de propósito general— y exige un motivo que queda en la auditoría junto al id del
+ * super admin que lo pulsó.
+ *
+ * El `WHERE ... estado = 'bloqueada'` no es solo una guarda: hace la operación idempotente y
+ * distingue «no existe» de «no estaba bloqueada», que son dos respuestas distintas para quien
+ * mira la pantalla.
+ */
+async function desbloquearConversacion(req, res) {
+    try {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return Respuesta.error(res, 'Datos de entrada inválidos', 400, errors.array());
+        }
+        if (!(await hayEsquemaIntelligence())) return sinEsquema(res);
+
+        const motivo = String(req.body?.motivo || '').trim();
+
+        const [fila] = await Models.sequelize.query(
+            `
+            UPDATE intelligence.conversacion
+               SET estado = 'activa'
+             WHERE id_conversacion = :id AND estado = 'bloqueada'
+            RETURNING id_conversacion, id_negocio, canal, id_externo, estado;
+            `,
+            { replacements: { id: req.params.id }, type: Models.sequelize.QueryTypes.SELECT }
+        );
+
+        if (!fila) {
+            const [existe] = await Models.sequelize.query(
+                `SELECT estado FROM intelligence.conversacion WHERE id_conversacion = :id;`,
+                { replacements: { id: req.params.id }, type: Models.sequelize.QueryTypes.SELECT }
+            );
+            return existe
+                ? Respuesta.error(res, `La conversación no está bloqueada (está "${existe.estado}")`, 409)
+                : Respuesta.error(res, 'Conversación no encontrada', 404);
+        }
+
+        await Audit.registrarEvento({
+            modulo: 'intelligence_consola',
+            accion: 'desbloquear_conversacion',
+            resultado: 'ok',
+            idUsuario: req.usuario?.id_usuario ?? null,
+            idNegocio: fila.id_negocio,
+            ip: req.ip,
+            detalle: { id_conversacion: fila.id_conversacion, canal: fila.canal, motivo },
+        });
+
+        return Respuesta.success(res, 'Conversación desbloqueada', fila);
+    } catch (error) {
+        return Respuesta.error(res, `Error al desbloquear la conversación: ${error.message}`, 500);
+    }
+}
+
 module.exports = {
     listarConversaciones,
     detalleConversacion,
     metricas,
+    desbloquearConversacion,
     /** Solo para tests: obliga a volver a comprobar si el esquema existe. */
     _olvidarEsquema: () => {
         esquemaPresente = null;

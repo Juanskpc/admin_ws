@@ -99,7 +99,8 @@ conversación ya bloqueada — la clase de excepción que un día se usa para ot
 
 **Consecuencia que hay que conocer:** al quedar `bloqueada`, escribir de nuevo no la reactiva. Un
 cliente que puso `STOP` por error **no puede volver por su cuenta**; hace falta un humano, y darle
-ese botón a la Consola es F8-B. Es fallar cerrado en una obligación legal, a propósito.
+ese botón a la Consola es F8-B — y ya existe: pide un motivo y queda auditado con el id del super
+admin que lo pulsó. Es fallar cerrado en una obligación legal, a propósito.
 
 ⚠️ **`CANCELAR` no está en la lista de bajas y no puede estar.** En Nivel 1 esa palabra significa
 «sal de este flujo» y en F7 «no ejecutes la mutación que estás confirmando». Si además diera de baja
@@ -167,7 +168,7 @@ arranca, la app va, y lo único que pasa es que nadie recibe respuesta.
 | **Correlacionar acuses** | ✅ el `wamid` se guarda al entregar; un `status: failed` marca la fila |
 | **Backoff en el entregador** | ✅ `mensaje.proximo_intento_en`, y el gateway ya distingue «no insistas» |
 | **Multimedia (visión)** | ⬜ **fuera de F8-B, y decidido**: exige descargar el medio de Meta y un modelo con visión. No se puede verificar sin cuenta, que es justo el criterio con el que se partió la fase |
-| **Desbloquear una baja desde la Consola** | ⬜ hoy un `STOP` por error sigue necesitando un `UPDATE` a mano |
+| **Desbloquear una baja desde la Consola** | ✅ la **única** escritura de la Consola: motivo obligatorio y auditada |
 | **La tabla de números** | ⬜ el segundo inquilino, y con él dónde viven los *access token* |
 
 ### La ventana: dónde vive y de qué reloj se cuenta
@@ -268,6 +269,18 @@ el Ledger exactamente igual que uno que sí.
 
 `sent`, `delivered` y `read` **no** se guardan, y es una decisión: son tres escrituras por mensaje
 en una tabla particionada de alto volumen a cambio de un dato que hoy no responde ninguna pregunta.
+
+### Deshacer una baja: la única escritura de la Consola
+
+La Consola nació de solo lectura y casi lo sigue siendo. La excepción es el botón de deshacer una
+baja, y no es una grieta: un `STOP` es **irrevocable por el cliente** a propósito, así que escribir
+de nuevo no reactiva nada y hace falta un humano. Sin el botón, deshacer una baja puesta por error
+es un `UPDATE` a mano en producción.
+
+Por eso pide **motivo** y queda **auditado con el id del super admin**: volver a escribirle a
+alguien que pidió que no le escribieran es exactamente lo que hay que poder justificar después. Un
+botón sin rastro sería peor que no tenerlo. Y es deliberadamente estrecho — solo actúa sobre una
+conversación `bloqueada`, no es un cambiador de estados de propósito general.
 
 ### El backoff, que era una nota desde F5-C
 

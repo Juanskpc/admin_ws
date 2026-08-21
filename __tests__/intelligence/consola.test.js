@@ -295,3 +295,58 @@ describe('GET /admin/intelligence/metricas', () => {
         expect(cuerpo.data.ratio_determinista).toBeNull();
     });
 });
+
+// ── La única escritura de la Consola (F8-B) ─────────────────────────────────────────────
+
+describe('deshacer una baja', () => {
+    /**
+     * Un `STOP` es irrevocable **por el cliente** a propósito: escribir de nuevo no reactiva la
+     * conversación (`optout.js`). Eso deja un caso real que solo un humano puede resolver — la
+     * baja puesta por error—, y hasta F8-B se resolvía con un `UPDATE` a mano en producción.
+     */
+    test('una conversación bloqueada vuelve a activa, y queda auditado quién y por qué', async () => {
+        await sequelize.query(
+            `UPDATE intelligence.conversacion SET estado = 'bloqueada' WHERE id_conversacion = :id;`,
+            { replacements: { id: idConversacion }, logging: false }
+        );
+
+        const res = resFalso();
+        await Consola.desbloquearConversacion(
+            {
+                params: { id: idConversacion },
+                body: { motivo: 'el cliente llamó: puso STOP sin querer' },
+                usuario: { id_usuario: 1 },
+                ip: '127.0.0.1',
+            },
+            res
+        );
+
+        expect(res.capturado.cuerpo.success).toBe(true);
+        expect(res.capturado.cuerpo.data.estado).toBe('activa');
+
+        const auditoria = await unaFila(
+            `SELECT accion, detalle FROM auditoria.audit_evento
+              WHERE modulo = 'intelligence_consola'
+                AND detalle->>'id_conversacion' = :id
+              ORDER BY fecha DESC LIMIT 1;`,
+            { id: idConversacion }
+        );
+        // Volver a escribirle a quien pidió que no le escribieran es justo lo que hay que poder
+        // justificar después. Un botón sin rastro sería peor que no tenerlo.
+        expect(auditoria).not.toBeNull();
+        expect(auditoria.detalle.motivo).toMatch(/sin querer/);
+    });
+
+    test('sobre una que no está bloqueada responde 409, no la toca', async () => {
+        const res = resFalso();
+        await Consola.desbloquearConversacion(
+            {
+                params: { id: idConversacion },
+                body: { motivo: 'probando dos veces' },
+                usuario: { id_usuario: 1 },
+            },
+            res
+        );
+        expect(res.capturado.statusCode).toBe(409);
+    });
+});

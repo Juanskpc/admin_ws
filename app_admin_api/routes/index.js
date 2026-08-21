@@ -337,4 +337,12 @@ router.get('/intelligence/conversaciones/:id', requireSuperAdmin, [
 router.get('/intelligence/metricas', requireSuperAdmin, consolaFiltrosComunes,
     IntelligenceConsolaController.metricas);
 
+// La única escritura de la Consola (F8-B). Un STOP es irrevocable por el cliente a propósito,
+// así que deshacer una baja puesta por error exige un humano — y que quede quién y por qué.
+router.post('/intelligence/conversaciones/:id/desbloquear', requireSuperAdmin, [
+    param('id').isUUID().withMessage('ID de conversación inválido'),
+    body('motivo').trim().isLength({ min: 5, max: 300 })
+        .withMessage('El motivo es obligatorio (5 a 300 caracteres)'),
+], IntelligenceConsolaController.desbloquearConversacion);
+
 module.exports = router;
