@@ -1,6 +1,7 @@
 'use strict';
 const Models = require('../../app_core/models/conection');
 const { Op } = Models.Sequelize;
+const outboxDao = require('../../app_core/dao/outboxDao');
 const Disponibilidad = require('./disponibilidadService');
 const Notificacion = require('./notificacionService');
 const Reglas = require('./reglasAgenda');
@@ -155,6 +156,22 @@ async function crearCita(params, { transaction: transaccionExterna = null } = {}
             duracion_snapshot_min: s.duracion_min,
         }));
         await Models.ReservaCitaServicio.bulkCreate(detalles, { transaction: t });
+
+        // El primer evento de dominio que emite una vertical (ADR-013). Va DENTRO de la
+        // transacción de la cita, que es todo el punto del outbox (ADR-012): si la cita no
+        // llega a existir, el evento tampoco, y no hay forma de que se despeguen.
+        //
+        // Delgado a propósito: solo el identificador. Quien lo consume relee lo que necesite —
+        // hoy el programador de recordatorios de F8-B, que además vuelve a leer la cita al
+        // vencer, así que un evento con la hora dentro envejecería en cuanto alguien reagende.
+        //
+        // Nótese que NO se emite en un try/catch: un evento que se pierde en silencio deja al
+        // cliente sin recordatorio y a nadie enterado. Si el outbox no puede escribir, la cita
+        // no se crea, que es lo que ADR-012 pide y lo que hace que este mecanismo valga algo.
+        await outboxDao.emitir(
+            { tipo: 'cita.creada.v1', idNegocio, payload: { id_cita: cita.id_cita } },
+            { transaction: t }
+        );
 
         // El hold se consume en la MISMA transacción que la cita: o existen los dos, o
         // ninguno. Si se marcara después, un fallo entre medias dejaría un hold activo

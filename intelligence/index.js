@@ -49,6 +49,10 @@ function _reiniciar() {
     motor._reiniciar();
     gateway.detener();
     gateway.limpiar();
+    const recordatorios = require('./recordatorios');
+    recordatorios.detener();
+    recordatorios.limpiarRevisores();
+    require('../app_core/outbox/outboxRelay').limpiarConsumidores();
     arrancado = false;
 }
 
@@ -182,10 +186,41 @@ function arrancarCanales({ iniciarEntrega = true } = {}) {
     return CANALES.map((c) => c.nombre);
 }
 
+/**
+ * Arranca los recordatorios proactivos (F8-B): el relay del outbox y el drenaje.
+ *
+ * Va aparte de todo lo demás por la misma razón que el motor va aparte del catálogo: esto pone en
+ * marcha **dos sondeos** y empieza a escribir mensajes que un cliente real va a recibir. Los tests
+ * de F4 y la CLI de capacidades no deben pagarlo por importar este archivo.
+ *
+ * Y aquí es donde el relay del outbox se enciende por primera vez desde F1. Arrancaba inactivo
+ * a propósito —«un evento se define cuando hay productor *y* consumidor»,
+ * [ADR-013](../docs/adr/ADR-013-catalogo-eventos.md) regla 4— y hasta hoy no había consumidor.
+ *
+ * @param {Object} [opciones]
+ * @param {boolean} [opciones.iniciarSondeos=true] — false registra sin poner temporizadores, que
+ *        es lo que quieren los tests y los guiones que drenan a mano.
+ */
+function arrancarRecordatorios({ iniciarSondeos = true } = {}) {
+    const relay = require('../app_core/outbox/outboxRelay');
+    const recordatorios = require('./recordatorios');
+
+    for (const adaptador of ADAPTADORES) adaptador.registrarRecordatorios?.({ relay });
+
+    if (iniciarSondeos) {
+        relay.iniciar();
+        recordatorios.iniciar();
+    }
+    return { canal: recordatorios.CONFIG.canal };
+}
+
 module.exports = {
     arrancar,
     arrancarMotor,
     arrancarCanales,
+    arrancarRecordatorios,
+    recordatorios: require('./recordatorios'),
+    plantillas: require('./core/plantillas'),
     montarEscalera,
     _reiniciar,
     registry,

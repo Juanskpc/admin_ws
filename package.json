@@ -43,6 +43,7 @@
     "migrate:platform-idempotencia": "node migrations/migrate_platform_idempotencia.js",
     "migrate:intelligence-ledger": "node migrations/migrate_intelligence_ledger.js",
     "migrate:intelligence-canal": "node migrations/migrate_intelligence_canal.js",
+    "migrate:intelligence-recordatorios": "node migrations/migrate_intelligence_recordatorios.js",
     "evaluar": "node scripts/evaluar.js"
   },
   "keywords": [],

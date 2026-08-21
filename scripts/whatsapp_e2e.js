@@ -56,7 +56,80 @@ process.env.CONVERSACION_DEBOUNCE_MAX_MS = '800';
 const intelligence = require('../intelligence');
 const { crearRutas } = require('../intelligence/channels/whatsapp/rutas');
 const gateway = require('../intelligence/channels/gateway');
+const ventana = require('../intelligence/channels/whatsapp/ventana');
+const recordatorios = require('../intelligence/recordatorios');
+const recordatoriosReserva = require('../intelligence/adapters/reserva/recordatorios');
+const repositorio = require('../intelligence/engine/repositorio');
 const Models = require('../app_core/models/conection');
+
+const unaFila = async (sql, replacements = {}) =>
+    (
+        await Models.sequelize.query(sql, {
+            replacements,
+            type: Models.sequelize.QueryTypes.SELECT,
+            logging: false,
+        })
+    )[0] ?? null;
+
+/** Un saliente de texto libre, como el que dejaría cualquier turno. */
+async function encolarTextoLibre(idConversacion) {
+    const t = await Models.sequelize.transaction();
+    try {
+        const fila = await repositorio.insertarMensajeSaliente(
+            {
+                idConversacion,
+                idNegocio: NEGOCIO,
+                idTurno: null,
+                canal: 'whatsapp',
+                contenido: 'Te escribo un día después, a ver si Meta me deja.',
+            },
+            { transaction: t }
+        );
+        await t.commit();
+        return fila;
+    } catch (error) {
+        await t.rollback();
+        throw error;
+    }
+}
+
+/** Una cita a nombre del número de esta corrida, a las horas que se pidan. */
+async function citaDePrueba(dentroDeHoras) {
+    const profesional = await unaFila(
+        `SELECT id_profesional FROM reserva.reserva_profesional
+          WHERE id_negocio = :negocio AND estado = 'A' LIMIT 1;`,
+        { negocio: NEGOCIO }
+    );
+    const servicio = await unaFila(
+        `SELECT id_servicio FROM reserva.reserva_servicio WHERE id_negocio = :negocio LIMIT 1;`,
+        { negocio: NEGOCIO }
+    );
+    const cita = await unaFila(
+        `
+        INSERT INTO reserva.reserva_cita
+            (id_negocio, id_profesional, fecha_hora_inicio, fecha_hora_fin, estado,
+             cliente_nombre, cliente_telefono)
+        VALUES (:negocio, :profesional,
+                (now() AT TIME ZONE 'America/Bogota') + (:horas || ' hours')::interval,
+                (now() AT TIME ZONE 'America/Bogota') + ((:horas::numeric + 0.5) || ' hours')::interval,
+                'pendiente', 'Cliente E2E', :telefono)
+        RETURNING id_cita, codigo_publico;
+        `,
+        {
+            negocio: NEGOCIO,
+            profesional: profesional.id_profesional,
+            telefono: NUMERO_CLIENTE,
+            horas: String(dentroDeHoras),
+        }
+    );
+    await Models.sequelize.query(
+        `INSERT INTO reserva.reserva_cita_servicio
+             (id_cita, id_servicio, precio_snapshot, duracion_snapshot_min)
+         VALUES (:idCita, :idServicio, 35000, 30);`,
+        { replacements: { idCita: cita.id_cita, idServicio: servicio.id_servicio }, logging: false }
+    );
+    return cita;
+}
 
 const dormir = (ms) => new Promise((r) => setTimeout(r, ms));
 const recibidoPorMeta = [];
@@ -169,6 +242,7 @@ function pintar(enviado) {
     const escalera = intelligence.montarEscalera();
     await intelligence.arrancarMotor(escalera.manejador, { recuperar: false });
     intelligence.arrancarCanales({ iniciarEntrega: false });
+    intelligence.arrancarRecordatorios({ iniciarSondeos: false });
 
     console.log(`\nNivel 4: ${escalera.nivel4 || 'ninguno (solo FSM)'} · cliente ${NUMERO_CLIENTE}`);
 
@@ -218,6 +292,86 @@ function pintar(enviado) {
     });
     await dormir(600);
 
+    // ── F8-B: la ventana de 24 h y el recordatorio ──────────────────────────────────────
+    //
+    // Se envejece la conversación a mano —30 horas— en vez de esperar un día. Es la única forma
+    // de recorrer esto sin Meta y sin un `setTimeout` de 24 horas.
+    await Models.sequelize.query(
+        `
+        UPDATE intelligence.mensaje m
+           SET enviado_en = now() - interval '30 hours'
+          FROM intelligence.conversacion c
+         WHERE c.id_conversacion = m.id_conversacion
+           AND c.id_negocio = :negocio AND c.canal = 'whatsapp' AND c.id_externo = :cliente
+           AND m.direccion = 'entrante';
+        `,
+        { replacements: { negocio: NEGOCIO, cliente: NUMERO_CLIENTE }, logging: false }
+    );
+
+    const conversacion = await unaFila(
+        `SELECT id_conversacion FROM intelligence.conversacion
+          WHERE id_negocio = :negocio AND canal = 'whatsapp' AND id_externo = :cliente;`,
+        { negocio: NEGOCIO, cliente: NUMERO_CLIENTE }
+    );
+    const estadoVentana = await ventana.estado(conversacion.id_conversacion);
+    console.log(
+        `
+→ la ventana de 24 h: ${estadoVentana.abierta ? 'ABIERTA' : 'cerrada'} ` +
+            `(esperado cerrada; último entrante ${estadoVentana.ultimoEntranteEn?.toISOString()})`
+    );
+
+    // Un texto libre ahora no puede salir, y no se reintenta: la ventana no se reabre esperando.
+    const libre = await encolarTextoLibre(conversacion.id_conversacion);
+    const antesDelLibre = recibidoPorMeta.length;
+    await gateway.entregarUnaVez();
+    const filaLibre = await unaFila(
+        `SELECT estado_entrega, intentos_entrega FROM intelligence.mensaje WHERE id_mensaje = :id;`,
+        { id: libre.id_mensaje }
+    );
+    console.log(
+        `   texto libre fuera de la ventana → ${filaLibre.estado_entrega} en ` +
+            `${filaLibre.intentos_entrega} intento (esperado fallido en 1), ` +
+            `mensajes que llegaron a Meta: ${recibidoPorMeta.length - antesDelLibre} (esperado 0)`
+    );
+
+    // Y el recordatorio, que SÍ sale: es exactamente para lo que existen las plantillas.
+    // La cita nace a 30 horas —para que el recordatorio se programe al futuro, como en la vida
+    // real— y luego se acerca a 20, que es lo que aquí hace las veces de «pasaron diez horas».
+    // Crearla directamente a 20 no programaría nada, y con razón: su recordatorio ya habría
+    // pasado. Fue el primer resultado de este guion, y el mensaje lo explicaba.
+    const cita = await citaDePrueba(30);
+    const programado = await recordatoriosReserva.alCrearseUnaCita({
+        id_negocio: NEGOCIO,
+        payload: { id_cita: cita.id_cita },
+    });
+    if (!programado.programado) console.log(`   ⚠️  no se programó: ${programado.motivo}`);
+    await Models.sequelize.query(
+        `UPDATE reserva.reserva_cita
+            SET fecha_hora_inicio = (now() AT TIME ZONE 'America/Bogota') + interval '20 hours',
+                fecha_hora_fin    = (now() AT TIME ZONE 'America/Bogota') + interval '20 hours 30 minutes'
+          WHERE id_cita = :idCita;`,
+        { replacements: { idCita: cita.id_cita }, logging: false }
+    );
+    await Models.sequelize.query(
+        `UPDATE intelligence.recordatorio SET enviar_en = now() - interval '1 minute'
+          WHERE id_negocio = :negocio AND referencia = :referencia;`,
+        { replacements: { negocio: NEGOCIO, referencia: `cita:${cita.codigo_publico}` }, logging: false }
+    );
+
+    const resumen = await recordatorios.drenarUnaVez();
+    await gateway.entregarUnaVez();
+    const plantillaEnviada = recibidoPorMeta.at(-1);
+    console.log(
+        `
+→ recordatorio de la cita (drenaje: ${JSON.stringify(resumen)})`
+    );
+    console.log(
+        plantillaEnviada?.type === 'template'
+            ? `   ← plantilla "${plantillaEnviada.template.name}" (${plantillaEnviada.template.language.code}): ` +
+                  plantillaEnviada.template.components[0].parameters.map((x) => x.text).join(' · ')
+            : '   ← NO salió la plantilla. Algo está roto.'
+    );
+
     // La baja: silencio y bloqueo.
     const antes = recibidoPorMeta.length;
     await mandar(webhook.url, cuerpoDeMensaje('STOP', 50));
@@ -237,6 +391,18 @@ function pintar(enviado) {
         `   vuelve a escribir → estado ${await estadoConversacion()}, ` +
             `mensajes recibidos por Meta: ${recibidoPorMeta.length - antes} (esperado 0)`
     );
+
+    // La cita de prueba se borra: ocupa un hueco de verdad en la agenda del profesional, y
+    // dejarla ahí haría que la siguiente corrida —o la suite— encontrara el calendario cambiado
+    // por un guion de pruebas. La conversación sí se queda: es lo que se mira en la Consola.
+    await Models.sequelize.query(
+        `DELETE FROM reserva.reserva_cita_servicio WHERE id_cita = :idCita;`,
+        { replacements: { idCita: cita.id_cita }, logging: false }
+    );
+    await Models.sequelize.query(`DELETE FROM reserva.reserva_cita WHERE id_cita = :idCita;`, {
+        replacements: { idCita: cita.id_cita },
+        logging: false,
+    });
 
     await new Promise((r) => graph.servidor.close(r));
     await new Promise((r) => webhook.servidor.close(r));

@@ -28,12 +28,21 @@
  * mensaje se reentrega. Un adaptador debería ser idempotente; el del WebChat lo es porque su
  * buzón indexa por `id_mensaje`.
  *
- * ## Sin backoff, y es una decisión
+ * ## Con backoff desde F8-B, y antes no
  *
- * Los reintentos van al ritmo del sondeo, sin espera creciente. Un backoff necesitaría una
- * columna `proximo_intento_en` en una tabla particionada de alto volumen, y hoy no compra
- * nada: el único canal es local y sus fallos son instantáneos. Cuando el primer canal remoto
- * (WhatsApp) empiece a devolver 429, esa columna será lo primero que haga falta.
+ * Hasta F8-A los reintentos iban al ritmo del sondeo, sin espera creciente, y estaba anotado
+ * aquí por qué: el backoff necesitaba una columna `proximo_intento_en` en una tabla
+ * particionada de alto volumen y no compraba nada mientras el único canal fuera local y sus
+ * fallos instantáneos. Con WhatsApp devolviendo 429 de verdad, sí compra: sin espera, los
+ * cinco intentos se consumen en cinco segundos y el mensaje acaba en *dead letter* sin que
+ * Meta haya tenido tiempo de dejar de limitarnos. La columna existe desde
+ * `migrate:intelligence-recordatorios` y la curva la aplica `repositorio.marcarEntrega`.
+ *
+ * ## Y el gateway ya distingue «vuelve a intentarlo» de «no insistas»
+ *
+ * `api.js` marcaba sus errores con `reintentable` desde F8-A y esto los trataba a todos igual.
+ * Ahora un error que se declara no reintentable va al dead letter en el primer intento: un
+ * número que no está en WhatsApp, o una ventana de 24 h cerrada, no se arreglan insistiendo.
  */
 'use strict';
 const Models = require('../../app_core/models/conection');
@@ -49,6 +58,8 @@ const CONFIG = {
     maxIntentos: numeroDeEntorno('CANAL_ENTREGA_MAX_INTENTOS', 5),
     /** Más viejo que esto no se entrega: responder a algo de anteayer es peor que callar. */
     ventanaHoras: numeroDeEntorno('CANAL_ENTREGA_VENTANA_HORAS', 24),
+    /** Techo del backoff. Cinco minutos: más allá, el mensaje caduca solo por `ventanaHoras`. */
+    backoffMaxSegundos: numeroDeEntorno('CANAL_ENTREGA_BACKOFF_MAX_SEG', 300),
 };
 
 /** Map<nombre, adaptador> */
@@ -62,8 +73,12 @@ let entregando = false;
  * @param {Object} adaptador
  * @param {string} adaptador.nombre — el mismo valor que viaja en `mensaje.canal`.
  * @param {Function} adaptador.entregar — async ({ idMensaje, idConversacion, idNegocio,
- *        idExterno, mensaje: { texto, opciones } }) => void. Si lanza, se reintenta.
- *        **Renderiza** las opciones como sepa su canal: botones, chips o una enumeración.
+ *        idExterno, mensaje: { texto, opciones, plantilla } }) => {idExternoCanal?} | void.
+ *        **Renderiza** las opciones como sepa su canal: botones, chips o una enumeración, y la
+ *        `plantilla` si su canal las exige (F8-B) o la ignora si le basta el texto.
+ *        Si lanza, se reintenta — salvo que el error traiga `reintentable: false`, que va
+ *        directo al dead letter. Lo que devuelva se guarda como `mensaje.id_externo`: es el id
+ *        del mensaje EN EL CANAL, y sin él un acuse posterior no se puede atar a nada.
  */
 function registrar(adaptador) {
     if (!adaptador || !adaptador.nombre || typeof adaptador.entregar !== 'function') {
@@ -105,6 +120,8 @@ async function entregarUnaVez() {
             const adaptador = obtener(mensaje.canal);
             let entregado = false;
             let motivo = null;
+            let reintentable = true;
+            let idExternoCanal = null;
 
             if (!adaptador) {
                 // No es un fallo del canal: es que nadie sabe hablar ese canal en este
@@ -113,24 +130,41 @@ async function entregarUnaVez() {
                 motivo = `sin adaptador registrado para el canal "${mensaje.canal}"`;
             } else {
                 try {
-                    await adaptador.entregar({
+                    const acuse = await adaptador.entregar({
                         idMensaje: mensaje.id_mensaje,
                         idConversacion: mensaje.id_conversacion,
                         idNegocio: mensaje.id_negocio,
                         idTurno: mensaje.id_turno,
                         idExterno: mensaje.id_externo,
                         intento: (mensaje.intentos_entrega || 0) + 1,
-                        mensaje: { texto: mensaje.contenido, opciones: mensaje.opciones || [] },
+                        mensaje: {
+                            texto: mensaje.contenido,
+                            opciones: mensaje.opciones || [],
+                            // Un saliente que el negocio inicia viaja con su plantilla (F8-B).
+                            // El canal que no tenga plantillas se queda con el texto, que ya
+                            // viene compuesto: eso es renderizar segun el canal (ADR-017).
+                            plantilla: mensaje.plantilla || null,
+                        },
                     });
                     entregado = true;
+                    // Lo que el canal devuelve al aceptar: el `wamid` de Meta. Sin guardarlo,
+                    // un `status: failed` posterior no se puede atar a ninguna fila nuestra.
+                    idExternoCanal = acuse?.idExternoCanal ?? acuse?.wamid ?? null;
                 } catch (error) {
                     motivo = error.message;
+                    reintentable = error.reintentable !== false;
                 }
             }
 
             const marca = await repositorio.marcarEntrega(
                 mensaje,
-                { entregado, maxIntentos: CONFIG.maxIntentos },
+                {
+                    entregado,
+                    maxIntentos: CONFIG.maxIntentos,
+                    reintentable,
+                    backoffMaxSegundos: CONFIG.backoffMaxSegundos,
+                    idExternoCanal,
+                },
                 { transaction: t }
             );
 
@@ -138,9 +172,14 @@ async function entregarUnaVez() {
                 entregados++;
             } else {
                 fallidos++;
+                const desenlace = !marca.agotado
+                    ? `, se reintentará en ${marca.esperaSegundos}s`
+                    : reintentable
+                      ? ' y agotó los intentos → dead letter'
+                      : ' y no es reintentable → dead letter';
                 console.error(
                     `[canalGateway] Entrega de ${mensaje.id_mensaje} (${mensaje.canal}) falló` +
-                        `${marca.agotado ? ' y agotó los intentos → dead letter' : ', se reintentará'}: ${motivo}`
+                        `${desenlace}: ${motivo}`
                 );
             }
         }

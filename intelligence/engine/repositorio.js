@@ -391,17 +391,17 @@ async function asignarMensajesATurno(mensajes, idTurno, { transaction }) {
  * lee de aquí, que es lo que permite ver una conversación entera sin un canal real.
  */
 async function insertarMensajeSaliente(
-    { idConversacion, idNegocio, idTurno, canal, contenido, opciones = [] },
+    { idConversacion, idNegocio, idTurno, canal, contenido, opciones = [], plantilla = null },
     { transaction }
 ) {
     return unaFila(
         `
         INSERT INTO intelligence.mensaje
             (id_conversacion, id_negocio, id_turno, direccion, canal, contenido, opciones,
-             estado_entrega)
+             plantilla, estado_entrega)
         VALUES
             (:idConversacion, :idNegocio, :idTurno, 'saliente', :canal, :contenido,
-             CAST(:opciones AS jsonb), 'pendiente')
+             CAST(:opciones AS jsonb), CAST(:plantilla AS jsonb), 'pendiente')
         RETURNING id_mensaje, creado_en;
         `,
         {
@@ -411,6 +411,9 @@ async function insertarMensajeSaliente(
             canal,
             contenido,
             opciones: JSON.stringify(opciones ?? []),
+            // Solo lo trae un mensaje que el negocio inicia (F8-B). Una respuesta a alguien que
+            // acaba de escribir no la necesita: la ventana de 24 h está abierta por definicion.
+            plantilla: plantilla ? JSON.stringify(plantilla) : null,
         },
         transaction
     );
@@ -434,13 +437,16 @@ async function reclamarSalientesPendientes({ lote, ventanaHoras, transaction }) 
         `
         SELECT m.id_mensaje, m.creado_en, m.creado_en::text AS creado_en_clave,
                m.id_conversacion, m.id_negocio, m.id_turno, m.canal, m.contenido, m.opciones,
-               m.intentos_entrega,
+               m.plantilla, m.intentos_entrega,
                c.id_externo
           FROM intelligence.mensaje m
           JOIN intelligence.conversacion c ON c.id_conversacion = m.id_conversacion
          WHERE m.direccion = 'saliente'
            AND m.estado_entrega = 'pendiente'
            AND m.creado_en > now() - (:ventanaHoras || ' hours')::interval
+           -- El backoff de F8-B. Sin esta linea, cinco intentos contra un 429 de Meta se
+           -- agotan en cinco segundos y el mensaje acaba en dead letter sin haber esperado.
+           AND (m.proximo_intento_en IS NULL OR m.proximo_intento_en <= now())
            -- A quien pidió la baja no se le escribe más, ni lo que ya estaba en la cola (F8-A).
            -- El caso real: el cliente escribe STOP mientras un turno anterior tenía respuesta
            -- encolada. Ese mensaje se queda pendiente y caduca solo al salir de la ventana de
@@ -465,23 +471,54 @@ async function reclamarSalientesPendientes({ lote, ventanaHoras, transaction }) 
  * `entregado` es final. `fallido` es el *dead letter*: se llega ahí solo tras agotar los
  * intentos, y entonces nadie lo reintenta — un mensaje que lleva cinco fallos seguidos no se
  * arregla insistiendo, y seguir insistiendo tapa el problema real.
+ *
+ * ## Dos cosas que F8-B añadió, y por qué no son adornos
+ *
+ * **`reintentable: false` manda al dead letter en el primer intento.** `api.js` distingue desde
+ * F8-A un 429 —vuelve a intentarlo— de un «ese número no está en WhatsApp» —no insistas—, y el
+ * gateway lo ignoraba: cinco intentos idénticos contra un error de argumento solo retrasan el
+ * desenlace y ensucian el registro. Ahora quien sabe lo dice y esto lo obedece.
+ *
+ * **El backoff.** Los reintentables esperan `2^intentos` segundos, acotado — la misma fórmula que
+ * `outboxDao.marcarFallo`, porque es el mismo problema y tener dos curvas distintas solo obliga a
+ * recordar cuál es cuál. Con el sondeo cada segundo y sin esto, los cinco intentos de un 429 se
+ * consumen antes de que Meta haya tenido tiempo de dejar de limitarnos.
+ *
+ * **`idExternoCanal`** es el `wamid` que devuelve Meta al aceptar el mensaje. Se guarda al
+ * entregar porque es la única forma de atar un acuse posterior (`status: failed`) a esta fila: el
+ * webhook trae el id del canal y nada más.
  */
-async function marcarEntrega(mensaje, { entregado, maxIntentos }, { transaction }) {
+async function marcarEntrega(
+    mensaje,
+    { entregado, maxIntentos, reintentable = true, backoffMaxSegundos = 300, idExternoCanal = null },
+    { transaction }
+) {
     const intentos = (mensaje.intentos_entrega || 0) + 1;
-    const estado = entregado ? 'entregado' : intentos >= maxIntentos ? 'fallido' : 'pendiente';
+    const agotado = !entregado && (intentos >= maxIntentos || reintentable === false);
+    const estado = entregado ? 'entregado' : agotado ? 'fallido' : 'pendiente';
+    // Solo tiene sentido si va a haber otro intento; en los demás casos se deja limpio para que
+    // nadie lea una espera que no existe.
+    const esperaSegundos = estado === 'pendiente' ? Math.min(2 ** intentos, backoffMaxSegundos) : null;
 
     await sequelize.query(
         `
         UPDATE intelligence.mensaje
            SET estado_entrega = :estado,
                intentos_entrega = :intentos,
-               entregado_en = CASE WHEN :estado = 'entregado' THEN now() ELSE entregado_en END
+               entregado_en = CASE WHEN :estado = 'entregado' THEN now() ELSE entregado_en END,
+               proximo_intento_en = CASE
+                   WHEN :espera::numeric IS NULL THEN NULL
+                   ELSE now() + (:espera || ' seconds')::interval
+               END,
+               id_externo = COALESCE(:idExternoCanal, id_externo)
          WHERE id_mensaje = :idMensaje AND creado_en = CAST(:creadoEn AS timestamptz);
         `,
         {
             replacements: {
                 estado,
                 intentos,
+                espera: esperaSegundos === null ? null : String(esperaSegundos),
+                idExternoCanal,
                 idMensaje: mensaje.id_mensaje,
                 // El texto, no el Date: ver el comentario de `abrirTurno`.
                 creadoEn: mensaje.creado_en_clave,
@@ -490,7 +527,46 @@ async function marcarEntrega(mensaje, { entregado, maxIntentos }, { transaction 
         }
     );
 
-    return { estado, intentos, agotado: estado === 'fallido' };
+    return { estado, intentos, agotado, esperaSegundos };
+}
+
+/**
+ * Anota el acuse que el canal manda DESPUÉS de haber aceptado el mensaje (F8-B).
+ *
+ * Meta acepta un envío con un 200 y **luego** avisa por webhook de si llegó o no. Un
+ * `status: failed` es un mensaje que dimos por entregado y que nadie recibió: el número no tiene
+ * WhatsApp, o el cliente nos bloqueó. Sin esto, ese caso se ve exactamente igual que uno que
+ * funcionó, que es la peor forma de fallar.
+ *
+ * Se busca por `id_externo` —el `wamid` guardado al entregar— y se acota por `creado_en`, que es
+ * la clave de partición: un acuse llega en segundos o minutos, así que dos días de margen sobran y
+ * evitan barrer las quince particiones por una columna que no está indexada. Si algún día el
+ * volumen lo pide, el índice va aquí y la consulta no cambia.
+ */
+async function marcarAcuseDelCanal({ idNegocio, idExternoCanal, estado, detalle = null }, { transaction = null } = {}) {
+    const filas = await sequelize.query(
+        `
+        UPDATE intelligence.mensaje
+           SET estado_entrega = :estado,
+               crudo = COALESCE(crudo, '{}'::jsonb) || jsonb_build_object('acuse', CAST(:detalle AS jsonb))
+         WHERE id_negocio = :idNegocio
+           AND direccion = 'saliente'
+           AND id_externo = :idExternoCanal
+           AND creado_en > now() - interval '2 days'
+        RETURNING id_mensaje, id_conversacion;
+        `,
+        {
+            replacements: {
+                idNegocio,
+                idExternoCanal,
+                estado,
+                detalle: JSON.stringify(detalle ?? null),
+            },
+            transaction,
+            ...SELECT,
+        }
+    );
+    return filas[0] ?? null;
 }
 
 // ── Turnos y pasos ──────────────────────────────────────────────────────────────────────
@@ -825,6 +901,7 @@ module.exports = {
     insertarMensajeSaliente,
     reclamarSalientesPendientes,
     marcarEntrega,
+    marcarAcuseDelCanal,
     mensajesPendientes,
     historialReciente,
     asignarMensajesATurno,

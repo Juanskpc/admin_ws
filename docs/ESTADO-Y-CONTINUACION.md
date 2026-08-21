@@ -1,6 +1,6 @@
 # EscalApp Intelligence — estado y cómo continuar
 
-**Última actualización:** 2026-08-19 (**F7 completa** · **F8-A: el canal de WhatsApp**, sin cuenta de Meta todavía)
+**Última actualización:** 2026-08-20 (**F8-B: las reglas del canal** — ventana de 24 h, plantillas y recordatorios proactivos)
 **Propósito:** que retomar el trabajo no cueste una sesión de arqueología. Si vuelves a este
 proyecto después de semanas, **lee este documento primero** y sigue por donde diga.
 
@@ -9,13 +9,13 @@ proyecto después de semanas, **lee este documento primero** y sigue por donde d
 
 ---
 
-## 4-0. POR DÓNDE SE SIGUE (cierre del 2026-08-19)
+## 4-0. POR DÓNDE SE SIGUE (cierre del 2026-08-20)
 
 > Esta sección es lo primero que hay que leer al retomar. Las de más abajo son historia de fases
 > ya cerradas y se conservan porque explican **por qué** las cosas están como están.
 
-**Estado en una frase:** F0–F7 completas y **F8-A (el canal de WhatsApp) hecha** en local — falta la
-cuenta de Meta, que no depende del código—, **ADR-023 Aceptado**, **431 pruebas en verde**, y **nada
+**Estado en una frase:** F0–F7 completas y **F8-A + F8-B hechas** en local — falta la cuenta de
+Meta, que no depende del código—, **ADR-023 Aceptado**, **455 pruebas en verde**, y **nada
 desplegado**.
 
 ### Lo que se puede hacer ya, en orden de valor
@@ -27,14 +27,17 @@ desplegado**.
    (§6.14). Mismo procedimiento que F2 con `AUTHZ_MODO`. Sin datos, encender el bloqueo es
    adivinar.
 3. **Empezar el trámite con Meta.** Es lo único de la lista con **semanas de plazo** y lo único que
-   no depende de nosotros: verificación de negocio, app creada, y el número por Embedded Signup si
-   se quiere coexistencia. **F8-A ya está construida y probada** contra un Meta de mentira
-   (§4-septies y [`canal-whatsapp.md`](canal-whatsapp.md)); lo que falta para el MVP comercial es la
-   cuenta. Cuanto antes empiece el trámite, antes se cierra F8-C.
+   no depende de nosotros: verificación de negocio, app creada, el número por Embedded Signup si se
+   quiere coexistencia, y ahora también **la aprobación de la plantilla `recordatorio_cita`**, que
+   tiene su propio plazo. Todo el código está hecho y probado contra un Meta de mentira
+   (§4-septies, §4-octies y [`canal-whatsapp.md`](canal-whatsapp.md)); lo que falta para el MVP
+   comercial es la cuenta.
 4. **Meter `asistente_ia` en un plan comercial.** Ningún plan lo incluye; hoy hay que forzarlo con
-   `FEATURES_FORZADAS`. Es media hora de trabajo y sin ello el asistente no se puede vender.
-5. **F8-B: la ventana de 24 h, las plantillas y los recordatorios.** Es donde se cobra el dividendo
-   del outbox de F1. Se puede empezar sin cuenta, pero no se puede terminar sin ella.
+   `FEATURES_FORZADAS`. Es media hora de trabajo y una decisión comercial —en qué plan y por cuánto—
+   que no es del código. Sin ello el asistente no se puede vender.
+5. **Lo que queda de F8-B**, todo pequeño y ninguno bloqueante: el botón para deshacer una baja
+   desde la Consola, la tabla de números para el segundo inquilino, y multimedia/visión —que se
+   dejó fuera a propósito: no se puede verificar sin descargar medios de Meta.
 
 ### Deudas conocidas, ninguna bloqueante
 
@@ -47,6 +50,8 @@ desplegado**.
 | El guardarraíl no ve promesas sin número, ni cifras que el bot dijo en turnos anteriores | §6.14 |
 | El caso `i12` del arnés falla una de cada dos tandas: es una aserción de redacción | §4-sexies |
 | Al encender `INTELLIGENCE_HTTP_ENABLED` en producción se enciende también el WebChat, que sigue sin autenticar | §6 decisión 9 |
+| Una baja por error sigue necesitando un `UPDATE` a mano | §4-octies |
+| Un `sent`/`delivered`/`read` de Meta no se guarda: solo los fallos | §4-octies |
 
 **Cerrada:** los **~14 días** de la coexistencia están **confirmados en la documentación de Meta**
 (`PRIMARY_INACTIVITY`, y companion a los 30). Dejó de ser un rumor de blogs y además dejó de ser un
@@ -56,6 +61,10 @@ riesgo silencioso: Meta lo avisa por el webhook `account_update`, y el canal ya 
 **Cerrada:** `cache_read` ya se vio funcionando — 88.8% de la entrada en la tanda de F7 (§4-sexies).
 El prompt de F7 pasa de 1024 tokens porque el catálogo tiene seis herramientas en vez de dos, y ahí
 la caché de OpenAI empieza a contar. ADR-019 estaba bien; lo que faltaba era volumen.
+
+**Cerrada:** el outbox de F1 tiene por fin un consumidor. Llevaba desde entonces transportando un
+catálogo vacío a propósito (ADR-013, regla 4), y F8-B trajo el primer productor y el primer
+consumidor de `cita.creada.v1`.
 
 ---
 
@@ -101,7 +110,7 @@ siguen sin commitear a propósito: son otro trabajo y les toca su propia rama.
 | **F6** | `ModelPort` + Prompt Builder + orquestador + Nivel 4 **solo lectura** + arnés | ✅ **Completa en local** (ver §4-quinquies) |
 | **F7** | Mutaciones vía IA + guardarraíles de ADR-023 + Consola de Handoff | ✅ **Completa en local** (ver §4-sexies). La «Consola de Handoff» **no se construyó y es correcto**: §6.13 decidió que el escalado aterriza en WhatsApp, así que su pantalla es la Consola de F5-E hasta que llegue F8 |
 | **F8-A** | Canal de WhatsApp: firma del cuerpo crudo, webhook, traducción, opt-out | ✅ **Completa en local** (§4-septies) |
-| **F8-B** | Ventana de 24 h, plantillas, multimedia, recordatorios proactivos | ⬜ |
+| **F8-B** | Ventana de 24 h, plantillas, recordatorios proactivos, backoff y acuses | ✅ **Completa en local** (§4-octies). Multimedia/visión se dejó **fuera a propósito**: no se puede verificar sin Meta |
 | **F8-C** | Conectar el número real → **MVP COMERCIAL** | ⬜ **bloqueada por el trámite con Meta** |
 | F9–F10 | Ver [`architecture/roadmap.md`](architecture/roadmap.md) | ⬜ |
 
@@ -140,15 +149,20 @@ la suite (contable con `grep -rhoE '^\s*(it|test)\(' __tests__/`):
 
 | Suite | Archivos | Casos declarados |
 |---|---:|---:|
-| `__tests__/intelligence/` | 14 | 258 |
+| `__tests__/intelligence/` | 16 | 271 |
 | `__tests__/platform/` | 5 | 71 |
 | `__tests__/reserva/` | 1 | 28 |
 | `__tests__/reportes/` | 2 | 20 |
 
-En ejecución salen más (**431** al cierre del 2026-08-19): los usos de `.each` expanden, y F6 y F7 sumaron las suyas.
+En ejecución salen más (**455** al cierre del 2026-08-20): los usos de `.each` expanden, y F6, F7 y F8 sumaron las suyas.
 Ver la nota del flake de `reportes` en §8.
 
-**Corrida completa del 2026-08-19 contra la base LOCAL: 386 de 386 en verde, en 58 s.** Las 25
+**Corrida completa del 2026-08-20 contra la base LOCAL: 455 de 455 en verde, en 26 s.** Las 24
+nuevas son de F8-B: 13 de la ventana, el backoff y los acuses (`ventana.test.js`) y 11 de los
+recordatorios (`recordatorios.test.js`). Cuatro de ellas se verificaron **rompiéndolas** — ver
+§4-octies.
+
+**Corrida del 2026-08-19: 386 de 386 en verde, en 58 s.** Las 25
 nuevas son de F7: 19 de la confirmación conversacional (`confirmacion.test.js`), 4 del Policy Gate
 contra la base de verdad y 2 del Registry. Dos de ellas se verificaron **rompiéndolas** —ver
 §4-sexies—, que es la única forma de saber que un test verde prueba algo.
@@ -211,6 +225,7 @@ npm run migrate:reserva-hold
 npm run migrate:platform-idempotencia
 npm run migrate:intelligence-ledger
 npm run migrate:intelligence-canal
+npm run migrate:intelligence-recordatorios
 
 # 3. Comprobar que todo sigue verde
 npx jest --runInBand                           # suite completa (inventario en §2; flake en §8)
@@ -1141,6 +1156,90 @@ que ocurre es que nadie recibe respuesta.
 
 ---
 
+## 4-octies. F8-B — las reglas del canal (2026-08-20)
+
+El detalle está en **[`canal-whatsapp.md`](canal-whatsapp.md)**. Aquí, lo que hay que saber al
+retomar.
+
+### La decisión que quitó la mitad del código
+
+Los recordatorios parecían pedir tres eventos: `cita.creada`, `cita.cancelada` y `cita.reagendada`.
+Se quedaron en **uno**. El recordatorio **relee la cita en el momento de enviarla** y decide ahí:
+cancelada o pasada → se cancela; movida → se reprograma sola; en pie → sale con los datos frescos.
+
+No es un ahorro, es una diferencia de corrección. La cadena de eventos solo funciona si nadie se
+salta un eslabón **nunca**; la relectura funciona aunque el evento se pierda, aunque alguien cancele
+con un `UPDATE` desde el panel y aunque la cita se mueva dos veces en un minuto. Es lo que ADR-013
+manda hacer con los eventos delgados: «quien necesite detalle lo pide releyendo».
+
+**Consecuencia:** `cita.creada.v1` es el primer evento de dominio de todo el proyecto con productor
+y consumidor vivos. El outbox de F1 llevaba desde entonces transportando un catálogo vacío, a
+propósito (regla 4 de ADR-013), y esto es lo que lo enciende.
+
+### Lo que cambió fuera del canal
+
+- **`reserva` emite.** `citaService.crearCita` mete `cita.creada.v1` en el outbox **dentro de la
+  transacción de la cita**, sin `try/catch`: si el outbox no puede escribir, la cita no se crea. Un
+  evento que se pierde en silencio deja al cliente sin recordatorio y a nadie enterado.
+- **El entregador tiene backoff** (`mensaje.proximo_intento_en`) y distingue «vuelve a intentarlo»
+  de «no insistas». `api.js` marcaba sus errores con `reintentable` desde F8-A y nadie lo miraba.
+- **`intelligence.recordatorio`** es la única tabla nueva. No es un `mensaje` —un recordatorio de
+  pasado mañana no es un saliente pendiente—, no es un evento —es una promesa de futuro que se
+  puede cancelar y mover— y no se puede derivar consultando la vertical desde el núcleo.
+- **`intelligence/recordatorios/`** sabe programar, esperar y entregar; **no sabe leer una cita**.
+  Eso vive en `adapters/reserva/recordatorios.js`, que es la frontera que F9 va a mirar: añadir
+  recordatorios de `restaurante` tiene que ser escribir el hermano de ese archivo.
+
+### Dos cosas que solo se vieron recorriéndolo
+
+1. **Una cita a menos de 24 h no programa recordatorio, y está bien.** El guion de pruebas creaba la
+   cita a 20 horas y no salía nada; el mensaje lo explicaba: su recordatorio ya habría pasado.
+   Ahora nace a 30 h y se acerca a 20, que es lo que en el guion hace las veces de «pasaron diez
+   horas». La lección de siempre: el primer resultado raro de un guion suele ser el sistema
+   diciendo la verdad.
+2. **El número se guarda sin el `+`.** El `id_externo` de una conversación de WhatsApp es el `from`
+   del webhook (`573001234567`); con `+` se abriría una **segunda** conversación para la misma
+   persona y el recordatorio saldría por un hilo distinto del que tiene abierto.
+
+### Cuatro pruebas verificadas rompiéndolas
+
+Un test verde puede no probar nada, así que se comprobó al revés — se rompió el código y se miró
+que el test cayera:
+
+| Se rompió | Cayó |
+|---|---|
+| La comprobación de la ventana en `entregar` | «texto libre con la ventana cerrada: no sale» |
+| El filtro `proximo_intento_en` al reclamar | «un fallo reintentable espera, y no se vuelve a reclamar» |
+| El estado de la cita en el revisor | «cita cancelada por fuera: el recordatorio muere» |
+| El corte por conversación `bloqueada` | «a quien pidió la baja no se le recuerda nada» |
+
+### Cómo se ejercita hoy
+
+```bash
+DB_PORT=5432 DB_PASS=... LLM_HABILITADO=false node scripts/whatsapp_e2e.js
+```
+
+El mismo guion de F8-A, ahora con lo que **solo se ve con el tiempo pasado**: envejece la
+conversación a mano, comprueba que la ventana está cerrada, que un texto libre muere en el primer
+intento sin llegar a Meta, y que el recordatorio sale igualmente **como plantilla**. Es el criterio
+de aceptación 2 del master-plan comprobado sin cuenta.
+
+### ⚠️ Lo que sigue abierto de F8-B
+
+1. **La plantilla `recordatorio_cita` hay que registrarla en Meta**, categoría UTILITY, con el texto
+   exacto de `intelligence/core/plantillas.js`. Tiene su propio plazo de aprobación: entra en la
+   lista de F8-C y conviene empezarlo con el resto del trámite.
+2. **Una baja por error sigue necesitando un `UPDATE` a mano.** El botón en la Consola no se
+   construyó.
+3. **`sent`/`delivered`/`read` no se guardan**, solo los fallos. Son tres escrituras por mensaje en
+   una tabla particionada a cambio de un dato que hoy no responde ninguna pregunta.
+4. **Multimedia/visión queda fuera**, y es coherente con el criterio con el que se partió F8: exige
+   descargar el medio de Meta y un modelo con visión, y no se puede verificar sin cuenta.
+5. **Sigue siendo un número, un negocio.** La tabla de números y dónde viven los *access token*
+   sigue sin decidirse (§4-septies, punto 2).
+
+---
+
 ## 5. Pendiente de despliegue (en este orden)
 
 **Lo más urgente es F2**, porque es lo único que arregla algo que está roto en producción
@@ -1488,6 +1587,9 @@ estado por consumidor y la Ficha 360 no agrega verticales vacías.
 | **Un cliente de mentira acepta cualquier combinación de parámetros** | Los 164 tests de `intelligence/` pasaban con un adaptador falso, y el de OpenAI **estaba inservible al 100%**: `gpt-5.6-*` devuelve un 400 si se le mandan herramientas y `reasoning_effort` a la vez en `/v1/chat/completions`, y omitir el parámetro tampoco vale —hay que pedir `'none'`—. Como el asistente ofrece capacidades en cada turno de Nivel 4, ningún turno podía funcionar. El síntoma tampoco ayudaba: el manejador atrapa los fallos del proveedor y responde con el handoff, así que la tanda salía con **50% de acierto, 0 llamadas y $0.00** en vez de con un error. La lección no es «probad contra la API»: es que un doble de pruebas valida la **forma** de la petición, nunca lo que el proveedor acepta. |
 | **`cache_read = 0` puede ser el umbral y no un prefijo roto** | ADR-019 dice que un cero sostenido significa que algo volátil se coló delante del punto de corte. Cierto en Anthropic. En OpenAI hay una causa anterior y mucho más tonta: **no cachea por debajo de 1024 tokens de entrada**. Los prompts de la suite rondan los 950-1020 — debajo por poco. Medido antes de creerlo: dos llamadas idénticas de 3213 tokens dieron 3210 cacheados en la segunda. El arnés ahora lo avisa; antes mandaba a revisar `promptBuilder.js`, donde no había nada que arreglar. |
 | **Un caso dorado puede exigir que el bot adivine** | Dos casos de `respuestas` pedían invocar `consultar_disponibilidad` sin decir el servicio, y `id_servicio` es requerido: cumplirlos obligaba a **inventarse cuál**. El bot preguntaba «¿corte o tinte?», que es lo correcto, y el arnés lo contaba como fallo. Y en `inyeccion`, el caso `i12` falló por decir «gratis» dentro de «**no puedo confirmar** sesiones gratis»: una lista de palabras prohibidas no distingue la promesa del rechazo. Antes de tocar el prompt o el modelo, **leer lo que contestó**: dos de cada tres fallos de la primera tanda buena eran del arnés. Y eso último es un aviso para ADR-023: el guardarraíl de promesas no puede ser una lista negra de palabras. |
+| **Un backtick dentro de un template literal parte el archivo** | Un comentario de SQL escrito con el estilo del repo —``-- `enviado_en`, pero quien poda es `creado_en` ``— dentro de una consulta en template literal cierra la cadena a media línea. El error que sale es `SyntaxError: missing ) after argument list` y **apunta al final del archivo**, no al backtick. En SQL embebido, los nombres de columna van sin comillas. |
+| **Encender un productor de eventos rompe los tests que cuentan lotes** | Desde F8-B `reserva` emite `cita.creada.v1` de verdad, así que `platform.outbox` deja de estar vacío y `expect(res.entregados).toBe(1)` en la suite del relay pasa a depender de lo que hayan dejado las otras suites. Es la **tercera** aparición de la misma lección —ya estaba escrita para los contadores del entregador y para los agregados por negocio—: los asertos van sobre **la fila**, y un consumidor de prueba se registra con `patron` aunque no lo necesite, o recibirá también los eventos reales. |
+| **Añadir backoff rompe los tests que cuentan intentos** | Los dos casos de dead letter de `canal.test.js` llamaban a `entregarUnaVez()` tres veces seguidas esperando tres intentos. Con la curva puesta, el segundo no reintenta nada y el test mide el reloj en vez del entregador. No se arregla quitando el backoff: se pone su techo a cero en ese `describe` y la espera se prueba donde la espera **es** lo que se comprueba (`ventana.test.js`). |
 | **Procesos zombis en el puerto** | Ver §3. |
 
 ---
@@ -1531,12 +1633,15 @@ estado por consumidor y la Ficha 360 no agrega verticales vacías.
 | Confirmación humana de mutaciones (F7) | declaración: `core/registry.js` (`CONFIRMACION`) + el manifiesto del adaptador · regla: `core/policyGate.js` · conversación: `engine/confirmacion.js` |
 | Canal de WhatsApp (F8-A) | `intelligence/channels/whatsapp/` — `config.js` (costura número→negocio) · `firma.js` · `adaptador.js` · `api.js` (el único que habla con Meta) · `rutas.js` |
 | Baja de la lista, STOP/BAJA (F8-A) | `intelligence/engine/optout.js` + el filtro de `reclamarSalientesPendientes` |
+| Ventana de 24 h (F8-B) | `intelligence/channels/whatsapp/ventana.js` — en el adaptador, nunca en el núcleo (ADR-017) |
+| Catálogo de plantillas (F8-B) | `intelligence/core/plantillas.js` — código, y en el núcleo: un canal sin plantillas recibe el texto ya compuesto |
+| Recordatorios proactivos (F8-B) | motor: `intelligence/recordatorios/index.js` · quien sabe leer una cita: `intelligence/adapters/reserva/recordatorios.js` |
 | Recorrido del canal sin cuenta de Meta | `scripts/whatsapp_e2e.js` |
 | Todo lo de WhatsApp explicado | `docs/canal-whatsapp.md` |
 | Leer «sí», «cancelar» y una ráfaga (F7) | `intelligence/engine/texto.js` — compartido por la FSM y la confirmación |
 | Arnés de evaluación (F6) | `intelligence/evaluacion/` · CLI: `scripts/evaluar.js` (`npm run evaluar`) |
 | Proveedores, modelos, tarifas y cómo se elige | `docs/nivel-4.md` |
-| Tests | `__tests__/intelligence/` (14) · `__tests__/platform/` (5) · `__tests__/reserva/` (1) — inventario en §2 |
+| Tests | `__tests__/intelligence/` (16) · `__tests__/platform/` (5) · `__tests__/reserva/` (1) — inventario en §2 |
 
 **Desde F5-C `intelligence` sí se monta en `app.js`, pero detrás de dos guardas.** Una es que
 el directorio exista, y es la que mantiene **literal** el test del apagón: se comprobó de

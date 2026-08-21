@@ -21,17 +21,25 @@
  *     móvil y Meta nos lo cuenta por `smb_message_echoes`. Eso **no** es un mensaje del cliente, y
  *     confundirlo era el agujero que §6.13 dejó anotado para esta fase.
  *
- * ## Lo que NO hace, y está decidido
+ * ## Lo que añadió F8-B
  *
- * No implementa la ventana de 24 horas ni las plantillas, ni multimedia, ni recordatorios
- * proactivos: eso es F8-B, y lo dice el master-plan. Aquí está el canal; allí las reglas de
- * negocio del canal. Se parten porque esta mitad **se puede verificar sin Meta** y la otra no.
+ * Las reglas del canal, que no son del canal en el sentido técnico sino de negocio: la **ventana
+ * de 24 horas** (`ventana.js`), las **plantillas** para poder escribir fuera de ella, y el
+ * `wamid` guardado al enviar para que un acuse posterior se pueda atar a nuestra fila.
+ *
+ * ## Lo que sigue sin hacer, y está decidido
+ *
+ * No lee multimedia: una foto entra marcada y el bot repregunta. Leer un comprobante de pago con
+ * visión encaja con el cobro adelantado que ya existe en `reserva`, pero exige descargar el medio
+ * de Meta y un modelo con visión — dos cosas que no se pueden verificar sin cuenta.
  */
 'use strict';
 const motor = require('../../engine/motor');
 const configReal = require('./config');
 const apiReal = require('./api');
+const ventanaReal = require('./ventana');
 const repositorio = require('../../engine/repositorio');
+const plantillas = require('../../core/plantillas');
 const Audit = require('../../../app_core/helpers/auditHelper');
 
 const NOMBRE = 'whatsapp';
@@ -198,16 +206,32 @@ async function recibirWebhook(cuerpo, { config = configReal } = {}) {
     }
 
     for (const estado of leido.estados) {
-        // Correlacionar un acuse con nuestro mensaje exige guardar el `wamid` al enviar, y eso es
-        // una columna en una tabla particionada: F8-B. Hasta entonces, los fallos se auditan —son
-        // los únicos que piden acción— y el resto es ruido que no se guarda.
-        if (estado.estado === 'failed') {
-            await auditar('entrega_fallida', estado.idNegocio, {
-                wamid: estado.wamid,
-                destinatario: estado.destinatario,
-                error: estado.error,
-            });
-        }
+        // Solo interesa `failed`, y desde F8-B se puede **atar a la fila**: el `wamid` se guarda
+        // al entregar. `sent`, `delivered` y `read` no se guardan a propósito — son tres
+        // escrituras por mensaje en una tabla particionada de alto volumen a cambio de un dato
+        // que hoy no responde ninguna pregunta. El día que alguien tenga que responderla, se
+        // añaden aquí.
+        //
+        // Que esto importe no es evidente: Meta acepta el envío con un 200 y avisa **después**
+        // de que no llegó. Sin este bucle, un mensaje que nadie recibió se ve en el Ledger
+        // exactamente igual que uno que sí.
+        if (estado.estado !== 'failed') continue;
+
+        const fila = await repositorio.marcarAcuseDelCanal({
+            idNegocio: estado.idNegocio,
+            idExternoCanal: estado.wamid,
+            estado: 'fallido',
+            detalle: { estado: estado.estado, error: estado.error },
+        });
+
+        await auditar('entrega_fallida', estado.idNegocio, {
+            wamid: estado.wamid,
+            destinatario: estado.destinatario,
+            error: estado.error,
+            // Un acuse sin fila nuestra no es un error: puede ser de un mensaje que mandó el
+            // dueño desde su móvil, o de uno más viejo que la ventana de particiones que se mira.
+            id_mensaje: fila?.id_mensaje ?? null,
+        });
     }
 
     return {
@@ -290,9 +314,14 @@ async function registrarAviso({ idNegocio, evento, motivo, iniciadoPor, numero }
  * API rechace el mensaje entero, así que recortar es lo que evita que un servicio con nombre largo
  * deje al cliente sin respuesta.
  */
-function renderizar({ texto, opciones = [] }) {
+function renderizar({ texto, opciones = [], plantilla = null }) {
     const cuerpo = String(texto ?? '').trim() || '…';
     const lista = (opciones || []).filter((o) => o && o.id != null);
+
+    // Una plantilla manda sobre todo lo demás: es el único formato que Meta acepta con la
+    // ventana de 24 h cerrada, y su texto no lo componemos aquí —lo compone Meta con el que
+    // aprobó—. Lo que va en el cuerpo del envío son solo los huecos, en orden.
+    if (plantilla) return renderizarPlantilla(plantilla);
 
     if (lista.length === 0) {
         return { type: 'text', text: { preview_url: false, body: recortar(cuerpo, LIMITES.texto) } };
@@ -355,15 +384,85 @@ function renderizar({ texto, opciones = [] }) {
 }
 
 /**
+ * Traduce una plantilla del catálogo a lo que espera la Cloud API.
+ *
+ * Los parámetros van **posicionales** (`{{1}}`, `{{2}}`…) y su orden lo fija el catálogo, no
+ * quien programó el mensaje: por eso se leen de ahí y no de las claves del objeto, cuyo orden en
+ * un JSON no es un contrato. Mandarlos en otro orden no da error — da un mensaje que dice que la
+ * cita es «de las 3 de Ana» en vez de «de Ana a las 3».
+ */
+function renderizarPlantilla({ nombre, idioma, parametros = {} }) {
+    const definicion = plantillas.obtener(nombre);
+    if (!definicion) {
+        // No es reintentable: una plantilla que no está en el catálogo no aparece por insistir.
+        const e = new Error(`No existe la plantilla "${nombre}" en el catálogo.`);
+        e.code = 'WHATSAPP_PLANTILLA_DESCONOCIDA';
+        e.reintentable = false;
+        throw e;
+    }
+
+    const valores = definicion.parametros.map((clave) => ({
+        type: 'text',
+        text: String(parametros[clave] ?? '').trim(),
+    }));
+
+    return {
+        type: 'template',
+        template: {
+            name: definicion.nombre,
+            language: { code: idioma || definicion.idioma },
+            // Una plantilla sin huecos no lleva `components`: mandarlo vacío es un 400.
+            ...(valores.length ? { components: [{ type: 'body', parameters: valores }] } : {}),
+        },
+    };
+}
+
+/**
  * Entrega, que aquí significa «Meta lo aceptó» — no que alguien lo haya leído.
  *
- * La llama el Channel Gateway. Si lanza, se reintenta: por eso los errores de red y los 429 de
- * `api.js` suben, y los de argumento también (el gateway todavía no distingue; ver su nota sobre
- * el backoff, que es lo primero que hará falta cuando esto empiece a recibir 429 de verdad).
+ * La llama el Channel Gateway. Si lanza, se reintenta, salvo que el error diga
+ * `reintentable: false` — desde F8-B el gateway sí distingue.
+ *
+ * ## La comprobación que hace esto distinto de F8-A
+ *
+ * Un texto libre solo puede salir con la **ventana de 24 h abierta**. Comprobarlo aquí, y no
+ * dejar que lo diga Meta con un 400, tiene dos razones que no son de estilo: el error de Meta
+ * llega después de haber gastado la llamada y sin decir a qué conversación culpar, y sobre todo
+ * **la ventana no se reabre esperando** — reintentarlo cinco veces es tirar cinco llamadas y
+ * retrasar el *dead letter*. Por eso el fallo se declara no reintentable.
+ *
+ * Que esto salte casi nunca es lo esperado: una respuesta se produce porque alguien acaba de
+ * escribir. Salta cuando el bot tarda más de un día en contestar —que es un fallo de otra
+ * cosa— y cuando alguien intenta iniciar una conversación sin plantilla, que es el error que
+ * esta comprobación existe para hacer visible.
  */
-async function entregar({ idExterno, mensaje, api = apiReal, config = configReal }) {
+async function entregar({
+    idConversacion,
+    idExterno,
+    mensaje,
+    api = apiReal,
+    config = configReal,
+    ventana = ventanaReal,
+}) {
     const payload = renderizar(mensaje);
-    await api.enviarMensaje({ para: idExterno, payload, config });
+
+    if (!mensaje.plantilla) {
+        const estadoVentana = await ventana.estado(idConversacion);
+        if (!estadoVentana.abierta) {
+            const desde = estadoVentana.ultimoEntranteEn
+                ? `el último mensaje del cliente fue ${estadoVentana.ultimoEntranteEn.toISOString()}`
+                : 'el cliente nunca ha escrito';
+            const e = new Error(
+                `Ventana de 24 h cerrada (${desde}): fuera de ella solo salen plantillas.`
+            );
+            e.code = 'WHATSAPP_FUERA_DE_VENTANA';
+            e.reintentable = false;
+            throw e;
+        }
+    }
+
+    const { wamid } = await api.enviarMensaje({ para: idExterno, payload, config });
+    return { idExternoCanal: wamid };
 }
 
 async function auditar(accion, idNegocio, detalle) {
@@ -388,6 +487,7 @@ module.exports = {
     recibirWebhook,
     interpretarWebhook,
     renderizar,
+    renderizarPlantilla,
     textoDeMensaje,
     silenciarPorHumano,
     LIMITES,

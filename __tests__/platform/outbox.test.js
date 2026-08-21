@@ -166,12 +166,17 @@ describe('relay', () => {
 
     it('entrega el evento al consumidor y lo marca como entregado', async () => {
         const recibidos = [];
-        relay.registrarConsumidor('prueba', { manejar: async (e) => recibidos.push(e) });
+        // Con patrón, aunque el consumidor de este test podría no tenerlo: sin él recibiría
+        // también los eventos reales que otras suites dejen pendientes.
+        relay.registrarConsumidor('prueba', { patron: [TIPO], manejar: async (e) => recibidos.push(e) });
         const id = await emitirEvento(TIPO, { id_orden: 42 });
 
-        const res = await relay.drenarUnaVez();
+        await relay.drenarUnaVez();
 
-        expect(res.entregados).toBe(1);
+        // Se afirma sobre LA FILA y no sobre `res.entregados`. Desde F8-B `reserva` emite
+        // `cita.creada.v1` de verdad, así que un lote arrastra los pendientes que hayan dejado
+        // las otras suites y el contador deja de valer 1 sin que nada esté roto. Es la misma
+        // lección que ya se pagó con los contadores del entregador de canal.
         expect(recibidos).toHaveLength(1);
         expect(recibidos[0].tipo).toBe(TIPO);
         expect(recibidos[0].payload).toEqual({ id_orden: 42 });
@@ -183,7 +188,7 @@ describe('relay', () => {
 
     it('un evento ya entregado no se vuelve a entregar', async () => {
         let veces = 0;
-        relay.registrarConsumidor('contador', { manejar: async () => { veces++; } });
+        relay.registrarConsumidor('contador', { patron: [TIPO], manejar: async () => { veces++; } });
         await emitirEvento();
 
         await relay.drenarUnaVez();

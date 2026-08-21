@@ -49,16 +49,21 @@ Todo evento viaja con el mismo sobre; los campos de abajo son el `payload`.
 
 | Evento | Estado | Payload | Notas |
 |---|---|---|---|
-| `cita.creada.v1` | Planificado | `{ id_cita, id_persona_negocio? }` | Detonante típico de la confirmación por canal. |
+| `cita.creada.v1` | **Activo** (F8-B, 2026-08-20) | `{ id_cita }` | Productor: `citaService.crearCita`, en la **misma transacción** que la cita. Consumidor: el programador de recordatorios (`intelligence/adapters/reserva/recordatorios.js`). Sin `id_persona_negocio` porque `reserva` todavía no adopta `persona`; añadirlo será aditivo. |
 | `cita.confirmada.v1` | Planificado | `{ id_cita }` | |
 | `cita.reagendada.v1` | Planificado | `{ id_cita, de: {inicio}, a: {inicio} }` | El `de→a` va en el evento (solo cierto en ese instante). |
 | `cita.cancelada.v1` | Planificado | `{ id_cita, origen: "cliente"\|"negocio" }` | |
 | `cita.completada.v1` | Planificado | `{ id_cita }` | |
 | `cita.no_asistio.v1` | Planificado | `{ id_cita }` | Alimenta el historial de no-shows de la Ficha 360. |
 
-> Nota de dominio: hoy `reserva` no emite ninguno de estos ([ADR-012](../adr/ADR-012-outbox.md),
-> contexto). Adoptarlos es parte del Contrato de Adopción de la vertical (ver
-> [capability-language.md](capability-language.md) y `revision-01.md`, punto 6).
+> Nota de dominio: desde F8-B `reserva` emite **`cita.creada.v1`**, el primer evento de dominio con
+> productor y consumidor de todo el proyecto — hasta entonces el outbox transportaba un catálogo
+> vacío a propósito (regla 4). Los otros cinco siguen planificados, y **no** por falta de tiempo:
+> los recordatorios no necesitan `cita.cancelada` ni `cita.reagendada` porque **releen la cita al
+> vencer**, que es correcto aunque el evento se pierda o alguien cancele con un `UPDATE` desde el
+> panel. Se definirán cuando aparezca un consumidor que sí los necesite. Adoptar el resto es parte
+> del Contrato de Adopción de la vertical (ver [capability-language.md](capability-language.md) y
+> `revision-01.md`, punto 6).
 
 ## `restaurante`
 

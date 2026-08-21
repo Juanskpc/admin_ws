@@ -1,6 +1,6 @@
 # El canal de WhatsApp: qué está hecho, qué falta y cómo se conecta
 
-**Fase:** F8-A · **Gobierna:** [ADR-016](adr/ADR-016-webchat-hostil.md), [ADR-017](adr/ADR-017-channel-gateway.md) · **Fecha:** 2026-08-19
+**Fase:** F8-A + F8-B · **Gobierna:** [ADR-016](adr/ADR-016-webchat-hostil.md), [ADR-017](adr/ADR-017-channel-gateway.md) · **Fecha:** 2026-08-19 (F8-A) · 2026-08-20 (F8-B)
 
 ## Por qué F8 está partida en tres
 
@@ -15,7 +15,7 @@ se partió por donde se puede verificar, igual que F5 se partió en cinco por do
 | | Qué | Estado |
 |---|---|---|
 | **F8-A** | El canal: firma, webhook, traducción de entrada y salida, opt-out | ✅ **Hecha en local (2026-08-19)** |
-| **F8-B** | Las reglas del canal: ventana de 24 h y plantillas, multimedia, recordatorios proactivos | ⬜ |
+| **F8-B** | Las reglas del canal: ventana de 24 h, plantillas, recordatorios, backoff y acuses | ✅ **Hecha en local (2026-08-20)** |
 | **F8-C** | Conectar el número de verdad → **HITO: MVP COMERCIAL** | ⬜ bloqueada por Meta |
 
 Lo que separa A de B no es tamaño: es que **A se puede probar sin Meta y B casi no**. Una plantilla
@@ -158,6 +158,130 @@ arranca, la app va, y lo único que pasa es que nadie recibe respuesta.
 
 ---
 
+## F8-B — las reglas del canal (2026-08-20)
+
+| Qué | Estado |
+|---|---|
+| **Ventana de 24 h y plantillas** | ✅ `ventana.js` + `core/plantillas.js` |
+| **Recordatorios proactivos** | ✅ `intelligence/recordatorios/` + el programador de `reserva` |
+| **Correlacionar acuses** | ✅ el `wamid` se guarda al entregar; un `status: failed` marca la fila |
+| **Backoff en el entregador** | ✅ `mensaje.proximo_intento_en`, y el gateway ya distingue «no insistas» |
+| **Multimedia (visión)** | ⬜ **fuera de F8-B, y decidido**: exige descargar el medio de Meta y un modelo con visión. No se puede verificar sin cuenta, que es justo el criterio con el que se partió la fase |
+| **Desbloquear una baja desde la Consola** | ⬜ hoy un `STOP` por error sigue necesitando un `UPDATE` a mano |
+| **La tabla de números** | ⬜ el segundo inquilino, y con él dónde viven los *access token* |
+
+### La ventana: dónde vive y de qué reloj se cuenta
+
+ADR-017 no deja margen — «las particularidades de cada canal (**la ventana de 24 h de WhatsApp**…)
+viven en su adaptador, no en el núcleo»—, así que está en `channels/whatsapp/ventana.js` y el motor
+no se enteró. El WebChat no tiene ventana; la voz tampoco.
+
+**No hay columna nueva para esto**, y la tentación era grande: `conversacion.ventana_abierta_hasta`,
+mantenida al recibir. Se descartó porque el dato ya existe —el último entrante está en
+`intelligence.mensaje`— y una columna derivada es una segunda fuente de verdad que se desincroniza
+en silencio. Lo que sí hacía falta era que la consulta no barriera quince particiones: se acota por
+`creado_en`, que es la **clave de partición**, aunque el dato que se lee sea `enviado_en`.
+
+`conversacion.ultimo_mensaje_en` tampoco servía, aunque hoy se parezca: lo escribe
+`asegurarConversacion` con `now()` —nuestro reloj— y lo refresca también un **duplicado**, así que
+un reintento del webhook de un mensaje viejo alargaría la ventana. La cuenta se lleva con el sello
+de Meta y, ante la duda, se toma el **menor** de los dos instantes: nunca afirmar que la ventana
+está más abierta de lo que Meta la ve, porque ése es el error que acaba en un envío rechazado.
+
+### Qué pasa cuando la ventana está cerrada
+
+Un texto libre **no sale, y no se reintenta**. Se comprueba antes de llamar a Meta por dos razones
+que no son de estilo: el 400 de Meta llega después de haber gastado la llamada y sin decir a qué
+conversación culpar, y sobre todo **la ventana no se reabre esperando** — insistir cinco veces es
+tirar cinco llamadas y retrasar el *dead letter*.
+
+Que salte casi nunca es lo esperado: una respuesta existe porque alguien acaba de escribir. Salta
+cuando el bot tarda más de un día en contestar —que es un fallo de otra cosa— y cuando alguien
+intenta **iniciar** una conversación sin plantilla, que es el error que esta comprobación existe
+para hacer visible en vez de dejarlo en un silencio.
+
+### El recordatorio se decide al enviarlo, no al programarlo
+
+Es la decisión de diseño de la fase, y quita la mitad del código que parecía necesario. Lo obvio era
+escuchar `cita.cancelada` y `cita.reagendada` para borrar o mover el recordatorio. En vez de eso, el
+recordatorio **relee la cita cuando le toca salir**:
+
+- si ya no existe, o está cancelada, o ya pasó → se cancela;
+- si se movió → se reprograma solo, con la hora de ahora;
+- si sigue en pie → sale, con los datos frescos.
+
+Eso es correcto **aunque el evento se pierda**, aunque alguien cancele con un `UPDATE` desde el
+panel, y aunque la cita se mueva dos veces en un minuto. La cadena de eventos solo es correcta si
+nadie se salta ningún eslabón nunca. Y es además lo que ADR-013 manda hacer con los eventos
+delgados: «un consumidor que necesite detalle lo pide releyendo».
+
+Consecuencia práctica: **`cita.creada.v1` es el único evento que hizo falta**, y es el primero de
+todo el proyecto con productor y consumidor vivos. El outbox de F1 llevaba desde entonces
+transportando un catálogo vacío, a propósito.
+
+```
+reserva crea una cita ──emitir()──► platform.outbox      (misma transacción, ADR-012)
+                                          │
+                                     outboxRelay
+                                          ▼
+                      adapters/reserva/recordatorios.js   (lo único que sabe leer una cita)
+                                          │ programar()
+                                          ▼
+                               intelligence.recordatorio   (una promesa de futuro)
+                                          │ al vencer: relee y decide
+                                          ▼
+                        intelligence.mensaje (saliente, con plantilla)
+                                          │
+                                   Channel Gateway ──► WhatsApp
+```
+
+Dos detalles que no se ven en el dibujo y muerden:
+
+- **El número se guarda sin el `+`.** El `id_externo` de una conversación de WhatsApp es el `from`
+  del webhook (`573001234567`). Guardar `+573001234567` abriría una **segunda** conversación para la
+  misma persona —la clave única es `(negocio, canal, id_externo)`— y el recordatorio saldría por un
+  hilo distinto del que la persona tiene abierto.
+- **Si la conversación está `bloqueada`, ni se crea el mensaje.** El filtro del entregador ya
+  impedía entregarlo, pero para entonces la fila existiría y se quedaría pendiente hasta caducar,
+  ensuciando la cola y el Ledger con algo que no iba a ocurrir.
+
+### La plantilla es un contrato con Meta, y por eso duele
+
+`core/plantillas.js` es el catálogo, y es **código** por lo mismo que el de capacidades: el texto
+aprobado y sus parámetros son parte del programa, no configuración de un inquilino. Vive en el
+núcleo y no en el canal porque una plantilla, en abstracto, es «un mensaje con huecos» y eso lo
+entiende cualquier canal — el WebChat recibe el texto ya compuesto. Si viviera en
+`channels/whatsapp/`, el núcleo tendría que importar de un canal para programar un recordatorio.
+
+⚠️ **`nombre`, `idioma` y el texto tienen que coincidir con lo registrado en Meta**, palabra por
+palabra, y los parámetros van **posicionales** en el orden del catálogo. Cambiar aquí una coma sin
+volver a pasar por Meta no rompe nada visible: el envío sale con el texto **aprobado**, y lo que se
+lea en el Ledger deja de ser lo que recibió el cliente. Registrar `recordatorio_cita` (categoría
+UTILITY) es parte de la lista de F8-C.
+
+### Lo que se guarda de un envío, y lo que no
+
+El `wamid` que devuelve Meta al aceptar se guarda en `mensaje.id_externo`. Sin él, el acuse que
+llega después no se puede atar a ninguna fila nuestra — y ese caso importa: **Meta acepta el envío
+con un 200 y avisa luego de que no llegó**. Sin correlacionar, un mensaje que nadie recibió se ve en
+el Ledger exactamente igual que uno que sí.
+
+`sent`, `delivered` y `read` **no** se guardan, y es una decisión: son tres escrituras por mensaje
+en una tabla particionada de alto volumen a cambio de un dato que hoy no responde ninguna pregunta.
+
+### El backoff, que era una nota desde F5-C
+
+`gateway.js` llevaba escrito desde entonces que el backoff no compraba nada mientras el único canal
+fuera local. Con Meta devolviendo 429 sí compra: sin espera, los cinco intentos se consumen en cinco
+segundos y el mensaje acaba en *dead letter* antes de que Meta haya dejado de limitarnos. La curva
+es la misma que la del outbox —`2^intentos`, acotada— a propósito: dos curvas distintas solo obligan
+a recordar cuál es cuál.
+
+Y de paso, el gateway aprendió a distinguir **«vuelve a intentarlo»** de **«no insistas»**: `api.js`
+marcaba sus errores con `reintentable` desde F8-A y nadie lo miraba.
+
+---
+
 ## Cómo se prueba hoy, sin cuenta de Meta
 
 ```bash
@@ -169,6 +293,12 @@ ellos. Lo único falso es Meta: la firma, el cuerpo crudo, el adaptador, el moto
 Gate, la capacidad, el Ledger, el entregador y el renderizado son los de producción. Comprueba de una
 pasada: menú con lista y precios, botones donde toca, firma inválida → 403, número ajeno descartado,
 el aviso de los 14 días, y `STOP` → conversación bloqueada con cero mensajes después.
+
+Desde F8-B recorre además lo que **solo se puede ver con el tiempo pasado**, envejeciendo la
+conversación a mano en vez de esperar un día: la ventana cerrada, un texto libre que muere en el
+primer intento sin llegar a Meta, y el recordatorio saliendo **como plantilla** por esa misma
+conversación cerrada. Es el criterio de aceptación 2 del master-plan —«un recordatorio se entrega
+fuera de la ventana de 24 h vía plantilla»— comprobado sin cuenta.
 
 Es el equivalente, para un webhook, de la lección que este proyecto ya pagó tres veces: **un
 entregable no está verificado hasta que alguien lo abre.** Aquí no hay pantalla, así que esto es lo
@@ -187,6 +317,10 @@ cubre la baja, incluida la regla en SQL que impide entregar a una conversación 
 3. Suscribir el webhook a `https://api.escalapp.cloud/intelligence/whatsapp/webhook` con el
    `WHATSAPP_VERIFY_TOKEN`. Debe devolver el challenge en texto plano.
 4. Suscribir los campos: `messages` y —si es coexistencia— `smb_message_echoes` y `account_update`.
+   `messages` incluye los acuses (`statuses`), que desde F8-B sí se usan.
+4-bis. **Registrar la plantilla `recordatorio_cita`** (categoría UTILITY) con el texto exacto de
+   `intelligence/core/plantillas.js` y esperar la aprobación. Sin ella no sale ni un recordatorio, y
+   es el único paso de esta lista que **también tiene plazo de espera**.
 5. **Encender `INTELLIGENCE_HTTP_ENABLED=true` en producción con cuidado**: eso enciende también el
    WebChat, que **sigue sin autenticar** (decisión abierta 9). Antes de encenderlo hay que decidir
    qué se hace con esa superficie — lo suyo es una clave pública por negocio, o dejarla fuera.
@@ -197,15 +331,3 @@ el HTTP, por lo mismo que dice `.env.example`. Un canal abierto con el Nivel 4 e
 factura ajena.
 
 ---
-
-## Lo que F8-B debe traer
-
-| Qué | Por qué no está en F8-A |
-|---|---|
-| **Ventana de 24 h y plantillas** | Es la regla de negocio más restrictiva del sistema y no se puede verificar sin conversaciones reales que envejezcan. Un recordatorio de cita **es** una plantilla: hay que diseñarlo así, no descubrirlo |
-| **Recordatorios proactivos** | Aquí se cobra el dividendo del outbox de F1. Necesitan la ventana y las plantillas |
-| **Multimedia (visión)** | Leer un comprobante de pago. Hoy una foto entra marcada como `[image]` y el bot repregunta, que es honesto pero no es el producto |
-| **Correlacionar acuses** | Un `status: failed` de Meta trae el `wamid` de *nuestro* mensaje, y para atarlo hay que haberlo guardado al enviar: una columna en una tabla particionada |
-| **Desbloquear una baja desde la Consola** | Hoy un `STOP` por error necesita SQL |
-| **Backoff en el entregador** | `gateway.js` ya lo tiene anotado: cuando Meta empiece a devolver 429 de verdad, la columna `proximo_intento_en` es lo primero que hará falta |
-| **La tabla de números** | El segundo inquilino, y con él la decisión sobre dónde viven los tokens |

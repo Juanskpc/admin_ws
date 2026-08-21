@@ -460,4 +460,9 @@ function formatearWallTime(fecha) {
     return `${p.year}-${p.month}-${p.day}T${p.hour}:${p.minute}:${p.second}`;
 }
 
-module.exports = { registrarCapacidades, VERTICAL };
+module.exports = {
+    registrarCapacidades,
+    /** Los recordatorios de F8-B viven en su propio archivo: aquí solo se publican. */
+    registrarRecordatorios: require('./recordatorios').registrar,
+    VERTICAL,
+};

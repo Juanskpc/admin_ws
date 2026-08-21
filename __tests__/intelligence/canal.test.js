@@ -241,6 +241,20 @@ describe('fallo inyectado: reordenar dos mensajes', () => {
 // ── Fallo 3: fallar la entrega ──────────────────────────────────────────────────────────
 
 describe('fallo inyectado: fallar la entrega saliente', () => {
+    // F8-B le puso backoff al entregador, y aquí eso estorba a propósito: lo que esta suite mide
+    // es **cuántos** intentos hacen falta y dónde acaba el mensaje, no cuánto se espera entre
+    // uno y otro. Con la curva puesta, tres `entregarUnaVez()` seguidos no reintentan nada y el
+    // test mediría el reloj en vez del entregador. La espera tiene su propia prueba en
+    // `ventana.test.js`, que es donde el retraso ES lo que se comprueba.
+    let techoOriginal;
+    beforeEach(() => {
+        techoOriginal = gateway.CONFIG.backoffMaxSegundos;
+        gateway.CONFIG.backoffMaxSegundos = 0;
+    });
+    afterEach(() => {
+        gateway.CONFIG.backoffMaxSegundos = techoOriginal;
+    });
+
     test('se reintenta y acaba entregando', async () => {
         const s = sesion('fallar');
         simulador.configurar(idNegocio, s, { fallarSalida: 2 });
