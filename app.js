@@ -252,11 +252,15 @@ app.use(errorHandler);
             console.log(describirModo());
 
             // Relay del outbox de eventos de dominio (ADR-012).
-            // Hoy arranca inactivo a propósito: no hay consumidores registrados todavía.
-            // Los consumidores se registran con outboxRelay.registrarConsumidor() ANTES de
-            // esta llamada; los primeros llegan en F4/F5.
-            const outboxRelay = require('./app_core/outbox/outboxRelay');
-            outboxRelay.iniciar();
+            //
+            // El ÚNICO consumidor que existe hoy es el de recordatorios (F8-B), y lo registra
+            // `intelligence.arrancarRecordatorios()`, que además llama a `relay.iniciar()`. Por
+            // eso aquí solo se arranca cuando Intelligence NO está montado: el relay comprueba
+            // los consumidores en `iniciar()`, así que llamarlo antes de registrarlos lo dejaba
+            // inactivo para siempre — la tubería viva, y nadie bebiendo.
+            if (!intelligenceDisponible) {
+                require('./app_core/outbox/outboxRelay').iniciar();
+            }
 
             // Conversation Engine + canales (F5-B, F5-C). Solo si el HTTP está encendido:
             // sin canal no puede entrarle un mensaje, así que arrancar el motor sería
@@ -284,6 +288,23 @@ app.use(errorHandler);
                     .arrancarMotor(escalera.manejador)
                     .then(() => {
                         const canales = intelligence.arrancarCanales();
+
+                        // Recordatorios proactivos (F8-B). **Sin esta línea F8-B es código
+                        // muerto en el servidor real:** aquí se registra el consumidor de
+                        // `cita.creada.v1` en el relay del outbox, se enciende el relay —que
+                        // llevaba inactivo desde F1 por no tener consumidores (ADR-013, regla
+                        // 4)— y arranca el drenaje que relee la cita y manda la plantilla.
+                        //
+                        // Faltaba, y no lo cazó ni un test: la suite y `scripts/whatsapp_e2e.js`
+                        // montan su propia composición y llaman a `arrancarRecordatorios()`
+                        // ellos mismos, así que quedaban verdes mientras el servidor de verdad
+                        // no programaba un solo recordatorio. Es exactamente la misma trampa
+                        // que en F5-D con el manejador de eco: este archivo es el único sitio
+                        // donde se compone de verdad, y nada lo ejercita.
+                        //
+                        // Va DESPUÉS de los canales a propósito: el drenaje escribe mensajes
+                        // salientes y necesita el entregador ya en pie (mismo orden que el e2e).
+                        intelligence.arrancarRecordatorios();
                         // El widget solo se anuncia si de verdad está montado. Anunciarlo
                         // siempre —como hacía hasta F8-C— manda a buscar una URL que devuelve
                         // 404, y peor: en producción hace creer que hay una superficie abierta

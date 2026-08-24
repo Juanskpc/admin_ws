@@ -1397,6 +1397,74 @@ ahora mismo. F0 y F1 son funcionalidad nueva y pueden esperar.
     con `scripts/whatsapp_diagnostico.js`, y **probar con tu propio número antes que con un
     cliente**.
 
+### 5-bis. Pre-vuelo: lo que hay que comprobar EN PRODUCCIÓN antes de desplegar
+
+*(Escrito el 2026-08-24 al dimensionar el despliegue. Son comprobaciones de solo lectura, y las
+tres primeras se hacen con una consulta cada una.)*
+
+**1. ⚠️ El catálogo de permisos tiene que estar sembrado — esto es lo único que puede dejar la app
+en blanco a un cliente activo.** Esta rama corrige un fallo de los cuatro `dashboardService.js`: las
+banderas de acción salían de `gener_nivel_negocio`, que no las tiene, y ahora salen de
+`gener_rol_nivel`, que es donde viven. La corrección **no está en `master`**, así que producción
+sigue con el fallo. Pero el arreglo tiene una condición: si `gener_rol_nivel` está vacía en
+producción, después del despliegue el usuario no recibe **ningún** permiso, el guardia de Angular
+cancela la navegación sin error y la app se queda en «Verificando acceso…» para siempre. Antes:
+
+```sql
+SELECT count(*) FROM general.gener_rol_nivel WHERE estado = 'A';   -- tiene que ser > 0
+```
+
+Si sale 0, hay que correr `npm run migrate:niveles` **antes** de reiniciar el backend.
+
+**2. El `id_negocio` real de los clientes activos**, para decidir `WHATSAPP_NEGOCIO_ID`:
+
+```sql
+SELECT id_negocio, nombre, estado FROM general.gener_negocio ORDER BY id_negocio;
+```
+
+**3. Cuánto pesa el backfill**, para saber cuánto dura el bloqueo de escritura del punto 4:
+
+```sql
+SELECT count(*) FROM restaurante.pedid_orden;
+```
+
+**4. ⚠️ El orden importa: la migración va ANTES de reiniciar el backend.** El modelo
+`restaurante.pedid_orden` declara ahora `id_persona_negocio`, así que Sequelize incluye esa columna
+en cada `INSERT` de una orden. Con el código nuevo corriendo y la columna sin crear, **cada pedido
+del POS falla**. El resto de la identidad sí está protegida (`resolverOCrearBestEffort` usa un
+SAVEPOINT y devuelve `null` si algo revienta), pero eso no cubre una columna inexistente.
+
+`migrate:platform-backfill-restaurante` corre entero en **una transacción**: `ADD COLUMN` +
+`ADD CONSTRAINT` (valida las filas) + `CREATE INDEX` (no concurrente) + el `UPDATE` del enlace.
+Mientras dura, **`pedid_orden` no acepta escrituras**. Con ~1.000 órdenes son segundos, pero es
+un bloqueo real sobre el POS del cliente: fuera de hora punta.
+
+**5. Que no se cuele una clave de modelo.** Con `OPENAI_API_KEY` o `ANTHROPIC_API_KEY` en el `.env`
+de producción, el Nivel 4 se enciende solo y cada turno de gente real cuesta dinero. El arranque lo
+dice en el log: *«Nivel 4 montado: …»* frente a *«sin nivel 4»*.
+
+### 5-ter. Fallo de cableado encontrado el 2026-08-24 (corregido)
+
+**`app.js` nunca llamaba a `intelligence.arrancarRecordatorios()`.** Consecuencia: en el servidor
+real —no en los tests— el consumidor de `cita.creada.v1` no se registraba nunca, el relay del outbox
+se arrancaba **antes** de que hubiera consumidores y por eso se quedaba inactivo para siempre, y el
+drenaje de recordatorios no existía. Traducido: **F8-B era código muerto en producción.** Los
+eventos se habrían acumulado como pendientes (no se pierden) y no habría salido un solo
+recordatorio, en silencio.
+
+Es la misma trampa que en F5-D con el manejador de eco, y por el mismo motivo: la suite y
+`scripts/whatsapp_e2e.js` **montan su propia composición** y llaman a `arrancarRecordatorios()`
+ellos mismos, así que los 457 tests estaban verdes mientras el único sitio donde se compone de
+verdad no lo llamaba. `app.js` no lo ejercita nadie.
+
+Corregido: `arrancarRecordatorios()` se llama después de `arrancarCanales()` (mismo orden que el
+e2e: el drenaje escribe mensajes y necesita el entregador en pie), y el `outboxRelay.iniciar()`
+suelto queda solo para cuando Intelligence no está montado. **Verificado levantando el servidor**,
+que ahora dice `[outboxRelay] Iniciado — 1 consumidor(es)` y `[recordatorios] Iniciado`.
+
+**Deuda que esto deja:** sigue sin haber nada que compruebe la composición de `app.js`. Es el tercer
+fallo de esta clase.
+
 Los conteos reales del backfill (≈621 personas, ≈1.056 órdenes) solo se materializan al
 ejecutarlo en producción. Lo verificado en local fueron 2 personas sintéticas.
 
