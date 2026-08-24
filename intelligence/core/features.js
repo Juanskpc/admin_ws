@@ -38,13 +38,23 @@ const FEATURE = {
 /**
  * Mapeo plan → features. Deliberadamente una constante.
  *
- * Hoy ningún plan comercial incluye el asistente: todavía no se vende. En local se abre
- * con `FEATURES_FORZADAS` (ver abajo), que es lo que permite ejercitar F4 sin inventarse
- * un plan que no existe.
+ * **Desde el 2026-08-24 el asistente vive en «Plan Avanzado».** Antes no estaba en ningún
+ * plan —no se vendía— y en producción eso lo hacía inalcanzable: `FEATURES_FORZADAS` se
+ * ignora ahí a propósito, así que el webhook de WhatsApp habría rechazado todo con 403.
+ *
+ * Se eligió Avanzado y no Básico por una razón que se puede comprobar: en producción los 11
+ * negocios están en «Plan Básico» y **Avanzado tiene cero**. Ponerlo en Básico se lo habría
+ * regalado a los dos clientes activos de golpe; ponerlo en Avanzado no cambia nada para
+ * nadie hasta que alguien contrate ese plan a sabiendas. Que el asistente sea la feature
+ * que justifica el plan caro es además la lectura comercial natural.
+ *
+ * El nombre es la clave del mapa y tiene que coincidir **exacto** con `gener_plan.nombre`.
+ * Los planes «Gratis», «Emprendedor», «Profesional» y «Empresarial» existen en la tabla
+ * pero no se listan aquí: sin entrada, `estaHabilitado` devuelve false, que es lo correcto.
  */
 const FEATURES_POR_PLAN = {
     'Plan Básico': [],
-    'Plan Avanzado': [],
+    'Plan Avanzado': [FEATURE.ASISTENTE_IA],
 };
 
 /**
