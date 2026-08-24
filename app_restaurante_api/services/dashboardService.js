@@ -92,9 +92,24 @@ async function getPermisosVistaNegocio({ idUsuario, idNegocio, idTipoNegocio, ro
     }
 
     // Que vistas habilita este negocio. Si no dice nada, no recorta nada.
+    //
+    // ## Por que esto NO es una simple interseccion (medido en produccion el 2026-08-24)
+    //
+    // La idea original era: vistas = plantilla del rol ∩ ajustes del negocio. Con los datos
+    // reales eso quita vistas. En ZONA BURGER el CAJERO pasaba de 7 vistas a 2 y el MESERO de 3
+    // a 1 -- perdiendo MESAS y PEDIDOS, que es su trabajo entero. Motivo: `gener_nivel_negocio`
+    // habilita pares (rol, nivel) que `gener_rol_nivel` no tiene, y la interseccion los tiraba.
+    //
+    // Que un negocio habilite una vista para un rol es una decision explicita de su dueño, y hoy
+    // en produccion esa vista SE VE. Quitarsela seria una regresion disfrazada de arreglo. Asi
+    // que el ajuste del negocio tambien puede AÑADIR: si la plantilla del rol no dice nada de
+    // ese par, la vista se conserva con `puede_ver` y sin banderas de accion -- exactamente el
+    // comportamiento actual. El arreglo queda estrictamente aditivo: nadie pierde una vista y
+    // los roles con plantilla recuperan sus botones.
     let habilitadasPorNegocio = null;
+    let ajustes = [];
     if (roleIds.length > 0 && idNegocio) {
-        const ajustes = await Models.GenerNivelNegocio.findAll({
+        ajustes = await Models.GenerNivelNegocio.findAll({
             where: {
                 id_negocio: idNegocio,
                 id_rol: roleIds,
@@ -102,11 +117,35 @@ async function getPermisosVistaNegocio({ idUsuario, idNegocio, idTipoNegocio, ro
                 puede_ver: true,
             },
             attributes: ['id_rol', 'id_nivel'],
+            include: [
+                {
+                    model: Models.GenerNivel,
+                    as: 'nivel',
+                    required: true,
+                    where: {
+                        estado: 'A',
+                        id_tipo_negocio: idTipoNegocio,
+                        id_tipo_nivel: 1,
+                        url: { [Op.ne]: null },
+                    },
+                    attributes: ['id_nivel', 'descripcion', 'url'],
+                },
+                {
+                    model: Models.GenerRol,
+                    as: 'rol',
+                    required: false,
+                    attributes: ['descripcion'],
+                },
+            ],
         });
         if (ajustes.length > 0) {
             habilitadasPorNegocio = new Set(ajustes.map((a) => a.id_rol + ':' + a.id_nivel));
         }
     }
+
+    // Los pares que SI tienen plantilla de rol. Lo que no este aqui y el negocio haya
+    // habilitado entra abajo como solo-ver.
+    const conPlantillaDeRol = new Set(rolePermisos.map((p) => p.id_rol + ':' + p.id_nivel));
 
     const permisosUsuarioDirectos = await Models.GenerNivelUsuario.findAll({
         where: { id_usuario: idUsuario },
@@ -152,6 +191,33 @@ async function getPermisosVistaNegocio({ idUsuario, idNegocio, idTipoNegocio, ro
         current.puede_crear = current.puede_crear || Boolean(permiso.puede_crear);
         current.puede_editar = current.puede_editar || Boolean(permiso.puede_editar);
         current.puede_eliminar = current.puede_eliminar || Boolean(permiso.puede_eliminar);
+
+        groupedByUrl.set(normalizedUrl, current);
+    });
+
+    // Vistas que el negocio habilita y la plantilla del rol no contempla: se conservan
+    // visibles, sin acciones. Es lo que hoy ve el usuario en produccion.
+    ajustes.forEach((ajuste) => {
+        if (conPlantillaDeRol.has(ajuste.id_rol + ':' + ajuste.id_nivel)) return;
+
+        const normalizedUrl = normalizeRoutePath(ajuste.nivel?.url);
+        if (!normalizedUrl || normalizedUrl === '/auth') return;
+
+        const current = groupedByUrl.get(normalizedUrl) || {
+            id_nivel: ajuste.nivel?.id_nivel,
+            vista: ajuste.nivel?.descripcion || 'Vista',
+            url: normalizedUrl,
+            roles: new Set(),
+            puede_ver: false,
+            puede_crear: false,
+            puede_editar: false,
+            puede_eliminar: false,
+        };
+
+        if (ajuste.rol?.descripcion) {
+            current.roles.add(ajuste.rol.descripcion);
+        }
+        current.puede_ver = true;
 
         groupedByUrl.set(normalizedUrl, current);
     });

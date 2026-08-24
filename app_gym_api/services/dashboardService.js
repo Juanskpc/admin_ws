@@ -63,16 +63,39 @@ async function getPermisosVistaNegocio({ idUsuario, idNegocio, idTipoNegocio, ro
     });
 
     // Que vistas habilita este negocio. Si no dice nada, no recorta nada.
+    //
+    // NO es una simple interseccion, y el motivo se midio en produccion el 2026-08-24: en
+    // ZONA BURGER el CAJERO pasaba de 7 vistas a 2 y el MESERO de 3 a 1 (perdia MESAS y
+    // PEDIDOS). `gener_nivel_negocio` habilita pares (rol, nivel) que `gener_rol_nivel` no
+    // tiene, y la interseccion los tiraba. Que el dueño habilite una vista para un rol es una
+    // decision explicita suya: el ajuste del negocio tambien puede AÑADIR. Sin plantilla de
+    // rol, la vista se conserva con `puede_ver` y sin acciones -- el comportamiento actual.
+    // Asi el arreglo es estrictamente aditivo. Ver app_restaurante_api para el detalle.
     let habilitadasPorNegocio = null;
+    let ajustes = [];
     if (idNegocio) {
-        const ajustes = await Models.GenerNivelNegocio.findAll({
+        ajustes = await Models.GenerNivelNegocio.findAll({
             where: { id_negocio: idNegocio, id_rol: roleIds, estado: 'A', puede_ver: true },
             attributes: ['id_rol', 'id_nivel'],
+            include: [
+                {
+                    model: Models.GenerNivel, as: 'nivel', required: true,
+                    where: {
+                        estado: 'A', id_tipo_negocio: idTipoNegocio,
+                        id_tipo_nivel: 1, url: { [Op.ne]: null },
+                    },
+                    attributes: ['id_nivel', 'descripcion', 'url'],
+                },
+                { model: Models.GenerRol, as: 'rol', required: false, attributes: ['descripcion'] },
+            ],
         });
         if (ajustes.length > 0) {
             habilitadasPorNegocio = new Set(ajustes.map(a => a.id_rol + ':' + a.id_nivel));
         }
     }
+
+    // Los pares que SI tienen plantilla de rol.
+    const conPlantillaDeRol = new Set(rolePermisos.map(p => p.id_rol + ':' + p.id_nivel));
 
     const grouped = new Map();
     rolePermisos.forEach((p) => {
@@ -91,6 +114,23 @@ async function getPermisosVistaNegocio({ idUsuario, idNegocio, idTipoNegocio, ro
         cur.puede_crear    = cur.puede_crear    || Boolean(p.puede_crear);
         cur.puede_editar   = cur.puede_editar   || Boolean(p.puede_editar);
         cur.puede_eliminar = cur.puede_eliminar || Boolean(p.puede_eliminar);
+        grouped.set(url, cur);
+    });
+
+    // Vistas habilitadas por el negocio sin plantilla de rol: visibles, sin acciones.
+    ajustes.forEach((a) => {
+        if (conPlantillaDeRol.has(a.id_rol + ':' + a.id_nivel)) return;
+        const url = normalizeRoutePath(a.nivel?.url);
+        if (!url || url === '/gimnasio') return;
+        const cur = grouped.get(url) || {
+            id_nivel: a.nivel?.id_nivel,
+            vista: a.nivel?.descripcion || 'Vista',
+            url,
+            roles: new Set(),
+            puede_ver: false, puede_crear: false, puede_editar: false, puede_eliminar: false,
+        };
+        if (a.rol?.descripcion) cur.roles.add(a.rol.descripcion);
+        cur.puede_ver = true;
         grouped.set(url, cur);
     });
 
