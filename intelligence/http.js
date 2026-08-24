@@ -18,7 +18,12 @@
  * `Principal` de tipo `contacto` sigue reservado sin implementar (ADR-010, P13). Lo que hay
  * en su lugar:
  *
- *   1. **Apagado por defecto.** Sin `INTELLIGENCE_HTTP_ENABLED=true` no existe ni la ruta.
+ *   1. **Apagado por defecto, y con interruptor propio.** Desde F8-C hacen falta **dos**
+ *      variables: `INTELLIGENCE_HTTP_ENABLED=true` (la superficie HTTP) **y**
+ *      `INTELLIGENCE_WEBCHAT_ENABLED=true` (solo esto). Están separadas a propósito: el webhook
+ *      de WhatsApp va autenticado por la firma de Meta y necesita la primera; este router no
+ *      está autenticado y no debe encenderse de rebote al conectar un número. En producción se
+ *      enciende la primera y NO la segunda, y entonces aquí no existe ni la ruta.
  *   2. **La feature comercial.** Solo se acepta tráfico de un negocio que tenga
  *      `asistente_ia`; sin ella, 403. No autentica a la persona, pero impide escribir en un
  *      negocio que ni siquiera contrató el asistente.

@@ -1,6 +1,6 @@
 # EscalApp Intelligence — estado y cómo continuar
 
-**Última actualización:** 2026-08-20 (**F8-B: las reglas del canal** — ventana de 24 h, plantillas y recordatorios proactivos)
+**Última actualización:** 2026-08-24 (**F8-C**: plantilla `recordatorio_cita` **aprobada**; queda desplegar, suscribir y publicar)
 **Propósito:** que retomar el trabajo no cueste una sesión de arqueología. Si vuelves a este
 proyecto después de semanas, **lee este documento primero** y sigue por donde diga.
 
@@ -9,14 +9,21 @@ proyecto después de semanas, **lee este documento primero** y sigue por donde d
 
 ---
 
-## 4-0. POR DÓNDE SE SIGUE (cierre del 2026-08-20)
+## 4-0. POR DÓNDE SE SIGUE (cierre del 2026-08-22)
 
 > Esta sección es lo primero que hay que leer al retomar. Las de más abajo son historia de fases
 > ya cerradas y se conservan porque explican **por qué** las cosas están como están.
 
-**Estado en una frase:** F0–F7 completas y **F8-A + F8-B hechas** en local — falta la cuenta de
-Meta, que no depende del código—, **ADR-023 Aceptado**, **457 pruebas en verde**, y **nada
-desplegado**.
+> ⚠️ **LO PRIMERO AL RETOMAR: el trabajo del 2026-08-22 está SIN COMMITEAR.** En el árbol de
+> `admin_ws` hay cambios sin commit: la separación `INTELLIGENCE_WEBCHAT_ENABLED` (`app.js`,
+> `intelligence/http.js`, `.env.example`), el script nuevo `scripts/whatsapp_diagnostico.js`, y
+> estos documentos. **457 tests en verde**, pero `git status` no está limpio. Decidir si se
+> commitea antes de tocar nada más.
+
+**Estado en una frase:** F0–F7 completas y **F8-A + F8-B hechas** en local, **ADR-023 Aceptado**,
+**457 pruebas en verde**, **nada desplegado** — y **F8-C ya empezó**: la cuenta de Meta existe y el
+número `+57 315 281 2484` está conectado y verificado ([`canal-whatsapp.md`](canal-whatsapp.md)
+tiene los identificadores).
 
 ### Lo que se puede hacer ya, en orden de valor
 
@@ -26,12 +33,47 @@ desplegado**.
 2. **Medir el guardarraíl de promesas una semana** antes de encender `PROMESAS_MODO=bloqueo`
    (§6.14). Mismo procedimiento que F2 con `AUTHZ_MODO`. Sin datos, encender el bloqueo es
    adivinar.
-3. **Empezar el trámite con Meta.** Es lo único de la lista con **semanas de plazo** y lo único que
-   no depende de nosotros: verificación de negocio, app creada, el número por Embedded Signup si se
-   quiere coexistencia, y ahora también **la aprobación de la plantilla `recordatorio_cita`**, que
-   tiene su propio plazo. Todo el código está hecho y probado contra un Meta de mentira
-   (§4-septies, §4-octies y [`canal-whatsapp.md`](canal-whatsapp.md)); lo que falta para el MVP
-   comercial es la cuenta.
+3. **Terminar F8-C.** El 2026-08-22 se conectó el número: cuenta de Meta creada, método de pago
+   cargado y **`+57 315 281 2484` registrado y verificado**. Los identificadores (WABA,
+   `phone_number_id`, portafolio) están en [`canal-whatsapp.md`](canal-whatsapp.md) §«La cuenta de
+   Meta: estado real». **Sigue por ahí, en este orden:**
+   1. ✅ **Plantilla `recordatorio_cita` APROBADA** — comprobado el 2026-08-24 contra la Graph
+      API (`APPROVED` · UTILITY · `es`). El temor de que la rechazara por las variables adyacentes
+      `{{3}} {{4}}` no se cumplió: pasó con el texto **idéntico, carácter por carácter**, al de
+      `intelligence/core/plantillas.js` — verificado leyendo el `BODY` aprobado, no el panel. Con
+      esto **desaparece el único paso de F8-C que tenía plazo de espera ajeno**.
+   2. ✅ **Token permanente** (2026-08-22): usuario del sistema `escalapp-api`, tipo `SYSTEM_USER`,
+      **sin caducidad**, ya en el `.env`. Verificado: el diagnóstico lista la WABA, su número y las
+      plantillas.
+   3. ✅ **Decisión 9 resuelta** (2026-08-22): `INTELLIGENCE_WEBCHAT_ENABLED` separa el WebChat del
+      webhook. En producción se enciende `INTELLIGENCE_HTTP_ENABLED` y **no** el WebChat, que
+      entonces **no existe** (404, no 403). Comprobado levantando el servidor; 457 tests en verde.
+      Detalle en [`canal-whatsapp.md`](canal-whatsapp.md).
+   4. **Desplegar el backend.** ⚠️ **Aquí está el trabajo de verdad, y no es pequeño:** hoy no hay
+      **nada** de Intelligence en producción, así que encender el canal significa desplegar
+      **F0→F8 entero con sus nueve migraciones** sobre un VPS de 1 vCPU que atiende al cliente
+      real. **Es una sesión dedicada.** El orden exacto, el `.env` completo y las migraciones
+      están en **§5, punto 15**. La URL del webhook queda en
+      `https://api.escalapp.cloud/intelligence/whatsapp/webhook`.
+   5. **Configurar el webhook en el panel** (URL + verify token) y suscribir `messages`.
+   6. **Suscribir la app a la WABA** (`POST /v21.0/4199925320246584/subscribed_apps`) — el
+      diagnóstico avisa de que hoy no hay ninguna, y sin eso **no llega un solo webhook**.
+   7. **Publicar la app** — sin publicar, el webhook solo recibe las pruebas del panel.
+   8. **Probar con tu propio número antes que con un cliente**, y comprobar con
+      `scripts/whatsapp_diagnostico.js`.
+
+   ⚠️ **Antes de nada hay que decidir `WHATSAPP_NEGOCIO_ID`**: a qué `id_negocio` pertenece el
+   número, y **tiene que ser el id de PRODUCCIÓN** — los locales (22 «Barbería Don Nico», 23
+   «Salón Demo EscalApp») no valen, hay que mirarlo en el VPS. No se deduce del panel de Meta, y
+   equivocarse escribe en la conversación de otro inquilino: la fuga que cerró F2.
+
+   Faltan además `WHATSAPP_APP_SECRET` (Configuración → Información básica de la app) y
+   `WHATSAPP_VERIFY_TOKEN` (lo eliges tú, y tiene que ser el mismo en el `.env` y en el panel).
+
+   Corregido el 2026-08-21: se había dado por hecho que el bloqueo eran las semanas de la
+   **verificación de negocio**. No lo era. Sin verificar se puede enviar a **250 destinatarios
+   únicos cada 24 h** y tener **2 números — o sea, 2 inquilinos**. Ese segundo techo, no el de los
+   250, es el que obligará a verificar cuando llegue el tercer cliente.
 4. **Meter `asistente_ia` en un plan comercial.** Ningún plan lo incluye; hoy hay que forzarlo con
    `FEATURES_FORZADAS`. Es media hora de trabajo y una decisión comercial —en qué plan y por cuánto—
    que no es del código. Sin ello el asistente no se puede vender.
@@ -49,7 +91,7 @@ desplegado**.
 | El horario del handoff llega siempre `null`: falta `platform.business_context` | §6.13 |
 | El guardarraíl no ve promesas sin número, ni cifras que el bot dijo en turnos anteriores | §6.14 |
 | El caso `i12` del arnés falla una de cada dos tandas: es una aserción de redacción | §4-sexies |
-| Al encender `INTELLIGENCE_HTTP_ENABLED` en producción se enciende también el WebChat, que sigue sin autenticar | §6 decisión 9 |
+| El WebChat sigue **sin autenticar** — pero ya **no se enciende de rebote** con el webhook (`INTELLIGENCE_WEBCHAT_ENABLED`, 2026-08-22). Falta clave pública por negocio, orígenes y límite por sesión antes de que sea producto | §6 decisión 9 · [`canal-whatsapp.md`](canal-whatsapp.md) |
 | Un `sent`/`delivered`/`read` de Meta no se guarda: solo los fallos | §4-octies |
 
 **Cerrada:** los **~14 días** de la coexistencia están **confirmados en la documentación de Meta**
@@ -1293,8 +1335,9 @@ ahora mismo. F0 y F1 son funcionalidad nueva y pueden esperar.
     migración. Desde 2026-08-13 `app.js` monta la **FSM determinista** en vez del eco (§8), así
     que el día que `INTELLIGENCE_HTTP_ENABLED` se ponga en `true` el asistente **agenda citas de
     verdad**, no contesta un eco. Con la bandera apagada sigue siendo inerte, pero el margen de
-    error de encenderla por descuido ya no es el mismo. Sigue en pie la decisión 9 de §6: **no
-    encender en producción sin autenticación del WebChat.**
+    error de encenderla por descuido ya no es el mismo. **Actualizado el 2026-08-22:** encender
+    `INTELLIGENCE_HTTP_ENABLED` en producción ya **no** abre el WebChat — hace falta además
+    `INTELLIGENCE_WEBCHAT_ENABLED`, que se deja apagada (§6, decisión 9).
 12. **F5-E: solo lectura, y se puede desplegar sin miedo.** Tres endpoints bajo
     `requireSuperAdmin` que leen el esquema con SQL y no importan `intelligence/`. Si el esquema
     no está migrado responden 503 con el motivo en vez de reventar, así que desplegar la Consola
@@ -1305,10 +1348,54 @@ ahora mismo. F0 y F1 son funcionalidad nueva y pueden esperar.
     migración. `npm install` traerá `@anthropic-ai/sdk` y `openai`, los dos con `require`
     tardío: sin credencial la escalera se queda en el Nivel 1 y el backend arranca igual. **No
     poner ninguna clave en el `.env` de producción** hasta que se decidan dos cosas que no son de
-    código: (a) sigue en pie la decisión 9 de §6 —el WebChat no está autenticado— y encender el
-    modelo sobre un canal abierto es pagarle los tokens a cualquiera; (b) el asistente no está
+    código: (a) **matizado el 2026-08-22** — el WebChat ya no se enciende de rebote con el
+    webhook (§6, decisión 9), así que el canal abierto deja de ser el riesgo; lo que queda es que
+    **WhatsApp sí será un canal real con gente escribiendo**, y ahí el Nivel 4 cuesta dinero por
+    turno: encenderlo es una decisión de presupuesto, no de seguridad; (b) el asistente no está
     en ningún plan comercial, así que hoy solo se enciende con `FEATURES_FORZADAS`, que en
     producción se ignora a propósito (ADR-021).
+
+14. **F5-B/C/D y F7: código, sin migración propia.** El motor, el canal WebChat, la FSM y las
+    mutaciones vía IA no añaden tablas: viven sobre el esquema de F5-A. `PROMESAS_MODO` y
+    `AUTHZ_MODO` se quedan en **observación** (su valor por defecto) — encenderlos en bloqueo es
+    otra decisión, y §4-0 pide medir antes.
+
+15. **F8: el canal de WhatsApp. Es lo último y depende de todo lo anterior.**
+
+    ⚠️ **Dimensiona esto antes de empezar:** hoy **no hay nada de Intelligence en producción**.
+    Encender el canal no es poner cinco variables — es desplegar F0→F8 entero, con sus **nueve
+    migraciones**, sobre un VPS de 1 vCPU que además atiende al cliente real. Es una sesión
+    dedicada, no un apéndice de otra cosa.
+
+    **Migraciones, en el orden de esta sección:** `platform-persona` →
+    `platform-backfill-restaurante` → `platform-outbox` → `platform-capacidades` →
+    `platform-idempotencia` → `reserva-hold` → `intelligence-ledger` → `intelligence-canal` →
+    `intelligence-recordatorios`. **Backup antes**, y el backfill fuera de hora punta.
+
+    **El `.env` de producción** (lo verificado en local el 2026-08-22):
+
+    ```
+    INTELLIGENCE_HTTP_ENABLED=true          # el webhook de WhatsApp
+    # INTELLIGENCE_WEBCHAT_ENABLED          ← NO PONER: el WebChat sigue sin autenticar
+    WHATSAPP_APP_SECRET=...                 # Configuración → Información básica de la app
+    WHATSAPP_VERIFY_TOKEN=...               # lo eliges tú; el mismo que pongas en el panel
+    WHATSAPP_PHONE_NUMBER_ID=1297624263436786
+    WHATSAPP_TOKEN=...                      # el del usuario del sistema, sin caducidad
+    WHATSAPP_NEGOCIO_ID=...                 # ⬅️ EL id_negocio DE PRODUCCIÓN, no el local
+    ```
+
+    ⚠️ **`WHATSAPP_NEGOCIO_ID` es un id de producción.** Los ids locales (22 «Barbería Don Nico»,
+    23 «Salón Demo EscalApp») **no** valen: hay que mirar el `id_negocio` real en el VPS. Poner el
+    equivocado escribe en la conversación de otro inquilino — la fuga que cerró F2.
+
+    **Sin clave de modelo.** Con WhatsApp abierto, el Nivel 4 cuesta dinero por turno de gente
+    real. Arrancar con el Nivel 1 determinista es gratis y es un estado válido, no un fallo.
+
+    **Después del despliegue, y en este orden:** configurar el webhook en el panel
+    (`https://api.escalapp.cloud/intelligence/whatsapp/webhook` + el verify token) → suscribir
+    `messages` → `POST /v21.0/4199925320246584/subscribed_apps` → **publicar la app**. Comprobar
+    con `scripts/whatsapp_diagnostico.js`, y **probar con tu propio número antes que con un
+    cliente**.
 
 Los conteos reales del backfill (≈621 personas, ≈1.056 órdenes) solo se materializan al
 ejecutarlo en producción. Lo verificado en local fueron 2 personas sintéticas.
@@ -1353,14 +1440,22 @@ ejecutarlo en producción. Lo verificado en local fueron 2 personas sintéticas.
 8. **El manejador de eco (`intelligence/engine/manejadorEco.js`) es un andamio.** Cuando F5-D
    traiga la FSM hay que decidir si se borra o se queda como manejador de pruebas. Los tests
    del motor lo usan, así que borrarlo sin más obliga a reescribirlos.
-9. ⚠️ **El WebChat no está autenticado, y esto te toca decidirlo a ti.** Un widget lo usa un
-   cliente final anónimo: no hay JWT que pedir y el `Principal` de tipo `contacto` sigue
-   reservado sin implementar. Hoy lo único que separa un negocio de otro en esa superficie es
-   la feature comercial `asistente_ia`, así que **cualquiera podría escribirle al asistente de
-   cualquier negocio que la tenga**. Mitigado a base de tenerlo apagado
-   (`INTELLIGENCE_HTTP_ENABLED=false` por defecto) y no desplegarlo. Lo que falta —clave
-   pública por negocio, orígenes permitidos, límite por sesión— es trabajo del día en que el
-   WebChat sea producto, y ADR-016 dice que lo será. **No encenderlo en producción antes.**
+9. ⚠️ **El WebChat no está autenticado.** Un widget lo usa un cliente final anónimo: no hay JWT
+   que pedir y el `Principal` de tipo `contacto` sigue reservado sin implementar. Hoy lo único
+   que separa un negocio de otro en esa superficie es la feature comercial `asistente_ia`, así
+   que **cualquiera podría escribirle al asistente de cualquier negocio que la tenga**.
+
+   **Resuelta a medias el 2026-08-22, y conviene ser preciso sobre qué mitad.** Lo que se
+   resolvió es el **acoplamiento**: hasta F8-C una sola bandera montaba el webhook de WhatsApp
+   —autenticado por la firma de Meta— y el WebChat, así que conectar el número obligaba a abrir
+   una superficie sin autenticar. Ahora son dos interruptores: `INTELLIGENCE_HTTP_ENABLED` para
+   el webhook e `INTELLIGENCE_WEBCHAT_ENABLED` **solo** para el WebChat, apagado por defecto.
+   Apagado no responde 403: **no existe la ruta**, ni el widget ni el simulador de fallos.
+   Comprobado levantando el servidor (`canal-whatsapp.md` tiene la tabla).
+
+   **Lo que NO se resolvió** es la autenticación en sí: la clave pública por negocio, los
+   orígenes permitidos y el límite por sesión siguen sin hacerse. El WebChat **no puede ser
+   producto** todavía. Lo que cambió es que dejó de bloquear a WhatsApp, que era el daño real.
 10. ~~**El widget nunca se vio renderizado.**~~ **Se abrió el 2026-08-13 y estaba roto**: el JS
     inline lo bloqueaba el CSP de Helmet, así que la página se pintaba entera y no hacía
     absolutamente nada (ver §8). Arreglado sacándolo a `publico/widget.js`. **La lección no es el

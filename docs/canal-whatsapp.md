@@ -323,20 +323,183 @@ cubre la baja, incluida la regla en SQL que impide entregar a una conversación 
 
 ---
 
-## Cuando exista la cuenta: la lista de F8-C
+## Lo que se aprendió intentando el sandbox (2026-08-21)
 
-1. **Verificación de negocio en Meta** aprobada, y la app creada.
+Se intentó levantar el **número de prueba** de Meta para verificar `api.js` sin cuenta real. **No se
+consiguió**, y el intento dejó cuatro hechos que cambian la lista de F8-C.
+
+**El sandbox no arrancó, y el motivo está a la vista.** En la app `1552342763052863` el paso «Solicita
+un número de prueba» nunca se completa: el botón recarga la página y no provisiona nada, con y sin
+los escudos del navegador. De ahí sale todo lo demás —el desplegable vacío, la WABA que no se puede
+leer, el token con permisos y **cero activos concedidos**—. Se descartó por medición, no por
+sospecha: `debug_token` devuelve `granular_scopes` sin un solo `target_id`.
+
+⚠️ **En Meta, tener el permiso no es tener el activo.** Un token **de usuario** con
+`whatsapp_business_management` y ningún activo concedido parece correcto en todas las pantallas y no
+puede leer una sola WABA. `scripts/whatsapp_diagnostico.js` lo comprueba en el bloque 1 — es lo
+primero que hay que mirar cuando la Cloud API diga «does not exist or you do not have permission».
+
+> **Matiz que costó un susto (2026-08-22):** eso **solo vale para tokens de usuario**. Un
+> `SYSTEM_USER` saca su acceso de los activos asignados al usuario del sistema y trae
+> `granular_scopes` **vacío siempre**; el diagnóstico lo daba por roto cuando el token estaba
+> perfecto. Corregido: para un usuario del sistema la prueba real es el **bloque 2** — si lista los
+> números de la WABA, tiene el activo. Lo mismo engaña en el panel: *Activos asignados* dice «No se
+> han asignado activos» porque ahí solo salen páginas y perfiles de Instagram, no apps ni cuentas de
+> WhatsApp.
+
+**Y hay tres requisitos que no estaban en la lista:**
+
+| Hallazgo | Consecuencia |
+|---|---|
+| **La verificación de negocio NO es requisito para empezar** | Un portafolio sin verificar puede conectar un número real y enviar a **250 destinatarios únicos por cada 24 h**. Verificar sube a 1.000 y abre la progresión de niveles. Con **un** cliente, 250 sobra |
+| **Hace falta un método de pago** para los mensajes iniciados por la empresa | Son **los recordatorios de F8-B**. Sin tarjeta en la cuenta no sale ni uno, esté verificado el negocio o no |
+| **Con la app sin publicar solo llegan webhooks de prueba** del propio panel | «No se entregará ningún dato de producción […] a menos que esta se haya publicado». Publicar la app es parte de encender el canal, no un trámite posterior |
+| **Sin verificar: máximo 2 números por empresa** (20 al verificar) | Un número es **un `id_negocio`** (`channels/whatsapp/config.js`). O sea: **sin verificación de negocio el canal da para 2 inquilinos**, no más. Es el techo real de F8-C, no los 250 destinatarios |
+
+**Lo que esto cambia en el plan:** el camino crítico **no** es la verificación de negocio —que se
+había tratado como el bloqueo de semanas—, es **conseguir un número de teléfono y conectarlo**. La
+verificación pasa a ser lo que hace falta el día que 250 destinatarios diarios se queden cortos.
+
+> Las cifras de 250/1.000 vienen de documentación de terceros, no de la fuente de Meta. Antes de
+> apoyar una decisión comercial en ellas, confirmarlas en la documentación oficial.
+
+---
+
+## La cuenta de Meta: estado real al 2026-08-24
+
+**La cuenta existe y el número está conectado.** Estos identificadores no son secretos —son ids
+públicos de la Cloud API— y se dejan escritos aquí para no volver a buscarlos por el panel:
+
+| Qué | Valor |
+|---|---|
+| App | `1552342763052863` (*Escalapp*) |
+| Portafolio empresarial | `1115123864174893` |
+| **WABA** (cuenta de WhatsApp Business) | `4199925320246584` |
+| Número del canal | `+57 315 281 2484` → en el `.env` sin `+`: `573152812484` |
+| **`WHATSAPP_PHONE_NUMBER_ID`** | **`1297624263436786`** |
+| Nombre visible | `Escalapp` — **en revisión por Meta** («Pendiente») |
+
+**Hecho:** método de pago cargado (✓ verde en el panel), número registrado y verificado, PIN de
+6 dígitos definido. El **número de prueba del sandbox nunca se consiguió** y se abandonó — ver la
+sección anterior; no hace falta para nada de lo que sigue.
+
+**APROBADA (comprobado el 2026-08-24):** la plantilla **`recordatorio_cita`** —enviada a revisión
+el 2026-08-22, categoría *Servicio* (así llama Meta a UTILITY en español), idioma **Spanish
+(`es`)**— está **`APPROVED`**. Con ella cae el **único paso de F8-C con plazo de espera ajeno**.
+
+El miedo a las **variables adyacentes** (`{{3}} {{4}}` separadas solo por un espacio, la causa de
+rechazo más probable) **no se materializó**: Meta la aprobó tal cual. Y se comprobó lo que de verdad
+importa, que no es el estado sino el texto: se leyó el `BODY` aprobado desde la Graph API
+(`GET /{WABA}/message_templates`) y es **idéntico carácter por carácter** al de
+`intelligence/core/plantillas.js`. Eso es lo que mantiene honesto al Ledger — si divergieran, el
+cliente recibiría el texto de Meta y la Consola mostraría el del código.
+
+> **Regla que sigue vigente:** cualquier cambio futuro en ese texto se hace **en Meta y en
+> `plantillas.js` a la vez**, y vuelve a pasar por revisión. Cambiar solo el código no rompe nada
+> visible —el envío sale con el texto aprobado— y por eso es peligroso: rompe el Ledger en silencio.
+
+**El detalle de puntuación era una falsa alarma.** La preocupación era que, con el punto tras
+`{{4}}`, un `cuando` como «mañana a las 3:00 p. m.» hiciera leer «p. m..». No puede pasar: quien
+compone ese parámetro es `comoSeDice()` en `adapters/reserva/recordatorios.js`, que formatea en
+**24 horas** (`el lunes 25 de agosto a las 15:30`) y nunca emite «p. m.». El «3:00 p. m.» del ejemplo
+es solo la muestra que se le dio a Meta para la revisión, no lo que envía el código.
+
+**Estado del número, en la propia API (diagnóstico del 2026-08-24):** `+57 315 2812484`,
+verificación `VERIFIED`, nombre visible `Escalapp` en estado **`PENDING`** (Meta aún revisa el
+nombre; no impide enviar). **Ninguna app suscrita a la WABA** — o sea, hoy **no llegaría un solo
+webhook** aunque el envío funcionara. Es el punto 4 de la lista.
+
+**Pendiente, en este orden:**
+
+1. ✅ **La decisión del WebChat: resuelta el 2026-08-22.** Ver la sección siguiente. Ya se puede
+   encender `INTELLIGENCE_HTTP_ENABLED=true` en producción sin abrir el WebChat.
+2. **Desplegar el backend** con `INTELLIGENCE_HTTP_ENABLED=true` y **sin**
+   `INTELLIGENCE_WEBCHAT_ENABLED`. La URL del webhook será
+   `https://api.escalapp.cloud/intelligence/whatsapp/webhook`.
+3. **Configurar el webhook en el panel** (URL + `WHATSAPP_VERIFY_TOKEN`) y suscribir los campos
+   `messages` —que incluye los acuses— y, si hay coexistencia, `smb_message_echoes` y
+   `account_update`.
+4. **Suscribir la app a la WABA.** El diagnóstico lo canta: *«NINGUNA app suscrita — los webhooks no
+   llegarán aunque el envío funcione»*. Se arregla con
+   `POST /v21.0/4199925320246584/subscribed_apps`, y **después** de tener la URL: suscribir sin
+   endpoint no sirve de nada.
+5. **Publicar la app** — sin esto el webhook solo recibe las pruebas del panel.
+
+---
+
+## Cómo se resolvió la decisión abierta 9: dos interruptores, no uno
+
+**El problema, en una frase:** una sola bandera montaba dos superficies con riesgos opuestos. El
+**webhook de WhatsApp** va autenticado por la firma HMAC de Meta; el **WebChat** no está autenticado
+en absoluto. Conectar el número obligaba a encender `INTELLIGENCE_HTTP_ENABLED`, y con él se
+encendía el WebChat de rebote — la decisión abierta 9 convertida en efecto colateral de otra cosa.
+
+**La solución es lo mínimo que quita el acoplamiento**, y deliberadamente no inventa autenticación
+que nadie ha diseñado:
+
+| Variable | Qué monta | En producción |
+|---|---|---|
+| `INTELLIGENCE_HTTP_ENABLED` | La superficie HTTP: **el webhook de WhatsApp** | `true` |
+| `INTELLIGENCE_WEBCHAT_ENABLED` | **Solo** el WebChat: widget, ingesta, sondeo y simulador | **sin poner** |
+
+Apagado, el WebChat **no responde 403: no existe la ruta.** Tampoco el widget estático ni el
+**simulador de fallos**, que es la peor de las tres — deja inyectar duplicados y retrasos en la
+sesión de cualquiera.
+
+**Comprobado levantando el servidor de verdad**, no razonando sobre el código:
+
+| Config | `…/whatsapp/webhook` | `…/webchat/mensajes` |
+|---|---|---|
+| HTTP on, WebChat off (**producción**) | `403` (existe, rechaza sin firma) | **`404`** |
+| ambos on (**desarrollo**) | `403` | `403` (existe, lo para la feature) |
+
+Y se corrigió un log que mentía: al arrancar anunciaba *«Widget de pruebas en /intelligence/webchat/»*
+incluso cuando no estaba montado. Ahora dice **«WebChat NO montado»**, y cuando sí lo está avisa en
+mayúsculas de que va **sin autenticar**. Un log que miente sobre qué tienes expuesto es justo el que
+no te puedes permitir.
+
+**Lo que esto NO resuelve, y sigue pendiente:** la clave pública por negocio, los orígenes permitidos
+y el límite por sesión. El WebChat sigue sin poder ser producto — pero ya no bloquea a WhatsApp, que
+era el problema real.
+
+**Token permanente: hecho (2026-08-22).** Usuario del sistema `escalapp-api` (id `61593334663332`,
+acceso de Admin) con la app y la WABA asignadas; token `SYSTEM_USER` **sin caducidad** y con los dos
+permisos de WhatsApp. Verificado con `scripts/whatsapp_diagnostico.js`: lista la WABA, su número y
+las plantillas — justo lo que el token del sandbox nunca pudo.
+
+**Decisión abierta y bloqueante: `WHATSAPP_NEGOCIO_ID`.** Nadie ha dicho todavía **a qué
+`id_negocio` pertenece este número**. No se puede deducir del panel y equivocarse significa escribir
+en la conversación de otro inquilino — que es exactamente la fuga que cerró F2.
+
+⚠️ **Comprobar la configuración de pagos.** En el WhatsApp Manager, bajo *Configuraciones de pagos*,
+aparece una entrada llamada **«India»**. No se tocó y no se sabe si es una sección que Meta muestra
+siempre o si la tarjeta quedó asociada a la región equivocada. Confirmar antes del primer envío
+facturado.
+
+---
+
+## La lista de F8-C, de principio a fin
+
+*(Se llamaba «Cuando exista la cuenta». La cuenta ya existe desde el 2026-08-22 — se deja la lista
+entera porque documenta el camino completo, con lo hecho marcado.)*
+
+1. ✅ **Un número de teléfono para el bot** que no esté usándose en WhatsApp (o que se pueda migrar), y
+   **un método de pago** en la cuenta. La **verificación de negocio no hace falta para esto** — solo
+   para pasar de 250 destinatarios únicos cada 24 h **y de 2 números (= 2 inquilinos)**.
+1-bis. **Publicar la app.** Sin publicar, el webhook solo recibe las pruebas del propio panel.
 2. Poner las cinco variables (`.env.example` las explica). Al arrancar, el log dice si falta alguna.
+   Ya se conoce `WHATSAPP_PHONE_NUMBER_ID`; falta el App Secret, el verify token (lo eliges tú), el
+   token permanente y **decidir `WHATSAPP_NEGOCIO_ID`**.
 3. Suscribir el webhook a `https://api.escalapp.cloud/intelligence/whatsapp/webhook` con el
    `WHATSAPP_VERIFY_TOKEN`. Debe devolver el challenge en texto plano.
 4. Suscribir los campos: `messages` y —si es coexistencia— `smb_message_echoes` y `account_update`.
    `messages` incluye los acuses (`statuses`), que desde F8-B sí se usan.
-4-bis. **Registrar la plantilla `recordatorio_cita`** (categoría UTILITY) con el texto exacto de
-   `intelligence/core/plantillas.js` y esperar la aprobación. Sin ella no sale ni un recordatorio, y
-   es el único paso de esta lista que **también tiene plazo de espera**.
-5. **Encender `INTELLIGENCE_HTTP_ENABLED=true` en producción con cuidado**: eso enciende también el
-   WebChat, que **sigue sin autenticar** (decisión abierta 9). Antes de encenderlo hay que decidir
-   qué se hace con esa superficie — lo suyo es una clave pública por negocio, o dejarla fuera.
+4-bis. ✅ **Plantilla `recordatorio_cita` registrada y APROBADA** (2026-08-24, UTILITY, `es`), con el
+   texto exacto de `intelligence/core/plantillas.js`. Era el único paso de esta lista con **plazo de
+   espera ajeno**; ya no lo hay.
+5. **Encender `INTELLIGENCE_HTTP_ENABLED=true` en producción, y NO `INTELLIGENCE_WEBCHAT_ENABLED`.**
+   Desde el 2026-08-22 son dos interruptores separados justo para esto: el webhook se enciende sin
+   abrir el WebChat, que sigue sin autenticar. Ver «Cómo se resolvió la decisión abierta 9».
 6. Probar con el número del propio dueño antes que con un cliente.
 
 **Lo que NO hay que hacer todavía:** poner una clave de modelo en producción a la vez que se enciende

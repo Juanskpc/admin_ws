@@ -172,20 +172,37 @@ app.use('/tienda', tiendaRoutes);
 app.use('/reserva', reservaRoutes);
 
 // ========================
-// EscalApp Intelligence (OPCIONAL — ADR-005)
+// EscalApp Intelligence — WebChat (OPCIONAL — ADR-005)
 // ========================
-// Primera vez que Intelligence se expone por HTTP (F5-C). Dos guardas, y las dos importan:
+// **TRES** guardas, y la tercera se añadió en F8-C (2026-08-22) resolviendo la decisión abierta 9:
 //
 //   1. El directorio tiene que existir. Es lo que mantiene LITERAL el test del apagón: se
 //      borra `intelligence/` y el backend arranca igual, sin un require que reviente.
-//   2. `INTELLIGENCE_HTTP_ENABLED=true`. Apagado por defecto porque estas rutas NO están
-//      autenticadas —un widget lo usa un cliente final anónimo— y hoy solo las protege la
-//      feature comercial del negocio. No encenderlo en producción hasta F8.
+//   2. `INTELLIGENCE_HTTP_ENABLED=true` — el interruptor maestro de la superficie HTTP.
+//   3. `INTELLIGENCE_WEBCHAT_ENABLED=true` — **solo el WebChat**, y apagado por defecto.
+//
+// ## Por qué hizo falta separarlas
+//
+// Hasta F8-C una sola bandera montaba dos cosas con riesgos muy distintos: el **webhook de
+// WhatsApp**, autenticado por la firma HMAC de Meta, y el **WebChat**, que NO está autenticado —un
+// widget lo usa un cliente final anónimo y solo lo protege la feature comercial del negocio—.
+// Conectar el número real obligaba a encender el webhook, y con él se encendía el WebChat: la
+// decisión abierta 9 en forma de efecto colateral.
+//
+// Separarlas es lo mínimo que resuelve eso sin inventar autenticación que nadie ha diseñado. En
+// producción se enciende (2) y NO (3): el webhook vive y el WebChat **no existe** — no responde
+// 403, no está la ruta, ni el widget estático ni el simulador de fallos, que es la superficie que
+// peor se ve abierta (deja inyectar duplicados y retrasos en la sesión de cualquiera).
+//
+// Lo que falta para que el WebChat sea público de verdad —una clave pública por negocio, orígenes
+// permitidos, un límite por sesión— sigue sin hacerse, y ahora se puede posponer sin que bloquee a
+// WhatsApp. La Consola no depende de esto: vive en `/admin/intelligence/*` con `requireSuperAdmin`.
 //
 // La flecha de dependencia no cambia: ninguna vertical importa esto ni sabe que existe.
 // El webhook de WhatsApp ya se montó arriba, antes del parser global: necesita el cuerpo crudo.
-if (intelligenceDisponible) {
+if (intelligenceDisponible && process.env.INTELLIGENCE_WEBCHAT_ENABLED === 'true') {
     app.use('/intelligence', require('./intelligence/http'));
+    console.log('⚠️  WebChat de Intelligence ENCENDIDO y SIN AUTENTICAR (INTELLIGENCE_WEBCHAT_ENABLED=true)');
 }
 
 // Ruta de salud / health check
@@ -267,10 +284,18 @@ app.use(errorHandler);
                     .arrancarMotor(escalera.manejador)
                     .then(() => {
                         const canales = intelligence.arrancarCanales();
+                        // El widget solo se anuncia si de verdad está montado. Anunciarlo
+                        // siempre —como hacía hasta F8-C— manda a buscar una URL que devuelve
+                        // 404, y peor: en producción hace creer que hay una superficie abierta
+                        // que no existe, o que no la hay cuando sí. Un log que miente sobre lo
+                        // que está expuesto es el que no puedes permitirte.
+                        const webchatMontado = process.env.INTELLIGENCE_WEBCHAT_ENABLED === 'true';
                         console.log(
                             `[intelligence] HTTP en /intelligence — canal(es): ${canales.join(', ')}. ` +
                                 `Escalera: nivel 1 + ${escalera.nivel4 || 'sin nivel 4'}. ` +
-                                'Widget de pruebas en /intelligence/webchat/'
+                                (webchatMontado
+                                    ? 'Widget de pruebas en /intelligence/webchat/'
+                                    : 'WebChat NO montado (INTELLIGENCE_WEBCHAT_ENABLED != true).')
                         );
                     })
                     .catch((error) => {
