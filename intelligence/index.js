@@ -38,8 +38,12 @@ let arrancado = false;
 function arrancar() {
     if (arrancado) return registry.listar();
 
+    const flujos = require('./engine/flujos');
     for (const adaptador of ADAPTADORES) {
         adaptador.registrarCapacidades();
+        // Qué clase de negocio atiende cada vertical. Sin esto el motor da por supuesto de qué
+        // va el negocio, y el 2026-08-24 eso dejó a un restaurante sin una sola respuesta.
+        adaptador.registrarFlujo?.({ flujos });
     }
     arrancado = true;
     return registry.listar();
@@ -48,6 +52,7 @@ function arrancar() {
 /** Solo para tests: vuelve al estado previo al arranque. */
 function _reiniciar() {
     registry._limpiar();
+    require('./engine/flujos')._limpiar();
     require('./model/puerto')._limpiar();
     motor._reiniciar();
     gateway.detener();

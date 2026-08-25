@@ -353,4 +353,20 @@ function registrarCapacidades() {
     });
 }
 
-module.exports = { VERTICAL, registrarCapacidades };
+/**
+ * El flujo determinista de esta vertical y los tipos de negocio que atiende.
+ *
+ * Vive en el adaptador porque un flujo conversacional sabe que existen categorías y productos,
+ * y eso es conocimiento de dominio: el motor no debe tenerlo (ADR-009).
+ */
+const flujo = require('./flujo');
+
+function registrarFlujo({ flujos }) {
+    flujos.registrar({
+        vertical: VERTICAL,
+        tipos: flujo.TIPOS_NEGOCIO,
+        manejar: flujo.manejarRestaurante,
+    });
+}
+
+module.exports = { VERTICAL, registrarCapacidades, registrarFlujo };

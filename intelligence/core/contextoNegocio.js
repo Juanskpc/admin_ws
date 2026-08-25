@@ -30,7 +30,7 @@
 const Models = require('../../app_core/models/conection');
 
 /** Lo que se enseña cuando el negocio no se puede leer. Neutro y sin mentir. */
-const GENERICO = { id: null, nombre: null, tratamiento: 'el negocio', atencion: null };
+const GENERICO = { id: null, nombre: null, tratamiento: 'el negocio', atencion: null, tipoNegocio: null };
 
 /**
  * Horario de atención del negocio — hoy **siempre `null`**, y es un estado correcto.
@@ -75,9 +75,10 @@ async function obtener(idNegocio) {
     if (!Number.isInteger(id) || id < 1) return GENERICO;
 
     const filas = await Models.sequelize.query(
-        `SELECT id_negocio, nombre
-           FROM general.gener_negocio
-          WHERE id_negocio = :id AND estado = 'A'`,
+        `SELECT n.id_negocio, n.nombre, t.nombre AS tipo_negocio
+           FROM general.gener_negocio n
+           LEFT JOIN general.gener_tipo_negocio t ON t.id_tipo_negocio = n.id_tipo_negocio
+          WHERE n.id_negocio = :id AND n.estado = 'A'`,
         { replacements: { id }, type: Models.sequelize.QueryTypes.SELECT }
     );
 
@@ -93,6 +94,11 @@ async function obtener(idNegocio) {
         nombre,
         tratamiento: nombre || GENERICO.tratamiento,
         atencion: leerAtencion(fila),
+        // Qué CLASE de negocio es. No se traduce aquí a una vertical: este módulo no sabe qué
+        // verticales existen y no debe saberlo (ADR-009). Devuelve el nombre del tipo tal como
+        // está en el catálogo —`RESTAURANTE`, `RESERVA`— y quien enruta lo traduce con lo que
+        // los adaptadores hayan declarado.
+        tipoNegocio: String(fila.tipo_negocio || '').trim().toUpperCase() || null,
     };
 }
 

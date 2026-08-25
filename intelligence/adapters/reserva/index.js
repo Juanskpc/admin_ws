@@ -574,7 +574,26 @@ function formatearWallTime(fecha) {
     return `${p.year}-${p.month}-${p.day}T${p.hour}:${p.minute}:${p.second}`;
 }
 
+/**
+ * Los tipos de negocio que atiende el flujo de citas.
+ *
+ * El manejador sigue viviendo en `engine/manejadorDeterminista.js` por historia —era el único
+ * que había— y no se mueve hoy para no tocar un flujo que funciona. Lo que sí se declara aquí
+ * es a QUIÉN atiende, que es lo que el motor necesita preguntar.
+ *
+ * `BARBERIA` y `SALON DE BELLEZA` van con `RESERVA`: son negocios de cita previa y el catálogo
+ * los tiene como tipos aparte por razones de producto, no de dominio.
+ */
+const TIPOS_NEGOCIO = ['RESERVA', 'BARBERIA', 'SALON DE BELLEZA'];
+
+function registrarFlujo({ flujos }) {
+    const { manejarDeterminista } = require('../../engine/manejadorDeterminista');
+    flujos.registrar({ vertical: VERTICAL, tipos: TIPOS_NEGOCIO, manejar: manejarDeterminista });
+}
+
 module.exports = {
+    TIPOS_NEGOCIO,
+    registrarFlujo,
     registrarCapacidades,
     /** Los recordatorios de F8-B viven en su propio archivo: aquí solo se publican. */
     registrarRecordatorios: require('./recordatorios').registrar,

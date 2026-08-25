@@ -26,6 +26,8 @@
 'use strict';
 
 const { NIVEL, enrutar } = require('../model/orquestador');
+const flujos = require('./flujos');
+const contextoNegocio = require('../core/contextoNegocio');
 const { manejarDeterminista } = require('./manejadorDeterminista');
 const { TAREA_AGENDAR } = require('./manejadorDeterminista');
 const confirmacion = require('./confirmacion');
@@ -39,7 +41,13 @@ const optout = require('./optout');
  * @param {Function} [deps.llm]        — el Nivel 4. Ausente = escalera de un peldaño, que es
  *                                       exactamente el sistema de F5 y sigue siendo válido.
  */
-function crearManejadorEscalera({ determinista = manejarDeterminista, llm = null } = {}) {
+function crearManejadorEscalera({
+    determinista = manejarDeterminista,
+    llm = null,
+    // Inyectable por la misma razón que los otros dos: un test del enrutado no debería
+    // necesitar una base de datos para comprobar a qué peldaño va un mensaje.
+    resolverNegocio = (id) => contextoNegocio.obtener(id),
+} = {}) {
     return async function manejarEscalera(ctx) {
         // Antes de enrutar, antes de leer la tarea, antes de todo. Un turno que pide la baja no se
         // enruta a ningún peldaño: se bloquea y se calla (F8-A, master-plan §Fase 8).
@@ -80,8 +88,49 @@ function crearManejadorEscalera({ determinista = manejarDeterminista, llm = null
             }
         }
 
-        return conPaso(await determinista(ctx), pasoDeRuta);
+        return conPaso(await deterministaDelNegocio(ctx), pasoDeRuta);
     };
+
+    /**
+     * El flujo determinista que le toca a ESTE negocio.
+     *
+     * Hasta el 2026-08-24 había uno solo y era el de agendar citas. El día que el canal apuntó a
+     * un restaurante, el primer «hola» pidió `consultar_servicios` —una capacidad de citas—
+     * sobre un negocio que no la tiene: `CAPACIDAD_NO_HABILITADA`, turno en error y **cliente sin
+     * respuesta**. El motor daba por supuesto de qué iba el negocio.
+     *
+     * Ahora se pregunta. Los flujos los declaran los adaptadores (`engine/flujos.js`), así que
+     * este archivo sigue sin nombrar ninguna vertical.
+     *
+     * **Si nadie declaró flujo para ese tipo de negocio**, se usa el que se inyectó por defecto
+     * —hoy el de citas— y se avisa por consola. Es el comportamiento que había antes de todo
+     * esto, así que no rompe nada existente; pero se grita, porque un gimnasio recibiendo el
+     * menú de una peluquería es un fallo que de otro modo solo se ve en la cara del cliente.
+     */
+    async function deterministaDelNegocio(ctx) {
+        // Si no se puede averiguar de qué negocio se trata —la base no responde, o esto corre
+        // en un test sin Postgres— NO se pierde el turno: se atiende con el flujo por defecto,
+        // que es exactamente lo que se hacía antes de que existiera el enrutado por vertical.
+        // Enrutar es una mejora; que enrutar pueda tumbar una conversación no lo sería.
+        let negocio = null;
+        try {
+            negocio = await resolverNegocio(ctx.conversacion?.id_negocio);
+        } catch (error) {
+            console.warn(`[intelligence] No se pudo leer el tipo de negocio: ${error.message}`);
+        }
+
+        const flujo = negocio && flujos.para(negocio.tipoNegocio);
+        if (flujo) return flujo.manejar(ctx);
+
+        if (negocio?.tipoNegocio && flujos.listar().length > 0) {
+            console.warn(
+                `[intelligence] El negocio ${negocio.id} es de tipo "${negocio.tipoNegocio}" y ` +
+                    'ninguna vertical declaró flujo para él. Se atiende con el flujo por defecto, ' +
+                    'que probablemente hable de otra cosa. Declara sus TIPOS_NEGOCIO en el adaptador.'
+            );
+        }
+        return determinista(ctx);
+    }
 }
 
 /** Antepone un paso a la decisión, sin mutarla: la del manejador es suya. */
