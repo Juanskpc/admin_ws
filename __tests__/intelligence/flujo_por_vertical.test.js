@@ -135,15 +135,18 @@ describe('el flujo de restaurante', () => {
         contextoNegocio: { obtener: async (id) => ({ id, nombre: 'Pregonchos', tratamiento: 'Pregonchos', tipoNegocio: 'RESTAURANTE' }) },
     });
 
-    it('el saludo ofrece las dos formas de pedir', async () => {
+    it('el saludo lleva el ENLACE en el texto, no como botón', async () => {
+        // Un botón de WhatsApp no abre una URL: devuelve un id al bot. Como opción, «ver el
+        // menú» costaba un turno de ida y vuelta para algo que debe ser un toque.
         const d = await flujo(entrada('hola', 12));
-        const opciones = d.respuestas[0].opciones.map((o) => o.id);
 
         expect(d.respuestas[0].texto).toContain('Pregonchos');
-        expect(opciones).toEqual([OPCION.MENU, OPCION.CHAT]);
-        // El menú digital va PRIMERO: es más barato y más exacto que conversar — el cliente ve
-        // precios y llega con el pedido armado, sin turnos de modelo ni malentendidos.
-        expect(opciones[0]).toBe(OPCION.MENU);
+        expect(d.respuestas[0].texto).toContain(enlaceDelMenu(12));
+    });
+
+    it('el saludo deja UN botón, para pedir por chat', async () => {
+        const d = await flujo(entrada('hola', 12));
+        expect(d.respuestas[0].opciones.map((o) => o.id)).toEqual([OPCION.CHAT]);
     });
 
     it('«ver el menú» manda el enlace de ESE negocio', async () => {
@@ -152,10 +155,9 @@ describe('el flujo de restaurante', () => {
         expect(d.respuestas[0].texto).toContain('/12');
     });
 
-    it('el enlace no va como opción, que en WhatsApp sería un botón muerto', async () => {
-        // Los botones de WhatsApp devuelven un id al bot; no abren URLs. Un enlace disfrazado
-        // de opción es un botón que no hace nada.
-        const d = await flujo(entrada(OPCION.MENU, 12));
+    it('pedir la carta por texto también manda el enlace, sin botones', async () => {
+        const d = await flujo(entrada('la carta', 12));
+        expect(d.respuestas[0].texto).toContain(enlaceDelMenu(12));
         expect(d.respuestas[0].opciones).toBeUndefined();
     });
 

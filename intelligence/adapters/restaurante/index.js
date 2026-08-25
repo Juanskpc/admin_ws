@@ -75,7 +75,8 @@ function registrarCapacidades() {
             'los productos de esa categoría con su precio. Úsala cuando el cliente pregunte ' +
             'qué venden, qué hay de comer, o pida ver el menú. Sin categoría devuelve solo las ' +
             'categorías, que es lo que hay que enseñar primero: la carta entera no cabe en un ' +
-            'mensaje y abruma.',
+            'mensaje y abruma. El id_categoria es el que devuelve esta misma capacidad sin ' +
+            'argumentos: NO son 1, 2, 3 — usa el número exacto o te dirá que no existe.',
         vertical: VERTICAL,
         tipo: registry.TIPO.CONSULTA,
         feature: FEATURE.ASISTENTE_IA,
@@ -83,7 +84,7 @@ function registrarCapacidades() {
             id_categoria: { tipo: 'entero', requerido: false, min: 1 },
         },
 
-        async ejecutar({ idNegocio, args }) {
+        async ejecutar({ idNegocio, args, contexto }) {
             // Se usan las variantes PÚBLICAS (`...Publicas`, `...PublicosByCategoria`) y no las
             // de administración: filtran por `visible` además de por `disponible`, que es
             // justo la diferencia entre lo que el negocio gestiona y lo que le enseña a un
@@ -98,6 +99,32 @@ function registrarCapacidades() {
                         cuantos_productos: (c.productos || []).length,
                     })),
                 };
+            }
+
+            // ⚠️ La categoría tiene que existir Y ser de ESTE negocio.
+            //
+            // Sin esta comprobación, un id que no existe devolvía lista vacía con resultado
+            // `ok`, y el bot se lo creía: el 2026-08-24 el modelo pidió la categoría 2 —un
+            // ordinal, «la segunda»— cuando las de ese negocio eran 38, 39 y 40, y el cliente
+            // leyó «en Platos no tenemos productos disponibles» con la carta llena de platos.
+            //
+            // La lección va más allá de este caso: **una capacidad que devuelve vacío ante una
+            // entrada inválida le enseña al modelo a mentirle al cliente.** Vacío significa «no
+            // hay», y eso tiene que ser cierto. Si el argumento está mal, se dice.
+            const categoria = await Models.CartaCategoria.findOne({
+                where: { id_categoria: args.id_categoria, id_negocio: idNegocio, estado: 'A' },
+                attributes: ['id_categoria', 'nombre'],
+                transaction: contexto.transaction,
+            });
+            if (!categoria) {
+                const e = new Error(
+                    `No existe la categoría ${args.id_categoria} en la carta de este negocio. ` +
+                        'Usa exactamente el id_categoria que devuelve consultar_carta sin argumentos; ' +
+                        'no son números correlativos.'
+                );
+                e.code = 'CATEGORIA_NO_ENCONTRADA';
+                e.statusCode = 404;
+                throw e;
             }
 
             const productos = await cartaService.getProductosPublicosByCategoria(

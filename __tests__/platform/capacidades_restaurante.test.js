@@ -107,6 +107,31 @@ describe('consultar_carta', () => {
         expect(typeof doble.precio).toBe('number');
     });
 
+    it('una categoría que no existe FALLA en vez de devolver vacío', async () => {
+        // El fallo que esto existe para que no vuelva (2026-08-24, en producción): el modelo
+        // pidió la categoría 2 —un ordinal, «la segunda»— cuando las de ese negocio eran 38, 39
+        // y 40. La capacidad devolvía lista vacía con resultado `ok`, el bot se lo creyó, y el
+        // cliente leyó «en Platos no tenemos productos disponibles» con la carta llena.
+        //
+        // La lección va más allá del caso: una capacidad que devuelve vacío ante una entrada
+        // inválida le enseña al modelo a mentirle al cliente. Vacío significa «no hay», y eso
+        // tiene que ser cierto.
+        await expect(ejecutar('consultar_carta', { id_categoria: 999999 }))
+            .rejects.toMatchObject({ code: 'CATEGORIA_NO_ENCONTRADA' });
+    });
+
+    it('tampoco vale la categoría de OTRO negocio', async () => {
+        const ajena = await unaFila(
+            `SELECT id_categoria FROM restaurante.carta_categoria
+              WHERE id_negocio <> :n AND estado = 'A' LIMIT 1;`,
+            { n: idNegocio }
+        );
+        if (!ajena) return; // sin otra carta en la base no hay nada que comprobar
+
+        await expect(ejecutar('consultar_carta', { id_categoria: ajena.id_categoria }))
+            .rejects.toMatchObject({ code: 'CATEGORIA_NO_ENCONTRADA' });
+    });
+
     it('NO enseña lo que el negocio oculta ni lo que está agotado', async () => {
         // Son dos filtros distintos de la vertical —`visible` y `disponible`— y el que se
         // olvida es siempre el segundo. Un bot que ofrece algo agotado hace que el negocio

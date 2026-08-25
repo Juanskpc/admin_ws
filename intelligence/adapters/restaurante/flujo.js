@@ -79,14 +79,23 @@ function bienvenida(ctx, pasosPrevios = []) {
         pasos: [...pasosPrevios, paso('menu_entrada_restaurante')],
         respuestas: [
             {
-                texto:
-                    `¡Hola! Te comunicas con ${ctx.negocio.tratamiento}. ¿Cómo prefieres pedir?`,
+                // ⚠️ El enlace va DENTRO del texto, no como opción.
+                //
+                // Un botón de WhatsApp no abre una URL: devuelve un id al bot. Ofrecer «Ver el
+                // menú» como opción obligaba a un turno de ida y vuelta —el cliente pulsa, el
+                // bot contesta con el enlace— para algo que debería ser un toque. En el texto,
+                // WhatsApp lo hace pulsable solo.
+                texto: [
+                    `¡Hola! Te comunicas con ${ctx.negocio.tratamiento}.`,
+                    '',
+                    '🍽️ *Ver el menú y pedir desde ahí:*',
+                    enlace,
+                    '',
+                    'Ahí ves fotos y precios, armas el pedido y vuelves aquí con todo listo.',
+                    '',
+                    'O si prefieres, dime por aquí qué quieres y yo lo anoto.',
+                ].join('\n'),
                 opciones: [
-                    {
-                        id: OPCION.MENU,
-                        etiqueta: 'Ver el menú',
-                        detalle: 'Con fotos y precios, y armas el pedido ahí',
-                    },
                     {
                         id: OPCION.CHAT,
                         etiqueta: 'Pedir por aquí',
