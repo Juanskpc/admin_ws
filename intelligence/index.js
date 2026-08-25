@@ -173,6 +173,14 @@ function arrancarCanales({ iniciarEntrega = true } = {}) {
     for (const adaptador of CANALES) gateway.registrar(adaptador);
     if (iniciarEntrega) gateway.iniciar();
 
+    // Qué canales traen una identidad probada. Se lee de la declaración del adaptador y no se
+    // nombra a ninguno aquí: añadir un canal no debe obligar a editar la composición ni el motor.
+    // De esto cuelga que un cliente pueda cancelar su cita y no la de otro — ver `identidad.js`.
+    const identidad = require('./engine/identidad');
+    for (const adaptador of CANALES) {
+        if (adaptador.idExternoEsIdentidad) identidad.registrarCanalConIdentidad(adaptador.nombre);
+    }
+
     // El de WhatsApp se registra siempre, pero solo **funciona** con sus cinco variables puestas.
     // Se dice al arrancar y no en el primer webhook: un canal a medio configurar recibe mensajes y
     // no contesta, y desde fuera eso es un negocio que ignora a sus clientes.

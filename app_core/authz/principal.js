@@ -79,12 +79,37 @@ async function resolverPrincipalUsuario(idUsuario) {
     });
 }
 
-function crearPrincipal({ tipo, idUsuario = null, esSuperAdmin = false, negocios = new Map() }) {
+/**
+ * @param {Object}  datos
+ * @param {string}  datos.tipo — `usuario` o `contacto`.
+ * @param {string}  [datos.telefonoVerificado] — E.164 **probado por el canal**, no dicho por
+ *        nadie. Solo lo tiene un `contacto` que llegó por un canal donde la identidad viaja
+ *        autenticada (WhatsApp: el `from` va dentro de un webhook firmado por Meta). Es la
+ *        diferencia entre «me dijo que su número es este» y «este es su número», y de ahí
+ *        cuelga que un cliente pueda cancelar su cita y no la de otro. En WebChat es `null`
+ *        porque el `id_externo` es una sesión de navegador: ahí no hay identidad que probar.
+ */
+function crearPrincipal({
+    tipo,
+    idUsuario = null,
+    esSuperAdmin = false,
+    negocios = new Map(),
+    telefonoVerificado = null,
+}) {
     return {
         tipo,
         id_usuario: idUsuario,
         es_super_admin: esSuperAdmin,
         negocios,
+
+        /**
+         * El teléfono que el canal probó, o `null`.
+         *
+         * Que sea `null` NO significa «no tiene teléfono»: significa **no lo sabemos con
+         * certeza**, y quien lo consulte debe tratarlo como tal. Es la razón de que las
+         * comprobaciones de pertenencia fallen cerradas en vez de dejar pasar.
+         */
+        telefono_verificado: telefonoVerificado,
 
         /** Ids de negocio a los que pertenece. Útil para logs y para acotar consultas. */
         idsNegocio() {

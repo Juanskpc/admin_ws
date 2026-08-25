@@ -104,6 +104,14 @@ async function limpiar() {
     await sequelize.query(`DELETE FROM reserva.reserva_cita WHERE cliente_nombre LIKE :m;`, {
         replacements: { m: `${CLIENTE}%` },
     });
+    // Y los eventos que esas citas emitieron. Desde F8-B crear una cita deja un
+    // `cita.creada.v1` en el outbox; si se quedan pendientes, el siguiente lote de CUALQUIER
+    // otra suite los arrastra y sus contadores dejan de valer. El propio `outbox.test.js` lo
+    // avisa en un comentario — esto es cumplir esa advertencia en vez de padecerla.
+    await sequelize.query(
+        `DELETE FROM platform.outbox WHERE tipo = 'cita.creada.v1' AND id_negocio IN (:n);`,
+        { replacements: { n: [negocioDemo, negocioRival] } }
+    );
 }
 
 beforeAll(async () => {
@@ -503,5 +511,178 @@ describe('Capa económica declarada (ADR-011)', () => {
         await expect(
             ejecutar('cancelar_cita', { codigo_cita: fila.codigo_publico })
         ).rejects.toMatchObject({ code: 'CANCELACION_TARDE' });
+    });
+});
+
+
+// ────────────────────────────────────────────────────────────────────────────────────────
+describe('PERTENENCIA — una cita solo la toca quien la pidió (2026-08-24)', () => {
+    // Antes de esto, `cancelar_cita` y `reagendar_cita` filtraban por código + negocio y nada
+    // más: **el código ERA la autorización**. No se explotaba porque un UUID v4 no se adivina,
+    // o sea que la seguridad la daba la longitud del identificador, sin que nadie lo hubiera
+    // decidido. Estas pruebas existen para que acortar el código —que es lo que se quiere
+    // hacer para poder dictarlo por teléfono— no reabra el agujero en silencio.
+    const { principalDeContacto, registrarCanalConIdentidad } = require('../../intelligence/engine/identidad');
+
+    const TEL_DUENO = '+573001112233';
+    const TEL_INTRUSO = '+573009998877';
+
+    /** El Principal de un cliente final que escribe por un canal que SÍ prueba su número. */
+    function contacto(telefonoVerificado) {
+        return principalDeContacto(negocioDemo, { telefonoVerificado });
+    }
+
+    /** Agenda una cita como si la hubiera pedido ese teléfono por WhatsApp. */
+    async function citaDe(telefonoVerificado, hora = '11:00') {
+        const codigoHold = await proponer(hora);
+        const { resultado } = await policyGate.ejecutar({
+            capacidad: 'reservar_turno',
+            principal: contacto(telefonoVerificado),
+            idNegocio: negocioDemo,
+            args: { codigo_hold: codigoHold, cliente_nombre: `${CLIENTE} pertenencia` },
+            confirmadoPor: { origen: 'test', texto: 'sí' },
+        });
+        return resultado.codigo_cita;
+    }
+
+    beforeAll(() => {
+        // El canal declara que su id_externo es identidad probada; en producción lo hace
+        // `arrancarCanales()` leyendo la declaración del adaptador de WhatsApp.
+        registrarCanalConIdentidad('whatsapp');
+    });
+
+    it('guarda el teléfono que probó el CANAL, no el que dicta el modelo', async () => {
+        const codigoHold = await proponer('09:30');
+        const { resultado } = await policyGate.ejecutar({
+            capacidad: 'reservar_turno',
+            principal: contacto(TEL_DUENO),
+            idNegocio: negocioDemo,
+            args: {
+                codigo_hold: codigoHold,
+                cliente_nombre: `${CLIENTE} pertenencia`,
+                // El modelo dice otro número. La plataforma tiene que ignorarlo: si ganara,
+                // la cita quedaría a nombre de quien no es y proteger al dueño protegería
+                // a la persona equivocada.
+                cliente_telefono: TEL_INTRUSO,
+            },
+            confirmadoPor: { origen: 'test', texto: 'sí' },
+        });
+
+        const fila = await unaFila(
+            `SELECT cliente_telefono FROM reserva.reserva_cita WHERE codigo_publico = :c;`,
+            { c: resultado.codigo_cita }
+        );
+        expect(fila.cliente_telefono).toBe(TEL_DUENO);
+    });
+
+    it('el dueño SÍ puede cancelar la suya', async () => {
+        const codigo = await citaDe(TEL_DUENO, '10:00');
+        const { resultado } = await policyGate.ejecutar({
+            capacidad: 'cancelar_cita',
+            principal: contacto(TEL_DUENO),
+            idNegocio: negocioDemo,
+            args: { codigo_cita: codigo },
+            confirmadoPor: { origen: 'test', texto: 'sí' },
+        });
+        expect(resultado.estado).toBe('cancelada');
+    });
+
+    it('otro número con el código correcto NO puede cancelarla', async () => {
+        const codigo = await citaDe(TEL_DUENO, '10:30');
+
+        await expect(
+            policyGate.ejecutar({
+                capacidad: 'cancelar_cita',
+                principal: contacto(TEL_INTRUSO),
+                idNegocio: negocioDemo,
+                args: { codigo_cita: codigo },
+                confirmadoPor: { origen: 'test', texto: 'sí' },
+            })
+        ).rejects.toMatchObject({ code: 'CITA_NO_ES_DE_QUIEN_PIDE' });
+
+        // Y sigue viva: denegar no puede tener efectos.
+        const fila = await unaFila(
+            `SELECT estado FROM reserva.reserva_cita WHERE codigo_publico = :c;`,
+            { c: codigo }
+        );
+        expect(fila.estado).not.toBe('cancelada');
+    });
+
+    it('tampoco puede REAGENDARLA — las dos puertas dan al mismo sitio', async () => {
+        const codigo = await citaDe(TEL_DUENO, '11:30');
+        // 12:30 y no 12:00: la cita de 11:30 dura 30 min y el buffer de limpieza son otros 10,
+        // así que las 12:00 no están libres. Es el motor haciendo su trabajo, no un estorbo.
+        const holdNuevo = await proponer('12:30');
+
+        await expect(
+            policyGate.ejecutar({
+                capacidad: 'reagendar_cita',
+                principal: contacto(TEL_INTRUSO),
+                idNegocio: negocioDemo,
+                args: { codigo_cita: codigo, codigo_hold: holdNuevo },
+                confirmadoPor: { origen: 'test', texto: 'sí' },
+            })
+        ).rejects.toMatchObject({ code: 'CITA_NO_ES_DE_QUIEN_PIDE' });
+    });
+
+    it('un canal que NO prueba identidad (WebChat) no puede cancelar nada', async () => {
+        const codigo = await citaDe(TEL_DUENO, '15:00');
+
+        // `telefono_verificado` en null = «no lo sabemos», no «no tiene». Falla cerrada.
+        await expect(
+            policyGate.ejecutar({
+                capacidad: 'cancelar_cita',
+                principal: contacto(null),
+                idNegocio: negocioDemo,
+                args: { codigo_cita: codigo },
+                confirmadoPor: { origen: 'test', texto: 'sí' },
+            })
+        ).rejects.toMatchObject({ code: 'CITA_NO_ES_DE_QUIEN_PIDE' });
+    });
+
+    it('una cita sin teléfono (apuntada en mostrador) tampoco se toca desde el canal', async () => {
+        const dia = lunes();
+        const ini = new Date(`${dia}T16:00:00-05:00`);
+        const fila = await unaFila(
+            `
+            INSERT INTO reserva.reserva_cita
+                (id_negocio, id_profesional, fecha_hora_inicio, fecha_hora_fin, estado, cliente_nombre)
+            SELECT :n, p.id_profesional, :ini, :fin, 'confirmada', :cliente
+              FROM reserva.reserva_profesional p
+             WHERE p.id_negocio = :n LIMIT 1
+            RETURNING codigo_publico;
+            `,
+            {
+                n: negocioDemo,
+                ini,
+                fin: new Date(ini.getTime() + 30 * 60_000),
+                cliente: `${CLIENTE} mostrador`,
+            }
+        );
+
+        await expect(
+            policyGate.ejecutar({
+                capacidad: 'cancelar_cita',
+                principal: contacto(TEL_DUENO),
+                idNegocio: negocioDemo,
+                args: { codigo_cita: fila.codigo_publico },
+                confirmadoPor: { origen: 'test', texto: 'sí' },
+            })
+        ).rejects.toMatchObject({ code: 'CITA_NO_ES_DE_QUIEN_PIDE' });
+    });
+
+    it('el NEGOCIO sigue pudiendo operar sobre cualquier cita', async () => {
+        // La comprobación es solo para Principals de tipo `contacto`. Un usuario con sesión
+        // —la Consola, la CLI, el propio salón— no tiene dueño que comprobar, y si esto
+        // fallara habríamos roto la gestión interna para arreglar el canal.
+        const codigo = await citaDe(TEL_DUENO, '16:30');
+        const { resultado } = await policyGate.ejecutar({
+            capacidad: 'cancelar_cita',
+            principal: principalDemo,
+            idNegocio: negocioDemo,
+            args: { codigo_cita: codigo },
+            confirmadoPor: { origen: 'test', texto: 'sí' },
+        });
+        expect(resultado.estado).toBe('cancelada');
     });
 });

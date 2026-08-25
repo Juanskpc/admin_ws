@@ -32,7 +32,15 @@
  * permisos, es otra cosa. Lo que puede hacer lo decide la capacidad (`tipo`, `feature`), no un
  * rol heredado que alguien podría ampliar sin darse cuenta.
  *
- * ## Lo que este resolver NO hace (F5-D, decisión consciente)
+ * ## Tres identidades, no dos (añadido el 2026-08-24)
+ *
+ * A las dos de arriba se sumó una tercera, y es la que da seguridad: el **teléfono verificado**
+ * —el que el propio canal probó—. Vive en el Principal (`telefono_verificado`) porque es
+ * autorización, no dato de dominio, y se distingue del teléfono que la persona *dijo*, que
+ * sigue viniendo de `conversacion.variables`. Decir no es probar: de esa distinción cuelga que
+ * un cliente pueda cancelar su cita y no la de otro. Ver `registrarCanalConIdentidad`.
+ *
+ * ## Lo que este resolver sigue SIN hacer (F5-D, decisión consciente)
  *
  * No enlaza la cita con la persona. `reserva.reservar_turno` recibe `cliente_nombre` y
  * `cliente_telefono` como texto suelto, no un `id_persona_negocio`: `reserva` no ha adoptado
@@ -59,7 +67,7 @@ const { crearPrincipal, TIPO } = require('../../app_core/authz/principal');
  *
  * @param {number} idNegocio — el negocio dueño del canal por el que entró el mensaje.
  */
-function principalDeContacto(idNegocio) {
+function principalDeContacto(idNegocio, { telefonoVerificado = null } = {}) {
     const id = Number(idNegocio);
     if (!Number.isInteger(id) || id <= 0) {
         throw new Error('principalDeContacto requiere un id_negocio válido.');
@@ -69,7 +77,53 @@ function principalDeContacto(idNegocio) {
         idUsuario: null,
         esSuperAdmin: false,
         negocios: new Map([[id, []]]),
+        telefonoVerificado,
     });
+}
+
+// ── Canales cuyo `id_externo` ES una identidad probada ──────────────────────────────────────
+//
+// La diferencia importa y no es cosmética:
+//
+//   · **WhatsApp**: el `id_externo` es el `from` del webhook, que llega dentro de un cuerpo
+//     firmado por Meta (HMAC-SHA256, ver `channels/whatsapp/firma.js`). Nadie puede afirmar ser
+//     otro número sin falsificar esa firma. Es una identidad **autenticada**.
+//   · **WebChat**: el `id_externo` es una sesión de navegador que se inventa el propio cliente.
+//     No prueba nada de nadie.
+//
+// Se registra desde la composición (`intelligence/index.js`) y no se deduce aquí con un
+// `if (canal === 'whatsapp')`, por la misma regla que el resto del motor: **el núcleo no sabe
+// qué canales existen**. Si lo supiera, añadir un canal obligaría a editar el motor, que es
+// justo lo que ADR-017 evita.
+const CANALES_CON_IDENTIDAD = new Set();
+
+/**
+ * Declara que en este canal el `id_externo` es un teléfono probado por el propio canal.
+ *
+ * **Solo debe llamarse para canales que autentican de verdad.** Registrar aquí un canal que no
+ * lo hace convierte «lo que alguien escribió» en «lo que la plataforma probó», y a partir de
+ * ahí las comprobaciones de pertenencia dejan de valer nada sin que nada falle a la vista.
+ */
+function registrarCanalConIdentidad(canal) {
+    if (!canal || typeof canal !== 'string') {
+        throw new Error('registrarCanalConIdentidad requiere el nombre del canal.');
+    }
+    CANALES_CON_IDENTIDAD.add(canal);
+}
+
+/** Para los tests y el arranque en frío. */
+function limpiarCanalesConIdentidad() {
+    CANALES_CON_IDENTIDAD.clear();
+}
+
+/**
+ * El teléfono que el canal probó para esta conversación, o `null`.
+ *
+ * Nunca mira `conversacion.variables`: eso es lo que la persona **dijo**, y decir no es probar.
+ */
+function telefonoVerificadoDe(conversacion) {
+    if (!conversacion || !CANALES_CON_IDENTIDAD.has(conversacion.canal)) return null;
+    return normalizarTelefono(conversacion.id_externo);
 }
 
 /**
@@ -138,9 +192,17 @@ async function buscarPersonaPorTelefono(idNegocio, telefonoE164, opciones = {}) 
  */
 async function resolver(conversacion, opciones = {}) {
     const idNegocio = Number(conversacion.id_negocio);
-    const principal = principalDeContacto(idNegocio);
 
-    const telefono = normalizarTelefono(conversacion.variables?.telefono);
+    // Lo que el canal PROBÓ. Va al Principal porque es autorización, no dato de dominio.
+    const telefonoVerificado = telefonoVerificadoDe(conversacion);
+    const principal = principalDeContacto(idNegocio, { telefonoVerificado });
+
+    // Lo que la persona DIJO. Sigue sirviendo para no volver a preguntar, y en WebChat es lo
+    // único que hay. Cuando el canal probó un número, ese manda: nadie se identifica a sí
+    // mismo mejor que la red por la que escribe.
+    const telefonoDicho = normalizarTelefono(conversacion.variables?.telefono);
+    const telefono = telefonoVerificado ?? telefonoDicho;
+
     const persona = telefono
         ? await buscarPersonaPorTelefono(idNegocio, telefono, opciones)
         : null;
@@ -148,6 +210,7 @@ async function resolver(conversacion, opciones = {}) {
     return {
         principal,
         persona,
+        telefonoVerificado,
         telefono: persona?.telefono_e164 ?? telefono,
         // Lo que dijo en esta conversación manda sobre la ficha: si se corrige el nombre, la
         // corrección es más reciente que lo que hubiera guardado.
@@ -158,6 +221,9 @@ async function resolver(conversacion, opciones = {}) {
 module.exports = {
     resolver,
     principalDeContacto,
+    registrarCanalConIdentidad,
+    limpiarCanalesConIdentidad,
+    telefonoVerificadoDe,
     normalizarTelefono,
     buscarPersonaPorTelefono,
 };

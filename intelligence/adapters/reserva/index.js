@@ -25,13 +25,21 @@
  * enumerar las citas de un cliente. Hasta que `reserva` adopte `persona`, eso no es una
  * carencia que haya que tapar: es el límite correcto.
  *
- * ## Handles públicos, no ids secuenciales
+ * ## Handles públicos, y desde 2026-08-24 también pertenencia
  *
  * El manifiesto en papel decía `cancelar_cita { id_cita }`. Aquí se usa `codigo_cita`, el
  * uuid que `reserva_cita` ya tiene como asa pública. Un entero secuencial dejaría que quien
  * hable con el asistente cancele la cita de otro cliente del mismo negocio contando hacia
- * arriba: el Policy Gate impone el `id_negocio`, pero dentro del negocio no distingue
- * clientes porque todavía no hay identidad. Con un uuid, adivinar no es una estrategia.
+ * arriba.
+ *
+ * Ese razonamiento tenía un agujero que se tapó el 2026-08-24: decía que «con un uuid,
+ * adivinar no es una estrategia», lo cual es cierto **y no es autorización**. Estaba dejando
+ * que la seguridad la diera la longitud del identificador — un accidente afortunado, no un
+ * diseño, y uno que se rompe en cuanto el código se acorte para poder dictarlo por teléfono.
+ *
+ * Ahora `buscarCitaPorCodigo` comprueba además que la cita sea **de quien la pide**, usando el
+ * teléfono que probó el canal (`principal.telefono_verificado`). Ver su comentario para el
+ * porqué de cada decisión, incluida la de fallar cerrada.
  *
  * ## Propose → hold → confirm, en dos capacidades
  *
@@ -46,6 +54,11 @@
 const Models = require('../../../app_core/models/conection');
 const registry = require('../../core/registry');
 const { FEATURE } = require('../../core/features');
+const { TIPO } = require('../../../app_core/authz/principal');
+const { normalizarE164Colombia } = require('../../../app_core/helpers/telefono');
+
+/** Solo a un cliente final se le comprueba de quién es la cita; el negocio opera sobre todas. */
+const TIPO_CONTACTO = TIPO.CONTACTO;
 
 const servicioService = require('../../../app_reserva_api/services/servicioService');
 const profesionalService = require('../../../app_reserva_api/services/profesionalService');
@@ -276,6 +289,17 @@ function registrarCapacidades() {
                 throw e;
             }
 
+            // El teléfono que se guarda es el que **el canal probó**, y solo si no hay ninguno
+            // se cae al que el modelo haya recogido de la conversación.
+            //
+            // El orden importa y es lo que hace que la comprobación de `buscarCitaPorCodigo`
+            // sirva de algo: si aquí mandara `args.cliente_telefono`, un cliente podría dictar
+            // el número de otro —o el modelo entenderlo mal— y la cita quedaría a nombre de
+            // quien no es. Entonces «solo el dueño puede cancelarla» protegería a la persona
+            // equivocada. La plataforma impone la identidad, igual que impone el `id_negocio`
+            // (ADR-010).
+            const telefonoDelCanal = contexto.principal?.telefono_verificado || null;
+
             const cita = await citaService.crearCita(
                 {
                     idNegocio,
@@ -283,7 +307,7 @@ function registrarCapacidades() {
                     idServicios: hold.id_servicios,
                     fechaHoraInicioISO: formatearWallTime(hold.fecha_hora_inicio),
                     clienteNombre: args.cliente_nombre,
-                    clienteTelefono: args.cliente_telefono || null,
+                    clienteTelefono: telefonoDelCanal || args.cliente_telefono || null,
                     notas: args.notas || null,
                     consumirHoldId: hold.id_hold,
                 },
@@ -325,7 +349,9 @@ function registrarCapacidades() {
         },
 
         async ejecutar({ idNegocio, args, contexto }) {
-            const cita = await buscarCitaPorCodigo(args.codigo_cita, idNegocio, contexto.transaction);
+            const cita = await buscarCitaPorCodigo(
+                args.codigo_cita, idNegocio, contexto.transaction, contexto.principal
+            );
             const hold = await holdService.vigentePorCodigo(args.codigo_hold, idNegocio, {
                 transaction: contexto.transaction,
             });
@@ -388,7 +414,9 @@ function registrarCapacidades() {
         },
 
         async ejecutar({ idNegocio, args, contexto }) {
-            await buscarCitaPorCodigo(args.codigo_cita, idNegocio, contexto.transaction);
+            await buscarCitaPorCodigo(
+                args.codigo_cita, idNegocio, contexto.transaction, contexto.principal
+            );
 
             const cita = await citaService.cancelarPorCliente(args.codigo_cita, args.motivo || null, {
                 idNegocio,
@@ -426,10 +454,44 @@ async function elegirProfesional(idNegocio, args) {
 }
 
 /** Busca una cita por su código público, acotada al negocio que impuso el Policy Gate. */
-async function buscarCitaPorCodigo(codigo, idNegocio, transaction = null) {
+/**
+ * Busca la cita por código **y comprueba que sea de quien la pide**.
+ *
+ * ## Por qué esta comprobación existe (2026-08-24)
+ *
+ * Hasta hoy esto solo filtraba por `codigo_publico` + `id_negocio`. Es decir: **el código ERA la
+ * autorización**. Quien tuviera un código podía cancelar o mover esa cita, fuese quien fuese.
+ *
+ * No se explotaba porque `codigo_publico` es un UUID v4 y no se adivina — o sea que la seguridad
+ * la estaba dando la *longitud* del identificador, sin que nadie lo hubiera decidido. Eso es un
+ * accidente afortunado, no un diseño, y se rompe en cuanto el código se acorte para poder
+ * dictarlo por teléfono (que es justo lo que se quiere hacer). Cancelar es además la operación
+ * irreversible del catálogo: una cita cancelada por error no se «descancela».
+ *
+ * Así que la pertenencia se comprueba **antes** de acortar nada, y vale por sí sola.
+ *
+ * ## Qué se compara, y por qué eso y no otra cosa
+ *
+ * `principal.telefono_verificado` — el número que **el canal probó**, no el que alguien dijo. En
+ * WhatsApp viene del `from` de un webhook firmado por Meta. Nunca se compara contra
+ * `args.cliente_telefono` ni contra las variables de la conversación: los rellena el modelo o el
+ * propio cliente, y pedirle a un atacante que declare quién es no es una comprobación.
+ *
+ * ## Falla cerrada, y eso tiene un coste que se acepta a sabiendas
+ *
+ * Si no hay teléfono probado (WebChat, que no autentica a nadie) o la cita no guarda teléfono
+ * (creada en mostrador sin pedirlo), **se deniega**. Consecuencia real: un cliente cuya cita
+ * apuntó el negocio a mano no podrá cancelarla por WhatsApp y tendrá que llamar. Es el lado
+ * correcto en el que equivocarse — la alternativa es dejar que un desconocido con un código
+ * acertado cancele citas ajenas.
+ *
+ * El mensaje lo dice sin tecnicismos y ofrece la salida (llamar al negocio), porque quien lo va
+ * a leer es un cliente al que acabamos de decir que no.
+ */
+async function buscarCitaPorCodigo(codigo, idNegocio, transaction = null, principal = null) {
     const cita = await Models.ReservaCita.findOne({
         where: { codigo_publico: codigo, id_negocio: idNegocio },
-        attributes: ['id_cita', 'estado'],
+        attributes: ['id_cita', 'estado', 'cliente_telefono'],
         transaction,
     });
     if (!cita) {
@@ -438,6 +500,24 @@ async function buscarCitaPorCodigo(codigo, idNegocio, transaction = null) {
         e.statusCode = 404;
         throw e;
     }
+
+    // `principal` llega en null desde la CLI de capacidades y los arneses, que operan como el
+    // negocio y no como un cliente. Ahí no hay dueño que comprobar.
+    if (principal && principal.tipo === TIPO_CONTACTO) {
+        const deQuienPide = normalizarE164Colombia(principal.telefono_verificado);
+        const deLaCita = normalizarE164Colombia(cita.cliente_telefono);
+
+        if (!deQuienPide || !deLaCita || deQuienPide !== deLaCita) {
+            const e = new Error(
+                'No puedo comprobar que esa cita sea tuya, así que no la voy a tocar. ' +
+                    'Llama al negocio y te la gestionan enseguida.'
+            );
+            e.code = 'CITA_NO_ES_DE_QUIEN_PIDE';
+            e.statusCode = 403;
+            throw e;
+        }
+    }
+
     return cita;
 }
 

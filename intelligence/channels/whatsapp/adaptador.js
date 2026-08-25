@@ -483,6 +483,17 @@ async function auditar(accion, idNegocio, detalle) {
 module.exports = {
     nombre: NOMBRE,
     NOMBRE,
+    /**
+     * En WhatsApp el `id_externo` de una conversación es el `from` del webhook, y ese webhook
+     * viene **firmado por Meta** (HMAC-SHA256 sobre el cuerpo crudo, ver `firma.js`). Nadie puede
+     * afirmar ser otro número sin falsificar la firma, así que aquí el identificador del canal no
+     * es una etiqueta: es una identidad **autenticada**.
+     *
+     * El motor lo usa para dejar en el Principal un `telefono_verificado`, que es lo que permite
+     * comprobar que quien cancela una cita es quien la pidió. Lo declara el canal —y no lo deduce
+     * el motor— porque el núcleo no debe saber qué canales existen (ADR-017).
+     */
+    idExternoEsIdentidad: true,
     entregar,
     recibirWebhook,
     interpretarWebhook,

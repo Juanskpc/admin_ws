@@ -125,6 +125,12 @@ function limpiarBuzones() {
 
 module.exports = {
     nombre: NOMBRE,
+    /**
+     * En WebChat el `id_externo` es una sesión de navegador que se inventa el propio cliente: no
+     * prueba nada de nadie. Se declara en `false` explícitamente —en vez de omitirlo— porque la
+     * diferencia con WhatsApp es de seguridad y merece verse al leer el archivo.
+     */
+    idExternoEsIdentidad: false,
     NOMBRE,
     entregar,
     recibirDelWidget,
