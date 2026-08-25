@@ -85,7 +85,10 @@ const PARAMETROS_PROHIBIDOS = new Set(['id_negocio', 'idNegocio', 'tenant_id', '
 
 /** Tipos que un parámetro puede declarar. Deliberadamente cortos: son argumentos de una
  *  acción de negocio, no un lenguaje de esquemas. */
-const TIPOS_PARAMETRO = new Set(['string', 'entero', 'numero', 'booleano', 'fecha', 'enum']);
+// `lista` se añadió con `tomar_pedido` (2026-08-24): un catálogo que no sabe decir «varios de
+// algo» no puede expresar un pedido. Una lista declara `elemento`, que es el esquema de cada
+// item y se valida con el mismo coercionador que los parámetros sueltos (`core/argumentos.js`).
+const TIPOS_PARAMETRO = new Set(['string', 'entero', 'numero', 'booleano', 'fecha', 'enum', 'lista']);
 
 const NOMBRE_VALIDO = /^[a-z][a-z0-9_]*$/;
 
@@ -120,6 +123,11 @@ function validarParametro(nombreCapacidad, nombre, decl) {
             `Parámetro "${nombre}" de "${nombreCapacidad}": tipo "${decl.tipo}" desconocido. ` +
                 `Tipos válidos: ${[...TIPOS_PARAMETRO].join(', ')}.`
         );
+    }
+    if (decl.tipo === 'lista' && (!decl.elemento || typeof decl.elemento !== 'object')) {
+        // Sin forma declarada, una lista es un agujero por el que entra cualquier cosa hasta el
+        // dominio. Se exige aquí, al registrar, y no en la primera invocación.
+        fallo(`Parámetro "${nombre}" de "${nombreCapacidad}": una lista debe declarar "elemento".`);
     }
     if (decl.tipo === 'enum' && (!Array.isArray(decl.valores) || decl.valores.length === 0)) {
         fallo(`Parámetro "${nombre}" de "${nombreCapacidad}": un enum debe declarar "valores".`);

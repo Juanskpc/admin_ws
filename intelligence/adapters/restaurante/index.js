@@ -54,6 +54,8 @@ const { normalizarE164Colombia } = require('../../../app_core/helpers/telefono')
 
 const cartaService = require('../../../app_restaurante_api/services/cartaService');
 const pedidoService = require('../../../app_restaurante_api/services/pedidoService');
+const cajaService = require('../../../app_restaurante_api/services/cajaService');
+const usuarioAsistenteDao = require('../../../app_core/dao/usuarioAsistenteDao');
 const Models = require('../../../app_core/models/conection');
 
 const VERTICAL = 'restaurante';
@@ -202,6 +204,150 @@ function registrarCapacidades() {
                 estado_pago: orden.estado_pago || null,
                 tipo_pedido: orden.tipo_pedido,
                 total: precio(orden.total),
+            };
+        },
+    });
+
+    registry.registrar({
+        nombre: 'tomar_pedido',
+        descripcion:
+            'Crea un pedido a domicilio con los productos que el cliente eligió. Úsala solo ' +
+            'cuando tengas los id_producto (de consultar_carta o buscar_producto), las ' +
+            'cantidades, el nombre y la dirección. Devuelve el número de pedido, que hace falta ' +
+            'para consultar su estado después. Al pedirla, el negocio le enseña al cliente una ' +
+            'pregunta de confirmación y no se ejecuta hasta que diga sí: no le digas que ya está hecho.',
+        vertical: VERTICAL,
+        tipo: registry.TIPO.MUTACION,
+        // NO es idempotente, y decirlo importa: dos llamadas crean dos pedidos. A diferencia de
+        // `reservar_turno` —que consume un hold y por eso la segunda vez no encuentra nada— aquí
+        // no hay nada que se gaste. Lo que evita el pedido doble es la clave de idempotencia que
+        // pone el motor (el id del turno), no una propiedad del dominio. Declararlo idempotente
+        // sería mentirle al Gate sobre una garantía que nadie da.
+        idempotente: false,
+        // Aquí nace una orden en la caja de un negocio real, con inventario que se consume. No
+        // se ejecuta sin un sí explícito del cliente en el canal (ADR-010, paso 5).
+        confirmacion: {
+            pregunta: ({ args }) =>
+                `¿Confirmo tu pedido a nombre de ${args.cliente_nombre} para ${args.direccion}?`,
+            hecho: ({ resultado }) =>
+                `¡Listo! Tu pedido quedó tomado. El número es ${resultado.numero_orden} — ` +
+                'guárdalo para consultar cómo va.',
+        },
+        feature: FEATURE.ASISTENTE_IA,
+        parametros: {
+            items: {
+                tipo: 'lista',
+                requerido: true,
+                min_items: 1,
+                max_items: 20,
+                // La forma de cada elemento se declara, no se asume. Sin esto el modelo podría
+                // mandar `[{producto: 'hamburguesa'}]` y el fallo aparecería dentro de
+                // `crearOrden`, en un sitio que no sabe explicárselo a nadie.
+                elemento: {
+                    id_producto: { tipo: 'entero', requerido: true, min: 1 },
+                    cantidad: { tipo: 'entero', requerido: true, min: 1, max: 50 },
+                },
+            },
+            cliente_nombre: { tipo: 'string', requerido: true, min_longitud: 2, max_longitud: 150 },
+            direccion: { tipo: 'string', requerido: true, min_longitud: 5, max_longitud: 300 },
+            nota: { tipo: 'string', requerido: false, max_longitud: 500 },
+        },
+
+        async ejecutar({ idNegocio, args, contexto }) {
+            // ── 1. La caja tiene que estar abierta ────────────────────────────────────────
+            //
+            // Es una regla del negocio, no un obstáculo que rodear: una orden no existe fuera
+            // de un turno de caja. Se comprueba ANTES y con un mensaje que un cliente entienda,
+            // porque si no `crearOrden` lanza su propio error y el bot acabaría diciéndole a
+            // alguien a las 3 de la mañana algo que no significa nada para él.
+            // Se usa `requireCajaAbierta` y no `getCajaAbierta` porque es la que acepta
+            // transacción —y toma el lock—, que es lo que hace que la caja no pueda cerrarse
+            // entre esta comprobación y la creación de la orden. Su error se traduce a uno que
+            // un cliente entienda: el suyo habla de turnos de caja, que no significa nada para
+            // quien solo quiere una hamburguesa.
+            try {
+                await cajaService.requireCajaAbierta(idNegocio, { transaction: contexto.transaction });
+            } catch (_) {
+                const e = new Error('El restaurante está cerrado ahora mismo y no puedo tomar pedidos.');
+                e.code = 'RESTAURANTE_CERRADO';
+                e.statusCode = 409;
+                throw e;
+            }
+
+            // ── 2. Los productos, releídos del dominio ────────────────────────────────────
+            //
+            // No se confía en los precios que traiga la conversación. El modelo pudo haber
+            // leído la carta hace veinte turnos, o haberla recordado mal, y un pedido con un
+            // precio inventado es una discusión en la puerta del cliente. Se releen aquí, y de
+            // paso se comprueba que sigan estando disponibles y visibles.
+            const idsPedidos = args.items.map((i) => Number(i.id_producto));
+            const productos = await Models.CartaProducto.findAll({
+                where: {
+                    id_negocio: idNegocio,
+                    id_producto: idsPedidos,
+                    estado: 'A',
+                    disponible: true,
+                    visible: true,
+                },
+                attributes: ['id_producto', 'nombre', 'precio'],
+                transaction: contexto.transaction,
+            });
+
+            const porId = new Map(productos.map((pr) => [pr.id_producto, pr]));
+            const faltantes = idsPedidos.filter((id) => !porId.has(id));
+            if (faltantes.length > 0) {
+                const e = new Error(
+                    'Alguno de esos productos ya no está disponible. Vuelve a consultar la carta ' +
+                        'antes de prometer nada.'
+                );
+                e.code = 'PRODUCTO_NO_DISPONIBLE';
+                e.statusCode = 409;
+                throw e;
+            }
+
+            // ── 3. El autor de la orden ───────────────────────────────────────────────────
+            //
+            // `pedid_orden.id_usuario` es NOT NULL y un pedido de WhatsApp no tiene empleado
+            // detrás. Va a nombre del usuario «Asistente» de ESTE negocio para que el informe
+            // de ventas por usuario diga la verdad — ver `usuarioAsistenteDao`.
+            const idUsuario = await usuarioAsistenteDao.resolverOCrear(idNegocio, {
+                transaction: contexto.transaction,
+            });
+
+            // El teléfono lo impone la plataforma, no el modelo: es el que probó el canal. Misma
+            // regla que en `reservar_turno`, y por el mismo motivo — de él cuelga que después
+            // solo el dueño pueda consultar su pedido.
+            const telefono = contexto.principal?.telefono_verificado || null;
+
+            const orden = await pedidoService.crearOrden(
+                {
+                    idNegocio,
+                    idUsuario,
+                    idMesa: null,
+                    tipoPedido: 'DOMICILIO',
+                    contactoNombre: args.cliente_nombre,
+                    contactoTelefono: telefono,
+                    direccionDomicilio: args.direccion,
+                    notaDomicilio: args.nota || null,
+                    // `precio_unitario` sale del producto que se acaba de releer, NUNCA de la
+                    // conversación. Es la mitad que hace útil esa relectura: si el precio
+                    // viniera del modelo, un pedido podría cobrarse a lo que el bot recordara
+                    // de hace veinte turnos, y esa diferencia se descubre en la puerta del
+                    // cliente con el domiciliario delante.
+                    items: args.items.map((i) => ({
+                        id_producto: Number(i.id_producto),
+                        cantidad: Number(i.cantidad) || 1,
+                        precio_unitario: Number(porId.get(Number(i.id_producto)).precio),
+                    })),
+                },
+                { transaction: contexto.transaction }
+            );
+
+            return {
+                numero_orden: orden.numero_orden,
+                estado: orden.estado,
+                total: precio(orden.total),
+                items: args.items.length,
             };
         },
     });

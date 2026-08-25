@@ -23,7 +23,7 @@ const policyGate = require('../../intelligence/core/policyGate');
 
 const sequelize = Models.sequelize;
 
-const CAPACIDADES = ['consultar_carta', 'buscar_producto', 'consultar_estado_pedido'];
+const CAPACIDADES = ['consultar_carta', 'buscar_producto', 'consultar_estado_pedido', 'tomar_pedido'];
 const TEL_DUENO = '+573001112233';
 const TEL_INTRUSO = '+573009998877';
 
@@ -70,7 +70,17 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-    await sequelize.query(`DELETE FROM restaurante.pedid_orden WHERE numero_orden LIKE 'TEST-REST%';`);
+    await sequelize.query(
+        `DELETE FROM restaurante.pedid_detalle WHERE id_orden IN (
+            SELECT id_orden FROM restaurante.pedid_orden
+             WHERE id_negocio = :n AND contacto_nombre LIKE 'BOT %');`,
+        { replacements: { n: idNegocio } }
+    );
+    await sequelize.query(
+        `DELETE FROM restaurante.pedid_orden WHERE numero_orden LIKE 'ORD-99%'
+            OR (id_negocio = :n AND contacto_nombre LIKE 'BOT %');`,
+        { replacements: { n: idNegocio } }
+    );
     intelligence._reiniciar();
     await sequelize.close();
 });
@@ -151,6 +161,11 @@ describe('consultar_estado_pedido — un pedido solo lo ve quien lo pidió', () 
     // `id_usuario` es NOT NULL en `pedid_orden`: una orden siempre la toma alguien del
     // negocio. Comprobado al escribir esto, y es exactamente el tercer bloqueo que impide
     // que el bot cree pedidos hoy — no es una convención del servicio, es el esquema.
+    // ⚠️ Los números tienen que seguir el formato real `ORD-<n>`: `generarNumeroOrden` hace
+    // `CAST(SUBSTRING(numero_orden FROM 5) AS INTEGER)` sobre TODAS las órdenes del negocio, así
+    // que uno con otra forma —`TEST-REST-1` daba `-REST-1`— hace fallar la creación de cualquier
+    // pedido nuevo de ese negocio. Descubierto escribiendo esto, y es una fragilidad real del
+    // servicio, no solo del test.
     async function crearOrdenDePrueba(numero, telefono) {
         await sequelize.query(
             `
@@ -163,50 +178,229 @@ describe('consultar_estado_pedido — un pedido solo lo ve quien lo pidió', () 
     }
 
     it('el dueño del pedido lo ve', async () => {
-        await crearOrdenDePrueba('TEST-REST-1', TEL_DUENO);
+        await crearOrdenDePrueba('ORD-9901', TEL_DUENO);
         const { resultado } = await policyGate.ejecutar({
             capacidad: 'consultar_estado_pedido',
             principal: principalDeContacto(idNegocio, { telefonoVerificado: TEL_DUENO }),
             idNegocio,
-            args: { numero_orden: 'TEST-REST-1' },
+            args: { numero_orden: 'ORD-9901' },
         });
-        expect(resultado.numero_orden).toBe('TEST-REST-1');
+        expect(resultado.numero_orden).toBe('ORD-9901');
         expect(resultado.total).toBe(45000);
     });
 
     it('otro número no lo ve, aunque acierte el número de orden', async () => {
-        await crearOrdenDePrueba('TEST-REST-2', TEL_DUENO);
+        await crearOrdenDePrueba('ORD-9902', TEL_DUENO);
         await expect(
             policyGate.ejecutar({
                 capacidad: 'consultar_estado_pedido',
                 principal: principalDeContacto(idNegocio, { telefonoVerificado: TEL_INTRUSO }),
                 idNegocio,
-                args: { numero_orden: 'TEST-REST-2' },
+                args: { numero_orden: 'ORD-9902' },
             })
         ).rejects.toMatchObject({ code: 'PEDIDO_NO_ES_DE_QUIEN_PIDE' });
     });
 
     it('un pedido de mesa, sin teléfono, no se consulta desde el canal', async () => {
-        await crearOrdenDePrueba('TEST-REST-3', null);
+        await crearOrdenDePrueba('ORD-9903', null);
         await expect(
             policyGate.ejecutar({
                 capacidad: 'consultar_estado_pedido',
                 principal: principalDeContacto(idNegocio, { telefonoVerificado: TEL_DUENO }),
                 idNegocio,
-                args: { numero_orden: 'TEST-REST-3' },
+                args: { numero_orden: 'ORD-9903' },
             })
         ).rejects.toMatchObject({ code: 'PEDIDO_NO_ES_DE_QUIEN_PIDE' });
     });
 
     it('el NEGOCIO sí puede consultar cualquiera', async () => {
-        await crearOrdenDePrueba('TEST-REST-4', TEL_DUENO);
-        const { resultado } = await ejecutar('consultar_estado_pedido', { numero_orden: 'TEST-REST-4' });
-        expect(resultado.numero_orden).toBe('TEST-REST-4');
+        await crearOrdenDePrueba('ORD-9904', TEL_DUENO);
+        const { resultado } = await ejecutar('consultar_estado_pedido', { numero_orden: 'ORD-9904' });
+        expect(resultado.numero_orden).toBe('ORD-9904');
     });
 
     it('un número que no existe dice que no existe, y no revienta', async () => {
         await expect(
             ejecutar('consultar_estado_pedido', { numero_orden: 'NO-EXISTE-999' })
         ).rejects.toMatchObject({ code: 'PEDIDO_NO_ENCONTRADO' });
+    });
+});
+
+
+describe('tomar_pedido — la mutación', () => {
+    const TEL_CLIENTE = '+573005556677';
+
+    function contacto() {
+        return principalDeContacto(idNegocio, { telefonoVerificado: TEL_CLIENTE });
+    }
+
+    async function idsDeCarta() {
+        const { resultado } = await ejecutar('buscar_producto', { termino: 'hamburguesa' });
+        return resultado.productos;
+    }
+
+    async function abrirCaja() {
+        // Una orden no existe fuera de un turno de caja: es la regla del dominio que hay que
+        // respetar, no rodear. Aquí se abre una a mano para poder ejercitar el camino feliz.
+        await sequelize.query(
+            `INSERT INTO restaurante.rest_caja (id_negocio, id_usuario, monto_apertura, estado, fecha_apertura)
+             SELECT :n, :u, 0, 'A', now()
+              WHERE NOT EXISTS (SELECT 1 FROM restaurante.rest_caja WHERE id_negocio = :n AND estado = 'A');`,
+            { replacements: { n: idNegocio, u: principal.id_usuario } }
+        );
+    }
+
+    async function cerrarCaja() {
+        await sequelize.query(
+            `UPDATE restaurante.rest_caja SET estado = 'C' WHERE id_negocio = :n AND estado = 'A';`,
+            { replacements: { n: idNegocio } }
+        );
+    }
+
+    function pedir(items, extra = {}) {
+        return policyGate.ejecutar({
+            capacidad: 'tomar_pedido',
+            principal: contacto(),
+            idNegocio,
+            args: {
+                items,
+                cliente_nombre: 'BOT Cliente',
+                direccion: 'Calle 10 # 5-30, apto 201',
+                ...extra,
+            },
+            confirmadoPor: { origen: 'test', texto: 'sí' },
+        });
+    }
+
+    afterEach(cerrarCaja);
+
+    it('con la caja CERRADA no toma el pedido, y lo dice en cristiano', async () => {
+        await cerrarCaja();
+        const [prod] = await idsDeCarta();
+
+        await expect(pedir([{ id_producto: prod.id_producto, cantidad: 1 }]))
+            .rejects.toMatchObject({ code: 'RESTAURANTE_CERRADO' });
+    });
+
+    it('crea la orden, a nombre del usuario Asistente y con el teléfono del CANAL', async () => {
+        await abrirCaja();
+        const [prod] = await idsDeCarta();
+
+        const { resultado } = await pedir([{ id_producto: prod.id_producto, cantidad: 2 }]);
+        expect(resultado.numero_orden).toBeTruthy();
+
+        const fila = await unaFila(
+            `SELECT o.contacto_telefono, o.tipo_pedido, o.direccion_domicilio,
+                    u.num_identificacion AS autor
+               FROM restaurante.pedid_orden o
+               JOIN general.gener_usuario u ON u.id_usuario = o.id_usuario
+              WHERE o.numero_orden = :num AND o.id_negocio = :n;`,
+            { num: resultado.numero_orden, n: idNegocio }
+        );
+
+        expect(fila.tipo_pedido).toBe('DOMICILIO');
+        expect(fila.direccion_domicilio).toContain('Calle 10');
+        // La plataforma impone el teléfono, igual que en reservar_turno.
+        expect(fila.contacto_telefono).toBe(TEL_CLIENTE);
+        // Y el autor es el asistente de ESTE negocio, para que el informe de ventas por
+        // usuario no le atribuya al dueño lo que vendió el bot.
+        expect(fila.autor).toBe(`ASISTENTE-${idNegocio}`);
+    });
+
+    it('el precio sale del CATÁLOGO, no de lo que diga la conversación', async () => {
+        // Es la mitad que hace útil releer los productos. Si el precio viniera del modelo, un
+        // pedido podría cobrarse a lo que el bot recordara de hace veinte turnos — y esa
+        // diferencia se descubre en la puerta del cliente, con el domiciliario delante.
+        await abrirCaja();
+        const [prod] = await idsDeCarta();
+
+        const { resultado } = await policyGate.ejecutar({
+            capacidad: 'tomar_pedido',
+            principal: contacto(),
+            idNegocio,
+            args: {
+                // El modelo intenta colar un precio. El validador ni siquiera lo deja pasar
+                // (no está declarado en `elemento`), y aunque pasara, el adaptador lo ignora.
+                items: [{ id_producto: prod.id_producto, cantidad: 2, precio_unitario: 1 }],
+                cliente_nombre: 'BOT Precio',
+                direccion: 'Calle 10 # 5-30',
+            },
+            confirmadoPor: { origen: 'test', texto: 'sí' },
+        });
+
+        const fila = await unaFila(
+            `SELECT d.precio_unitario::numeric AS unitario, d.subtotal::numeric AS subtotal
+               FROM restaurante.pedid_detalle d
+               JOIN restaurante.pedid_orden o USING (id_orden)
+              WHERE o.numero_orden = :num AND o.id_negocio = :n;`,
+            { num: resultado.numero_orden, n: idNegocio }
+        );
+
+        expect(Number(fila.unitario)).toBe(prod.precio);
+        expect(Number(fila.subtotal)).toBe(prod.precio * 2);
+    });
+
+    it('el pedido creado se puede consultar después, y solo por su dueño', async () => {
+        await abrirCaja();
+        const [prod] = await idsDeCarta();
+        const { resultado } = await pedir([{ id_producto: prod.id_producto, cantidad: 1 }]);
+
+        const { resultado: estado } = await policyGate.ejecutar({
+            capacidad: 'consultar_estado_pedido',
+            principal: contacto(),
+            idNegocio,
+            args: { numero_orden: resultado.numero_orden },
+        });
+        expect(estado.numero_orden).toBe(resultado.numero_orden);
+
+        await expect(
+            policyGate.ejecutar({
+                capacidad: 'consultar_estado_pedido',
+                principal: principalDeContacto(idNegocio, { telefonoVerificado: TEL_INTRUSO }),
+                idNegocio,
+                args: { numero_orden: resultado.numero_orden },
+            })
+        ).rejects.toMatchObject({ code: 'PEDIDO_NO_ES_DE_QUIEN_PIDE' });
+    });
+
+    it('rechaza un producto que no está disponible en vez de crear media orden', async () => {
+        await abrirCaja();
+        const oculto = await unaFila(
+            `SELECT id_producto FROM restaurante.carta_producto
+              WHERE id_negocio = :n AND nombre = 'Malteada de mora';`,
+            { n: idNegocio }
+        );
+
+        await expect(pedir([{ id_producto: oculto.id_producto, cantidad: 1 }]))
+            .rejects.toMatchObject({ code: 'PRODUCTO_NO_DISPONIBLE' });
+    });
+
+    it('sin confirmación del cliente NO se ejecuta', async () => {
+        // El Policy Gate lo exige, no el adaptador: aquí nace una orden con inventario que se
+        // consume, y eso compromete al negocio (ADR-010, paso 5).
+        await abrirCaja();
+        const [prod] = await idsDeCarta();
+
+        await expect(
+            policyGate.ejecutar({
+                capacidad: 'tomar_pedido',
+                principal: contacto(),
+                idNegocio,
+                args: {
+                    items: [{ id_producto: prod.id_producto, cantidad: 1 }],
+                    cliente_nombre: 'BOT SinConfirmar',
+                    direccion: 'Calle 10 # 5-30',
+                },
+            })
+        ).rejects.toBeDefined();
+    });
+
+    it('un item mal formado se rechaza ANTES de tocar el dominio', async () => {
+        await abrirCaja();
+        // El validador de argumentos conoce la forma de cada elemento de la lista. Sin eso,
+        // esto reventaría dentro de crearOrden, en un sitio que no sabe explicárselo a nadie.
+        await expect(pedir([{ producto: 'hamburguesa' }])).rejects.toMatchObject({
+            code: 'ARGUMENTOS_INVALIDOS',
+        });
     });
 });

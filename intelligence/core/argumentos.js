@@ -75,6 +75,39 @@ function coercionar(nombre, decl, valor) {
             }
             return s;
         }
+        case 'lista': {
+            // Una lista de objetos con forma declarada. Existe desde `tomar_pedido`
+            // (2026-08-24): un catálogo que no sabe decir «varios de algo» no puede expresar un
+            // pedido, y hasta entonces todas las capacidades pedían valores sueltos.
+            //
+            // Cada elemento se valida con el MISMO `coercionar`, recursivamente. No es elegancia:
+            // es que los límites de un `id_producto` dentro de una lista tienen que ser los
+            // mismos que fuera, y dos validadores distintos divergen el día que nadie mira.
+            if (!Array.isArray(valor)) rechazar(`"${nombre}" debe ser una lista.`);
+            if (decl.min_items && valor.length < decl.min_items) {
+                rechazar(`"${nombre}" necesita al menos ${decl.min_items} elemento(s).`);
+            }
+            if (decl.max_items && valor.length > decl.max_items) {
+                rechazar(`"${nombre}" admite como mucho ${decl.max_items} elemento(s).`);
+            }
+
+            const forma = decl.elemento || {};
+            return valor.map((item, i) => {
+                if (item === null || typeof item !== 'object' || Array.isArray(item)) {
+                    rechazar(`"${nombre}[${i}]" debe ser un objeto.`);
+                }
+                const limpio = {};
+                for (const [campo, subDecl] of Object.entries(forma)) {
+                    const bruto = item[campo];
+                    if (bruto === undefined || bruto === null || bruto === '') {
+                        if (subDecl.requerido) rechazar(`Falta "${campo}" en "${nombre}[${i}]".`);
+                        continue;
+                    }
+                    limpio[campo] = coercionar(`${nombre}[${i}].${campo}`, subDecl, bruto);
+                }
+                return limpio;
+            });
+        }
         default:
             return rechazar(`"${nombre}" declara un tipo desconocido: ${decl.tipo}.`);
     }

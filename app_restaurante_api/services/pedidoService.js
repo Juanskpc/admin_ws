@@ -349,8 +349,19 @@ async function crearOrden({
     idNegocio, idMetodoPago = null, idUsuario, idMesa, nota, items, porcentajeImpuesto = 0, permitirStockNegativo = false,
     tipoPedido = 'MESA', contactoNombre = null, contactoTelefono = null,
     direccionDomicilio = null, notaDomicilio = null, idDomiciliario = null,
-}) {
-    const t = await Models.sequelize.transaction();
+}, { transaction = null } = {}) {
+    // Si el llamante trae su propia transacción, esta función NO la confirma ni la deshace:
+    // solo trabaja dentro. Quien la abre, la cierra.
+    //
+    // Hace falta para que el Policy Gate de Intelligence pueda invocar esto: el Gate envuelve
+    // toda ejecución en una transacción propia —así el `dry-run` es genérico y no algo que cada
+    // capacidad deba implementar y olvidar—, y una transacción anidada aquí dentro haría que ni
+    // el dry-run deshiciera nada ni el rollback del Gate alcanzara a la orden. Es el mismo paso
+    // que F3 dio en `reserva` con `citaService.crearCita`.
+    //
+    // El POS sigue llamando sin opciones y se comporta exactamente igual que antes.
+    const transaccionPropia = !transaction;
+    const t = transaction || (await Models.sequelize.transaction());
     try {
         await cajaService.requireCajaAbierta(idNegocio, { transaction: t });
 
@@ -416,12 +427,13 @@ async function crearOrden({
             transaction: t,
         });
 
-        await t.commit();
+        if (transaccionPropia) await t.commit();
 
-        // Retornar orden con detalles
-        return getOrdenById(orden.id_orden);
+        // Retornar orden con detalles. Con transacción ajena aún sin confirmar hay que leer
+        // DENTRO de ella: desde fuera, la orden que se acaba de crear todavía no existe.
+        return getOrdenById(orden.id_orden, { transaction: transaccionPropia ? null : t });
     } catch (err) {
-        await t.rollback();
+        if (transaccionPropia) await t.rollback();
         throw err;
     }
 }
@@ -503,8 +515,15 @@ async function agregarItemsOrden({
 /**
  * Obtiene una orden por su ID, con detalles, exclusiones, producto e ingrediente.
  */
-async function getOrdenById(idOrden) {
+/**
+ * @param {number} idOrden
+ * @param {Object} [opciones]
+ * @param {Object} [opciones.transaction] — para leer DENTRO de una transacción sin confirmar.
+ *        Sin esto, releer la orden recién creada desde fuera de su transacción no la encuentra.
+ */
+async function getOrdenById(idOrden, { transaction = null } = {}) {
     return Models.PedidOrden.findByPk(idOrden, {
+        transaction,
         include: [{
             model: Models.PedidDetalle,
             as: 'detalles',
