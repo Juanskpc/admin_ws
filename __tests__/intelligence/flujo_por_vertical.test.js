@@ -259,3 +259,99 @@ describe('el flujo de restaurante', () => {
         expect(d.respuestas[0].texto).toContain('Pregonchos');
     });
 });
+
+
+// ── El pedido que llega del menú digital ────────────────────────────────────────────────
+
+describe('el código compacto del menú digital', () => {
+    const codigoPedido = require('../../intelligence/adapters/restaurante/codigoPedido');
+
+    /** Tal como lo compone `carrito.service.ts` en el menú. Es el contrato entre los dos. */
+    const MENSAJE_REAL = [
+        'Hola, quiero pedir:',
+        '',
+        '• 2 × Bandeja paisa',
+        '• 1 × Limonada de coco',
+        '',
+        'Total aproximado: $78.000',
+        '',
+        '#P12-4x2,9x1',
+    ].join('\n');
+
+    it('lee el pedido de un mensaje real del menú', async () => {
+        expect(codigoPedido.leer(MENSAJE_REAL)).toEqual({
+            idNegocio: 12,
+            items: [
+                { id_producto: 4, cantidad: 2 },
+                { id_producto: 9, cantidad: 1 },
+            ],
+        });
+    });
+
+    it('lo encuentra aunque el cliente escriba algo antes de enviar', async () => {
+        // Es lo que pasa siempre: la gente añade «buenas tardes» encima del mensaje ya escrito.
+        const conPrologo = `Buenas, disculpa la hora\n\n${MENSAJE_REAL}`;
+        expect(codigoPedido.leer(conPrologo)?.items).toHaveLength(2);
+    });
+
+    it('un mensaje normal no trae pedido', async () => {
+        expect(codigoPedido.leer('hola, tienen hamburguesas?')).toBeNull();
+        expect(codigoPedido.leer('')).toBeNull();
+        expect(codigoPedido.loTrae('quiero pedir algo')).toBe(false);
+    });
+
+    it('descarta cantidades de cero o negativas en vez de crearlas', async () => {
+        expect(codigoPedido.leer('#P12-4x0')).toBeNull();
+    });
+
+    it('suma el mismo producto repetido en vez de duplicar la línea', async () => {
+        // El cliente pidió tres, no dos y una.
+        expect(codigoPedido.leer('#P12-4x2,4x1')?.items).toEqual([{ id_producto: 4, cantidad: 3 }]);
+    });
+
+    it('rechaza un pedido absurdamente largo', async () => {
+        const muchos = Array.from({ length: 40 }, (_, i) => `${i + 1}x1`).join(',');
+        expect(codigoPedido.leer(`#P12-${muchos}`)).toBeNull();
+    });
+});
+
+describe('el flujo recibe el pedido del menú', () => {
+    const { crearFlujoRestaurante } = require('../../intelligence/adapters/restaurante/flujo');
+
+    const negocioFalso = {
+        obtener: async (id) => ({ id, nombre: 'Pregonchos', tratamiento: 'Pregonchos', tipoNegocio: 'RESTAURANTE' }),
+    };
+    const flujo = crearFlujoRestaurante({
+        contextoNegocio: negocioFalso,
+        listarCategorias: async () => [],
+    });
+
+    const mensaje = 'Hola, quiero pedir:\n\n• 2 × Bandeja paisa\n\n#P12-4x2';
+
+    it('pide la dirección y guarda los productos, SIN crear la orden', async () => {
+        // Crear la orden es una mutación que exige el sí del cliente (ADR-010, paso 5), y
+        // pulsar «Continuar por WhatsApp» es abrir un chat, no confirmar un pedido. Además
+        // falta la dirección, sin la cual no hay domicilio que llevar.
+        const d = await flujo(entrada(mensaje, 12));
+
+        expect(d.respuestas[0]).toMatch(/dirección/i);
+        expect(d.variables.pedido_pendiente).toEqual([{ id_producto: 4, cantidad: 2 }]);
+        expect(d.tarea).toBeNull();
+    });
+
+    it('el pedido de OTRO negocio se rechaza con su motivo', async () => {
+        // Alguien armó el carrito en la carta de un restaurante y lo mandó al WhatsApp de otro.
+        // Sin comprobarlo, el pedido se crearía con ids que aquí son otra cosa, o no existen.
+        const d = await flujo(entrada('#P99-4x2', 12));
+
+        expect(d.respuestas[0]).toMatch(/otro negocio/i);
+        expect(d.variables.pedido_pendiente).toBeUndefined();
+    });
+
+    it('el saludo del mensaje NO se confunde con un «hola» suelto', async () => {
+        // El mensaje del menú empieza por «Hola, quiero pedir:». Si el código se leyera después
+        // del saludo, el cliente recibiría la bienvenida en vez de su pedido.
+        const d = await flujo(entrada(mensaje, 12));
+        expect(d.respuestas[0]).not.toMatch(/Te comunicas con/);
+    });
+});

@@ -31,6 +31,7 @@
 
 const contextoNegocio = require('../../core/contextoNegocio');
 const { COMANDO, normalizar, ultimaLinea, esComando } = require('../../engine/texto');
+const codigoPedido = require('./codigoPedido');
 
 const VERTICAL = 'restaurante';
 
@@ -183,6 +184,64 @@ async function pasarAlModelo(ctx, listarCategorias) {
 }
 
 /**
+ * El cliente llega con el carrito ya armado desde el menú digital.
+ *
+ * ## Por qué esto lo lee el flujo y no el modelo
+ *
+ * Porque no hay nada que interpretar. El código es exacto, y pedirle al modelo que lo lea sería
+ * pagar un turno para que haga peor lo que una expresión regular hace perfecto. Lo que sí queda
+ * para el modelo es lo que viene después —confirmar, preguntar la dirección, resolver un «mejor
+ * sin cebolla»—, que es conversación de verdad.
+ *
+ * ## El pedido NO se crea aquí
+ *
+ * Se dejan los productos anotados en las variables de la conversación y se le pide la dirección.
+ * Crear la orden es una mutación que **exige el sí del cliente** (ADR-010, paso 5), y ese sí
+ * todavía no lo ha dado: pulsar «Continuar por WhatsApp» es abrir un chat, no confirmar un
+ * pedido. Además falta la dirección, sin la cual no hay domicilio que llevar.
+ *
+ * ## El negocio del código se comprueba
+ *
+ * El código lleva el id del negocio donde se armó. Si no coincide con este, se dice: alguien
+ * armó el carrito en la carta de un restaurante y lo mandó al WhatsApp de otro. Sin comprobarlo,
+ * el pedido se crearía con ids de productos que aquí son otra cosa — o no existen.
+ */
+function recibirPedidoDelMenu(ctx, pedido) {
+    if (pedido.idNegocio !== ctx.idNegocio) {
+        return {
+            pasos: [
+                paso('pedido_de_otro_negocio', { venia_de: pedido.idNegocio, aqui: ctx.idNegocio }),
+            ],
+            respuestas: [
+                'Ese pedido lo armaste en la carta de otro negocio, así que no puedo tomarlo aquí. ' +
+                    `Abre el menú de ${ctx.negocio.tratamiento} y vuelve a elegir: ${enlaceDelMenu(ctx.idNegocio)}`,
+            ],
+            variables: conMemoria(ctx.conversacion),
+            tarea: null,
+            resultado: 'resuelto',
+            nivel: 'determinista',
+        };
+    }
+
+    const cuantos = pedido.items.reduce((n, i) => n + i.cantidad, 0);
+
+    return {
+        pasos: [paso('pedido_del_menu_recibido', { items: pedido.items.length, unidades: cuantos })],
+        respuestas: [
+            `¡Recibí tu pedido! Son ${cuantos} producto(s). ` +
+                '¿A qué dirección te lo llevamos? Dime también si hay alguna indicación para llegar.',
+        ],
+        // Los productos quedan en la memoria de la conversación, no en una tarea: el modelo los
+        // lee del contexto y llama a `tomar_pedido` cuando tenga la dirección y el sí. Abrir una
+        // tarea devolvería la conversación a este flujo, que no sabe terminarla.
+        variables: conMemoria(ctx.conversacion, { pedido_pendiente: pedido.items }),
+        tarea: null,
+        resultado: 'resuelto',
+        nivel: 'determinista',
+    };
+}
+
+/**
  * Cede el turno al modelo sin escribir nada.
  *
  * `respuestas: []` es deliberado: el motor cierra el turno como `sin_respuesta` y el cliente no
@@ -228,6 +287,12 @@ function crearFlujoRestaurante({
     return async function manejarRestaurante({ conversacion, texto }) {
         const negocio = await ctxNegocio.obtener(conversacion.id_negocio);
         const ctx = { conversacion, texto, negocio, idNegocio: Number(conversacion.id_negocio) };
+
+        // Lo PRIMERO: ¿viene con el carrito del menú digital? Va antes que cualquier otra
+        // lectura porque el mensaje trae texto humano delante («Hola, quiero pedir…») que si no
+        // se confundiría con un saludo, y el cliente recibiría la bienvenida en vez de su pedido.
+        const delMenu = codigoPedido.leer(texto);
+        if (delMenu) return recibirPedidoDelMenu(ctx, delMenu);
 
         const t = normalizar(ultimaLinea(texto));
 
