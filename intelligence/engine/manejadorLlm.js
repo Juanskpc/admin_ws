@@ -45,6 +45,7 @@ const puerto = require('../model/puerto');
 const precios = require('../model/precios');
 const promptBuilder = require('../model/promptBuilder');
 const policyGateReal = require('../core/policyGate');
+const registry = require('../core/registry');
 const contextoNegocioReal = require('../core/contextoNegocio');
 const identidadReal = require('./identidad');
 
@@ -518,6 +519,17 @@ async function ejecutarSolicitud({
     } catch (error) {
         invocaciones.push({
             capacidad: solicitada.capacidad,
+            // ⚠️ La vertical TAMBIÉN en el camino de error. `invocacion_capacidad.vertical` es
+            // NOT NULL, así que omitirla aquí hacía que el Ledger fallara al escribir y se
+            // llevara por delante el turno entero: `MANEJADOR_FALLO`, cliente sin respuesta.
+            //
+            // Es justo lo contrario de lo que dice el comentario de abajo. Un error de
+            // capacidad debe volver al modelo para que se corrija; en vez de eso, registrarlo
+            // mataba la conversación. Latente desde F6 y solo visible el 2026-08-24, cuando una
+            // capacidad falló por primera vez en el camino del modelo en producción.
+            //
+            // Sale del Registry por nombre porque en el `catch` no existe la respuesta del Gate.
+            vertical: registry.describir(solicitada.capacidad)?.vertical ?? null,
             argumentos: solicitada.argumentos,
             resultado: error.statusCode === 403 ? 'denegado' : 'error',
             errorCodigo: error.code ?? null,

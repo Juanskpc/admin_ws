@@ -131,9 +131,27 @@ describe('el registro de flujos', () => {
 describe('el flujo de restaurante', () => {
     const { crearFlujoRestaurante, OPCION, enlaceDelMenu } = require('../../intelligence/adapters/restaurante/flujo');
 
+    const CATEGORIAS = [
+        { id_categoria: 38, nombre: 'Entradas', descripcion: 'Para empezar' },
+        { id_categoria: 39, nombre: 'Platos', descripcion: 'Fuertes' },
+        { id_categoria: 40, nombre: 'Bebidas', descripcion: 'Frías' },
+    ];
+
+    const negocioFalso = {
+        obtener: async (id) => ({ id, nombre: 'Pregonchos', tratamiento: 'Pregonchos', tipoNegocio: 'RESTAURANTE' }),
+    };
+
     const flujo = crearFlujoRestaurante({
-        contextoNegocio: { obtener: async (id) => ({ id, nombre: 'Pregonchos', tratamiento: 'Pregonchos', tipoNegocio: 'RESTAURANTE' }) },
+        contextoNegocio: negocioFalso,
+        listarCategorias: async () => CATEGORIAS,
     });
+
+    /** Una conversación que ya lleva turnos: no es alguien que acaba de llegar. */
+    function enCurso(texto, idNegocio = 12) {
+        const e = entrada(texto, idNegocio);
+        e.conversacion.variables = { turnos: 4 };
+        return e;
+    }
 
     it('el saludo lleva el ENLACE en el texto, no como botón', async () => {
         // Un botón de WhatsApp no abre una URL: devuelve un id al bot. Como opción, «ver el
@@ -149,6 +167,15 @@ describe('el flujo de restaurante', () => {
         expect(d.respuestas[0].opciones.map((o) => o.id)).toEqual([OPCION.CHAT]);
     });
 
+    it('esa única opción NO lleva detalle: con detalle el canal pinta una lista', async () => {
+        // `channels/whatsapp/adaptador.js` decide botón vs lista con `<= LIMITES.botones &&
+        // !conDetalle`. Una lista de una sola entrada obliga a desplegar un menú para pulsar lo
+        // único que hay dentro.
+        const d = await flujo(entrada('hola', 12));
+        expect(d.respuestas[0].opciones[0].detalle).toBeUndefined();
+        expect(Object.keys(d.respuestas[0].opciones[0])).toEqual(['id', 'etiqueta']);
+    });
+
     it('«ver el menú» manda el enlace de ESE negocio', async () => {
         const d = await flujo(entrada(OPCION.MENU, 12));
         expect(d.respuestas[0].texto).toContain(enlaceDelMenu(12));
@@ -161,16 +188,74 @@ describe('el flujo de restaurante', () => {
         expect(d.respuestas[0].opciones).toBeUndefined();
     });
 
+    it('«pedir por aquí» enseña las categorías, con sus ids REALES', async () => {
+        // Que las pinte el flujo y no el modelo evita que el modelo las adivine: el 2026-08-24
+        // pidió la categoría «2» —un ordinal— cuando las de ese negocio eran 38, 39 y 40.
+        const d = await flujo(entrada(OPCION.CHAT, 12));
+        expect(d.respuestas[0].opciones.map((o) => o.id)).toEqual(['38', '39', '40']);
+        expect(d.respuestas[0].opciones.map((o) => o.etiqueta)).toEqual(['Entradas', 'Platos', 'Bebidas']);
+    });
+
+    it('las categorías tampoco llevan detalle: con tres, botones y no menú', async () => {
+        const d = await flujo(entrada(OPCION.CHAT, 12));
+        expect(d.respuestas[0].opciones.every((o) => o.detalle === undefined)).toBe(true);
+    });
+
+    it('dice «elige o dime»: quien ya sabe qué quiere no debería navegar un menú', async () => {
+        const d = await flujo(entrada(OPCION.CHAT, 12));
+        expect(d.respuestas[0].texto).toMatch(/elige.*o dime|dime directamente/i);
+    });
+
     it('«pedir por aquí» NO deja tarea abierta: así el siguiente mensaje lo atiende el modelo', async () => {
         // Es el mecanismo entero. Con una tarea abierta, la política de enrutado devolvería la
         // conversación a este flujo, que no sabe tomar un pedido.
         const d = await flujo(entrada(OPCION.CHAT, 12));
         expect(d.tarea).toBeNull();
+    });
+
+    it('sin categorías no se queda mudo: pide que le digan qué quieren', async () => {
+        const sinCarta = crearFlujoRestaurante({
+            contextoNegocio: negocioFalso,
+            listarCategorias: async () => [],
+        });
+        const d = await sinCarta(entrada(OPCION.CHAT, 12));
         expect(d.respuestas[0]).toMatch(/qué quieres pedir/i);
+    });
+
+    it('si leer las categorías falla, tampoco se cae', async () => {
+        const rota = crearFlujoRestaurante({
+            contextoNegocio: negocioFalso,
+            listarCategorias: async () => {
+                throw new Error('base caída');
+            },
+        });
+        const d = await rota(entrada(OPCION.CHAT, 12));
+        expect(d.resultado).toBe('resuelto');
     });
 
     it('el saludo tampoco deja tarea: una pregunta suelta no se queda atrapada en el menú', async () => {
         const d = await flujo(entrada('hola', 12));
         expect(d.tarea).toBeNull();
+    });
+
+    it('un «sí» a mitad de conversación NO reinicia el saludo', async () => {
+        // El fallo, visto en producción el 2026-08-24: la política de enrutado manda al flujo
+        // determinista todo lo que sea un «comando conocido», y esa lista incluye «sí», «no»,
+        // «ok» y «vale». El cliente contestaba «sí» a una pregunta del modelo y recibía el
+        // saludo inicial otra vez, como si el bot se hubiera reiniciado.
+        const d = await flujo(enCurso('si'));
+        expect(d.respuestas).toEqual([]);
+        expect(d.resultado).toBe('sin_respuesta');
+    });
+
+    it('quien llega por primera vez SÍ recibe el saludo', async () => {
+        // La contraparte del anterior: no vaya a ser que por no re-saludar, no se salude nunca.
+        const d = await flujo(entrada('buenas', 12));
+        expect(d.respuestas[0].texto).toContain('Pregonchos');
+    });
+
+    it('«menú» reabre el saludo aunque la conversación esté en marcha', async () => {
+        const d = await flujo(enCurso('menu'));
+        expect(d.respuestas[0].texto).toContain('Pregonchos');
     });
 });
