@@ -116,6 +116,40 @@ function registrarCapacidades() {
     });
 
     registry.registrar({
+        nombre: 'consultar_profesionales',
+        descripcion:
+            'Lista quién presta un servicio concreto en el negocio. Úsala cuando el cliente ' +
+            'pregunte con quién puede ir, pida a alguien por su nombre, o antes de consultar ' +
+            'disponibilidad si quiere elegir profesional. Si le da igual con quién, NO la ' +
+            'necesitas: consulta la disponibilidad sin profesional y sale antes.',
+        vertical: VERTICAL,
+        tipo: registry.TIPO.CONSULTA,
+        feature: FEATURE.ASISTENTE_IA,
+        parametros: {
+            // Obligatorio, y no por comodidad: listar los profesionales del negocio entero
+            // ofrecería gente que no hace lo que el cliente pidió, y elegir a una de ellas
+            // termina en un «esa persona no presta ese servicio» tres pasos más tarde.
+            id_servicio: { tipo: 'entero', requerido: true, min: 1 },
+        },
+
+        async ejecutar({ idNegocio, args }) {
+            const profesionales = await profesionalService.listar({
+                idNegocio,
+                idServicio: args.id_servicio,
+                soloActivos: true,
+            });
+
+            return {
+                profesionales: profesionales.map((p) => ({
+                    id_profesional: p.id_profesional,
+                    nombre: p.nombre,
+                    especialidad: p.especialidad || null,
+                })),
+            };
+        },
+    });
+
+    registry.registrar({
         nombre: 'consultar_disponibilidad',
         descripcion:
             'Devuelve las horas libres de un servicio en una fecha concreta. Úsala cuando el ' +

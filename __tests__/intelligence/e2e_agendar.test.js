@@ -295,7 +295,7 @@ afterAll(async () => {
 // ── Criterio 1 ──────────────────────────────────────────────────────────────────────────
 
 describe('criterio 1: una cita completa por WebChat', () => {
-    test('seis turnos y la cita queda correcta en el dominio', async () => {
+    test('siete turnos y la cita queda correcta en el dominio', async () => {
         const s = sesion('feliz');
 
         const menu = await decir(s, 'hola', 1);
@@ -304,15 +304,23 @@ describe('criterio 1: una cita completa por WebChat', () => {
         // El menú NO va numerado dentro del texto (ADR-017): va en `opciones`.
         expect(menu.contenido).not.toMatch(/1\)/);
 
-        await decir(s, servicios[0].id, 2);
-        const horas = horasDe(await decir(s, fechaConAgenda, 3));
+        // Desde 2026-08-24 se pregunta con quién, porque este servicio lo prestan dos
+        // personas. La PRIMERA opción es «me da igual» a propósito: es la vía rápida de quien
+        // no tiene preferencia, que es casi todo el mundo. Si algún día deja de ser la
+        // primera, este test lo dice.
+        const quien = await decir(s, servicios[0].id, 2);
+        expect(quien.contenido).toMatch(/con quién/i);
+        expect(opcionesDe(quien)[0].id).toBe('cualquiera');
+
+        await decir(s, 'me da igual', 3);
+        const horas = horasDe(await decir(s, fechaConAgenda, 4));
         expect(horas.length).toBeGreaterThan(0);
 
-        await decir(s, horas[0].id, 4);
-        const propuesta = await decir(s, 'E2E Cliente', 5);
+        await decir(s, horas[0].id, 5);
+        const propuesta = await decir(s, 'E2E Cliente', 6);
         expect(propuesta.contenido).toMatch(/¿Confirmo la cita\?/);
 
-        const final = await decir(s, 'sí', 6);
+        const final = await decir(s, 'sí', 7);
         expect(final.contenido).toMatch(/agendada/i);
 
         // La prueba de verdad no es el texto del bot: es la fila en el dominio.
@@ -406,9 +414,10 @@ describe('criterio 2: la ráfaga', () => {
 
         const menu = await decir(s, 'hola', 1);
         await decir(s, opcionesDe(menu)[0].id, 2);
-        const horas = horasDe(await decir(s, fechaConAgenda, 3));
-        await decir(s, horas[0].id, 4);
-        await decir(s, 'E2E Doble', 5);
+        await decir(s, 'me da igual', 3);
+        const horas = horasDe(await decir(s, fechaConAgenda, 4));
+        await decir(s, horas[0].id, 5);
+        await decir(s, 'E2E Doble', 6);
 
         for (let i = 0; i < 3; i++) {
             await enviar(s, 'sí');
@@ -423,7 +432,10 @@ describe('criterio 2: la ráfaga', () => {
             { idNegocio }
         );
         expect(citas[0].n).toBe(1);
-        expect(await salientesDe(s)).toHaveLength(6);
+        // Siete y no seis desde 2026-08-24: el menú de profesional añadió un turno. Se afirma
+        // el número exacto a propósito — es lo que caza que la ráfaga NO haya producido una
+        // respuesta de más, que es justo lo que este test vigila.
+        expect(await salientesDe(s)).toHaveLength(7);
     }, 60000);
 });
 
@@ -438,7 +450,9 @@ describe('criterio 3: la continuidad', () => {
 
         const antes = await conversacionDe(s);
         expect(antes.tarea_actual).toBe('agendar_cita');
-        expect(antes.tarea_datos.paso).toBe('fecha');
+        // 'profesional' desde 2026-08-24: tras elegir servicio se pregunta con quién. Lo que
+        // este test prueba es que la tarea sobrevive al reinicio, no en qué paso se quedó.
+        expect(antes.tarea_datos.paso).toBe('profesional');
 
         // El "reinicio": se tira el motor entero, con su cola en memoria y su manejador.
         // Si el estado de la conversación viviera en memoria, aquí se perdería.
@@ -451,7 +465,7 @@ describe('criterio 3: la continuidad', () => {
 
         const conv = await conversacionDe(s);
         expect(conv.tarea_actual).toBe('agendar_cita');
-        expect(conv.tarea_datos.paso).toBe('fecha');
+        expect(conv.tarea_datos.paso).toBe('profesional');
         expect(conv.tarea_datos.id_servicio).toBe(antes.tarea_datos.id_servicio);
     }, 60000);
 
@@ -467,10 +481,11 @@ describe('criterio 3: la continuidad', () => {
         motor._reiniciar();
         motor.registrarManejador(manejarDeterminista);
 
-        const horas = horasDe(await decir(s, fechaConAgenda, 3));
-        await decir(s, horas[0].id, 4);
-        await decir(s, 'E2E Retomada', 5);
-        await decir(s, 'sí', 6);
+        await decir(s, 'me da igual', 3);
+        const horas = horasDe(await decir(s, fechaConAgenda, 4));
+        await decir(s, horas[0].id, 5);
+        await decir(s, 'E2E Retomada', 6);
+        await decir(s, 'sí', 7);
 
         const cita = await unaFila(
             `SELECT codigo_publico FROM reserva.reserva_cita

@@ -91,6 +91,7 @@ const NEGOCIOS = [
 
 const CAPACIDADES = [
     'consultar_servicios',
+    'consultar_profesionales',
     'consultar_disponibilidad',
     'proponer_turno',
     'reservar_turno',

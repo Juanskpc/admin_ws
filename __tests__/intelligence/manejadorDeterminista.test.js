@@ -38,6 +38,23 @@ const SERVICIOS_OFRECIDOS = SERVICIOS.servicios.map((s) => ({
     nombre: s.nombre,
 }));
 
+const PROFESIONALES = {
+    profesionales: [
+        { id_profesional: 4, nombre: 'Laura Gómez', especialidad: 'Colorimetría' },
+        { id_profesional: 5, nombre: 'Marco Ruiz', especialidad: 'Barbería' },
+    ],
+};
+
+/** Un servicio que presta una sola persona: el caso en que NO hay que preguntar nada. */
+const UN_SOLO_PROFESIONAL = {
+    profesionales: [{ id_profesional: 4, nombre: 'Laura Gómez', especialidad: 'Colorimetría' }],
+};
+
+const PROFESIONALES_OFRECIDOS = PROFESIONALES.profesionales.map((p) => ({
+    id: p.id_profesional,
+    nombre: p.nombre,
+}));
+
 const DISPONIBILIDAD = {
     fecha: '2026-08-20',
     duracion_min: 30,
@@ -119,6 +136,7 @@ function entrada(texto, conv, turno = { id_turno: 'turno-1' }) {
 const gateCompleto = () =>
     gateFalso({
         consultar_servicios: SERVICIOS,
+        consultar_profesionales: PROFESIONALES,
         consultar_disponibilidad: DISPONIBILIDAD,
         proponer_turno: HOLD,
         reservar_turno: { codigo_cita: 'CITA-999', inicio: '2026-08-20T10:00:00' },
@@ -127,7 +145,7 @@ const gateCompleto = () =>
 // ── El camino completo ──────────────────────────────────────────────────────────────────
 
 describe('agendar una cita de principio a fin', () => {
-    test('cinco turnos: servicio, fecha, hora, nombre, confirmar', async () => {
+    test('seis turnos: servicio, profesional, fecha, hora, nombre, confirmar', async () => {
         const gate = gateCompleto();
         const manejar = crearManejadorDeterminista({ gate, contextoNegocio: NEGOCIO_FALSO, identidad: identidadFalsa() });
 
@@ -137,12 +155,17 @@ describe('agendar una cita de principio a fin', () => {
         expect(d.tarea.datos.paso).toBe(PASO.SERVICIO);
         expect(d.respuestas[0].opciones).toHaveLength(2);
 
-        // 2. Elige servicio → pide fecha
+        // 2. Elige servicio → pregunta con quién (este servicio lo prestan dos personas)
         conv = conversacion({ tarea: TAREA_AGENDAR, datos: d.tarea.datos });
         d = await manejar(entrada('1', conv));
-        expect(d.tarea.datos).toMatchObject({ paso: PASO.FECHA, id_servicio: 1 });
+        expect(d.tarea.datos).toMatchObject({ paso: PASO.PROFESIONAL, id_servicio: 1 });
 
-        // 3. Da fecha → menú de horas
+        // 3. «Me da igual» → pide fecha, y sin filtrar por nadie
+        conv = conversacion({ tarea: TAREA_AGENDAR, datos: d.tarea.datos });
+        d = await manejar(entrada('me da igual', conv));
+        expect(d.tarea.datos).toMatchObject({ paso: PASO.FECHA, id_profesional_preferido: null });
+
+        // 4. Da fecha → menú de horas
         conv = conversacion({ tarea: TAREA_AGENDAR, datos: d.tarea.datos });
         d = await manejar(entrada('2026-08-20', conv));
         expect(d.tarea.datos.paso).toBe(PASO.HORA);
@@ -645,5 +668,106 @@ describe('presentación (ADR-017)', () => {
 
         expect(d.tarea).toBeNull();
         expect(d.resultado).toBe('sin_respuesta');
+    });
+});
+
+
+// ── Elegir profesional ──────────────────────────────────────────────────────────────────
+
+describe('elegir profesional (2026-08-24)', () => {
+    const conPaso = (datos) =>
+        conversacion({
+            tarea: TAREA_AGENDAR,
+            datos: { paso: PASO.PROFESIONAL, id_servicio: 1, profesionales_ofrecidos: PROFESIONALES_OFRECIDOS, ...datos },
+        });
+
+    function manejador(gate) {
+        return crearManejadorDeterminista({ gate, contextoNegocio: NEGOCIO_FALSO, identidad: identidadFalsa() });
+    }
+
+    test('«me da igual» es la PRIMERA opción del menú', async () => {
+        // No es cosmética: la mayoría no tiene preferencia, y para esa mayoría el paso es
+        // fricción. Si la salida rápida deja de ser la primera —la que se pulsa sin leer—,
+        // el menú empeora el flujo para casi todos con tal de mejorarlo para unos pocos.
+        const gate = gateCompleto();
+        const conv = conversacion({ tarea: TAREA_AGENDAR, datos: { paso: PASO.SERVICIO, ofrecidos: SERVICIOS_OFRECIDOS } });
+        const d = await manejador(gate)(entrada('1', conv));
+
+        const opciones = d.respuestas[0].opciones;
+        expect(opciones[0]).toMatchObject({ id: 'cualquiera', etiqueta: 'Me da igual' });
+        expect(opciones.map((o) => o.etiqueta)).toEqual(['Me da igual', 'Laura Gómez', 'Marco Ruiz']);
+    });
+
+    test('con UN solo profesional no se pregunta: se salta al día', async () => {
+        // Un menú de una opción es pedirle a alguien que confirme lo inevitable.
+        const gate = gateFalso({
+            consultar_servicios: SERVICIOS,
+            consultar_profesionales: UN_SOLO_PROFESIONAL,
+            consultar_disponibilidad: DISPONIBILIDAD,
+        });
+        const conv = conversacion({ tarea: TAREA_AGENDAR, datos: { paso: PASO.SERVICIO, ofrecidos: SERVICIOS_OFRECIDOS } });
+        const d = await manejador(gate)(entrada('1', conv));
+
+        expect(d.tarea.datos.paso).toBe(PASO.FECHA);
+        expect(d.respuestas[0].texto).toMatch(/qué día/i);
+        // Y no se guarda a nadie: dejar la disponibilidad sin filtrar da el mismo resultado
+        // —solo hay uno— sin afirmar una elección que el cliente nunca hizo.
+        expect(d.tarea.datos.id_profesional_preferido).toBeUndefined();
+    });
+
+    test('sin profesionales tampoco se pregunta: el problema se explica en el paso de horas', async () => {
+        const gate = gateFalso({
+            consultar_servicios: SERVICIOS,
+            consultar_profesionales: { profesionales: [] },
+            consultar_disponibilidad: { fecha: '2026-08-20', horas: [] },
+        });
+        const conv = conversacion({ tarea: TAREA_AGENDAR, datos: { paso: PASO.SERVICIO, ofrecidos: SERVICIOS_OFRECIDOS } });
+        const d = await manejador(gate)(entrada('1', conv));
+
+        expect(d.tarea.datos.paso).toBe(PASO.FECHA);
+    });
+
+    test('elegir a alguien FILTRA la disponibilidad por esa persona', async () => {
+        // Es el efecto que hace que el menú signifique algo. Sin esto, elegir a Marco daría
+        // las horas de todos y el cliente acabaría con quien no pidió.
+        const gate = gateCompleto();
+        const manejar = manejador(gate);
+
+        let d = await manejar(entrada('Marco', conPaso()));
+        expect(d.tarea.datos.id_profesional_preferido).toBe(5);
+
+        d = await manejar(entrada('2026-08-20', conversacion({ tarea: TAREA_AGENDAR, datos: d.tarea.datos })));
+        const disponibilidad = gate.llamadas.find((l) => l.capacidad === 'consultar_disponibilidad');
+        expect(disponibilidad.args.id_profesional).toBe(5);
+    });
+
+    test('«me da igual» NO manda filtro, en vez de mandarlo en null', async () => {
+        const gate = gateCompleto();
+        const manejar = manejador(gate);
+
+        let d = await manejar(entrada('cualquiera', conPaso()));
+        d = await manejar(entrada('2026-08-20', conversacion({ tarea: TAREA_AGENDAR, datos: d.tarea.datos })));
+
+        const disponibilidad = gate.llamadas.find((l) => l.capacidad === 'consultar_disponibilidad');
+        expect('id_profesional' in disponibilidad.args).toBe(false);
+    });
+
+    test('se le reconoce por el nombre de pila, que es como escribe la gente', async () => {
+        const d = await manejador(gateCompleto())(entrada('con laura porfa', conPaso()));
+        expect(d.tarea.datos.id_profesional_preferido).toBe(4);
+    });
+
+    test('si no se entiende, repregunta en vez de elegir por su cuenta', async () => {
+        const d = await manejador(gateCompleto())(entrada('el mejor que tengan', conPaso()));
+        expect(d.tarea.datos.paso).toBe(PASO.PROFESIONAL);
+        expect(d.respuestas[0]).toMatch(/con quién|me da igual/i);
+    });
+
+    test('una conversación abierta antes de que esto existiera vuelve a ver el menú', async () => {
+        // `tarea_datos` está persistido y no se migra solo: sin la lista guardada no se puede
+        // resolver sin adivinar, así que se reofrece el menú, que la repuebla.
+        const d = await manejador(gateCompleto())(entrada('Laura', conPaso({ profesionales_ofrecidos: undefined })));
+        expect(d.tarea.datos.paso).toBe(PASO.PROFESIONAL);
+        expect(d.tarea.datos.profesionales_ofrecidos).toHaveLength(2);
     });
 });

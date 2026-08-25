@@ -67,6 +67,7 @@ const confirmacion = require('./confirmacion');
 /** Pasos de la tarea de agendar. Enum-like: se registran en el Ledger y se miden. */
 const PASO = {
     SERVICIO: 'servicio',
+    PROFESIONAL: 'profesional',
     FECHA: 'fecha',
     HORA: 'hora',
     NOMBRE: 'nombre',
@@ -76,6 +77,15 @@ const PASO = {
 const TAREA_AGENDAR = 'agendar_cita';
 
 const MAX_OPCIONES = 8;
+
+/**
+ * La opción «me da igual» del paso de profesional.
+ *
+ * Es una cadena y no `null` porque tiene que viajar como `id` de una opción por el canal y
+ * volver como texto. `null` se convertiría en la cadena "null" en algún borde y acabaría
+ * comparándose mal justo el día que nadie mire.
+ */
+const CUALQUIER_PROFESIONAL = 'cualquiera';
 
 /**
  * Memoria de conversación completa. Existe porque `variables` reemplaza en vez de fusionar:
@@ -338,9 +348,18 @@ function crearManejadorDeterminista({
         if (!servicio) {
             return reintentar(ctx, datos, 'Elige uno de los servicios de la lista, por favor.');
         }
-        const elegido = [String(servicio.id)];
+        const idServicio = Number(servicio.id);
+        return ofrecerProfesionales(
+            ctx,
+            { ...datos, id_servicio: idServicio },
+            [paso('servicio_elegido', { id_servicio: idServicio })]
+        );
+    }
+
+    /** El paso de fecha, que es a donde se llega con o sin elegir profesional. */
+    function pedirFecha(ctx, datos, pasosPrevios) {
         return {
-            pasos: [paso('servicio_elegido', { id_servicio: Number(elegido[0]) })],
+            pasos: pasosPrevios,
             respuestas: [
                 {
                     texto: '¿Para qué día? Puedes decirme "hoy", "mañana" o una fecha (2026-08-20).',
@@ -351,13 +370,137 @@ function crearManejadorDeterminista({
                 },
             ],
             variables: conMemoria(ctx.conversacion),
+            tarea: { nombre: TAREA_AGENDAR, datos: { ...datos, paso: PASO.FECHA } },
+            resultado: 'resuelto',
+            nivel: 'determinista',
+        };
+    }
+
+    /**
+     * Ofrece quién puede atender — y se salta el paso cuando preguntar no aporta nada.
+     *
+     * ## Las dos decisiones que hacen que esto no estorbe
+     *
+     * **1. «Me da igual» va primero.** La mayoría de la gente no tiene preferencia, y para esa
+     * mayoría preguntar es fricción pura: un paso más entre «quiero un corte» y tenerlo
+     * agendado. Si el menú se añadiera sin una salida rápida y visible, el flujo empeoraría
+     * para casi todos con tal de mejorar para unos pocos. Por eso la primera opción —la que
+     * más se pulsa sin leer— es la que equivale al comportamiento anterior.
+     *
+     * **2. Con un solo profesional NO se pregunta.** Ofrecer un menú de una opción es pedirle
+     * a alguien que confirme lo inevitable. Se salta directo a la fecha y no se guarda
+     * `id_profesional`: dejar la disponibilidad sin filtrar da el mismo resultado —solo hay
+     * uno— y evita que la conversación afirme una elección que el cliente nunca hizo.
+     *
+     * Si no hay ninguno, tampoco se pregunta: se sigue a la fecha y el paso de disponibilidad
+     * dirá «no hay horas», que es donde ese problema se explica bien.
+     */
+    async function ofrecerProfesionales(ctx, datos, pasosPrevios) {
+        const { resultado } = await invocar({
+            ...ctx,
+            capacidad: 'consultar_profesionales',
+            args: { id_servicio: datos.id_servicio },
+        });
+        const profesionales = (resultado?.profesionales || []).slice(0, MAX_OPCIONES);
+
+        if (profesionales.length <= 1) {
+            return pedirFecha(ctx, datos, [
+                ...pasosPrevios,
+                paso('profesional_no_se_pregunta', { cuantos: profesionales.length }),
+            ]);
+        }
+
+        return {
+            pasos: [...pasosPrevios, paso('menu_profesionales', { cuantos: profesionales.length })],
+            respuestas: [
+                {
+                    texto: '¿Con quién prefieres?',
+                    opciones: [
+                        { id: CUALQUIER_PROFESIONAL, etiqueta: 'Me da igual', detalle: 'El primero que tenga hueco' },
+                        ...profesionales.map((pr) => ({
+                            id: String(pr.id_profesional),
+                            etiqueta: pr.nombre,
+                            detalle: pr.especialidad || undefined,
+                        })),
+                    ],
+                },
+            ],
+            variables: conMemoria(ctx.conversacion),
             tarea: {
                 nombre: TAREA_AGENDAR,
-                datos: { ...datos, paso: PASO.FECHA, id_servicio: Number(elegido[0]) },
+                datos: {
+                    ...datos,
+                    paso: PASO.PROFESIONAL,
+                    // Misma razón que con los servicios: se recuerda lo ofrecido para resolver
+                    // la respuesta contra la lista real en vez de sacar un número del texto.
+                    profesionales_ofrecidos: profesionales.map((pr) => ({
+                        id: pr.id_profesional,
+                        nombre: pr.nombre,
+                    })),
+                },
             },
             resultado: 'resuelto',
             nivel: 'determinista',
         };
+    }
+
+    /**
+     * Resuelve a quién eligió, contra la lista que se ofreció.
+     *
+     * Devuelve `undefined` si no se entiende, y `null` si dijo que le da igual — que **no es lo
+     * mismo** y por eso no se colapsan: `null` es una elección («cualquiera»), `undefined` es
+     * una falta de respuesta que hay que repreguntar.
+     */
+    function resolverProfesional(texto, ofrecidos) {
+        const t = normalizar(texto);
+        if (!t) return undefined;
+
+        if (
+            t === CUALQUIER_PROFESIONAL ||
+            /\b(me da igual|cualquiera|el que sea|da igual|indiferente|no tengo preferencia)\b/.test(t)
+        ) {
+            return null;
+        }
+
+        if (!ofrecidos || ofrecidos.length === 0) return undefined;
+
+        const porId = ofrecidos.find((pr) => t === String(pr.id));
+        if (porId) return porId.id;
+
+        // Por nombre, y también por el nombre de pila suelto: quien escribe en WhatsApp pone
+        // «con Laura», no «Laura Gómez».
+        const porNombre = ofrecidos.find((pr) => {
+            const completo = normalizar(pr.nombre);
+            const pila = completo.split(' ')[0];
+            return t.includes(completo) || (pila.length >= 3 && t.includes(pila));
+        });
+        if (porNombre) return porNombre.id;
+
+        for (const num of t.match(/\d+/g) || []) {
+            const pr = ofrecidos.find((x) => x.id === Number(num));
+            if (pr) return pr.id;
+        }
+        return undefined;
+    }
+
+    async function elegirProfesional(ctx, datos) {
+        // Igual que en el paso de servicio: una conversación abierta antes de que esto
+        // existiera no tiene la lista guardada, así que se vuelve a ofrecer el menú en vez de
+        // resolver a ciegas.
+        if (!datos.profesionales_ofrecidos) {
+            return ofrecerProfesionales(ctx, datos, [paso('menu_repetido', { motivo: 'sin_profesionales_ofrecidos' })]);
+        }
+
+        const elegido = resolverProfesional(ultimaLinea(ctx.texto), datos.profesionales_ofrecidos);
+        if (elegido === undefined) {
+            return reintentar(ctx, datos, 'Dime con quién prefieres, o "me da igual".');
+        }
+
+        return pedirFecha(
+            ctx,
+            { ...datos, id_profesional_preferido: elegido },
+            [paso('profesional_elegido', { id_profesional: elegido })]
+        );
     }
 
     async function elegirFecha(ctx, datos) {
@@ -369,7 +512,15 @@ function crearManejadorDeterminista({
         const { resultado } = await invocar({
             ...ctx,
             capacidad: 'consultar_disponibilidad',
-            args: { id_servicio: datos.id_servicio, fecha },
+            args: {
+                id_servicio: datos.id_servicio,
+                fecha,
+                // Solo va si eligió a alguien. `id_profesional_preferido` en `null` significa
+                // «me da igual» y es justo la ausencia del filtro, no un filtro con valor nulo.
+                ...(datos.id_profesional_preferido
+                    ? { id_profesional: datos.id_profesional_preferido }
+                    : {}),
+            },
         });
         const horas = (resultado?.horas || []).slice(0, MAX_OPCIONES);
 
@@ -661,6 +812,8 @@ function crearManejadorDeterminista({
         switch (datos.paso) {
             case PASO.SERVICIO:
                 return conRastro(await elegirServicio(ctx, datos));
+            case PASO.PROFESIONAL:
+                return conRastro(await elegirProfesional(ctx, datos));
             case PASO.FECHA:
                 return conRastro(await elegirFecha(ctx, datos));
             case PASO.HORA:
@@ -693,6 +846,8 @@ function textoDelPaso(pasoActual) {
     switch (pasoActual) {
         case PASO.SERVICIO:
             return 'Elige el servicio de la lista.';
+        case PASO.PROFESIONAL:
+            return '¿Con quién prefieres? También puedes decir "me da igual".';
         case PASO.FECHA:
             return '¿Para qué día lo quieres?';
         case PASO.HORA:
