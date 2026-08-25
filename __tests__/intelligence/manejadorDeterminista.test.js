@@ -169,7 +169,8 @@ describe('agendar una cita de principio a fin', () => {
         conv = conversacion({ tarea: TAREA_AGENDAR, datos: d.tarea.datos });
         d = await manejar(entrada('2026-08-20', conv));
         expect(d.tarea.datos.paso).toBe(PASO.HORA);
-        expect(d.respuestas[0].opciones.map((o) => o.id)).toEqual(['09:00', '10:00']);
+        // Las horas, y al final la salida para cambiar de día (2026-08-24).
+        expect(d.respuestas[0].opciones.map((o) => o.id)).toEqual(['09:00', '10:00', 'volver_fecha']);
 
         // 4. Elige hora → pide nombre (no lo conocemos)
         conv = conversacion({ tarea: TAREA_AGENDAR, datos: d.tarea.datos });
@@ -695,7 +696,13 @@ describe('elegir profesional (2026-08-24)', () => {
 
         const opciones = d.respuestas[0].opciones;
         expect(opciones[0]).toMatchObject({ id: 'cualquiera', etiqueta: 'Me da igual' });
-        expect(opciones.map((o) => o.etiqueta)).toEqual(['Me da igual', 'Laura Gómez', 'Marco Ruiz']);
+        // La salida para volver va al FINAL: retroceder es la excepción, elegir es la norma.
+        expect(opciones.map((o) => o.etiqueta)).toEqual([
+            'Me da igual',
+            'Laura Gómez',
+            'Marco Ruiz',
+            '← Otro servicio',
+        ]);
     });
 
     test('con UN solo profesional no se pregunta: se salta al día', async () => {
@@ -769,5 +776,138 @@ describe('elegir profesional (2026-08-24)', () => {
         const d = await manejador(gateCompleto())(entrada('Laura', conPaso({ profesionales_ofrecidos: undefined })));
         expect(d.tarea.datos.paso).toBe(PASO.PROFESIONAL);
         expect(d.tarea.datos.profesionales_ofrecidos).toHaveLength(2);
+    });
+});
+
+
+// ── Retroceder ──────────────────────────────────────────────────────────────────────────
+
+describe('retroceder sin empezar de cero (2026-08-24)', () => {
+    function manejador(gate) {
+        return crearManejadorDeterminista({ gate, contextoNegocio: NEGOCIO_FALSO, identidad: identidadFalsa() });
+    }
+
+    /** Una tarea con TODO elegido: es lo que permite ver qué sobrevive y qué no. */
+    const todoElegido = (paso) =>
+        conversacion({
+            tarea: TAREA_AGENDAR,
+            datos: {
+                paso,
+                id_servicio: 1,
+                id_profesional_preferido: 5,
+                profesionales_ofrecidos: PROFESIONALES_OFRECIDOS,
+                fecha: '2026-08-20',
+                hora: '10:00',
+                profesional_por_hora: { '10:00': 5 },
+                codigo_hold: 'HOLD-ABC',
+                nombre: 'Ana',
+            },
+        });
+
+    test('cambiar de servicio olvida TODO lo que venía después', async () => {
+        // Un servicio de 3 h y otro de 15 min no comparten ni la hora ni a quien lo presta.
+        // Conservar algo de eso es guardarse una selección imposible que no falla hasta el
+        // último paso.
+        const d = await manejador(gateCompleto())(entrada('quiero cambiar de servicio', todoElegido(PASO.HORA)));
+
+        expect(d.tarea.datos.paso).toBe(PASO.SERVICIO);
+        for (const clave of ['id_servicio', 'id_profesional_preferido', 'fecha', 'hora', 'codigo_hold']) {
+            expect(d.tarea.datos[clave]).toBeUndefined();
+        }
+    });
+
+    test('cambiar de profesional conserva el servicio y tira la hora', async () => {
+        const d = await manejador(gateCompleto())(entrada('con otra persona', todoElegido(PASO.HORA)));
+
+        expect(d.tarea.datos.paso).toBe(PASO.PROFESIONAL);
+        expect(d.tarea.datos.id_servicio).toBe(1);
+        // La agenda de otra persona es otra agenda: la hora y el día no valen.
+        expect(d.tarea.datos.hora).toBeUndefined();
+        expect(d.tarea.datos.fecha).toBeUndefined();
+        expect(d.tarea.datos.codigo_hold).toBeUndefined();
+    });
+
+    test('cambiar de día conserva servicio y profesional, y tira la hora', async () => {
+        const d = await manejador(gateCompleto())(entrada('otro día', todoElegido(PASO.HORA)));
+
+        expect(d.tarea.datos.paso).toBe(PASO.FECHA);
+        expect(d.tarea.datos.id_servicio).toBe(1);
+        expect(d.tarea.datos.id_profesional_preferido).toBe(5);
+        expect(d.tarea.datos.hora).toBeUndefined();
+        expect(d.tarea.datos.codigo_hold).toBeUndefined();
+    });
+
+    test('rechazar la confirmación vuelve a las horas de ESE día, sin repreguntar la fecha', async () => {
+        // Antes mandaba al paso de fecha: «Ver otras horas» prometía horas y pedía teclear el
+        // día otra vez, un paso de castigo por cambiar de opinión.
+        const d = await manejador(gateCompleto())(entrada('no', todoElegido(PASO.CONFIRMAR)));
+
+        expect(d.tarea.datos.paso).toBe(PASO.HORA);
+        expect(d.tarea.datos.fecha).toBe('2026-08-20');
+        expect(d.respuestas[0].texto).toMatch(/horas libres el 2026-08-20/);
+        expect(d.tarea.datos.codigo_hold).toBeUndefined();
+    });
+
+    test('el menú de horas ofrece volver, y el chip funciona igual que el texto', async () => {
+        const d = await manejador(gateCompleto())(entrada('volver_fecha', todoElegido(PASO.HORA)));
+        expect(d.tarea.datos.paso).toBe(PASO.FECHA);
+    });
+
+    test('«cambiar» a secas en el paso de confirmar sigue siendo «otras horas», no un retroceso', async () => {
+        // COMANDO.NO incluye «cambiar». Si el detector de retroceso se quedara con esa palabra
+        // suelta, robaría el «no» del paso de confirmar. Por eso exige un destino además de la
+        // pista de cambio.
+        const d = await manejador(gateCompleto())(entrada('cambiar', todoElegido(PASO.CONFIRMAR)));
+        expect(d.tarea.datos.paso).toBe(PASO.HORA);
+    });
+
+    test('elegir un servicio NO se lee como retroceso estando en el menú de servicios', async () => {
+        // El falso positivo que más caro saldría: quedarse en bucle en el primer paso.
+        const conv = conversacion({ tarea: TAREA_AGENDAR, datos: { paso: PASO.SERVICIO, ofrecidos: SERVICIOS_OFRECIDOS } });
+        const d = await manejador(gateCompleto())(entrada('Corte', conv));
+        expect(d.tarea.datos.paso).toBe(PASO.PROFESIONAL);
+    });
+
+    test('pedir el paso en el que ya se está no hace nada raro', async () => {
+        const conv = conversacion({ tarea: TAREA_AGENDAR, datos: { paso: PASO.FECHA, id_servicio: 1 } });
+        const d = await manejador(gateCompleto())(entrada('otro día', conv));
+        // Se queda pidiendo la fecha, que es lo que ya hacía: no se reinicia la tarea.
+        expect(d.tarea.datos.paso).toBe(PASO.FECHA);
+        expect(d.tarea.datos.id_servicio).toBe(1);
+    });
+
+    test('volver a las horas sin día guardado pide la fecha en vez de romperse', async () => {
+        const conv = conversacion({ tarea: TAREA_AGENDAR, datos: { paso: PASO.NOMBRE, id_servicio: 1 } });
+        const d = await manejador(gateCompleto())(entrada('otra hora', conv));
+        expect(d.tarea.datos.paso).toBe(PASO.FECHA);
+    });
+
+    test('un día vacío con profesional elegido ofrece cambiar de persona', async () => {
+        const gate = gateFalso({
+            consultar_servicios: SERVICIOS,
+            consultar_profesionales: PROFESIONALES,
+            consultar_disponibilidad: { fecha: '2026-08-20', horas: [] },
+        });
+        const conv = conversacion({
+            tarea: TAREA_AGENDAR,
+            datos: { paso: PASO.FECHA, id_servicio: 1, id_profesional_preferido: 5 },
+        });
+        const d = await manejador(gate)(entrada('2026-08-20', conv));
+
+        expect(d.respuestas[0].texto).toMatch(/con quien elegiste/i);
+        expect(d.respuestas[0].opciones.map((o) => o.id)).toContain('volver_profesional');
+    });
+
+    test('un día vacío SIN profesional elegido no ofrece cambiar de persona', async () => {
+        // Sería una opción que no lleva a ninguna parte: no había preferencia que cambiar.
+        const gate = gateFalso({
+            consultar_servicios: SERVICIOS,
+            consultar_profesionales: PROFESIONALES,
+            consultar_disponibilidad: { fecha: '2026-08-20', horas: [] },
+        });
+        const conv = conversacion({ tarea: TAREA_AGENDAR, datos: { paso: PASO.FECHA, id_servicio: 1 } });
+        const d = await manejador(gate)(entrada('2026-08-20', conv));
+
+        expect(d.respuestas[0].opciones.map((o) => o.id)).not.toContain('volver_profesional');
     });
 });

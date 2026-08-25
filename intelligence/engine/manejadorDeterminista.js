@@ -87,6 +87,99 @@ const MAX_OPCIONES = 8;
  */
 const CUALQUIER_PROFESIONAL = 'cualquiera';
 
+// ── Retroceso ───────────────────────────────────────────────────────────────────────────────
+//
+// Ids de las opciones para volver atrás. Van con prefijo para no chocar nunca con un id de
+// servicio, una hora o un profesional: el resolvedor de cada paso compara contra texto, y un
+// «volver» que coincidiera con un dato real sería el peor de los errores posibles.
+const VOLVER = {
+    SERVICIO: 'volver_servicio',
+    PROFESIONAL: 'volver_profesional',
+    FECHA: 'volver_fecha',
+    HORA: 'volver_hora',
+};
+
+/**
+ * Qué sobrevive al volver a cada paso. **Es una lista blanca a propósito.**
+ *
+ * Con una lista negra —«borra la hora»— cada campo nuevo que alguien añada al flujo se
+ * quedaría por descuido, y el síntoma sería una selección imposible que no falla hasta el
+ * último paso: elegir un servicio de 3 horas conservando una hora que se calculó para uno de
+ * 30, y descubrirlo al reservar. Enumerando lo que se queda, lo que se olvida es el
+ * comportamiento por defecto.
+ *
+ * El orden de arriba abajo es el del flujo, y cada paso conserva lo del anterior:
+ *
+ *   · **Servicio**: nada. Cambiar de servicio cambia la duración y a quién lo presta; todo lo
+ *     que venía después se calculó para otra cosa.
+ *   · **Profesional**: solo el servicio. La fecha se conserva*a*, pero la hora no: la agenda de
+ *     otra persona es otra agenda.
+ *   · **Fecha**: servicio y profesional. Solo caen la hora y el hold.
+ *   · **Hora**: además la fecha, porque volver a las horas es volver a las de ESE día.
+ *
+ * *a* La fecha no se conserva al cambiar de profesional aunque podría: se prefiere volver a
+ * preguntarla antes que enseñar las horas de alguien para un día que quizá no trabaja, con el
+ * cliente creyendo que sigue eligiendo sobre lo mismo.
+ */
+const SOBREVIVE_AL_VOLVER = {
+    servicio: [],
+    profesional: ['id_servicio'],
+    fecha: ['id_servicio', 'id_profesional_preferido', 'profesionales_ofrecidos'],
+    hora: ['id_servicio', 'id_profesional_preferido', 'profesionales_ofrecidos', 'fecha'],
+};
+
+/**
+ * Poda los datos de la tarea dejando solo lo que sigue siendo cierto en el paso de destino.
+ *
+ * **El hold no se libera, y no es un olvido.** Si había una hora apartada se queda apartada
+ * hasta que caduca sola, porque soltarla exigiría invocar otra capacidad en el mismo turno y
+ * la FSM invoca una por turno (la clave de idempotencia es el id del turno). Es la misma
+ * decisión que ya tomó el rechazo de la confirmación, y se mantiene igual aquí para no tener
+ * dos reglas distintas sobre lo mismo. El coste es que una hora queda bloqueada unos minutos
+ * para los demás; el precio de la alternativa es romper una invariante del motor.
+ */
+function podarAlVolver(destino, datos) {
+    const conservar = SOBREVIVE_AL_VOLVER[destino] || [];
+    const podados = {};
+    for (const clave of conservar) {
+        if (datos[clave] !== undefined) podados[clave] = datos[clave];
+    }
+    return podados;
+}
+
+/** Reconoce «otro día», «cambiar de servicio», «con otra persona»… y el id de un chip. */
+const PISTA_DE_CAMBIO = /\b(otro|otra|otros|otras|cambiar|cambia|cambio|volver|atras|regresar|distinto|distinta|diferente)\b/;
+
+const DESTINOS_DE_RETROCESO = [
+    [PASO.SERVICIO, VOLVER.SERVICIO, /\bservicios?\b/],
+    [PASO.PROFESIONAL, VOLVER.PROFESIONAL, /\b(profesional|persona|estilista|barbero|peluquer\w*|manicurista)\b/],
+    [PASO.FECHA, VOLVER.FECHA, /\b(dia|dias|fecha|fechas)\b/],
+    [PASO.HORA, VOLVER.HORA, /\b(hora|horas|horario)\b/],
+];
+
+/**
+ * ¿A qué paso quiere volver? `null` si no lo pidió.
+ *
+ * Un id de chip vale por sí solo; el texto libre necesita **las dos cosas**: una pista de
+ * cambio y un destino. Exigir las dos es lo que evita que «quiero un corte de pelo» se lea
+ * como «volver al servicio» estando ya en el menú de servicios, y que «cambiar» a secas robe
+ * el «no» del paso de confirmar, donde esa palabra significa «enséñame otras horas».
+ */
+function destinoDeRetroceso(texto) {
+    const t = normalizar(texto);
+    if (!t) return null;
+
+    for (const [destino, id] of DESTINOS_DE_RETROCESO) {
+        if (t === id) return destino;
+    }
+    if (!PISTA_DE_CAMBIO.test(t)) return null;
+
+    for (const [destino, , patron] of DESTINOS_DE_RETROCESO) {
+        if (patron.test(t)) return destino;
+    }
+    return null;
+}
+
 /**
  * Memoria de conversación completa. Existe porque `variables` reemplaza en vez de fusionar:
  * construirla a mano en cada rama es la forma segura de perder el teléfono en la rama que
@@ -422,6 +515,7 @@ function crearManejadorDeterminista({
                             etiqueta: pr.nombre,
                             detalle: pr.especialidad || undefined,
                         })),
+                        { id: VOLVER.SERVICIO, etiqueta: '← Otro servicio' },
                     ],
                 },
             ],
@@ -483,6 +577,33 @@ function crearManejadorDeterminista({
         return undefined;
     }
 
+    /**
+     * Lleva la conversación al paso pedido, con los datos ya podados.
+     *
+     * Un solo sitio para las cuatro vueltas: si cada rama decidiera por su cuenta qué
+     * conservar, la que nadie prueba acabaría arrastrando una hora que ya no existe.
+     */
+    async function volverA(ctx, destino, datos) {
+        const podados = podarAlVolver(destino, datos);
+        const rastro = [paso('retroceso', { desde: datos.paso ?? null, hacia: destino })];
+
+        switch (destino) {
+            case PASO.SERVICIO:
+                return ofrecerServicios(ctx, rastro);
+            case PASO.PROFESIONAL:
+                return ofrecerProfesionales(ctx, podados, rastro);
+            case PASO.HORA:
+                // Volver a las horas de ESE día. Si no hay día guardado —porque se venía de
+                // más atrás— no hay nada a lo que volver, y se pide la fecha.
+                return podados.fecha
+                    ? mostrarHoras(ctx, podados, podados.fecha, rastro)
+                    : pedirFecha(ctx, podados, rastro);
+            case PASO.FECHA:
+            default:
+                return pedirFecha(ctx, podados, rastro);
+        }
+    }
+
     async function elegirProfesional(ctx, datos) {
         // Igual que en el paso de servicio: una conversación abierta antes de que esto
         // existiera no tiene la lista guardada, así que se vuelve a ofrecer el menú en vez de
@@ -508,7 +629,18 @@ function crearManejadorDeterminista({
         if (!fecha) {
             return reintentar(ctx, datos, 'No entendí la fecha. Dime "hoy", "mañana" o algo como 2026-08-20.');
         }
+        return mostrarHoras(ctx, datos, fecha, []);
+    }
 
+    /**
+     * Consulta y pinta las horas libres de un día.
+     *
+     * Va aparte de `elegirFecha` desde que existe el retroceso: volver a la lista de horas no
+     * debe obligar a repreguntar la fecha que el cliente ya dijo. Antes, rechazar la
+     * confirmación mandaba al paso de fecha y había que volver a teclear el día — un paso de
+     * castigo por cambiar de opinión.
+     */
+    async function mostrarHoras(ctx, datos, fecha, pasosPrevios) {
         const { resultado } = await invocar({
             ...ctx,
             capacidad: 'consultar_disponibilidad',
@@ -533,11 +665,20 @@ function crearManejadorDeterminista({
             // turno): sondear varios días de golpe exige otra capacidad, no otro parche aquí.
             const siguiente = diaSiguiente(fecha);
             return {
-                pasos: [paso('sin_disponibilidad', { fecha })],
+                pasos: [...pasosPrevios, paso('sin_disponibilidad', { fecha })],
                 respuestas: [
                     {
-                        texto: `No hay horas libres el ${fecha}. ¿Probamos el ${siguiente}?`,
-                        opciones: [{ id: siguiente, etiqueta: etiquetaDia(siguiente) }],
+                        texto: datos.id_profesional_preferido
+                            ? `No hay horas libres el ${fecha} con quien elegiste. ¿Probamos el ${siguiente}?`
+                            : `No hay horas libres el ${fecha}. ¿Probamos el ${siguiente}?`,
+                        opciones: [
+                            { id: siguiente, etiqueta: etiquetaDia(siguiente) },
+                            // Solo si había preferencia: sin ella, «otra persona» no significa
+                            // nada y sería una opción que no lleva a ninguna parte.
+                            ...(datos.id_profesional_preferido
+                                ? [{ id: VOLVER.PROFESIONAL, etiqueta: '← Con otra persona' }]
+                                : []),
+                        ],
                     },
                 ],
                 variables: conMemoria(ctx.conversacion),
@@ -561,11 +702,17 @@ function crearManejadorDeterminista({
         const profesionalPorHora = Object.fromEntries(horas.map((h) => [h.hora, h.id_profesional]));
 
         return {
-            pasos: [paso('menu_horas', { fecha, cuantas: horas.length })],
+            pasos: [...pasosPrevios, paso('menu_horas', { fecha, cuantas: horas.length })],
             respuestas: [
                 {
                     texto: `Estas son las horas libres el ${fecha}:`,
-                    opciones: horas.map((h) => ({ id: h.hora, etiqueta: h.hora })),
+                    // Ocho horas + «otro día» = nueve filas, dentro del límite de diez de una
+                    // lista de WhatsApp (`channels/whatsapp/adaptador.js`, LIMITES). Añadir
+                    // aquí una segunda opción de volver rompería ese margen.
+                    opciones: [
+                        ...horas.map((h) => ({ id: h.hora, etiqueta: h.hora })),
+                        { id: VOLVER.FECHA, etiqueta: '← Otro día' },
+                    ],
                 },
             ],
             variables: conMemoria(ctx.conversacion),
@@ -675,14 +822,11 @@ function crearManejadorDeterminista({
         if (esComando(ctx.texto, COMANDO.NO)) {
             // No se libera el hold a mano: caduca solo. Soltarlo aquí exigiría otra mutación
             // en el mismo turno, y eso choca con la regla de una capacidad por turno.
-            return {
-                pasos: [paso('confirmacion_rechazada')],
-                respuestas: [`Sin problema. Dime otra fecha y te muestro las horas libres.`],
-                variables: conMemoria(ctx.conversacion),
-                tarea: { nombre: TAREA_AGENDAR, datos: { ...datos, paso: PASO.FECHA } },
-                resultado: 'resuelto',
-                nivel: 'determinista',
-            };
+            //
+            // Desde el retroceso (2026-08-24) se vuelve a las horas de ESE día en vez de
+            // repreguntar la fecha. «Ver otras horas» prometía justo eso y llevaba a teclear
+            // otra vez el día: un paso de castigo por cambiar de opinión.
+            return volverA(ctx, PASO.HORA, { ...datos, paso: PASO.CONFIRMAR });
         }
 
         if (!esComando(ctx.texto, COMANDO.SI)) {
@@ -798,6 +942,16 @@ function crearManejadorDeterminista({
         if (hayTarea && esComando(texto, COMANDO.SEGUIMOS)) {
             // Retomar no repite trabajo: se vuelve a preguntar lo del paso donde se quedó.
             return reintentar(ctx, datos, `Seguimos donde lo dejamos. ${textoDelPaso(datos.paso)}`);
+        }
+
+        // Retroceder. Va DESPUÉS de cancelar y de la confirmación pendiente —que mandan
+        // siempre— y ANTES del paso actual, porque «otro día» no es una respuesta al paso en
+        // el que se está: es la petición de no responderlo.
+        if (hayTarea) {
+            const destino = destinoDeRetroceso(ultimaLinea(texto));
+            if (destino && destino !== datos.paso) {
+                return conRastro(await volverA(ctx, destino, datos));
+            }
         }
 
         if (!hayTarea || esComando(texto, COMANDO.MENU)) {
