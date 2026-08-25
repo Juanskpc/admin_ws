@@ -1,6 +1,6 @@
 # EscalApp Intelligence — estado y cómo continuar
 
-**Última actualización:** 2026-08-24 (**F0–F8 DESPLEGADAS**: el asistente atiende por WhatsApp en producción)
+**Última actualización:** 2026-08-25 (**dos verticales en producción** y pedido desde el menú digital)
 **Propósito:** que retomar el trabajo no cueste una sesión de arqueología. Si vuelves a este
 proyecto después de semanas, **lee este documento primero** y sigue por donde diga.
 
@@ -9,96 +9,95 @@ proyecto después de semanas, **lee este documento primero** y sigue por donde d
 
 ---
 
-## 4-0. POR DÓNDE SE SIGUE (cierre del 2026-08-24)
+## 4-0. POR DÓNDE SE SIGUE (cierre del 2026-08-25)
 
 > Esta sección es lo primero que hay que leer al retomar. Las de más abajo son historia de fases
 > ya cerradas y se conservan porque explican **por qué** las cosas están como están.
 
-**Estado en una frase:** **F0–F8 COMPLETAS Y DESPLEGADAS EN PRODUCCIÓN.** El asistente atiende por
-WhatsApp en el número `+57 315 281 2484`, agendó sus primeras citas reales el 2026-08-24 y **costó
-cero**. 457 pruebas en verde. Ya no hay ninguna fase pendiente del roadmap original.
+**Estado en una frase:** el asistente atiende **dos verticales** en producción —citas y
+restaurante— por WhatsApp, y desde el menú digital se puede armar un pedido y mandarlo al bot ya
+escrito. **534 pruebas de backend + 15 de frontend en verde.** El roadmap original está agotado:
+lo que se hace ahora sale del uso real.
 
-### Lo que pasó el 2026-08-24, en una lectura
+### Qué hay vivo, y dónde apunta
 
-Fue la sesión en que Intelligence salió de local. Hasta ese día **no había nada** de esto en
-producción; ahora está todo, con las nueve migraciones aplicadas.
-
-| Qué | Resultado |
+| Pieza | Estado |
 |---|---|
-| Las 9 migraciones | Aplicadas. El backfill tardó **1,36 s**: 819 personas, 1.450 órdenes enlazadas |
-| F2 (fuga entre negocios) | Desplegada, **modo observación**. Cero violaciones registradas |
-| Fallo de permisos | Corregido — producción llevaba con **todos** los permisos en `v---` |
-| Canal de WhatsApp | Vivo, apuntando al negocio **10 (Salón Demo)**, no a un cliente |
-| Frontends | `escalapp.cloud/reserva/` (nueva) y la Consola en `/admin/admin/intelligence` |
-| Primera conversación | 2 personas, 36 turnos, **todos deterministas**, 0 filas en `intelligence.costo` |
+| Número `+57 315 281 2484` | Atiende a **`id_negocio` 12, Restaurante pregonchos** |
+| Verticales con flujo | `reserva` (citas) y `restaurante` |
+| Capacidades | 10: seis de reserva, cuatro de restaurante |
+| Menú digital con carrito | `escalapp.cloud/restaurante/carta/12`, desplegado el 2026-08-25 |
+| Escalera | Nivel 1 determinista + `openai/gpt-5.6-terra` |
+| WebChat | **apagado**, y sigue sin autenticar |
 
-Los detalles del canal —y **las tres trampas de Meta que costaron la tarde**— están en
-[`canal-whatsapp.md`](canal-whatsapp.md) §«F8-C TERMINADA». El procedimiento de despliegue y lo que
-hay que comprobar antes, en §5 y §5-bis de este documento.
+⚠️ **Un número, un negocio.** Apuntarlo a otro deja de atender al anterior. El Salón Demo
+(`id_negocio` 10) quedó sin bot cuando el número pasó a pregonchos.
 
-> **La lección de la sesión, si solo se lee una línea:** los tres fallos que costaron tiempo
-> —el cableado de F8-B, el `=` de más en el App Secret, los cero `fields` suscritos— **no daban
-> error**. Arrancaba todo, los logs decían «listo» y lo único que pasaba es que no pasaba nada. En
-> este sistema el modo de fallo caro es el silencio, no la excepción.
+### Lo que se hizo el 2026-08-24/25
+
+Está detallado en [`asistente-restaurante.md`](asistente-restaurante.md) y
+[`mejoras-flujo-agenda.md`](mejoras-flujo-agenda.md). Resumen:
+
+1. **Pertenencia de una cita** — `cancelar_cita` y `reagendar_cita` autorizaban **solo con el
+   código**. La seguridad la daba, sin que nadie lo decidiera, que un UUID no se adivina. Ahora se
+   comprueba el teléfono que **probó el canal** (`principal.telefono_verificado`).
+2. **Elegir profesional**, con «me da igual» primero y el paso saltado cuando solo hay uno.
+3. **Retroceder** sin empezar de cero, con lista blanca de lo que sobrevive a cada vuelta.
+4. **Vertical `restaurante` entera**: cuatro capacidades, flujo propio, usuario «Asistente» por
+   negocio, y el pedido desde el menú digital.
+
+### Los cuatro fallos que solo se vieron en producción
+
+Vale la pena leerlos juntos porque **comparten forma**: ninguno daba error donde se originaba.
+
+1. **El motor daba por supuesto de qué iba el negocio.** Había un solo flujo determinista —el de
+   citas— y con el canal ya en un restaurante, un «hola» pidió `consultar_servicios`:
+   `CAPACIDAD_NO_HABILITADA` y **cliente sin respuesta**. Ningún test lo vio porque todos usaban
+   un negocio de citas. Ahora los flujos los declaran los adaptadores (`engine/flujos.js`).
+2. **Una capacidad devolvía vacío ante una entrada inválida.** El modelo pidió la categoría «2»
+   —un ordinal— cuando eran la 38, 39 y 40, y el cliente leyó «en Platos no tenemos productos» con
+   la carta llena. **Vacío significa «no hay», y eso tiene que ser cierto**: si el argumento está
+   mal, se dice.
+3. **El Ledger mataba el turno.** `invocacion_capacidad.vertical` es NOT NULL y el camino de
+   **error** del manejador de modelo no lo rellenaba: cualquier fallo de capacidad reventaba al
+   escribir el rastro y se llevaba la conversación (`MANEJADOR_FALLO`). Latente desde F6.
+4. **El bot se «reiniciaba».** La política de enrutado manda al determinista todo lo que sea
+   *comando conocido*, y esa lista incluye «sí», «no», «ok», «vale». El cliente contestaba «sí» a
+   una pregunta del modelo y recibía el saludo inicial.
+
+> **La lección, si solo se lee una línea:** en este sistema el modo de fallo caro es el silencio,
+> no la excepción. Y **un test verde no prueba nada hasta que se rompe el código a propósito** —
+> pasó literalmente con el precio del catálogo: 17 pruebas seguían pasando con la protección
+> desactivada.
 
 ### Lo siguiente, en orden
 
-El roadmap original está agotado. Lo que sigue viene del uso real, no del plan.
+1. **El bot va lento.** Lo señaló el dueño y se aplazó. **Medir antes de tocar**:
+   `intelligence.turno` tiene `nivel` y `latencia_ms`, así que se puede saber cuánto tarda cada
+   peldaño y cuántas veces sube al modelo sin necesidad. Sospecha razonable: sube más de lo
+   necesario.
+2. **Probar el círculo completo del menú digital** con gente de verdad: carrito → WhatsApp →
+   dirección → `tomar_pedido`. Es la primera vez que los dos repos se hablan fuera de un test.
+3. **El código de cita sigue siendo un UUID** (punto 2 de `mejoras-flujo-agenda.md`). Su
+   prerrequisito de seguridad ya está hecho, así que ahora es solo trabajo.
+4. **`tomar_pedido` no pregunta método de pago ni exclusiones** («sin cebolla»). El dominio las
+   soporta; la capacidad no.
+5. **Alta de números de clientes (Embedded Signup)** — el techo de «un número, un negocio» se nota
+   ya. Merece un ADR. Ver [`canal-whatsapp.md`](canal-whatsapp.md).
 
-1. **Mejoras del flujo de agendamiento** (pedidas el 2026-08-24 tras probarlo de verdad). Son de
-   producto, no de arquitectura, y todas viven en el manejador determinista y el adaptador de
-   `reserva`. **Detalle completo en [`mejoras-flujo-agenda.md`](mejoras-flujo-agenda.md)**:
-   1. **Elegir profesional, y poder no elegirlo.** Hoy el flujo asigna sin preguntar. Falta el menú
-      de selección **y** una opción explícita de «me da igual / el primero que haya», que además
-      debe seguir siendo la vía rápida.
-   2. **El código de la cita no puede ser un UUID.** Hoy el cliente recibe
-      `6b82eea2-f35d-48ae-b2ab-79009fc6b44a`. Hace falta un código corto, legible y dictable por
-      teléfono. ⚠️ **Tiene un prerrequisito de seguridad, verificado:** hoy `cancelar_cita` y
-      `reagendar_cita` autorizan **solo** con el código, sin comprobar quién lo usa — la seguridad
-      la da, sin que nadie lo decidiera, que un UUID no se adivina. Hay que atar la cita al teléfono
-      que la pidió **antes** de acortar el código. Detalle y el resto de implicaciones en
-      [`mejoras-flujo-agenda.md`](mejoras-flujo-agenda.md).
-   3. **Poder retroceder.** Al listar opciones, el cliente debe poder cambiar de día, de servicio o
-      de profesional sin empezar de cero. Hoy el flujo solo avanza.
-2. **El adaptador de restaurante.** Es lo que convierte esto en algo vendible a los clientes que
-   ya existen: los dos activos (6 ZONA BURGER, 14 LA ESQUINA DEL BARRIL) son restaurantes y el
-   asistente **solo sabe agendar citas**. Las seis capacidades son de `reserva` y el único adaptador
-   es `reserva`. El andamiaje —policy gate, ledger, canal, confirmación humana, escalera— ya está y
-   no hay que tocarlo: son capacidades nuevas sobre una vertical que ya existe.
-3. **Medir el guardarraíl de promesas una semana** antes de encender `PROMESAS_MODO=bloqueo`
-   (§6.14). Y lo mismo con `AUTHZ_MODO=bloqueo`: ya hay tráfico real siendo observado desde el
-   2026-08-24, así que **la medición ya está corriendo** — solo hay que mirarla.
-4. **Alta de números de clientes (Embedded Signup).** Lo pidió el dueño el 2026-08-24: que el
-   cliente traiga su número desde la app. Son tres frentes (proveedor de tecnología + verificación
-   de negocio en Meta, tabla de números y custodia de tokens en el código, máquina de estados en la
-   app) y **merece un ADR**. Detalle en [`canal-whatsapp.md`](canal-whatsapp.md) §«Dar de alta el
-   número de un CLIENTE». **Va DESPUÉS del punto 2**: es fontanería que solo rinde cuando hay
-   producto que entregar.
-5. **Meter `asistente_ia` en la oferta comercial de verdad.** Desde el 2026-08-24 vive en **«Plan
-   Avanzado»** (`intelligence/core/features.js`), que se eligió porque los 11 negocios de producción
-   están en «Plan Básico» y Avanzado tenía **cero**: así no se le regala a nadie. Falta ponerle
-   precio y decidir si es el plan caro o un añadido.
+### Cosas que hay que vigilar
 
-### Cosas que hay que vigilar ahora que esto está vivo
-
-- **`OPENAI_API_KEY` está puesta en el `.env` de producción.** Decisión consciente del dueño el
-  2026-08-24 para poder probar con modelo. Hay cortacircuitos por turno (5 centavos, 4 vueltas)
-  pero **no hay tope global**. Mientras la app no esté publicada solo escriben los conocidos; el día
-  que se publique, el número lo puede encontrar cualquiera.
-- **La app de Meta NO está publicada.** No hizo falta para probar: los webhooks llegan igual.
-- **El nombre visible del número** quedó `AVAILABLE_WITHOUT_REVIEW`, o sea aprobado.
-- **Particiones del Ledger hasta 2027-10.** Una tabla particionada sin la partición del mes rechaza
-  TODO INSERT. Antes de que se agoten:
-  `node scripts/intelligence_mantenimiento.js particiones --meses 12`.
-- **`FEATURES_FORZADAS` no funciona en producción** y es a propósito (ADR-021). Si hace falta darle
-  el asistente a un negocio, se le pone «Plan Avanzado».
-- **Horarios del Salón Demo con restos de la primera siembra:** Laura tiene lunes (el diseño la
-  puso de martes a sábado) y Marco cierra a las 18:00, no a las 19:00. El fixture es idempotente por
-  *hora de inicio*, así que no pudo corregir un `hora_fin` ya existente. Inofensivo, pero la agenda
-  no es la que dice `scripts/fixtures/prod_salon_demo.sql`.
-- **Configuración de pagos de Meta:** en el panel aparece una entrada llamada **«India»**. Sigue sin
-  confirmarse si es una sección que Meta muestra siempre o si la tarjeta quedó en la región
-  equivocada. Con envíos reales ya en marcha, conviene mirarlo.
+- **`OPENAI_API_KEY` está puesta en producción** (decisión del dueño para probar con modelo). Tope
+  por turno, **no global**. La app de Meta sigue **sin publicar**.
+- **`generarNumeroOrden` es una bomba de relojería**: `CAST(SUBSTRING(numero_orden FROM 5) AS
+  INTEGER)` sobre todas las órdenes del negocio. Un número con otra forma deja al negocio sin
+  poder crear pedidos. Los `TEST-*` de la base de desarrollo sobreviven por casualidad.
+- **La carta de pregonchos son datos de demo** en un negocio real con caja abierta.
+- **Particiones del Ledger hasta 2027-10.** Una tabla particionada sin la partición del mes
+  rechaza TODO INSERT: `node scripts/intelligence_mantenimiento.js particiones --meses 12`.
+- **`restaurante_app` está en la rama `feature/pedido-menu-digital`**, no en `master`. El backend
+  sigue en `feature/escalapp_intelligence` — **y el VPS corre esa rama, no `master`**.
+- **Copia del frontend anterior**: `~/backups/frontend_restaurante_20260825_0000.tgz` en el VPS.
 
 ### Deudas conocidas, ninguna bloqueante
 
@@ -1853,6 +1852,7 @@ estado por consumidor y la Ficha 360 no agrega verticales vacías.
 | `nivel-4.md` | Qué modelo sirve el Nivel 4, por qué diverge del id que nombra ADR-018 y qué señales hay que vigilar. |
 | `canal-whatsapp.md` | El canal de WhatsApp de punta a punta: F8-A/B/C, los límites de Meta confirmados en la fuente, **las tres trampas silenciosas del alta (2026-08-24)**, cómo cobra Meta, y qué haría falta para dar de alta el número de un cliente. |
 | `mejoras-flujo-agenda.md` | Las mejoras del flujo de agendamiento pedidas tras la primera prueba real, y el prerrequisito de seguridad que esconde el cambio del código de cita. |
+| `asistente-restaurante.md` | La vertical de restaurante: sus cuatro capacidades, los tres obstáculos de `tomar_pedido` y cómo se resolvieron, y el pedido armado desde el menú digital con su contrato entre repos. |
 | `env-produccion-f8c.txt` | El bloque de `.env` del canal en producción, con qué significa cada variable. |
 | `mediciones/` | Mediciones sobre datos reales que condicionaron decisiones. |
 

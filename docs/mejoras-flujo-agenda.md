@@ -9,9 +9,27 @@ antemano, y también más concretas.
 Policy Gate, el Ledger ni el canal. Viven en el manejador determinista de la conversación y en el
 adaptador de `reserva`.
 
+> ## Estado al 2026-08-25
+>
+> | | |
+> |---|---|
+> | 1. Elegir profesional | ✅ **hecho y desplegado** |
+> | 2. Código de cita legible | ⏳ pendiente — **su prerrequisito de seguridad SÍ está hecho** |
+> | 3. Retroceder | ✅ **hecho y desplegado** |
+> | 4. Adaptador de restaurante | ✅ **hecho y desplegado**, ver [`asistente-restaurante.md`](asistente-restaurante.md) |
+>
+> Lo de abajo se conserva como registro de qué se pidió y por qué, no como lista de tareas.
+
 ---
 
-## 1. Elegir profesional — y poder no elegirlo
+## 1. Elegir profesional — y poder no elegirlo ✅
+
+**Hecho el 2026-08-24.** Dos decisiones sobrevivieron al código y tienen prueba que las vigila:
+«me da igual» va **primera** en el menú (si deja de estarlo, falla un test), y con **un solo
+profesional no se pregunta** — un menú de una opción es pedirle a alguien que confirme lo
+inevitable. Hizo falta una capacidad nueva, `consultar_profesionales`: el motor no puede llamar a
+la vertical de otro modo (ADR-009).
+
 
 **Hoy:** el flujo asigna profesional sin preguntar. `consultar_disponibilidad` ya devuelve
 `id_profesional` en cada hueco, así que la información está; simplemente no se ofrece.
@@ -82,7 +100,20 @@ Antes de tocarlo hay que decidir tres cosas:
 
 ---
 
-## 3. Poder retroceder
+## 3. Poder retroceder ✅
+
+**Hecho el 2026-08-24.** Lo que costaba pensar no era detectar «otro día» sino **qué deja de ser
+cierto** al volver. `SOBREVIVE_AL_VOLVER` es una **lista blanca**: enumera lo que se conserva, no
+lo que se borra — con una lista negra, cada campo nuevo se quedaría por descuido y el síntoma
+sería una selección imposible que no falla hasta el último paso.
+
+El hold **no se libera** (caduca solo): soltarlo exigiría invocar otra capacidad en el mismo
+turno, y la FSM invoca una por turno. Es la decisión que ya había tomado el rechazo de la
+confirmación; se mantiene una sola regla.
+
+De paso, rechazar la confirmación vuelve a las horas de **ese** día en vez de repreguntar la
+fecha: «Ver otras horas» prometía horas y cobraba un paso de castigo por cambiar de opinión.
+
 
 **Hoy:** el flujo solo avanza. Si el cliente elige día, ve las horas y quiere otro día, o se da
 cuenta de que pidió el servicio equivocado, no hay vuelta atrás dentro de la conversación.
