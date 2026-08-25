@@ -1,4 +1,4 @@
--- Agenda del «Salón Demo EscalApp» (id_negocio 10) en PRODUCCIÓN.
+-- Catálogo del «Salón Demo EscalApp» (id_negocio 10) en PRODUCCIÓN.
 --
 -- ## Por qué existe, y por qué toca producción
 --
@@ -12,20 +12,35 @@
 -- tiene dueño real y estaba **vacío**: 0 servicios, 0 profesionales, 0 citas. Es el sitio
 -- correcto para la prueba — y sembrarlo no toca a ningún cliente.
 --
--- Es el mismo contenido que `dev_reserva.sql`, que monta la agenda sobre el negocio 1 en
--- local. Se copia en vez de parametrizarse porque el de local se ejecuta a ciegas y este
--- **no debe poder apuntar a otro negocio por descuido**: el id va escrito y comprobado.
+-- ## Por qué el catálogo es variado y no dos servicios de muestra
 --
--- Idempotente: se puede volver a ejecutar sin duplicar nada.
+-- La primera versión (2026-08-24) puso lo mínimo para que el bot no respondiera «no hay
+-- nada»: dos servicios y dos profesionales. Sirve para comprobar que la tubería funciona y
+-- para nada más. Un catálogo pobre esconde justo los casos donde el motor de disponibilidad
+-- se rompe, así que esta versión busca **variedad con intención**:
+--
+--   · **Duraciones de 15 a 180 minutos.** Con todo durando 30 min y un paso de 15, los
+--     huecos siempre cuadran. Un alisado de 3 horas contra una agenda partida en dos
+--     bloques es lo que descubre si el buffer de limpieza y el solape están bien.
+--   · **Seis profesionales con horarios DISTINTOS**, no el mismo copiado. Cuando dos
+--     agendas se funden para el mismo servicio, `consultar_disponibilidad` tiene que
+--     unirlas sin duplicar huecos; con horarios idénticos ese caso no se ejercita.
+--   · **Quién presta qué, repartido de forma desigual.** El diseño de cejas lo hace una
+--     sola persona y el corte lo hacen cuatro: son los dos extremos del mismo cálculo.
+--   · **Sábado incluido** para tres de ellos, porque `dia_semana` es 0=domingo…6=sábado y
+--     un fixture de lunes a viernes nunca prueba el borde de la semana.
+--
+-- Precios en pesos colombianos, coherentes con un salón real de barrio.
+--
+-- Es idempotente por nombre: se puede volver a ejecutar y no duplica nada. Añadir un
+-- servicio nuevo aquí y reejecutar es la forma prevista de ampliarlo.
 DO $$
 DECLARE
     v_id_negocio integer := 10;
     v_nombre     text;
-    v_corte      integer;
-    v_tinte      integer;
-    v_laura      integer;
-    v_marco      integer;
-    v_dia        integer;
+    v_serv       integer;
+    v_prof       integer;
+    v_hor        integer;
 BEGIN
     -- Salvaguarda: si el 10 dejara de ser el salón demo, esto NO siembra nada. En producción
     -- un fixture que se equivoca de inquilino le mete servicios inventados a un cliente real.
@@ -42,58 +57,139 @@ BEGIN
     VALUES (v_id_negocio, 1, 10, 15)
     ON CONFLICT (id_negocio) DO NOTHING;
 
-    SELECT id_servicio INTO v_corte FROM reserva.reserva_servicio
-     WHERE id_negocio = v_id_negocio AND nombre = 'Corte de cabello';
-    IF v_corte IS NULL THEN
-        INSERT INTO reserva.reserva_servicio (id_negocio, nombre, descripcion, duracion_min, precio, estado)
-        VALUES (v_id_negocio, 'Corte de cabello', 'Corte clásico con lavado', 30, 35000, 'A')
-        RETURNING id_servicio INTO v_corte;
-    END IF;
+    -- ── Servicios ────────────────────────────────────────────────────────────────────────
+    INSERT INTO reserva.reserva_servicio (id_negocio, nombre, descripcion, duracion_min, precio, estado)
+    SELECT v_id_negocio, c.nombre, c.descripcion, c.duracion, c.precio, 'A'
+      FROM (VALUES
+            ('Corte de cabello',          'Corte clásico con lavado y secado',                30,  35000),
+            ('Corte y barba',             'Corte completo más perfilado de barba',            45,  50000),
+            ('Arreglo de barba',          'Perfilado, recorte y aceite hidratante',           20,  22000),
+            ('Afeitado clásico a navaja', 'Toalla caliente, navaja y bálsamo',                30,  30000),
+            ('Corte infantil',            'Corte para niños hasta 12 años',                   25,  25000),
+            ('Tinte',                     'Coloración completa',                              90, 120000),
+            ('Mechas y balayage',         'Iluminación con matizado incluido',               150, 220000),
+            ('Peinado y secado',          'Brushing, ondas o recogido',                       40,  45000),
+            ('Tratamiento capilar',       'Hidratación profunda con masaje',                  60,  70000),
+            ('Alisado con keratina',      'Alisado progresivo, incluye lavado y sellado',    180, 280000),
+            ('Manicure',                  'Limado, cutícula y esmaltado',                     40,  30000),
+            ('Pedicure',                  'Spa de pies, limado y esmaltado',                  50,  40000),
+            ('Diseño de cejas',           'Depilación y perfilado',                           15,  18000)
+           ) AS c(nombre, descripcion, duracion, precio)
+     WHERE NOT EXISTS (
+        SELECT 1 FROM reserva.reserva_servicio s
+         WHERE s.id_negocio = v_id_negocio AND s.nombre = c.nombre
+     );
 
-    SELECT id_servicio INTO v_tinte FROM reserva.reserva_servicio
-     WHERE id_negocio = v_id_negocio AND nombre = 'Tinte';
-    IF v_tinte IS NULL THEN
-        INSERT INTO reserva.reserva_servicio (id_negocio, nombre, descripcion, duracion_min, precio, estado)
-        VALUES (v_id_negocio, 'Tinte', 'Coloración completa', 90, 120000, 'A')
-        RETURNING id_servicio INTO v_tinte;
-    END IF;
+    -- ── Profesionales ────────────────────────────────────────────────────────────────────
+    INSERT INTO reserva.reserva_profesional (id_negocio, nombre, especialidad, estado)
+    SELECT v_id_negocio, p.nombre, p.especialidad, 'A'
+      FROM (VALUES
+            ('Laura Gómez',     'Colorimetría'),
+            ('Marco Ruiz',      'Barbería'),
+            ('Valentina Ríos',  'Estilismo y peinado'),
+            ('Andrés Mora',     'Barbería clásica'),
+            ('Camila Torres',   'Manicure y pedicure'),
+            ('Sofía Herrera',   'Tratamientos capilares')
+           ) AS p(nombre, especialidad)
+     WHERE NOT EXISTS (
+        SELECT 1 FROM reserva.reserva_profesional r
+         WHERE r.id_negocio = v_id_negocio AND r.nombre = p.nombre
+     );
 
-    SELECT id_profesional INTO v_laura FROM reserva.reserva_profesional
-     WHERE id_negocio = v_id_negocio AND nombre = 'Laura Gómez';
-    IF v_laura IS NULL THEN
-        INSERT INTO reserva.reserva_profesional (id_negocio, nombre, especialidad, estado)
-        VALUES (v_id_negocio, 'Laura Gómez', 'Colorimetría', 'A')
-        RETURNING id_profesional INTO v_laura;
-    END IF;
-
-    SELECT id_profesional INTO v_marco FROM reserva.reserva_profesional
-     WHERE id_negocio = v_id_negocio AND nombre = 'Marco Ruiz';
-    IF v_marco IS NULL THEN
-        INSERT INTO reserva.reserva_profesional (id_negocio, nombre, especialidad, estado)
-        VALUES (v_id_negocio, 'Marco Ruiz', 'Barbería', 'A')
-        RETURNING id_profesional INTO v_marco;
-    END IF;
-
-    -- Laura hace las dos cosas; Marco solo corta. Así `consultar_disponibilidad` sin
-    -- profesional tiene que fundir dos agendas para el corte y una sola para el tinte,
-    -- que es justo el caso que el adaptador compensa.
+    -- ── Quién presta qué ─────────────────────────────────────────────────────────────────
+    -- Repartido a propósito de forma desigual: el corte lo hacen cuatro personas y el diseño
+    -- de cejas una sola. Son los dos extremos de la misma consulta de disponibilidad.
     INSERT INTO reserva.reserva_profesional_servicio (id_profesional, id_servicio)
-    VALUES (v_laura, v_corte), (v_laura, v_tinte), (v_marco, v_corte)
+    SELECT pr.id_profesional, se.id_servicio
+      FROM (VALUES
+            ('Laura Gómez',    'Corte de cabello'),
+            ('Laura Gómez',    'Tinte'),
+            ('Laura Gómez',    'Mechas y balayage'),
+            ('Laura Gómez',    'Peinado y secado'),
+            ('Laura Gómez',    'Tratamiento capilar'),
+            ('Laura Gómez',    'Alisado con keratina'),
+            ('Marco Ruiz',     'Corte de cabello'),
+            ('Marco Ruiz',     'Corte y barba'),
+            ('Marco Ruiz',     'Arreglo de barba'),
+            ('Marco Ruiz',     'Afeitado clásico a navaja'),
+            ('Marco Ruiz',     'Corte infantil'),
+            ('Valentina Ríos', 'Corte de cabello'),
+            ('Valentina Ríos', 'Peinado y secado'),
+            ('Valentina Ríos', 'Tinte'),
+            ('Valentina Ríos', 'Alisado con keratina'),
+            ('Andrés Mora',    'Corte de cabello'),
+            ('Andrés Mora',    'Corte y barba'),
+            ('Andrés Mora',    'Arreglo de barba'),
+            ('Andrés Mora',    'Afeitado clásico a navaja'),
+            ('Andrés Mora',    'Corte infantil'),
+            ('Camila Torres',  'Manicure'),
+            ('Camila Torres',  'Pedicure'),
+            ('Camila Torres',  'Diseño de cejas'),
+            ('Sofía Herrera',  'Tratamiento capilar'),
+            ('Sofía Herrera',  'Mechas y balayage'),
+            ('Sofía Herrera',  'Alisado con keratina')
+           ) AS a(profesional, servicio)
+      JOIN reserva.reserva_profesional pr
+        ON pr.id_negocio = v_id_negocio AND pr.nombre = a.profesional
+      JOIN reserva.reserva_servicio se
+        ON se.id_negocio = v_id_negocio AND se.nombre = a.servicio
     ON CONFLICT DO NOTHING;
 
-    -- Lunes a viernes, 09:00–13:00 y 14:00–18:00, para ambos.
-    FOREACH v_dia IN ARRAY ARRAY[1, 2, 3, 4, 5] LOOP
-        INSERT INTO reserva.reserva_horario (id_negocio, id_profesional, dia_semana, hora_inicio, hora_fin)
-        SELECT v_id_negocio, p, v_dia, h[1]::time, h[2]::time
-          FROM unnest(ARRAY[v_laura, v_marco]) AS p,
-               (VALUES (ARRAY['09:00', '13:00']), (ARRAY['14:00', '18:00'])) AS t(h)
-         WHERE NOT EXISTS (
-            SELECT 1 FROM reserva.reserva_horario
-             WHERE id_negocio = v_id_negocio AND id_profesional = p
-               AND dia_semana = v_dia AND hora_inicio = h[1]::time
-         );
-    END LOOP;
+    -- ── Horarios ─────────────────────────────────────────────────────────────────────────
+    -- `dia_semana`: 0=domingo … 6=sábado (es `Date.getDay()` de Bogotá, ver
+    -- `reglasAgenda.diaSemanaLocal`). Cada persona tiene un horario DISTINTO a propósito:
+    -- con agendas idénticas nunca se prueba la fusión de disponibilidades.
+    INSERT INTO reserva.reserva_horario (id_negocio, id_profesional, dia_semana, hora_inicio, hora_fin)
+    SELECT v_id_negocio, pr.id_profesional, h.dia, h.desde::time, h.hasta::time
+      FROM (VALUES
+            -- Laura: martes a sábado, jornada partida
+            ('Laura Gómez', 2, '09:00', '13:00'), ('Laura Gómez', 2, '14:00', '18:00'),
+            ('Laura Gómez', 3, '09:00', '13:00'), ('Laura Gómez', 3, '14:00', '18:00'),
+            ('Laura Gómez', 4, '09:00', '13:00'), ('Laura Gómez', 4, '14:00', '18:00'),
+            ('Laura Gómez', 5, '09:00', '13:00'), ('Laura Gómez', 5, '14:00', '18:00'),
+            ('Laura Gómez', 6, '09:00', '14:00'),
+            -- Marco: lunes a viernes, cierra más tarde
+            ('Marco Ruiz', 1, '09:00', '13:00'), ('Marco Ruiz', 1, '14:00', '19:00'),
+            ('Marco Ruiz', 2, '09:00', '13:00'), ('Marco Ruiz', 2, '14:00', '19:00'),
+            ('Marco Ruiz', 3, '09:00', '13:00'), ('Marco Ruiz', 3, '14:00', '19:00'),
+            ('Marco Ruiz', 4, '09:00', '13:00'), ('Marco Ruiz', 4, '14:00', '19:00'),
+            ('Marco Ruiz', 5, '09:00', '13:00'), ('Marco Ruiz', 5, '14:00', '19:00'),
+            -- Valentina: solo lunes, miércoles, viernes y sábado por la mañana
+            ('Valentina Ríos', 1, '10:00', '18:00'),
+            ('Valentina Ríos', 3, '10:00', '18:00'),
+            ('Valentina Ríos', 5, '10:00', '18:00'),
+            ('Valentina Ríos', 6, '09:00', '13:00'),
+            -- Andrés: martes a sábado, entra y sale más tarde
+            ('Andrés Mora', 2, '10:00', '14:00'), ('Andrés Mora', 2, '15:00', '19:00'),
+            ('Andrés Mora', 3, '10:00', '14:00'), ('Andrés Mora', 3, '15:00', '19:00'),
+            ('Andrés Mora', 4, '10:00', '14:00'), ('Andrés Mora', 4, '15:00', '19:00'),
+            ('Andrés Mora', 5, '10:00', '14:00'), ('Andrés Mora', 5, '15:00', '19:00'),
+            ('Andrés Mora', 6, '10:00', '16:00'),
+            -- Camila: lunes a viernes de corrido, sin pausa de almuerzo
+            ('Camila Torres', 1, '09:00', '17:00'),
+            ('Camila Torres', 2, '09:00', '17:00'),
+            ('Camila Torres', 3, '09:00', '17:00'),
+            ('Camila Torres', 4, '09:00', '17:00'),
+            ('Camila Torres', 5, '09:00', '17:00'),
+            -- Sofía: solo jueves, viernes y sábado (los tratamientos largos)
+            ('Sofía Herrera', 4, '10:00', '18:00'),
+            ('Sofía Herrera', 5, '10:00', '18:00'),
+            ('Sofía Herrera', 6, '10:00', '16:00')
+           ) AS h(profesional, dia, desde, hasta)
+      JOIN reserva.reserva_profesional pr
+        ON pr.id_negocio = v_id_negocio AND pr.nombre = h.profesional
+     WHERE NOT EXISTS (
+        SELECT 1 FROM reserva.reserva_horario x
+         WHERE x.id_negocio = v_id_negocio
+           AND x.id_profesional = pr.id_profesional
+           AND x.dia_semana = h.dia
+           AND x.hora_inicio = h.desde::time
+     );
 
-    RAISE NOTICE 'Agenda lista en "%" (negocio %): servicios % y %, profesionales % y %',
-        v_nombre, v_id_negocio, v_corte, v_tinte, v_laura, v_marco;
+    SELECT count(*) INTO v_serv FROM reserva.reserva_servicio    WHERE id_negocio = v_id_negocio AND estado = 'A';
+    SELECT count(*) INTO v_prof FROM reserva.reserva_profesional WHERE id_negocio = v_id_negocio AND estado = 'A';
+    SELECT count(*) INTO v_hor  FROM reserva.reserva_horario     WHERE id_negocio = v_id_negocio;
+
+    RAISE NOTICE 'Catálogo de "%" (negocio %): % servicios, % profesionales, % bloques de horario.',
+        v_nombre, v_id_negocio, v_serv, v_prof, v_hor;
 END $$;

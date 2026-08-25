@@ -1,0 +1,47 @@
+# ══════════════════════════════════════════════════════════════════════════════
+#  Bloque para AÑADIR al final de /var/www/admin_ws/.env en el VPS (F8-C)
+#
+#  Antes:  cp /var/www/admin_ws/.env /var/www/admin_ws/.env.bak_$(date +%Y%m%d_%H%M)
+#  Después: sudo systemctl restart escalapp-api
+#
+#  Rellena los DOS valores marcados con <<< antes de reiniciar. Con cualquiera
+#  de ellos vacío el canal queda apagado y el log de arranque dice cuál falta.
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ======== EscalApp Intelligence — canal de WhatsApp (F8-C, 2026-08-24) ========
+#
+# Superficie HTTP: la necesita el WEBHOOK de WhatsApp, que va autenticado por la
+# firma HMAC de Meta sobre el cuerpo crudo. El WebChat NO se enciende aquí — sigue
+# sin autenticar y por eso tiene su propio interruptor, que se deja SIN PONER.
+INTELLIGENCE_HTTP_ENABLED=true
+# INTELLIGENCE_WEBCHAT_ENABLED   <<< NO PONER (WebChat sin autenticación)
+
+# El número apunta al negocio 10 «Salón Demo EscalApp», NO a un cliente real.
+# Los dos activos (6 ZONA BURGER, 14 LA ESQUINA DEL BARRIL) son restaurantes y el
+# asistente solo sabe agendar citas. Equivocar este id escribe en la conversación
+# de otro inquilino: es la fuga que cerró F2.
+WHATSAPP_NEGOCIO_ID=10
+
+WHATSAPP_PHONE_NUMBER_ID=1297624263436786
+WHATSAPP_WABA_ID=4199925320246584
+
+# El token permanente del usuario del sistema `escalapp-api`, sin caducidad.
+# Cópialo de tu .env local (admin_ws/.env, línea WHATSAPP_TOKEN=EAAWD2Pb...).
+WHATSAPP_TOKEN=<<< PEGA AQUÍ EL TOKEN DE TU .env LOCAL
+
+# Meta → Configuración → Información básica de la app → «Clave secreta de la app».
+# Es lo que valida que el webhook viene de Meta y no de cualquiera.
+WHATSAPP_APP_SECRET=<<< PEGA AQUÍ EL APP SECRET
+
+# Lo eliges tú y tiene que ser EL MISMO en el panel de Meta al dar de alta el
+# webhook. Este ya está generado:
+WHATSAPP_VERIFY_TOKEN=escalapp_b91ce678025bff4827ef60445931f4ea
+
+# Sin clave de modelo a propósito. Con WhatsApp abierto el Nivel 4 cuesta dinero
+# por turno de gente real; el Nivel 1 determinista es gratis y es un estado
+# válido, no un fallo. Encenderlo es una decisión de presupuesto aparte.
+
+WHATSAPP_VERIFY_TOKEN=escalapp_b91ce678025bff4827ef60445931f4ea
+INTELLIGENCE_HTTP_ENABLED=true
+WHATSAPP_NEGOCIO_ID=10
+WHATSAPP_APP_SECRET==5c0b9b78b09e6f410d5718998955ef92
