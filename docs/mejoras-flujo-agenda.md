@@ -102,7 +102,51 @@ hay que soltarlo. Si no, el cliente se bloquea a sí mismo el hueco al que quier
 
 ---
 
-## 4. Después: el adaptador de restaurante
+## 4. El adaptador de restaurante — primera tanda HECHA (2026-08-24)
+
+**Hechas y probadas: tres consultas.** `consultar_carta` (categorías, o los productos de una),
+`buscar_producto` (por nombre) y `consultar_estado_pedido` (por número de orden). Viven en
+`intelligence/adapters/restaurante/index.js`, con 11 pruebas contra la base real.
+
+Ya valen por sí solas: la carta, el precio de algo concreto y en qué va un pedido son la mayor
+parte de lo que le preguntan a un restaurante por WhatsApp, y hoy lo contesta una persona a mano.
+
+Dos detalles que costaron encontrarse y no se deben perder:
+
+- **Se usan las consultas PÚBLICAS de `cartaService`**, no las de administración. Filtran por
+  `visible` además de por `disponible`: lo primero es lo que el negocio oculta a propósito, lo
+  segundo lo que hoy está agotado. Un bot que ofrece algo agotado hace quedar mal al negocio con
+  su cliente. Hay una prueba que falla si se cambian por las de admin.
+- **`consultar_estado_pedido` comprueba de quién es el pedido**, por el mismo motivo que
+  `cancelar_cita` — y aquí es más urgente: el número de orden es corto y secuencial (`ORD-12`),
+  así que recorrerlo **sí** es una estrategia. Sin la comprobación, cualquiera leería el teléfono
+  y el total de los pedidos ajenos.
+
+### ⚠️ Lo que falta: TOMAR el pedido, y por qué no se hizo aún
+
+Es el mismo corte que F4-A/F4-B hizo en `reserva` —consultas primero—, pero aquí no es prudencia
+genérica: **`pedidoService.crearOrden` tiene tres obstáculos concretos**, y ninguno se resuelve
+desde el adaptador.
+
+1. **No acepta una transacción externa.** Abre la suya con `Models.sequelize.transaction()`. El
+   Policy Gate envuelve toda ejecución en una transacción propia para que el `dry-run` sea
+   genérico y no algo que cada capacidad implemente (y olvide). Con una transacción anidada, ni
+   el dry-run deshace nada ni el rollback del Gate alcanza a la orden. **`reserva` no tiene este
+   problema porque F3 lo resolvió allí**: `citaService.crearCita` sí recibe `{ transaction }`.
+   Es el punto 2 del Contrato de Adopción y le toca a la vertical.
+2. **Exige `requireCajaAbierta`.** Una orden no existe fuera de un turno de caja. Es una regla
+   correcta que hay que respetar, no rodear — pero significa que quien escriba a las 3 de la
+   mañana no puede pedir, y el bot tiene que **saber decirlo bien** en vez de fallar con un error
+   técnico.
+3. **`pedid_orden.id_usuario` es NOT NULL** — comprobado contra el esquema, no supuesto. Una
+   orden la toma siempre alguien del negocio, y un pedido que llega por WhatsApp no tiene empleado
+   detrás. Qué se escribe ahí **no es una decisión de código**: es quién responde de esa orden en
+   la caja del negocio.
+
+Añádase el resto del pedido a domicilio —dirección, método de pago, inventario que se consume— y
+queda claro que es una tanda propia, con sus decisiones de negocio.
+
+## 5. Después: lo que quedó fuera
 
 No es una mejora del flujo de citas, es la siguiente pieza de producto — y está anotada aquí para
 que no se pierda el orden.

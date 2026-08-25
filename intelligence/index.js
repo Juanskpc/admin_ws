@@ -18,7 +18,10 @@ const registry = require('./core/registry');
 const motor = require('./engine/motor');
 const gateway = require('./channels/gateway');
 
-const ADAPTADORES = [require('./adapters/reserva')];
+const ADAPTADORES = [
+    require('./adapters/reserva'),
+    require('./adapters/restaurante'),
+];
 
 /** Los canales, por el mismo motivo y con la misma regla que los adaptadores de vertical. */
 const CANALES = [
