@@ -1,6 +1,6 @@
 # EscalApp Intelligence — estado y cómo continuar
 
-**Última actualización:** 2026-08-24 (**F8-C**: plantilla `recordatorio_cita` **aprobada**; queda desplegar, suscribir y publicar)
+**Última actualización:** 2026-08-24 (**F0–F8 DESPLEGADAS**: el asistente atiende por WhatsApp en producción)
 **Propósito:** que retomar el trabajo no cueste una sesión de arqueología. Si vuelves a este
 proyecto después de semanas, **lee este documento primero** y sigue por donde diga.
 
@@ -9,77 +9,96 @@ proyecto después de semanas, **lee este documento primero** y sigue por donde d
 
 ---
 
-## 4-0. POR DÓNDE SE SIGUE (cierre del 2026-08-22)
+## 4-0. POR DÓNDE SE SIGUE (cierre del 2026-08-24)
 
 > Esta sección es lo primero que hay que leer al retomar. Las de más abajo son historia de fases
 > ya cerradas y se conservan porque explican **por qué** las cosas están como están.
 
-> ⚠️ **LO PRIMERO AL RETOMAR: el trabajo del 2026-08-22 está SIN COMMITEAR.** En el árbol de
-> `admin_ws` hay cambios sin commit: la separación `INTELLIGENCE_WEBCHAT_ENABLED` (`app.js`,
-> `intelligence/http.js`, `.env.example`), el script nuevo `scripts/whatsapp_diagnostico.js`, y
-> estos documentos. **457 tests en verde**, pero `git status` no está limpio. Decidir si se
-> commitea antes de tocar nada más.
+**Estado en una frase:** **F0–F8 COMPLETAS Y DESPLEGADAS EN PRODUCCIÓN.** El asistente atiende por
+WhatsApp en el número `+57 315 281 2484`, agendó sus primeras citas reales el 2026-08-24 y **costó
+cero**. 457 pruebas en verde. Ya no hay ninguna fase pendiente del roadmap original.
 
-**Estado en una frase:** F0–F7 completas y **F8-A + F8-B hechas** en local, **ADR-023 Aceptado**,
-**457 pruebas en verde**, **nada desplegado** — y **F8-C ya empezó**: la cuenta de Meta existe y el
-número `+57 315 281 2484` está conectado y verificado ([`canal-whatsapp.md`](canal-whatsapp.md)
-tiene los identificadores).
+### Lo que pasó el 2026-08-24, en una lectura
 
-### Lo que se puede hacer ya, en orden de valor
+Fue la sesión en que Intelligence salió de local. Hasta ese día **no había nada** de esto en
+producción; ahora está todo, con las nueve migraciones aplicadas.
 
-1. **Desplegar F2.** Sigue siendo lo único de toda la lista que arregla algo **roto en producción
-   ahora mismo**: la fuga entre negocios. Procedimiento en §5. Lleva semanas esperando y no depende
-   de nada de lo que viene después.
-2. **Medir el guardarraíl de promesas una semana** antes de encender `PROMESAS_MODO=bloqueo`
-   (§6.14). Mismo procedimiento que F2 con `AUTHZ_MODO`. Sin datos, encender el bloqueo es
-   adivinar.
-3. **Terminar F8-C.** El 2026-08-22 se conectó el número: cuenta de Meta creada, método de pago
-   cargado y **`+57 315 281 2484` registrado y verificado**. Los identificadores (WABA,
-   `phone_number_id`, portafolio) están en [`canal-whatsapp.md`](canal-whatsapp.md) §«La cuenta de
-   Meta: estado real». **Sigue por ahí, en este orden:**
-   1. ✅ **Plantilla `recordatorio_cita` APROBADA** — comprobado el 2026-08-24 contra la Graph
-      API (`APPROVED` · UTILITY · `es`). El temor de que la rechazara por las variables adyacentes
-      `{{3}} {{4}}` no se cumplió: pasó con el texto **idéntico, carácter por carácter**, al de
-      `intelligence/core/plantillas.js` — verificado leyendo el `BODY` aprobado, no el panel. Con
-      esto **desaparece el único paso de F8-C que tenía plazo de espera ajeno**.
-   2. ✅ **Token permanente** (2026-08-22): usuario del sistema `escalapp-api`, tipo `SYSTEM_USER`,
-      **sin caducidad**, ya en el `.env`. Verificado: el diagnóstico lista la WABA, su número y las
-      plantillas.
-   3. ✅ **Decisión 9 resuelta** (2026-08-22): `INTELLIGENCE_WEBCHAT_ENABLED` separa el WebChat del
-      webhook. En producción se enciende `INTELLIGENCE_HTTP_ENABLED` y **no** el WebChat, que
-      entonces **no existe** (404, no 403). Comprobado levantando el servidor; 457 tests en verde.
-      Detalle en [`canal-whatsapp.md`](canal-whatsapp.md).
-   4. **Desplegar el backend.** ⚠️ **Aquí está el trabajo de verdad, y no es pequeño:** hoy no hay
-      **nada** de Intelligence en producción, así que encender el canal significa desplegar
-      **F0→F8 entero con sus nueve migraciones** sobre un VPS de 1 vCPU que atiende al cliente
-      real. **Es una sesión dedicada.** El orden exacto, el `.env` completo y las migraciones
-      están en **§5, punto 15**. La URL del webhook queda en
-      `https://api.escalapp.cloud/intelligence/whatsapp/webhook`.
-   5. **Configurar el webhook en el panel** (URL + verify token) y suscribir `messages`.
-   6. **Suscribir la app a la WABA** (`POST /v21.0/4199925320246584/subscribed_apps`) — el
-      diagnóstico avisa de que hoy no hay ninguna, y sin eso **no llega un solo webhook**.
-   7. **Publicar la app** — sin publicar, el webhook solo recibe las pruebas del panel.
-   8. **Probar con tu propio número antes que con un cliente**, y comprobar con
-      `scripts/whatsapp_diagnostico.js`.
+| Qué | Resultado |
+|---|---|
+| Las 9 migraciones | Aplicadas. El backfill tardó **1,36 s**: 819 personas, 1.450 órdenes enlazadas |
+| F2 (fuga entre negocios) | Desplegada, **modo observación**. Cero violaciones registradas |
+| Fallo de permisos | Corregido — producción llevaba con **todos** los permisos en `v---` |
+| Canal de WhatsApp | Vivo, apuntando al negocio **10 (Salón Demo)**, no a un cliente |
+| Frontends | `escalapp.cloud/reserva/` (nueva) y la Consola en `/admin/admin/intelligence` |
+| Primera conversación | 2 personas, 36 turnos, **todos deterministas**, 0 filas en `intelligence.costo` |
 
-   ⚠️ **Antes de nada hay que decidir `WHATSAPP_NEGOCIO_ID`**: a qué `id_negocio` pertenece el
-   número, y **tiene que ser el id de PRODUCCIÓN** — los locales (22 «Barbería Don Nico», 23
-   «Salón Demo EscalApp») no valen, hay que mirarlo en el VPS. No se deduce del panel de Meta, y
-   equivocarse escribe en la conversación de otro inquilino: la fuga que cerró F2.
+Los detalles del canal —y **las tres trampas de Meta que costaron la tarde**— están en
+[`canal-whatsapp.md`](canal-whatsapp.md) §«F8-C TERMINADA». El procedimiento de despliegue y lo que
+hay que comprobar antes, en §5 y §5-bis de este documento.
 
-   Faltan además `WHATSAPP_APP_SECRET` (Configuración → Información básica de la app) y
-   `WHATSAPP_VERIFY_TOKEN` (lo eliges tú, y tiene que ser el mismo en el `.env` y en el panel).
+> **La lección de la sesión, si solo se lee una línea:** los tres fallos que costaron tiempo
+> —el cableado de F8-B, el `=` de más en el App Secret, los cero `fields` suscritos— **no daban
+> error**. Arrancaba todo, los logs decían «listo» y lo único que pasaba es que no pasaba nada. En
+> este sistema el modo de fallo caro es el silencio, no la excepción.
 
-   Corregido el 2026-08-21: se había dado por hecho que el bloqueo eran las semanas de la
-   **verificación de negocio**. No lo era. Sin verificar se puede enviar a **250 destinatarios
-   únicos cada 24 h** y tener **2 números — o sea, 2 inquilinos**. Ese segundo techo, no el de los
-   250, es el que obligará a verificar cuando llegue el tercer cliente.
-4. **Meter `asistente_ia` en un plan comercial.** Ningún plan lo incluye; hoy hay que forzarlo con
-   `FEATURES_FORZADAS`. Es media hora de trabajo y una decisión comercial —en qué plan y por cuánto—
-   que no es del código. Sin ello el asistente no se puede vender.
-5. **Lo que queda de F8-B**, pequeño y no bloqueante: la tabla de números para el segundo
-   inquilino, y multimedia/visión —que se dejó fuera a propósito: no se puede verificar sin
-   descargar medios de Meta.
+### Lo siguiente, en orden
+
+El roadmap original está agotado. Lo que sigue viene del uso real, no del plan.
+
+1. **Mejoras del flujo de agendamiento** (pedidas el 2026-08-24 tras probarlo de verdad). Son de
+   producto, no de arquitectura, y todas viven en el manejador determinista y el adaptador de
+   `reserva`. **Detalle completo en [`mejoras-flujo-agenda.md`](mejoras-flujo-agenda.md)**:
+   1. **Elegir profesional, y poder no elegirlo.** Hoy el flujo asigna sin preguntar. Falta el menú
+      de selección **y** una opción explícita de «me da igual / el primero que haya», que además
+      debe seguir siendo la vía rápida.
+   2. **El código de la cita no puede ser un UUID.** Hoy el cliente recibe
+      `6b82eea2-f35d-48ae-b2ab-79009fc6b44a`. Hace falta un código corto, legible y dictable por
+      teléfono. ⚠️ **Tiene un prerrequisito de seguridad, verificado:** hoy `cancelar_cita` y
+      `reagendar_cita` autorizan **solo** con el código, sin comprobar quién lo usa — la seguridad
+      la da, sin que nadie lo decidiera, que un UUID no se adivina. Hay que atar la cita al teléfono
+      que la pidió **antes** de acortar el código. Detalle y el resto de implicaciones en
+      [`mejoras-flujo-agenda.md`](mejoras-flujo-agenda.md).
+   3. **Poder retroceder.** Al listar opciones, el cliente debe poder cambiar de día, de servicio o
+      de profesional sin empezar de cero. Hoy el flujo solo avanza.
+2. **El adaptador de restaurante.** Es lo que convierte esto en algo vendible a los clientes que
+   ya existen: los dos activos (6 ZONA BURGER, 14 LA ESQUINA DEL BARRIL) son restaurantes y el
+   asistente **solo sabe agendar citas**. Las seis capacidades son de `reserva` y el único adaptador
+   es `reserva`. El andamiaje —policy gate, ledger, canal, confirmación humana, escalera— ya está y
+   no hay que tocarlo: son capacidades nuevas sobre una vertical que ya existe.
+3. **Medir el guardarraíl de promesas una semana** antes de encender `PROMESAS_MODO=bloqueo`
+   (§6.14). Y lo mismo con `AUTHZ_MODO=bloqueo`: ya hay tráfico real siendo observado desde el
+   2026-08-24, así que **la medición ya está corriendo** — solo hay que mirarla.
+4. **Alta de números de clientes (Embedded Signup).** Lo pidió el dueño el 2026-08-24: que el
+   cliente traiga su número desde la app. Son tres frentes (proveedor de tecnología + verificación
+   de negocio en Meta, tabla de números y custodia de tokens en el código, máquina de estados en la
+   app) y **merece un ADR**. Detalle en [`canal-whatsapp.md`](canal-whatsapp.md) §«Dar de alta el
+   número de un CLIENTE». **Va DESPUÉS del punto 2**: es fontanería que solo rinde cuando hay
+   producto que entregar.
+5. **Meter `asistente_ia` en la oferta comercial de verdad.** Desde el 2026-08-24 vive en **«Plan
+   Avanzado»** (`intelligence/core/features.js`), que se eligió porque los 11 negocios de producción
+   están en «Plan Básico» y Avanzado tenía **cero**: así no se le regala a nadie. Falta ponerle
+   precio y decidir si es el plan caro o un añadido.
+
+### Cosas que hay que vigilar ahora que esto está vivo
+
+- **`OPENAI_API_KEY` está puesta en el `.env` de producción.** Decisión consciente del dueño el
+  2026-08-24 para poder probar con modelo. Hay cortacircuitos por turno (5 centavos, 4 vueltas)
+  pero **no hay tope global**. Mientras la app no esté publicada solo escriben los conocidos; el día
+  que se publique, el número lo puede encontrar cualquiera.
+- **La app de Meta NO está publicada.** No hizo falta para probar: los webhooks llegan igual.
+- **El nombre visible del número** quedó `AVAILABLE_WITHOUT_REVIEW`, o sea aprobado.
+- **Particiones del Ledger hasta 2027-10.** Una tabla particionada sin la partición del mes rechaza
+  TODO INSERT. Antes de que se agoten:
+  `node scripts/intelligence_mantenimiento.js particiones --meses 12`.
+- **`FEATURES_FORZADAS` no funciona en producción** y es a propósito (ADR-021). Si hace falta darle
+  el asistente a un negocio, se le pone «Plan Avanzado».
+- **Horarios del Salón Demo con restos de la primera siembra:** Laura tiene lunes (el diseño la
+  puso de martes a sábado) y Marco cierra a las 18:00, no a las 19:00. El fixture es idempotente por
+  *hora de inicio*, así que no pudo corregir un `hora_fin` ya existente. Inofensivo, pero la agenda
+  no es la que dice `scripts/fixtures/prod_salon_demo.sql`.
+- **Configuración de pagos de Meta:** en el panel aparece una entrada llamada **«India»**. Sigue sin
+  confirmarse si es una sección que Meta muestra siempre o si la tarjeta quedó en la región
+  equivocada. Con envíos reales ya en marcha, conviene mirarlo.
 
 ### Deudas conocidas, ninguna bloqueante
 
@@ -183,9 +202,13 @@ F3. Compensarlas en el adaptador sería correcto para `restaurante` (Grupo 1) e 
 para `reserva` (Grupo 2). Las consultas no dependían de nada de eso, así que F4-A salió
 primero y F3 después.
 
-### ⚠️ NADA está desplegado en producción
+### ✅ TODO desplegado en producción (2026-08-24)
 
-Los once bloques funcionan y están probados **solo contra una base de desarrollo**. Inventario de
+> Esta sección decía «⚠️ NADA está desplegado» hasta el 2026-08-24. Ese día se desplegó F0–F8
+> entero con sus nueve migraciones, y el canal de WhatsApp quedó atendiendo. Ver §5.
+
+Los tests siguen corriendo **solo contra una base de desarrollo** — eso no cambió y no debe cambiar
+(§ «Reglas de uso» de la base compartida). Inventario de
 la suite (contable con `grep -rhoE '^\s*(it|test)\(' __tests__/`):
 
 | Suite | Archivos | Casos declarados |
@@ -1284,7 +1307,63 @@ de aceptación 2 del master-plan comprobado sin cuenta.
 
 ---
 
-## 5. Pendiente de despliegue (en este orden)
+## 5. El despliegue (EJECUTADO el 2026-08-24)
+
+> ✅ **Esta sección ya se ejecutó entera.** Se conserva porque describe el orden correcto y los
+> motivos de cada paso — sirve para repetirlo en otro entorno y para entender por qué las cosas
+> quedaron como quedaron. Lo que de verdad pasó está resumido abajo; el plan original sigue
+> intacto a continuación.
+
+### Cómo fue en la realidad
+
+Se hizo en dos fases el mismo día, con los clientes a punto de entrar a trabajar a las 19:00.
+
+| Paso | Resultado real |
+|---|---|
+| Backup previo | `db_2026-08-24_1659.dump` |
+| Rama en el VPS | `git checkout feature/escalapp_intelligence` (no se fusionó a `master`) |
+| Las 9 migraciones | Todas OK. `platform` 6 tablas, `intelligence` 83, `reserva` 9 |
+| Backfill | **1,36 s** — 1.450 órdenes con móvil válido → **819 personas**; 70 con teléfono no utilizable (esperado) |
+| Volumen real | **5.633 órdenes**, no las ~1.056 estimadas. Aun así el bloqueo fue un parpadeo |
+| Reinicio | Limpio. `[authz] Modo OBSERVACIÓN`, cero errores |
+
+**El pre-vuelo de §5-bis valió la pena:** `gener_rol_nivel` tenía 147 filas, así que el arreglo de
+permisos era seguro. Si hubiera estado vacía, el despliegue habría dejado a los clientes mirando
+«Verificando acceso…» para siempre.
+
+### El susto: una regresión de permisos, cazada y revertida en 13 minutos
+
+El arreglo de permisos, tal como estaba escrito, calculaba las vistas como **intersección** de la
+plantilla del rol y los ajustes del negocio. Con los datos reales eso **quita** vistas: en ZONA
+BURGER el CAJERO pasaba de 7 a 2 y el MESERO de 3 a 1, perdiendo MESAS y PEDIDOS. Son 1 cajero y 3
+meseros, y entraban a trabajar en dos horas.
+
+Se detectó **antes que ningún usuario**, comparando las dos tablas por SQL en producción. Se revirtió
+a `master` en 13 minutos, sin un solo error en los logs durante la ventana.
+
+El arreglo definitivo hace que el ajuste del negocio **también pueda añadir**: si la plantilla del
+rol no dice nada de un par (rol, nivel) que el negocio habilitó, la vista se conserva con `puede_ver`
+y sin acciones — el comportamiento que ya había. Así el cambio es **estrictamente aditivo**.
+
+**Y se verificó antes de volver a subirlo**, ejecutando `verificarAccesoRestaurante` contra la base
+real para los 11 usuarios de ZONA BURGER, con la rama vieja y con la nueva: las listas de vistas
+salieron **idénticas**, y aparecieron las banderas de acción. Esa comprobación —correr el código
+real contra los datos reales y comparar— es lo que convirtió una corazonada en un hecho.
+
+> **Dato que justifica todo el arreglo:** antes del despliegue, **todos** los permisos de producción
+> eran `v---`. Ni el administrador de ZONA BURGER tenía botones de crear, editar o eliminar.
+
+### Lo que se descubrió del entorno real, y no coincidía con lo escrito
+
+- **12 negocios, 2 activos**: `6` ZONA BURGER (5.453 órdenes, 1.696 en 30 días) y `14` LA ESQUINA
+  DEL BARRIL (13 órdenes, arrancando). Los demás son demos o están parados.
+- **Los dos son restaurantes.** El único negocio de citas es el `10` (Salón Demo) y estaba vacío.
+- **No había frontend de reservas desplegado.** Solo `admin` y `restaurante`. Se añadió la ruta
+  `/reserva/*` al Caddyfile y se desplegó `reserva_app`.
+- **`1193035399` es el `num_identificacion` del dueño, no su `id_usuario`** (que es `1`). Buscar por
+  la columna equivocada hace parecer que un usuario no existe.
+
+### El plan original, tal como se escribió
 
 **Lo más urgente es F2**, porque es lo único que arregla algo que está roto en producción
 ahora mismo. F0 y F1 son funcionalidad nueva y pueden esperar.
@@ -1772,7 +1851,9 @@ estado por consumidor y la Ficha 360 no agrega verticales vacías.
 | `architecture/glossary.md` | La lengua ubicua. |
 | `desarrollo-local.md` | Montar el entorno local desde cero. |
 | `nivel-4.md` | Qué modelo sirve el Nivel 4, por qué diverge del id que nombra ADR-018 y qué señales hay que vigilar. |
-| `canal-whatsapp.md` | El canal de WhatsApp: qué está hecho (F8-A), los límites de Meta confirmados en la fuente, y la lista de lo que hay que hacer el día que exista la cuenta. |
+| `canal-whatsapp.md` | El canal de WhatsApp de punta a punta: F8-A/B/C, los límites de Meta confirmados en la fuente, **las tres trampas silenciosas del alta (2026-08-24)**, cómo cobra Meta, y qué haría falta para dar de alta el número de un cliente. |
+| `mejoras-flujo-agenda.md` | Las mejoras del flujo de agendamiento pedidas tras la primera prueba real, y el prerrequisito de seguridad que esconde el cambio del código de cita. |
+| `env-produccion-f8c.txt` | El bloque de `.env` del canal en producción, con qué significa cada variable. |
 | `mediciones/` | Mediciones sobre datos reales que condicionaron decisiones. |
 
 ## 10. Dónde está cada cosa que se construyó

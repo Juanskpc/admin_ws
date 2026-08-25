@@ -365,7 +365,7 @@ verificación pasa a ser lo que hace falta el día que 250 destinatarios diarios
 
 ---
 
-## La cuenta de Meta: estado real al 2026-08-24
+## La cuenta de Meta: estado real al 2026-08-24 (EL CANAL YA ESTA VIVO)
 
 **La cuenta existe y el número está conectado.** Estos identificadores no son secretos —son ids
 públicos de la Cloud API— y se dejan escritos aquí para no volver a buscarlos por el panel:
@@ -507,3 +507,200 @@ el HTTP, por lo mismo que dice `.env.example`. Un canal abierto con el Nivel 4 e
 factura ajena.
 
 ---
+
+---
+
+## F8-C TERMINADA — el canal en producción (2026-08-24)
+
+**El asistente atiende por WhatsApp en producción.** Dos personas conversaron con él desde sus
+teléfonos, agendó dos citas reales y no costó un centavo. Lo que sigue es el registro de cómo se
+llegó ahí y, sobre todo, de **las tres trampas que costaron la tarde**, porque ninguna daba error.
+
+### Lo que quedó encendido
+
+| Pieza | Valor |
+|---|---|
+| Número | `+57 315 281 2484` → `platform_type: CLOUD_API`, `status: CONNECTED`, caudal `STANDARD` |
+| Negocio | `WHATSAPP_NEGOCIO_ID=10` — **Salón Demo EscalApp**, no un cliente real |
+| Escalera | Nivel 1 determinista + `openai/gpt-5.6-terra` montado |
+| WebChat | **apagado** (`INTELLIGENCE_WEBCHAT_ENABLED` sin poner) — sigue sin autenticar |
+| Frontends | `escalapp.cloud/reserva/` (nueva) y la Consola en `/admin/admin/intelligence` |
+
+### Trampa 1: «número verificado» y «número registrado» son cosas distintas
+
+El primer envío falló con **`133010 — Account not registered`**, y el teléfono de un humano decía
+*«Este número de teléfono no está en WhatsApp»*. Las dos cosas eran el mismo problema.
+
+Este documento afirmaba desde el 2026-08-22 que el número estaba «registrado y verificado». Era
+media verdad, y la mitad que faltaba es la que importa:
+
+| Paso | Qué es | Campo que lo delata |
+|---|---|---|
+| **Verificar** | Demostrar que el número es tuyo (código por SMS) | `code_verification_status: VERIFIED` |
+| **Registrar** | Darlo de alta **en la Cloud API** con el PIN de 6 dígitos | `platform_type`, `status` |
+
+Estaba verificado y **no registrado**: `platform_type: NOT_APPLICABLE`, `status: PENDING`. Se
+arregla con una llamada, y sin ella **nada funciona aunque todo lo demás esté perfecto**:
+
+```
+POST /v21.0/{phone_number_id}/register
+{ "messaging_product": "whatsapp", "pin": "<los 6 dígitos>" }
+```
+
+Después: `platform_type: CLOUD_API`, `status: CONNECTED`, `throughput: STANDARD`.
+
+> **Cómo comprobarlo sin adivinar:**
+> `GET /v21.0/{phone_number_id}?fields=platform_type,status,code_verification_status,name_status`.
+> Si `platform_type` no dice `CLOUD_API`, el número no está operativo, punto.
+
+De paso se corrigió otra lectura equivocada: el `status: PENDING` que este documento atribuía al
+**nombre en revisión** no era eso. El nombre estaba aprobado (`name_status:
+AVAILABLE_WITHOUT_REVIEW`); el `PENDING` era la conexión.
+
+### Trampa 2: un `=` de más en el App Secret
+
+Al pegar el secreto en el `.env` quedó `WHATSAPP_APP_SECRET==5c0…f92` — **33 caracteres, empezando
+por `=`**. dotenv lo carga tal cual, el backend arranca sin quejarse y el canal dice «listo».
+
+Lo que se rompe está fuera de la vista: el App Secret es lo que valida la firma HMAC de Meta, así
+que **todos los webhooks entrantes se habrían rechazado con 403**. Un secreto mal copiado no da
+error al arrancar; da silencio cuando llega el primer mensaje.
+
+Se cazó porque el token de app (`{app_id}|{app_secret}`) devolvía `190 — Invalid OAuth access token
+signature` al consultar las suscripciones. **Esa llamada es el test del App Secret** y no cuesta
+nada:
+
+```
+GET /v21.0/{app_id}/subscriptions?access_token={app_id}|{app_secret}
+```
+
+Comprobación rápida del valor: **32 caracteres, hexadecimal en minúsculas**. Cualquier otra cosa es
+un error de copiado.
+
+### Trampa 3: la URL suscrita, y cero campos
+
+Con el secreto arreglado, la consulta anterior devolvió esto:
+
+```json
+{ "object": "whatsapp_business_account",
+  "callback_url": "https://api.escalapp.cloud/intelligence/whatsapp/webhook",
+  "active": true }
+```
+
+**Sin `fields`.** La URL estaba registrada, verificada y activa — Meta tenía dónde entregar y nada
+que entregar. Por eso el webhook no recibía absolutamente nada: ni un 403, ni una petición
+rechazada. Silencio.
+
+Es la sección de campos que el panel nuevo de Meta esconde: tras «Verificar y guardar» el asistente
+redirige a *Personaliza el caso de uso → Permisos y funciones*, que no tiene nada que ver, y el
+paso de suscribir `messages` se queda sin hacer. Por API:
+
+```
+POST /v21.0/{app_id}/subscriptions
+  object=whatsapp_business_account
+  callback_url=...   verify_token=...   fields=messages
+  access_token={app_id}|{app_secret}
+```
+
+> **Las tres trampas comparten forma:** todo parecía correcto. El servicio arrancaba, el canal
+> decía «listo», el diagnóstico daba verde en lo suyo y el panel de Meta mostraba el webhook
+> guardado. **Lo único que fallaba es que no pasaba nada.** Por eso el orden de diagnóstico
+> correcto es de fuera hacia dentro: ¿está el número en `CLOUD_API`? ¿responde la API al token de
+> app? ¿hay `fields`? ¿llega algo al log? Cada pregunta descarta una capa.
+
+### Detalles menores que también costaron minutos
+
+- **`hello_world` no se puede enviar desde un número propio** — `131058: Hello World templates can
+  only be sent from the Public Test Numbers`. Para abrir un hilo desde el negocio hay que usar una
+  plantilla propia aprobada. Al final no hizo falta: en cuanto el número quedó `CONNECTED`, los
+  teléfonos lo encontraron solos.
+- **`subscribed_apps` de la WABA y `subscriptions` de la app son dos cosas distintas**, y hacen
+  falta las dos. La primera dice «esta app atiende a esta cuenta»; la segunda, «y quiero estos
+  campos».
+
+### La primera conversación real
+
+| Medida | Valor |
+|---|---|
+| Conversaciones | **2** — una por teléfono, clave `(negocio, canal, id_externo)` |
+| Mensajes | 36 |
+| Turnos | 36, **todos `determinista`**, todos `resuelto` |
+| Capacidades | 8 `consultar_disponibilidad`, 6 `proponer_turno`, 5 `consultar_servicios`, 4 `reservar_turno` — todas `ok` |
+| Citas creadas | 2, reales, en la agenda del salón |
+| Filas en `intelligence.costo` | **0** |
+
+**Ni una llamada al modelo.** El Nivel 4 estaba montado y disponible; la escalera de ADR-018 no
+necesitó subir porque el Nivel 1 resolvió la conversación entera — que es exactamente para lo que se
+diseñó. Agendar siguiendo el guion es lo que sabe hacer gratis. **El primer bot en producción costó
+cero.**
+
+> Anotado para cuando se investigue: hay **4 `reservar_turno` en `ok` y solo 2 citas**. Puede ser
+> idempotencia (misma clave, misma cita devuelta) o invocaciones en dry-run contadas como ok. No se
+> persiguió.
+
+### Un susto que resultó ser el sistema funcionando
+
+Tras sembrar el catálogo, un servicio de 180 minutos no ofrecía huecos el martes por la mañana pese
+a que la profesional trabajaba de 09:00 a 13:00. Parecía un fallo del motor de disponibilidad.
+
+No lo era: **el bot había agendado dos citas de verdad** durante la prueba (09:30–10:00 y
+12:00–12:30), que parten esa mañana en trozos de 30, 120 y 30 minutos. Ninguno admite 180. El motor
+estaba respetando reservas reales.
+
+Vale la pena dejarlo escrito porque es un patrón: en un entorno con datos vivos, **una
+disponibilidad «que falta» es casi siempre una cita que existe**. Antes de sospechar del cálculo,
+mirar `reserva_cita` y `reserva_hold`.
+
+### Cómo funciona el cobro de Meta (medido, no recordado)
+
+Las primeras 28 entregas salieron **gratis**, y el panel explica por qué: categoría *Servicio de
+atención al cliente gratuito*, cargos `$0,00`.
+
+El cobro es **por mensaje y por categoría**, no por tiempo ni con una cuota diaria:
+
+| Categoría | Cuándo | Coste |
+|---|---|---|
+| **Servicio** | El cliente escribe primero; el negocio responde dentro de las 24 h | **Gratis** |
+| **Utilidad** | Plantillas que inicia el negocio: confirmaciones, **recordatorios** | Se cobra |
+| **Marketing** | Promociones | Se cobra (la más cara) |
+| **Autenticación** | Códigos de un solo uso | Se cobra |
+| **Punto de entrada gratuito** | Conversación nacida de anuncio de clic a WhatsApp o botón de página | Gratis 72 h |
+
+**Lo que esto significa para el producto:** casi todo lo que hace el asistente es *Servicio* y por
+tanto gratis. Lo que se paga es **`recordatorio_cita`, que es UTILITY**. Un salón con 200 citas al
+mes paga 200 recordatorios y nada más — es un coste **por cita agendada**, no por conversación.
+
+Las tarifas concretas varían por país y Meta las cambia: la fuente es
+<https://developers.facebook.com/docs/whatsapp/pricing> y el propio panel, en *Límites de mensajes*.
+**No copiar cifras aquí**, envejecen mal.
+
+Paneles útiles (con `business_id=1115123864174893`):
+- Consumo y coste: <https://business.facebook.com/wa/manage/insights/>
+- Métodos de pago y facturas: <https://business.facebook.com/billing_hub/accounts>
+
+---
+
+## Dar de alta el número de un CLIENTE (pendiente, y no es un botón)
+
+El alta que se hizo hoy fue la del **dueño**: crear la app, conectar un número propio, registrarlo
+con PIN. Para que un inquilino traiga *su* número desde la app de EscalApp, Meta tiene otro camino
+—**Embedded Signup**—, y son tres frentes, no uno:
+
+**1. En Meta.** Hacerse **Proveedor de tecnología** (*Hazte socio → Hacerte proveedor de
+tecnología*) y pasar la **verificación de negocio**. Sin verificar, el techo son **2 números = 2
+inquilinos**; ese techo, y no el de 250 destinatarios únicos cada 24 h, es el que muerde al llegar
+el tercer cliente.
+
+**2. En el código.** Hoy la traducción número → negocio vive en variables de entorno: un número, un
+negocio, cableado en `intelligence/channels/whatsapp/config.js`. Hace falta una tabla de números y
+—lo delicado— **decidir dónde viven los tokens de cada inquilino**, que pasan a ser secretos de
+terceros bajo nuestra custodia. Eso no se improvisa: **merece su propio ADR**.
+
+**3. En la app.** El botón de Embedded Signup en la Consola y la máquina de estados del alta, con
+más ramas de las que parece: número ya en uso, verificación pendiente, cliente que abandona a medias.
+
+> ⚠️ **Y el bloqueo de verdad no es ninguno de los tres.** El asistente **solo sabe agendar citas**:
+> las seis capacidades son de `reserva` y el único adaptador es `reserva`. Conectar hoy el número de
+> un restaurante le daría un bot que ofrece cortes de cabello. La fontanería del alta multi-inquilino
+> solo rinde cuando hay producto que entregar, y los dos clientes activos son restaurantes. **El
+> adaptador de restaurante va antes que el Embedded Signup.**
