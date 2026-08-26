@@ -704,3 +704,48 @@ más ramas de las que parece: número ya en uso, verificación pendiente, client
 > un restaurante le daría un bot que ofrece cortes de cabello. La fontanería del alta multi-inquilino
 > solo rinde cuando hay producto que entregar, y los dos clientes activos son restaurantes. **El
 > adaptador de restaurante va antes que el Embedded Signup.**
+
+---
+
+## Un mensaje sin remitente, y un lote entero perdido (2026-08-26)
+
+Un familiar del dueño escribió «Buenas tardes» al número del negocio y **no recibió nada**. El
+mensaje salió con doble check: Meta lo tenía. En el Ledger no había ni conversación ni ingesta,
+como si nunca hubiera existido.
+
+En el log, una sola línea, a la hora exacta:
+
+```
+[whatsapp] fallo procesando el webhook: El mensaje canónico necesita saber quién habla
+```
+
+El webhook **sí** llegó. Lo rechazamos nosotros.
+
+### Qué estaba mal, y cuál de las dos cosas era la grave
+
+**1. Se leía solo `mensaje.from`.** Ese mensaje llegó sin ese campo. Meta manda el número de quien
+escribe **también** en `contacts[].wa_id`, dentro del mismo cambio del webhook — es el mismo dato
+por otra puerta, y usarlo de respaldo no adivina nada.
+
+**2. Un elemento malo abortaba el lote entero.** Esta es la de verdad. `recibirWebhook` era una
+fila de bucles sin red: el primer `throw` se llevaba todo lo que venía detrás — los demás mensajes,
+los acuses, los avisos de la cuenta.
+
+Y no hay reintento posible: **a Meta ya se le contestó 200 antes de procesar** (son sus 10
+segundos). Lo que se pierde ahí no vuelve. El aislamiento por elemento no es prolijidad: es lo
+único que decide si un cliente recibe respuesta.
+
+> Es la misma forma del fallo del Ledger de esta misma semana: **una pieza secundaria matando la
+> principal**. Allí el rastro de un error tumbaba la conversación que estaba contando; aquí la
+> validación de un mensaje tumbaba los mensajes de al lado.
+
+### Lo que hay ahora
+
+- El remitente sale de `from` y, si no viene, de `contacts[].wa_id`.
+- Si no hay ninguno de los dos, el mensaje **se aparta** y se registra su **forma** —tipo, claves
+  presentes, `wamid`— y nunca su contenido: eso acaba en un log, y lo que escribió una persona no
+  tiene por qué acabar ahí. Con eso, un caso nuevo se diagnostica sin tener que reproducirlo.
+- Cada mensaje, eco, aviso y acuse se procesa **por su cuenta**. Un fallo se registra con su
+  `wamid` y los demás siguen. El resumen devuelve `fallos` y `sinRemitente`.
+
+Las cuatro pruebas se comprobaron quitando las dos protecciones: sin ellas, fallan.

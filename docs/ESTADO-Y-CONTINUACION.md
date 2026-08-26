@@ -16,7 +16,7 @@ proyecto después de semanas, **lee este documento primero** y sigue por donde d
 
 **Estado en una frase:** el asistente atiende **dos verticales** en producción —citas y
 restaurante— por WhatsApp, y desde el menú digital se puede armar un pedido y mandarlo al bot ya
-escrito. **560 pruebas de backend + 15 de frontend en verde.** El roadmap original está agotado:
+escrito. **564 pruebas de backend + 15 de frontend en verde.** El roadmap original está agotado:
 lo que se hace ahora sale del uso real.
 
 ### Qué hay vivo, y dónde apunta
@@ -66,7 +66,7 @@ de restaurante. `saludoPorLaHora` vive en `engine/texto.js` y no en un flujo: un
 barbería saludan igual, y tenerlo dos veces sería tener **dos relojes** — el día que alguien mueva
 el corte de la tarde en uno, el otro se queda como estaba.
 
-**560 pruebas de backend en verde**, arnés de enrutado 28/28 a $0.00, y **desplegado en
+**564 pruebas de backend en verde**, arnés de enrutado 28/28 a $0.00, y **desplegado en
 producción el 2026-08-26** (commit `dd5e19b`). Verificado contra la carta real de pregonchos.
 
 > ⚠️ **Trampa cobrada al desplegar esto:** `git pull` en el VPS decía **«Already up to date»** con
@@ -104,6 +104,18 @@ agendar, literal. Detalle en [`asistente-restaurante.md`](asistente-restaurante.
 
 > **Y la que se saca de este:** cuando el modelo «se olvida» de algo exacto, mirar primero si
 > alguien le pidió que lo recordara en vez de dárselo.
+
+**Y uno más, probando con gente de fuera.** Un familiar escribió «Buenas tardes» y no recibió
+nada: el webhook llegó con un mensaje **sin `from`**, el núcleo lo rechazó con razón, y la
+excepción **se llevó por delante el resto del lote**. A Meta ya se le había contestado 200 —son
+sus 10 segundos—, así que no hubo reintento: ese mensaje se perdió del todo. Ahora el remitente
+sale de `from` o de `contacts[].wa_id` (el mismo número por otra puerta), lo que no se pueda
+atribuir se aparta anotando su **forma** y nunca su contenido, y **cada mensaje, eco, aviso y
+acuse se procesa por su cuenta**. Detalle en [`canal-whatsapp.md`](canal-whatsapp.md).
+
+> **La forma se repite:** una pieza secundaria matando a la principal. El rastro de un error
+> tumbando la conversación; la validación de un mensaje tumbando los de al lado. Donde ya se
+> contestó 200, lo que se pierde no vuelve.
 
 ### Lo que se hizo el 2026-08-24/25
 

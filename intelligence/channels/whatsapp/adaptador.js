@@ -106,7 +106,7 @@ function textoDeMensaje(mensaje) {
  * @returns {{mensajes: Array, estados: Array, ecos: Array, avisos: Array, ajenos: number}}
  */
 function interpretarWebhook(cuerpo, { config = configReal } = {}) {
-    const salida = { mensajes: [], estados: [], ecos: [], avisos: [], ajenos: 0 };
+    const salida = { mensajes: [], estados: [], ecos: [], avisos: [], ajenos: 0, sinRemitente: [] };
 
     for (const entrada of cuerpo?.entry || []) {
         for (const cambio of entrada.changes || []) {
@@ -124,12 +124,37 @@ function interpretarWebhook(cuerpo, { config = configReal } = {}) {
 
             // ── Mensajes del cliente ────────────────────────────────────────────────────
             for (const mensaje of valor.messages || []) {
+                // ⚠️ Quién habla: `from`, y si no viene, el `wa_id` del contacto.
+                //
+                // El 2026-08-26 un webhook llegó con un mensaje **sin `from`** y el núcleo lo
+                // rechazó —«el mensaje canónico necesita saber quién habla»—, tirando de paso
+                // todo el resto del webhook. Del otro lado había una persona real que había
+                // escrito «Buenas tardes» y no recibió nada.
+                //
+                // Meta manda `contacts[]` junto a `messages[]` en el mismo cambio, y su `wa_id`
+                // **es el mismo número** que `from`. Usarlo de respaldo no adivina nada: es el
+                // mismo dato por otra puerta. Si tampoco está, el mensaje se aparta con su forma
+                // anotada (nunca su contenido) en vez de llevarse por delante el webhook.
+                const deQuien = mensaje.from || valor.contacts?.[0]?.wa_id || null;
+
+                if (!deQuien) {
+                    salida.sinRemitente.push({
+                        tipo: mensaje.type ?? null,
+                        // La FORMA, nunca el contenido: esto acaba en un log, y lo que escribió
+                        // una persona no tiene por qué acabar ahí.
+                        claves: Object.keys(mensaje).sort(),
+                        claves_del_cambio: Object.keys(valor).sort(),
+                        wamid: mensaje.id ?? null,
+                    });
+                    continue;
+                }
+
                 salida.mensajes.push({
                     canal: NOMBRE,
                     idNegocio,
                     // El número de la persona es su identidad en este canal. Es también el que
                     // permitirá reconocerla como `persona` el día que reserva adopte identidad.
-                    idExterno: mensaje.from,
+                    idExterno: deQuien,
                     texto: textoDeMensaje(mensaje),
                     // El `wamid` es lo que hace deduplicable un reintento de Meta.
                     idExternoMensaje: mensaje.id || null,
@@ -184,25 +209,60 @@ function interpretarWebhook(cuerpo, { config = configReal } = {}) {
 }
 
 /**
- * Procesa un webhook ya verificado: mete los mensajes por la misma puerta que el WebChat.
+ * Procesa lo que trae un webhook ya interpretado.
  *
- * Devuelve rápido y sin la respuesta del bot (ADR-016) — que aquí no es una preferencia de
- * diseño: Meta corta a los 10 segundos y reintenta.
+ * ## Cada cosa por su cuenta, y ninguna puede tumbar a las demás
+ *
+ * Antes esto era una fila de bucles sin red: el primer `throw` abortaba el resto del webhook.
+ * El 2026-08-26 pasó de verdad — un mensaje sin remitente hizo saltar la validación del núcleo y
+ * la persona que había escrito «Buenas tardes» no recibió nada. Y si Meta hubiera agrupado dos
+ * mensajes en la misma entrega, se habrían perdido los dos.
+ *
+ * Un webhook es un lote de cosas independientes: el mensaje de un cliente, el acuse de otro, un
+ * aviso de la cuenta. Que una falle no dice nada de las demás. **Ya se contestó 200 a Meta**, así
+ * que lo que se pierda aquí no se reintenta: es la última oportunidad de que algo llegue, y por
+ * eso el aislamiento no es prolijidad, es lo que decide si un cliente recibe respuesta.
  */
 async function recibirWebhook(cuerpo, { config = configReal } = {}) {
     const leido = interpretarWebhook(cuerpo, { config });
     const acuses = [];
+    const fallos = [];
+
+    /** Ejecuta una pieza del lote sin que su fallo alcance a las demás. */
+    async function aparte(que, detalle, tarea) {
+        try {
+            return await tarea();
+        } catch (error) {
+            fallos.push({ que, detalle, error: error.code || error.message });
+            console.error(`[whatsapp] ${que} no se pudo procesar (${detalle}): ${error.message}`);
+            return null;
+        }
+    }
+
+    // Un mensaje que llegó sin saber quién lo manda. Se anota su FORMA —nunca su contenido— para
+    // poder arreglarlo: es lo único que faltaba el 26 para no tener que adivinar.
+    for (const raro of leido.sinRemitente) {
+        console.error(
+            `[whatsapp] mensaje SIN REMITENTE, se aparta: ${JSON.stringify(raro)}. ` +
+                'Ni `from` ni `contacts[].wa_id`. Alguien escribió y no se le puede contestar.'
+        );
+    }
 
     for (const mensaje of leido.mensajes) {
-        acuses.push(await motor.recibir(mensaje));
+        const acuse = await aparte('un mensaje', mensaje.idExternoMensaje || 'sin wamid', () =>
+            motor.recibir(mensaje)
+        );
+        if (acuse) acuses.push(acuse);
     }
 
     for (const eco of leido.ecos) {
-        await silenciarPorHumano(eco);
+        await aparte('un eco del negocio', eco.wamid || 'sin wamid', () => silenciarPorHumano(eco));
     }
 
     for (const aviso of leido.avisos) {
-        await registrarAviso(aviso);
+        await aparte('un aviso de la cuenta', aviso.evento || 'sin evento', () =>
+            registrarAviso(aviso)
+        );
     }
 
     for (const estado of leido.estados) {
@@ -217,20 +277,22 @@ async function recibirWebhook(cuerpo, { config = configReal } = {}) {
         // exactamente igual que uno que sí.
         if (estado.estado !== 'failed') continue;
 
-        const fila = await repositorio.marcarAcuseDelCanal({
-            idNegocio: estado.idNegocio,
-            idExternoCanal: estado.wamid,
-            estado: 'fallido',
-            detalle: { estado: estado.estado, error: estado.error },
-        });
+        await aparte('un acuse fallido', estado.wamid || 'sin wamid', async () => {
+            const fila = await repositorio.marcarAcuseDelCanal({
+                idNegocio: estado.idNegocio,
+                idExternoCanal: estado.wamid,
+                estado: 'fallido',
+                detalle: { estado: estado.estado, error: estado.error },
+            });
 
-        await auditar('entrega_fallida', estado.idNegocio, {
-            wamid: estado.wamid,
-            destinatario: estado.destinatario,
-            error: estado.error,
-            // Un acuse sin fila nuestra no es un error: puede ser de un mensaje que mandó el
-            // dueño desde su móvil, o de uno más viejo que la ventana de particiones que se mira.
-            id_mensaje: fila?.id_mensaje ?? null,
+            await auditar('entrega_fallida', estado.idNegocio, {
+                wamid: estado.wamid,
+                destinatario: estado.destinatario,
+                error: estado.error,
+                // Un acuse sin fila nuestra no es un error: puede ser de un mensaje que mandó el
+                // dueño desde su móvil, o de uno más viejo que la ventana de particiones.
+                id_mensaje: fila?.id_mensaje ?? null,
+            });
         });
     }
 
@@ -240,6 +302,8 @@ async function recibirWebhook(cuerpo, { config = configReal } = {}) {
         avisos: leido.avisos.length,
         estados: leido.estados.length,
         ajenos: leido.ajenos,
+        sinRemitente: leido.sinRemitente.length,
+        fallos,
         acuses,
     };
 }

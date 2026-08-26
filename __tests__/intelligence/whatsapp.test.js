@@ -434,3 +434,112 @@ describe('las rutas del webhook', () => {
         expect(await r.text()).toBe('OK');
     });
 });
+
+// ── Un webhook es un lote, y un fallo no puede llevárselo entero ─────────────────────────
+
+describe('quién habla, y qué pasa cuando no se sabe', () => {
+    // ## El fallo (2026-08-26, en producción)
+    //
+    // Una persona escribió «Buenas tardes» al número del negocio y **no recibió nada**. En el
+    // log, una sola línea: «fallo procesando el webhook: El mensaje canónico necesita saber
+    // quién habla». El mensaje llegó sin `from`, el núcleo lo rechazó —con razón— y la excepción
+    // se llevó por delante el resto del webhook. Ya se había contestado 200 a Meta, así que no
+    // hubo reintento: ese mensaje se perdió del todo.
+    //
+    // Dos cosas estaban mal, y la segunda es la grave:
+    //   1. Se leía solo `from`, cuando Meta manda el mismo número en `contacts[].wa_id`.
+    //   2. Un elemento malo abortaba el lote entero.
+    const adaptador = require('../../intelligence/channels/whatsapp/adaptador');
+
+    const config = {
+        resolverNegocio: (phoneNumberId) => (phoneNumberId === 'PN-1' ? 12 : null),
+        leer: () => ({}),
+    };
+
+    /** Un cambio de webhook, con lo que se le quiera poner dentro. */
+    const webhook = (valor) => ({
+        entry: [{ changes: [{ value: { metadata: { phone_number_id: 'PN-1' }, ...valor } }] }],
+    });
+
+    const unMensaje = (extra = {}) => ({
+        id: 'wamid.AAA',
+        type: 'text',
+        text: { body: 'Buenas tardes' },
+        timestamp: String(Math.floor(Date.now() / 1000)),
+        ...extra,
+    });
+
+    it('lo normal: el remitente sale de `from`', () => {
+        const leido = adaptador.interpretarWebhook(
+            webhook({ messages: [unMensaje({ from: '573150528532' })] }),
+            { config }
+        );
+        expect(leido.mensajes[0].idExterno).toBe('573150528532');
+        expect(leido.sinRemitente).toHaveLength(0);
+    });
+
+    it('sin `from`, el remitente sale de `contacts[].wa_id` — es el mismo número', () => {
+        // No se adivina nada: Meta manda `contacts[]` en el mismo cambio y su `wa_id` es
+        // literalmente el número de quien escribe. Es el mismo dato por otra puerta.
+        const leido = adaptador.interpretarWebhook(
+            webhook({
+                contacts: [{ wa_id: '573150528532', profile: { name: 'Alguien' } }],
+                messages: [unMensaje()],
+            }),
+            { config }
+        );
+
+        expect(leido.mensajes).toHaveLength(1);
+        expect(leido.mensajes[0].idExterno).toBe('573150528532');
+        expect(leido.mensajes[0].texto).toBe('Buenas tardes');
+    });
+
+    it('sin `from` NI contacto, se aparta con su forma — y NO tumba el webhook', () => {
+        const leido = adaptador.interpretarWebhook(
+            webhook({ messages: [unMensaje(), unMensaje({ from: '573114682492', id: 'wamid.BBB' })] }),
+            { config }
+        );
+
+        // El bueno sigue vivo: es lo que antes se perdía.
+        expect(leido.mensajes).toHaveLength(1);
+        expect(leido.mensajes[0].idExterno).toBe('573114682492');
+
+        // Y del malo queda la FORMA, para poder arreglarlo. Nunca el contenido: esto va a un log.
+        expect(leido.sinRemitente).toHaveLength(1);
+        expect(leido.sinRemitente[0].tipo).toBe('text');
+        expect(leido.sinRemitente[0].claves).toContain('text');
+        expect(JSON.stringify(leido.sinRemitente[0])).not.toContain('Buenas tardes');
+    });
+
+    it('un mensaje que revienta al procesarse no se lleva a los demás', async () => {
+        // Es la mitad que de verdad importa. Meta ya recibió su 200: lo que se pierda aquí no se
+        // reintenta nunca, así que un `throw` en el primero de tres era perder tres.
+        const motor = require('../../intelligence/engine/motor');
+        const original = motor.recibir;
+        const vistos = [];
+        motor.recibir = async (mensaje) => {
+            vistos.push(mensaje.idExternoMensaje);
+            if (mensaje.idExternoMensaje === 'wamid.MALO') throw new Error('base caída');
+            return { id_mensaje: mensaje.idExternoMensaje };
+        };
+
+        try {
+            const resumen = await adaptador.recibirWebhook(
+                webhook({
+                    messages: [
+                        unMensaje({ from: '571', id: 'wamid.MALO' }),
+                        unMensaje({ from: '572', id: 'wamid.BUENO' }),
+                    ],
+                }),
+                { config }
+            );
+
+            expect(vistos).toEqual(['wamid.MALO', 'wamid.BUENO']);
+            expect(resumen.acuses).toHaveLength(1);
+            expect(resumen.fallos).toHaveLength(1);
+            expect(resumen.fallos[0].detalle).toBe('wamid.MALO');
+        } finally {
+            motor.recibir = original;
+        }
+    });
+});
