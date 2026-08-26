@@ -83,16 +83,37 @@ function coercionar(nombre, decl, valor) {
             // Cada elemento se valida con el MISMO `coercionar`, recursivamente. No es elegancia:
             // es que los límites de un `id_producto` dentro de una lista tienen que ser los
             // mismos que fuera, y dos validadores distintos divergen el día que nadie mira.
-            if (!Array.isArray(valor)) rechazar(`"${nombre}" debe ser una lista.`);
-            if (decl.min_items && valor.length < decl.min_items) {
+            //
+            // ⚠️ Una lista que llega como TEXTO se acepta si el texto es la lista.
+            //
+            // Es un tropiezo conocido del function-calling y se vio en producción el
+            // 2026-08-26: el modelo mandó `items` como `"[{\"id_producto\":106,…}]"` —la lista
+            // correcta, serializada— y antes de eso `"106x1,109x1,111x2"`, que es el código
+            // compacto del carrito copiado tal cual. Le costó tres llamadas acertar.
+            //
+            // Rechazar lo segundo es correcto: no es una lista, es otra cosa. Rechazar lo
+            // primero era terquedad cara: los datos estaban bien y completos, y la única
+            // diferencia era una comilla. Se aceptan **solo** si el texto parsea a un array;
+            // cualquier otra cosa sigue siendo un argumento inválido y se dice.
+            let lista = valor;
+            if (typeof lista === 'string') {
+                try {
+                    const parseado = JSON.parse(lista);
+                    if (Array.isArray(parseado)) lista = parseado;
+                } catch (_) {
+                    // Se cae al rechazo de abajo con el mensaje de siempre.
+                }
+            }
+            if (!Array.isArray(lista)) rechazar(`"${nombre}" debe ser una lista.`);
+            if (decl.min_items && lista.length < decl.min_items) {
                 rechazar(`"${nombre}" necesita al menos ${decl.min_items} elemento(s).`);
             }
-            if (decl.max_items && valor.length > decl.max_items) {
+            if (decl.max_items && lista.length > decl.max_items) {
                 rechazar(`"${nombre}" admite como mucho ${decl.max_items} elemento(s).`);
             }
 
             const forma = decl.elemento || {};
-            return valor.map((item, i) => {
+            return lista.map((item, i) => {
                 if (item === null || typeof item !== 'object' || Array.isArray(item)) {
                     rechazar(`"${nombre}[${i}]" debe ser un objeto.`);
                 }

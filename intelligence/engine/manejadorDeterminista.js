@@ -56,6 +56,7 @@
 'use strict';
 
 const policyGateReal = require('../core/policyGate');
+const registry = require('../core/registry');
 const identidadReal = require('./identidad');
 const contextoNegocioReal = require('../core/contextoNegocio');
 // Leer «sí», «cancelar» y la última línea de una ráfaga vive en `texto.js` desde F7: la
@@ -309,7 +310,10 @@ function crearManejadorDeterminista({
             // denegada o rota es media respuesta a «¿por qué el bot hizo eso?».
             invocaciones?.push({
                 capacidad,
-                vertical: null,
+                // En el `catch` no existe la respuesta del Gate, así que sale del Registry por
+                // nombre. Antes iba `null` y la columna es NOT NULL: el rastro del error se
+                // llevaba por delante el turno entero. Ver `repositorio.registrarInvocacion`.
+                vertical: registry.describir(capacidad)?.vertical ?? null,
                 argumentos: args,
                 resultado: error.code && error.statusCode === 403 ? 'denegado' : 'error',
                 errorCodigo: error.code ?? null,

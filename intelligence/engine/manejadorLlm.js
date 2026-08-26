@@ -454,6 +454,7 @@ async function ejecutarSolicitud({
             // eso no es un caso que se «maneje»: se registra como lo que es.
             invocaciones.push({
                 capacidad: solicitada.capacidad,
+                vertical: registry.describir(solicitada.capacidad)?.vertical ?? null,
                 argumentos: solicitada.argumentos,
                 resultado: 'error',
                 errorCodigo: 'CONFIRMACION_NO_EXIGIDA',
@@ -473,8 +474,15 @@ async function ejecutarSolicitud({
                 // `confirmacion_solicitada` es lo que cuenta esta historia en el Ledger.
                 return { pendiente: { capacidad: solicitada.capacidad, args: solicitada.argumentos } };
             }
+            // ⚠️ La vertical, aquí también. Es el TERCER sitio de este archivo donde faltaba,
+            // y el que mató una conversación real el 2026-08-26: un cliente dio su dirección,
+            // el modelo mandó `items` como texto en vez de como lista, y el turno murió al
+            // escribir el rastro de ese error — cuando el propio modelo se corrigió solo dos
+            // llamadas después. Desde hoy `repositorio.registrarInvocacion` la resuelve por su
+            // cuenta si falta, que es la red de verdad; esto es decirlo donde se sabe.
             invocaciones.push({
                 capacidad: solicitada.capacidad,
+                vertical: registry.describir(solicitada.capacidad)?.vertical ?? null,
                 argumentos: solicitada.argumentos,
                 resultado: error.statusCode === 403 ? 'denegado' : 'error',
                 errorCodigo: error.code ?? null,

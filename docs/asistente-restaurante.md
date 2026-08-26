@@ -308,6 +308,55 @@ una barbería saludan igual, y dos copias serían dos relojes.
 
 ---
 
+## El rastro que mataba la conversación (2026-08-26, segunda vez)
+
+El dueño probó el flujo nuevo, llegó a «¿a qué dirección te lo enviamos?», contestó — y **no
+recibió nada**. En el Ledger, `MANEJADOR_FALLO`:
+
+```
+null value in column "vertical" of relation "invocacion_capacidad_2026_08"
+violates not-null constraint
+```
+
+Es **el mismo fallo del 24**, en otro sitio del mismo archivo. Entonces se arregló el `catch`
+general del manejador de modelo; los dos `push` del **camino de confirmación** —el de las
+mutaciones que exigen un sí— seguían sin poner `vertical`.
+
+### Lo que pasó de verdad, turno a turno
+
+La auditoría del Gate lo cuenta entero. El modelo llamó a `tomar_pedido` **tres veces**:
+
+| # | `items` que mandó | Resultado |
+|---|---|---|
+| 1 | `"106x1,109x1,111x2"` | `ARGUMENTOS_INVALIDOS` — es el código compacto del carrito, copiado tal cual |
+| 2 | `"[{\"id_producto\":106,…}]"` | `ARGUMENTOS_INVALIDOS` — la lista correcta, pero **serializada** |
+| 3 | `[{id_producto:106,…}]` | `CONFIRMACION_REQUERIDA` ✅ — el camino bueno |
+
+O sea: **el modelo se corrigió solo y el pedido era válido**. La conversación estaba salvada. Lo
+que la mató fue apuntar los dos errores: las invocaciones se escriben todas juntas al cerrar el
+turno, así que el INSERT de la primera reventó la transacción entera y se llevó por delante la
+pregunta de confirmación que ya estaba lista.
+
+> **Un rastro que no se puede escribir puede perderse. Lo que no puede es llevarse por delante la
+> conversación que estaba contando.**
+
+### Los dos arreglos
+
+1. **La red, en un solo sitio.** `repositorio.registrarInvocacion` resuelve la vertical desde el
+   Registry cuando no se la pasan, y escribe `'desconocida'` como último recurso. Dos veces el
+   mismo fallo en dos sitios distintos significa que el sitio equivocado era el *call site*: por
+   este punto pasan todos, presentes y futuros. Los tres sitios que la omitían la ponen igual,
+   porque decirlo donde se sabe sigue siendo mejor que deducirlo.
+2. **La lista serializada se acepta.** Es un tropiezo conocido del *function-calling*. Rechazar
+   el código compacto es correcto —no es una lista, es otra cosa—; rechazar la lista bien formada
+   por venir entre comillas costaba dos llamadas al modelo, ~2,5 s y sus tokens, por nada. Se
+   acepta **solo** si el texto parsea a un array; el contenido se valida igual de estricto.
+
+Las dos pruebas se comprobaron rompiendo el código a propósito: la del Ledger reproduce el error
+de Postgres palabra por palabra.
+
+---
+
 ## Lo que queda pendiente
 
 - **El bot va lento.** Señalado por el dueño el 2026-08-24 y aplazado. Sospecha razonable: la

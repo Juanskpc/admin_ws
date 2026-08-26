@@ -16,7 +16,7 @@ proyecto después de semanas, **lee este documento primero** y sigue por donde d
 
 **Estado en una frase:** el asistente atiende **dos verticales** en producción —citas y
 restaurante— por WhatsApp, y desde el menú digital se puede armar un pedido y mandarlo al bot ya
-escrito. **541 pruebas de backend + 15 de frontend en verde.** El roadmap original está agotado:
+escrito. **550 pruebas de backend + 15 de frontend en verde.** El roadmap original está agotado:
 lo que se hace ahora sale del uso real.
 
 ### Qué hay vivo, y dónde apunta
@@ -66,7 +66,7 @@ de restaurante. `saludoPorLaHora` vive en `engine/texto.js` y no en un flujo: un
 barbería saludan igual, y tenerlo dos veces sería tener **dos relojes** — el día que alguien mueva
 el corte de la tarde en uno, el otro se queda como estaba.
 
-**541 pruebas de backend en verde**, arnés de enrutado 28/28 a $0.00, y **desplegado en
+**550 pruebas de backend en verde**, arnés de enrutado 28/28 a $0.00, y **desplegado en
 producción el 2026-08-26** (commit `dd5e19b`). Verificado contra la carta real de pregonchos.
 
 > ⚠️ **Trampa cobrada al desplegar esto:** `git pull` en el VPS decía **«Already up to date»** con
@@ -74,6 +74,19 @@ producción el 2026-08-26** (commit `dd5e19b`). Verificado contra la carta real 
 > la rama de Intelligence **nunca se traía** y la rama local no tenía upstream. Arreglado en el
 > servidor (refspec estándar + upstream). La lección general: **después de un pull, mirar el
 > `git log --oneline -1`, no el mensaje del pull.**
+
+**Y un fallo más, cazado probando lo anterior.** El dueño llegó a «¿a qué dirección te lo
+enviamos?», contestó y **no recibió nada**: `MANEJADOR_FALLO`, `vertical` nula en
+`invocacion_capacidad`. Es **el mismo fallo del 24 en otro sitio del mismo archivo** — el camino
+de confirmación tenía sus dos `push` propios y ninguno la ponía. El pedido era válido: el modelo
+mandó `items` como texto las dos primeras veces y **se corrigió solo a la tercera**; lo que mató
+la conversación fue apuntar esos dos errores. Arreglado en el único punto por el que pasan todas
+las invocaciones (`repositorio.registrarInvocacion` resuelve la vertical desde el Registry), y de
+paso el validador acepta una lista serializada, que es lo que costaba las dos llamadas de más.
+Detalle en [`asistente-restaurante.md`](asistente-restaurante.md).
+
+> **La regla que se saca de esto:** un rastro que no se puede escribir puede perderse; lo que no
+> puede es llevarse por delante la conversación que estaba contando.
 
 ### Lo que se hizo el 2026-08-24/25
 

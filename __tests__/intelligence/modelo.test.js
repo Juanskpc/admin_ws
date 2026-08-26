@@ -427,6 +427,64 @@ describe('manejadorLlm', () => {
         expect(decision.invocaciones[0].errorCodigo).toBe('CAPACIDAD_NO_OFRECIDA');
     });
 
+    it('un error en la mutación que hay que confirmar se apunta CON su vertical', async () => {
+        // La regresión del 2026-08-26, en producción. El camino de confirmación tiene sus dos
+        // `push` propios y ninguno ponía `vertical`; la columna es NOT NULL, así que el rastro
+        // de ese error tumbaba la transacción del turno entero y el cliente no recibía nada.
+        //
+        // Pasó con un pedido: el modelo mandó `items` como texto en vez de como lista, el Gate
+        // lo rechazó —correctamente—, y esa anotación mató una conversación que el propio
+        // modelo arregló dos llamadas después.
+        const registry = require('../../intelligence/core/registry');
+        registry.registrar({
+            nombre: 'reservar_turno',
+            descripcion: 'Solo para esta prueba: lo que importa es su vertical.',
+            vertical: 'reserva',
+            tipo: registry.TIPO.MUTACION,
+            idempotente: true,
+            confirmacion: { pregunta: () => '¿Confirmo?', hecho: () => 'Hecho.' },
+            feature: 'asistente_ia',
+            parametros: { codigo_hold: { tipo: 'string', requerido: true } },
+            ejecutar: async () => ({ ok: true }),
+        });
+
+        // Un Gate propio: el compartido deniega por falta de confirmación ANTES de mirar los
+        // errores inyectados, y lo que hay que ejercitar aquí es justo el otro caso — que el
+        // Gate falle por algo peor que la confirmación, que es lo que pasó en producción.
+        const roto = new Error('"codigo_hold" es demasiado corto (mínimo 2).');
+        roto.code = 'ARGUMENTOS_INVALIDOS';
+        roto.statusCode = 400;
+        const gate = {
+            llamadas: [],
+            async capacidadesDisponibles() {
+                return CAPACIDADES;
+            },
+            async ejecutar(invocacion) {
+                this.llamadas.push(invocacion);
+                throw roto;
+            },
+        };
+        const adaptador = adaptadorFalso([
+            {
+                razonFin: puerto.FIN.CAPACIDADES,
+                invocacionesSolicitadas: [
+                    { id: 't1', capacidad: 'reservar_turno', argumentos: { codigo_hold: 'x' } },
+                ],
+            },
+            { texto: 'Perdón, ¿me repites el código?', razonFin: puerto.FIN.TURNO },
+        ]);
+        const manejador = crearManejadorLlm({ ...DEPS_BASE, gate, adaptador });
+        const { decision } = await correr(manejador);
+
+        registry._limpiar();
+
+        const apuntada = decision.invocaciones.find((i) => i.capacidad === 'reservar_turno');
+        expect(apuntada.errorCodigo).toBe('ARGUMENTOS_INVALIDOS');
+        expect(apuntada.vertical).toBe('reserva');
+        // Y el turno sigue vivo: el error vuelve al modelo, que se corrige.
+        expect(decision.respuestas).toEqual(['Perdón, ¿me repites el código?']);
+    });
+
     it('cierra el bucle: pide capacidad, recibe resultado y contesta', async () => {
         const gate = gateFalso({ resultados: { consultar_servicios: { servicios: [{ nombre: 'Corte' }] } } });
         const adaptador = adaptadorFalso([

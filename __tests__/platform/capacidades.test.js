@@ -554,3 +554,62 @@ function proximoLunes() {
 function proximoDomingo() {
     return proximoDiaSemana(0);
 }
+
+// ────────────────────────────────────────────────────────────────────────────────────────
+describe('Una lista que el modelo manda como texto', () => {
+    // Visto en producción el 2026-08-26, pidiendo comida. El modelo llamó a `tomar_pedido`
+    // tres veces seguidas: la primera con `items: "106x1,109x1,111x2"` —el código compacto del
+    // carrito, copiado tal cual—, la segunda con la lista correcta pero **serializada**, y solo
+    // la tercera bien. Dos llamadas de más, ~2,5 s y sus tokens, por una comilla.
+    //
+    // Rechazar la primera es correcto: no es una lista, es otra cosa. Insistir en rechazar la
+    // segunda era terquedad cara — los datos estaban completos y bien formados.
+    const { validar } = require('../../intelligence/core/argumentos');
+
+    const CAPACIDAD = {
+        nombre: 'tomar_pedido',
+        parametros: {
+            items: {
+                tipo: 'lista',
+                requerido: true,
+                min_items: 1,
+                max_items: 20,
+                elemento: {
+                    id_producto: { tipo: 'entero', requerido: true, min: 1 },
+                    cantidad: { tipo: 'entero', requerido: true, min: 1, max: 50 },
+                },
+            },
+        },
+    };
+
+    const ESPERADO = [{ id_producto: 106, cantidad: 1 }, { id_producto: 111, cantidad: 2 }];
+
+    it('la lista de verdad sigue valiendo', () => {
+        expect(validar(CAPACIDAD, { items: ESPERADO }).items).toEqual(ESPERADO);
+    });
+
+    it('la misma lista serializada en JSON se acepta', () => {
+        expect(validar(CAPACIDAD, { items: JSON.stringify(ESPERADO) }).items).toEqual(ESPERADO);
+    });
+
+    it('un texto que NO es una lista se sigue rechazando', () => {
+        // El código compacto del carrito. Aceptar esto sería adivinar, y adivinar un pedido se
+        // paga en la puerta del cliente.
+        expect(() => validar(CAPACIDAD, { items: '106x1,109x1,111x2' })).toThrow(
+            /debe ser una lista/
+        );
+    });
+
+    it('un JSON que parsea pero no es una lista tampoco pasa', () => {
+        expect(() => validar(CAPACIDAD, { items: '{"id_producto":106}' })).toThrow(
+            /debe ser una lista/
+        );
+    });
+
+    it('los elementos de la lista serializada se validan igual de estricto', () => {
+        // La leniencia es sobre el envoltorio, no sobre el contenido: dentro, las mismas reglas.
+        expect(() => validar(CAPACIDAD, { items: '[{"id_producto":"la primera","cantidad":1}]' })).toThrow(
+            /entero/
+        );
+    });
+});

@@ -23,6 +23,7 @@
  */
 'use strict';
 const Models = require('../../app_core/models/conection');
+const registry = require('../core/registry');
 
 const sequelize = Models.sequelize;
 const SELECT = { type: sequelize.QueryTypes.SELECT };
@@ -714,6 +715,38 @@ async function registrarPaso(
  * Así que se resuelve con la frontera que ya existía: **el manejador devuelve lo que hizo y
  * el motor lo escribe**, igual que con los pasos. El manejador sigue sin tocar la base.
  */
+/**
+ * La vertical de una invocación, cueste lo que cueste.
+ *
+ * ## Por qué esto vive aquí y no en cada sitio que apunta una invocación
+ *
+ * `invocacion_capacidad.vertical` es NOT NULL, y eso está bien: un rastro que no se puede
+ * atribuir a una vertical no responde ninguna de las preguntas por las que existe el Ledger.
+ * Lo que no está bien es lo que pasaba cuando faltaba — **el INSERT reventaba, la transacción
+ * del turno se deshacía entera y el cliente se quedaba sin respuesta**. Un rastro que no se
+ * puede escribir puede perderse; lo que no puede es llevarse por delante la conversación que
+ * estaba contando.
+ *
+ * Y faltaba a menudo, porque hasta ahora dependía de que **cada** sitio que apunta una
+ * invocación se acordara de rellenarla:
+ *
+ * - 2026-08-24, en producción: el `catch` del manejador de modelo la omitía. Se arregló ahí.
+ * - 2026-08-26, en producción, **otra vez**: los dos `push` del camino de confirmación de ese
+ *   mismo archivo también la omitían. Un cliente dio su dirección, el modelo mandó `items`
+ *   como texto en vez de como lista, y el turno murió al escribir el rastro de ese error. El
+ *   modelo se había corregido solo dos llamadas después: la conversación era recuperable y la
+ *   mató el registro.
+ *
+ * Dos veces el mismo fallo en dos sitios distintos es la señal de que el sitio equivocado era
+ * el call site. Aquí hay **uno solo**, y por él pasa todo el mundo: el nombre de la capacidad
+ * basta para preguntárselo al Registry, que es quien lo sabe. `'desconocida'` es el último
+ * recurso —una capacidad que ya no está registrada— y dice la verdad en vez de romper.
+ */
+function verticalDe(capacidad, declarada) {
+    if (declarada) return declarada;
+    return registry.describir(capacidad)?.vertical || 'desconocida';
+}
+
 async function registrarInvocacion(
     {
         idTurno,
@@ -743,7 +776,7 @@ async function registrarInvocacion(
                 idConversacion,
                 idNegocio,
                 capacidad,
-                vertical,
+                vertical: verticalDe(capacidad, vertical),
                 argumentos: JSON.stringify(argumentos ?? {}),
                 resultado,
                 errorCodigo,

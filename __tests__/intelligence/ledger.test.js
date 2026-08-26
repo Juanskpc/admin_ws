@@ -392,3 +392,84 @@ describe('Invariantes del esquema (ADR-004, ADR-024)', () => {
         expect(filas).toEqual([]);
     });
 });
+
+// ── El rastro no puede matar al turno que está contando ─────────────────────────────────
+
+describe('registrarInvocacion siempre puede escribir la vertical', () => {
+    // El fallo, dos veces en producción y las dos con el mismo final: el cliente sin respuesta.
+    //
+    // `invocacion_capacidad.vertical` es NOT NULL, y quien apuntaba la invocación tenía que
+    // acordarse de rellenarla. El 2026-08-24 se le olvidó al `catch` del manejador de modelo; se
+    // arregló ahí. El 2026-08-26 se le había olvidado también a los dos `push` del camino de
+    // confirmación del MISMO archivo: un cliente dio su dirección para un pedido, el modelo mandó
+    // `items` como texto en vez de como lista, y el INSERT de ese error reventó la transacción
+    // del turno entero. `MANEJADOR_FALLO`, silencio — cuando el propio modelo se había corregido
+    // dos llamadas después y el pedido era perfectamente válido.
+    //
+    // Dos veces el mismo fallo en dos sitios distintos significa que el sitio equivocado era el
+    // call site. Estas pruebas van contra el único punto por el que pasa todo el mundo.
+    const repositorio = require('../../intelligence/engine/repositorio');
+    const registry = require('../../intelligence/core/registry');
+
+    let idTurno;
+    let convC;
+
+    beforeAll(async () => {
+        convC = await crearConversacion('cliente-vertical');
+        idTurno = await crearTurno(convC, {
+            secuencia: 1, nivel: 'llm', resultado: 'resuelto', latencia: 10,
+        });
+    });
+
+    const apuntar = (capacidad, vertical) =>
+        repositorio.registrarInvocacion(
+            {
+                idTurno,
+                idConversacion: convC,
+                idNegocio,
+                capacidad,
+                vertical,
+                argumentos: { items: 'esto vino mal' },
+                resultado: 'error',
+                errorCodigo: 'ARGUMENTOS_INVALIDOS',
+                latenciaMs: 5,
+            },
+            {}
+        );
+
+    const verticalGuardada = async (capacidad) =>
+        (
+            await unaFila(
+                `SELECT vertical FROM intelligence.invocacion_capacidad
+                  WHERE id_turno = :idTurno AND capacidad = :capacidad;`,
+                { idTurno, capacidad }
+            )
+        ).vertical;
+
+    it('sin vertical, la saca del Registry en vez de reventar', async () => {
+        registry.registrar({
+            nombre: 'probar_vertical_del_ledger',
+            descripcion: 'Existe solo para esta prueba.',
+            vertical: 'restaurante',
+            tipo: registry.TIPO.CONSULTA,
+            feature: 'asistente_ia',
+            parametros: {},
+            ejecutar: async () => ({ ok: true }),
+        });
+
+        await expect(apuntar('probar_vertical_del_ledger', null)).resolves.toBeUndefined();
+        expect(await verticalGuardada('probar_vertical_del_ledger')).toBe('restaurante');
+    });
+
+    it('de una capacidad que ya no existe, escribe "desconocida" y NO se cae', async () => {
+        // Un rastro que no se puede atribuir puede perderse o quedar a medias. Lo que no puede
+        // es llevarse por delante la conversación.
+        await expect(apuntar('consultar_algo_que_ya_no_existe', null)).resolves.toBeUndefined();
+        expect(await verticalGuardada('consultar_algo_que_ya_no_existe')).toBe('desconocida');
+    });
+
+    it('si quien apunta SÍ la sabe, se respeta la suya', async () => {
+        await expect(apuntar('consultar_con_vertical_explicita', 'reserva')).resolves.toBeUndefined();
+        expect(await verticalGuardada('consultar_con_vertical_explicita')).toBe('reserva');
+    });
+});
