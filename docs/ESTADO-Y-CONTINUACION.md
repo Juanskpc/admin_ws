@@ -66,7 +66,14 @@ de restaurante. `saludoPorLaHora` vive en `engine/texto.js` y no en un flujo: un
 barbería saludan igual, y tenerlo dos veces sería tener **dos relojes** — el día que alguien mueva
 el corte de la tarde en uno, el otro se queda como estaba.
 
-**541 pruebas de backend en verde** y el arnés de enrutado 28/28, $0.00.
+**541 pruebas de backend en verde**, arnés de enrutado 28/28 a $0.00, y **desplegado en
+producción el 2026-08-26** (commit `dd5e19b`). Verificado contra la carta real de pregonchos.
+
+> ⚠️ **Trampa cobrada al desplegar esto:** `git pull` en el VPS decía **«Already up to date»** con
+> la rama dos commits por detrás. El clon tenía `remote.origin.fetch` limitado a `master`, así que
+> la rama de Intelligence **nunca se traía** y la rama local no tenía upstream. Arreglado en el
+> servidor (refspec estándar + upstream). La lección general: **después de un pull, mirar el
+> `git log --oneline -1`, no el mensaje del pull.**
 
 ### Lo que se hizo el 2026-08-24/25
 
