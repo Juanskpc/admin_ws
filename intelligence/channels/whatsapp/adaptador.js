@@ -124,18 +124,30 @@ function interpretarWebhook(cuerpo, { config = configReal } = {}) {
 
             // ── Mensajes del cliente ────────────────────────────────────────────────────
             for (const mensaje of valor.messages || []) {
-                // ⚠️ Quién habla: `from`, y si no viene, el `wa_id` del contacto.
+                // ⚠️ Quién habla: el teléfono si lo hay, y si no, el BSUID.
                 //
                 // El 2026-08-26 un webhook llegó con un mensaje **sin `from`** y el núcleo lo
-                // rechazó —«el mensaje canónico necesita saber quién habla»—, tirando de paso
-                // todo el resto del webhook. Del otro lado había una persona real que había
-                // escrito «Buenas tardes» y no recibió nada.
+                // rechazó —«el mensaje canónico necesita saber quién habla»—. Del otro lado
+                // había una persona real que había escrito «Buenas tardes» y no recibió nada.
                 //
-                // Meta manda `contacts[]` junto a `messages[]` en el mismo cambio, y su `wa_id`
-                // **es el mismo número** que `from`. Usarlo de respaldo no adivina nada: es el
-                // mismo dato por otra puerta. Si tampoco está, el mensaje se aparta con su forma
-                // anotada (nunca su contenido) en vez de llevarse por delante el webhook.
-                const deQuien = mensaje.from || valor.contacts?.[0]?.wa_id || null;
+                // La causa no era una rareza: es el cambio de identidad de WhatsApp. Desde
+                // marzo de 2026 Meta manda un **Business-Scoped User ID** (`CO.1112947…`) en
+                // `messages[].from_user_id` y `contacts[].user_id`, y desde junio, con los
+                // nombres de usuario, **quien escribe puede no tener teléfono en el webhook**:
+                // ni `from` ni `wa_id`. No es un caso de borde — es el estado normal de un
+                // cliente nuevo que llega por su nombre de usuario.
+                //
+                // El orden importa. El teléfono va primero **a propósito**: es lo que identifica
+                // a la persona en el resto de la plataforma (`persona_negocio`), lo que prueba
+                // la pertenencia de una cita o un pedido, y lo que ya tienen las conversaciones
+                // abiertas. Con el BSUID delante, un cliente conocido estrenaría conversación y
+                // perdería su historia.
+                const deQuien =
+                    mensaje.from ||
+                    valor.contacts?.[0]?.wa_id ||
+                    mensaje.from_user_id ||
+                    valor.contacts?.[0]?.user_id ||
+                    null;
 
                 if (!deQuien) {
                     salida.sinRemitente.push({

@@ -16,7 +16,7 @@ proyecto después de semanas, **lee este documento primero** y sigue por donde d
 
 **Estado en una frase:** el asistente atiende **dos verticales** en producción —citas y
 restaurante— por WhatsApp, y desde el menú digital se puede armar un pedido y mandarlo al bot ya
-escrito. **564 pruebas de backend + 15 de frontend en verde.** El roadmap original está agotado:
+escrito. **569 pruebas de backend + 15 de frontend en verde.** El roadmap original está agotado:
 lo que se hace ahora sale del uso real.
 
 ### Qué hay vivo, y dónde apunta
@@ -66,7 +66,7 @@ de restaurante. `saludoPorLaHora` vive en `engine/texto.js` y no en un flujo: un
 barbería saludan igual, y tenerlo dos veces sería tener **dos relojes** — el día que alguien mueva
 el corte de la tarde en uno, el otro se queda como estaba.
 
-**564 pruebas de backend en verde**, arnés de enrutado 28/28 a $0.00, y **desplegado en
+**569 pruebas de backend en verde**, arnés de enrutado 28/28 a $0.00, y **desplegado en
 producción el 2026-08-26** (commit `dd5e19b`). Verificado contra la carta real de pregonchos.
 
 > ⚠️ **Trampa cobrada al desplegar esto:** `git pull` en el VPS decía **«Already up to date»** con
@@ -116,6 +116,23 @@ acuse se procesa por su cuenta**. Detalle en [`canal-whatsapp.md`](canal-whatsap
 > **La forma se repite:** una pieza secundaria matando a la principal. El rastro de un error
 > tumbando la conversación; la validación de un mensaje tumbando los de al lado. Donde ya se
 > contestó 200, lo que se pierde no vuelve.
+
+**Y lo que había detrás no era una rareza: WhatsApp cambió la identidad.** El diagnóstico nuevo lo
+dijo al segundo intento — el mensaje traía `from_user_id`, no `from`, con un valor
+`CO.1112947687726965`. Es un **BSUID** (*Business-Scoped User ID*), la identidad que Meta da a
+quien escribe **sin enseñar su número**. Desde el 31/03/2026 viaja en todos los mensajes, y desde
+junio, con los nombres de usuario, **un cliente nuevo puede llegar solo con eso**: ni `from` ni
+`wa_id`. Va a ser cada vez más frecuente.
+
+Se lee (orden: `from` → `wa_id` → `from_user_id` → `user_id`; el teléfono primero, que es lo que
+identifica a la persona en el resto de la plataforma) y se le contesta con **`recipient`, no
+`to`** — si van los dos, Meta le da precedencia a `to` y el mensaje no llega a nadie.
+
+> ⚠️ **Pendiente de producto:** sin teléfono probado, las comprobaciones de pertenencia fallan
+> cerradas (correcto), pero **`tomar_pedido` guarda `contacto_telefono` nulo**: el restaurante
+> recibe un domicilio sin número al que llamar. No falla — sale mal en la puerta del cliente. Lo
+> natural: pedir el teléfono **solo** cuando el canal no probó ninguno, y guardarlo como dato de
+> contacto, nunca como prueba de identidad.
 
 ### Lo que se hizo el 2026-08-24/25
 

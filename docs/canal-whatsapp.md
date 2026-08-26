@@ -749,3 +749,56 @@ segundos). Lo que se pierde ahí no vuelve. El aislamiento por elemento no es pr
   `wamid` y los demás siguen. El resumen devuelve `fallos` y `sinRemitente`.
 
 Las cuatro pruebas se comprobaron quitando las dos protecciones: sin ellas, fallan.
+
+### Lo que había detrás: WhatsApp cambió la identidad (BSUID)
+
+El diagnóstico de arriba dio el dato a la primera. El segundo intento dejó esto en el log:
+
+```
+[whatsapp] mensaje SIN REMITENTE, se aparta:
+{"tipo":"text","claves":["from_user_id","id","text","timestamp","type"],
+ "claves_del_cambio":["contacts","messages","messaging_product","metadata"], "wamid":"…"}
+```
+
+`from_user_id`, no `from`. Y el `wamid`, en base64, llevaba dentro `CO.1112947687726965`.
+
+Eso es un **Business-Scoped User ID**: la identidad que Meta da a quien escribe a un negocio
+**sin enseñar su número de teléfono**. Formato: indicativo de país, un punto, dígitos.
+
+No es una rareza ni un caso de borde:
+
+- Desde el **31 de marzo de 2026** Meta manda el BSUID en `messages[].from_user_id` y
+  `contacts[].user_id` **en todos los mensajes**, tenga o no el usuario un nombre de usuario.
+- Desde **junio de 2026**, con los nombres de usuario (`@alguien`), un cliente puede escribirle a
+  un negocio sin compartir su número. Ahí el webhook llega **sin `from` y sin `wa_id`**: el BSUID
+  es lo único que hay.
+
+O sea: **el estado normal de un cliente nuevo que llega por su nombre de usuario**, y va a ser
+cada vez más frecuente.
+
+### Las dos mitades del arreglo
+
+**Leerlo.** El remitente se busca en este orden: `from` → `contacts[].wa_id` → `from_user_id` →
+`contacts[].user_id`. El teléfono va primero **a propósito**: es lo que identifica a la persona en
+el resto de la plataforma (`persona_negocio`), lo que prueba la pertenencia de una cita o un
+pedido, y la clave de las conversaciones que ya existen. Con el BSUID delante, un cliente conocido
+estrenaría conversación y perdería su historia.
+
+**Contestarle.** A un BSUID **se le escribe con `recipient`, no con `to`** — y si van los dos,
+Meta le da precedencia a `to`. Equivocarse ahí no es «casi correcto»: es un envío que Meta acepta
+y que no llega a nadie.
+
+### Lo que un cliente sin teléfono NO puede hacer, y por qué está bien
+
+Sin número probado, `principal.telefono_verificado` es `null` y las comprobaciones de pertenencia
+**fallan cerradas**: no puede consultar el estado de un pedido ni cancelar una cita por código. Es
+la decisión correcta —el id opaco no prueba que el pedido sea suyo— y es la que ya estaba escrita
+desde F2. Lo que no podía pasar, y no pasa, es que `CO.111…` se colara como si fuera su móvil:
+`normalizarTelefono` lo rechaza.
+
+> ⚠️ **Pendiente de producto, no de código:** `tomar_pedido` guarda como teléfono de contacto el
+> que probó el canal. Para un cliente que llega por BSUID eso es `null`, así que **el restaurante
+> recibe un domicilio sin un número al que llamar**. La columna lo admite, o sea que no falla:
+> sale mal en la puerta del cliente. Lo natural es que el flujo pida el teléfono **solo cuando el
+> canal no probó ninguno** —un paso más para quien llega sin número, ninguno para los demás— y que
+> ese teléfono se guarde como dato de contacto, nunca como prueba de identidad. Está sin hacer.

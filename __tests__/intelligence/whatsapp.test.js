@@ -543,3 +543,134 @@ describe('quién habla, y qué pasa cuando no se sabe', () => {
         }
     });
 });
+
+// ── La identidad nueva de WhatsApp: el BSUID ────────────────────────────────────────────
+
+describe('quien escribe sin enseñar su número (BSUID)', () => {
+    // ## El fallo, y por qué no era una rareza (2026-08-26, en producción)
+    //
+    // Una persona escribió «Buenas tardes» dos veces y no recibió nada. El log dijo que el
+    // mensaje venía sin `from` — y con `from_user_id`.
+    //
+    // Es el cambio de identidad de WhatsApp. Desde marzo de 2026 Meta manda un **Business-Scoped
+    // User ID** (`CO.1112947687726965`: indicativo, punto, dígitos) en `messages[].from_user_id`
+    // y `contacts[].user_id`; desde junio, con los nombres de usuario, **quien escribe puede no
+    // tener teléfono en el webhook**. No es un caso de borde: es el estado normal de un cliente
+    // nuevo que llega por su nombre de usuario.
+    //
+    // Y tiene dos mitades. Leerlo, y saber contestarle: a un BSUID se le escribe con `recipient`,
+    // no con `to` — y si van los dos, Meta le da precedencia a `to`, así que equivocarse ahí no
+    // es «casi correcto», es un mensaje que nadie recibe.
+    const adaptador = require('../../intelligence/channels/whatsapp/adaptador');
+    const api = require('../../intelligence/channels/whatsapp/api');
+
+    const BSUID = 'CO.1112947687726965';
+
+    const config = {
+        resolverNegocio: (id) => (id === 'PN-1' ? 12 : null),
+        leer: () => ({ token: 't', phoneNumberId: 'PN-1', baseUrl: 'https://x', versionApi: 'v21.0' }),
+    };
+
+    const webhookBsuid = {
+        entry: [
+            {
+                changes: [
+                    {
+                        value: {
+                            messaging_product: 'whatsapp',
+                            metadata: { phone_number_id: 'PN-1' },
+                            // Tal como llegó de verdad: contacto SIN `wa_id`.
+                            contacts: [{ user_id: BSUID, profile: { name: 'Alguien' } }],
+                            messages: [
+                                {
+                                    from_user_id: BSUID,
+                                    id: 'wamid.HBgTQ08uMTExMjk0NzY4NzcyNjk2NRUU',
+                                    type: 'text',
+                                    text: { body: 'Buenas tardes' },
+                                    timestamp: String(Math.floor(Date.now() / 1000)),
+                                },
+                            ],
+                        },
+                    },
+                ],
+            },
+        ],
+    };
+
+    it('se lee el mensaje: la identidad es el BSUID', () => {
+        const leido = adaptador.interpretarWebhook(webhookBsuid, { config });
+
+        expect(leido.sinRemitente).toHaveLength(0);
+        expect(leido.mensajes).toHaveLength(1);
+        expect(leido.mensajes[0].idExterno).toBe(BSUID);
+        expect(leido.mensajes[0].texto).toBe('Buenas tardes');
+    });
+
+    it('si viene el teléfono, MANDA el teléfono aunque también venga el BSUID', async () => {
+        // El orden no es cosmético. El teléfono es lo que identifica a la persona en el resto de
+        // la plataforma y lo que prueba la pertenencia de un pedido; y es la clave de las
+        // conversaciones que ya existen. Con el BSUID delante, un cliente conocido estrenaría
+        // conversación y perdería su historia.
+        const cuerpo = JSON.parse(JSON.stringify(webhookBsuid));
+        cuerpo.entry[0].changes[0].value.messages[0].from = '573150528532';
+        cuerpo.entry[0].changes[0].value.contacts[0].wa_id = '573150528532';
+
+        const leido = adaptador.interpretarWebhook(cuerpo, { config });
+        expect(leido.mensajes[0].idExterno).toBe('573150528532');
+    });
+
+    it('a un BSUID se le contesta con `recipient`, NUNCA con `to`', async () => {
+        let enviado = null;
+        await api.enviarMensaje({
+            para: BSUID,
+            payload: { type: 'text', text: { body: 'hola' } },
+            config,
+            fetchImpl: async (_url, opciones) => {
+                enviado = JSON.parse(opciones.body);
+                return {
+                    ok: true,
+                    status: 200,
+                    text: async () => JSON.stringify({ messages: [{ id: 'wamid.X' }] }),
+                };
+            },
+        });
+
+        expect(enviado.recipient).toBe(BSUID);
+        // Si van los dos, Meta le da precedencia a `to` y el mensaje no llega a nadie.
+        expect(enviado.to).toBeUndefined();
+    });
+
+    it('a un teléfono se le sigue contestando con `to`', async () => {
+        let enviado = null;
+        await api.enviarMensaje({
+            para: '573150528532',
+            payload: { type: 'text', text: { body: 'hola' } },
+            config,
+            fetchImpl: async (_url, opciones) => {
+                enviado = JSON.parse(opciones.body);
+                return {
+                    ok: true,
+                    status: 200,
+                    text: async () => JSON.stringify({ messages: [{ id: 'wamid.X' }] }),
+                };
+            },
+        });
+
+        expect(enviado.to).toBe('573150528532');
+        expect(enviado.recipient).toBeUndefined();
+    });
+
+    it('un BSUID NO se confunde con un teléfono probado', () => {
+        // Importa para la autorización: `CO.111…` no es un número, así que quien llega así no
+        // tiene teléfono verificado y las comprobaciones de pertenencia fallan CERRADAS. Es lo
+        // correcto — lo que no puede pasar es que un id opaco se cuele como si fuera su móvil.
+        const identidad = require('../../intelligence/engine/identidad');
+        expect(api.esBsuid(BSUID)).toBe(true);
+        expect(api.esBsuid('573150528532')).toBe(false);
+        expect(
+            identidad._normalizarTelefono
+                ? identidad._normalizarTelefono(BSUID)
+                : null
+        ).toBeNull();
+    });
+});

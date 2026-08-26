@@ -36,10 +36,30 @@ function fallo(mensaje, { code, statusCode, reintentable, detalle }) {
 }
 
 /**
+ * ¿A quién se le escribe: a un teléfono o a un BSUID?
+ *
+ * Un **Business-Scoped User ID** es la identidad que WhatsApp da a quien escribe sin enseñar su
+ * número: `CO.1112947687726965` — indicativo de país, un punto, y dígitos. Meta los manda desde
+ * marzo de 2026 y, con los nombres de usuario, un cliente nuevo puede llegar **solo** con eso.
+ *
+ * Se distinguen por el punto, y no hace falta más: un número de teléfono no lleva puntos en
+ * ninguna de las formas en que Meta lo entrega. Una expresión regular más lista sería más
+ * frágil el día que Meta añada un formato.
+ */
+function esBsuid(destinatario) {
+    return /^[A-Za-z]{2}\.[A-Za-z0-9]+$/.test(String(destinatario || ''));
+}
+
+/**
  * Manda un mensaje ya renderizado.
  *
+ * ⚠️ **A un BSUID se le escribe con `recipient`, no con `to`.** Es lo que dice la documentación
+ * de Meta, y además `to` **tiene precedencia** si van los dos: mandar el BSUID en `to` no es
+ * «casi correcto», es un envío que Meta no entrega y un cliente que no recibe nada.
+ *
  * @param {Object} opciones
- * @param {string} opciones.para — el número del destinatario, tal como llegó en el webhook.
+ * @param {string} opciones.para — el destinatario tal como llegó en el webhook: su número, o su
+ *                 BSUID si no enseñó número.
  * @param {Object} opciones.payload — lo que devolvió `adaptador.renderizar()`.
  * @param {Function} [opciones.fetchImpl] — inyectable; por defecto el `fetch` de Node 22.
  * @param {Object} [opciones.config]
@@ -55,7 +75,12 @@ async function enviarMensaje({ para, payload, fetchImpl = globalThis.fetch, conf
     }
 
     const url = `${c.baseUrl}/${c.versionApi}/${c.phoneNumberId}/messages`;
-    const cuerpo = { messaging_product: 'whatsapp', recipient_type: 'individual', to: para, ...payload };
+    const cuerpo = {
+        messaging_product: 'whatsapp',
+        recipient_type: 'individual',
+        ...(esBsuid(para) ? { recipient: para } : { to: para }),
+        ...payload,
+    };
 
     const control = new AbortController();
     const reloj = setTimeout(() => control.abort(), TIMEOUT_MS);
@@ -103,4 +128,5 @@ async function enviarMensaje({ para, payload, fetchImpl = globalThis.fetch, conf
     return { wamid: datos?.messages?.[0]?.id ?? null };
 }
 
-module.exports = { enviarMensaje, TIMEOUT_MS };
+module.exports = {
+    esBsuid, enviarMensaje, TIMEOUT_MS };
