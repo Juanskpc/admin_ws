@@ -34,6 +34,9 @@
 const contextoNegocio = require('../../core/contextoNegocio');
 const { COMANDO, normalizar, ultimaLinea, esComando, saludoPorLaHora } = require('../../engine/texto');
 const codigoPedido = require('./codigoPedido');
+const confirmacion = require('../../engine/confirmacion');
+const policyGate = require('../../core/policyGate');
+const identidadReal = require('../../engine/identidad');
 
 const VERTICAL = 'restaurante';
 
@@ -250,27 +253,97 @@ async function abrirPedidoPorChat(ctx, leerCarta) {
 }
 
 /**
- * El cliente llega con el carrito ya armado desde el menú digital.
+ * El pedido que llega del menú digital, de principio a fin y sin modelo.
  *
- * ## Por qué esto lo lee el flujo y no el modelo
+ * ## Por qué esto SÍ es un formulario, cuando pedir por chat no lo era
  *
- * Porque no hay nada que interpretar. El código es exacto, y pedirle al modelo que lo lea sería
- * pagar un turno para que haga peor lo que una expresión regular hace perfecto. Lo que sí queda
- * para el modelo es lo que viene después —confirmar, preguntar la dirección, resolver un «mejor
- * sin cebolla»—, que es conversación de verdad.
+ * La cabecera de este archivo defiende que pedir comida no se parece a agendar una cita: «dos
+ * bandejas, una sin chicharrón, y una limonada sin azúcar» es una frase, no cinco pulsaciones.
+ * Sigue siendo verdad **para quien pide escribiendo**.
  *
- * ## El pedido NO se crea aquí
+ * Un carrito armado en el menú es lo contrario: los productos ya están elegidos, exactos y con
+ * su id. No queda nada que interpretar — faltan dos datos, el nombre y la dirección, y eso es un
+ * formulario de dos campos. Dárselo a un modelo era pagar por que lo hiciera peor, y el
+ * 2026-08-26 lo hizo peor de la forma cara: se le olvidó el carrito y preguntó «¿qué quieres
+ * pedir hoy?» a alguien que acababa de mandarle su pedido.
  *
- * Se dejan los productos anotados en las variables de la conversación y se le pide la dirección.
- * Crear la orden es una mutación que **exige el sí del cliente** (ADR-010, paso 5), y ese sí
- * todavía no lo ha dado: pulsar «Continuar por WhatsApp» es abrir un chat, no confirmar un
- * pedido. Además falta la dirección, sin la cual no hay domicilio que llevar.
+ * ## Por qué los productos van en la TAREA y no en `variables`
+ *
+ * ADR-014: la tarea es lo acotado y retomable; `variables` es la memoria infinita. Un pedido a
+ * medias es exactamente lo primero — y además, mientras la tarea está abierta, la política de
+ * enrutado devuelve cada mensaje a este flujo (`tarea_en_curso`), que es lo que impide que el
+ * modelo se lleve la conversación a mitad de camino.
+ *
+ * Hasta hoy se dejaban en `variables.pedido_pendiente` y **nadie los leía nunca**: ni el modelo
+ * —que no ve las variables— ni este flujo, que cerraba sin tarea. Eran un apunte para nadie.
+ *
+ * ## El sí sigue siendo del cliente
+ *
+ * Con nombre y dirección no se crea nada: se pide la confirmación por el mismo camino que usa el
+ * modelo (`engine/confirmacion.js`), y es el Policy Gate quien se niega a ejecutar sin la prueba
+ * (ADR-010). Este flujo no tiene una puerta trasera a `tomar_pedido`.
+ */
+const TAREA_PEDIDO = 'pedido_domicilio';
+const PASO_PEDIDO = { NOMBRE: 'nombre', DIRECCION: 'direccion' };
+
+/** Lo que hace falta para crear la orden, y que nadie más sabe. */
+function datosDelPedido(conversacion) {
+    return conversacion.tarea_actual === TAREA_PEDIDO ? conversacion.tarea_datos || {} : {};
+}
+
+function tareaPedido(datos) {
+    return { nombre: TAREA_PEDIDO, datos };
+}
+
+function unidades(items) {
+    return items.reduce((n, i) => n + i.cantidad, 0);
+}
+
+/** El texto que resume lo que se va a pedir. Sin ids: el cliente no los tiene que ver. */
+function pedirNombre(ctx, items, pasos) {
+    const cuantos = unidades(items);
+    return {
+        pasos,
+        respuestas: [
+            `¡Listo, ya tengo tu pedido! ${cuantos === 1 ? 'Es 1 producto' : `Son ${cuantos} productos`}. ` +
+                '¿A nombre de quién lo dejo? 📝',
+        ],
+        variables: conMemoria(ctx.conversacion),
+        tarea: tareaPedido({ paso: PASO_PEDIDO.NOMBRE, items }),
+        resultado: 'resuelto',
+        nivel: 'determinista',
+    };
+}
+
+function pedirDireccion(ctx, datos, pasos, { saludarPorNombre = null } = {}) {
+    const apertura = saludarPorNombre ? `Gracias, ${saludarPorNombre}. ` : '';
+    return {
+        pasos,
+        respuestas: [
+            `${apertura}¿A qué dirección te lo llevamos? 🛵 Dime también si hay alguna indicación ` +
+                'para llegar.',
+        ],
+        variables: conMemoria(ctx.conversacion, datos.nombre ? { nombre: datos.nombre } : {}),
+        tarea: tareaPedido({ ...datos, paso: PASO_PEDIDO.DIRECCION }),
+        resultado: 'resuelto',
+        nivel: 'determinista',
+    };
+}
+
+/**
+ * Empieza el pedido del menú.
  *
  * ## El negocio del código se comprueba
  *
  * El código lleva el id del negocio donde se armó. Si no coincide con este, se dice: alguien
  * armó el carrito en la carta de un restaurante y lo mandó al WhatsApp de otro. Sin comprobarlo,
  * el pedido se crearía con ids de productos que aquí son otra cosa — o no existen.
+ *
+ * ## Si ya sabemos su nombre, no se pregunta
+ *
+ * Es la misma regla que en las citas: preguntar dos veces lo que ya te dijeron es lo que hace
+ * que un bot parezca un formulario. El nombre vive en `variables` —memoria larga— y el pedido
+ * en la tarea.
  */
 function recibirPedidoDelMenu(ctx, pedido) {
     if (pedido.idNegocio !== ctx.idNegocio) {
@@ -289,22 +362,124 @@ function recibirPedidoDelMenu(ctx, pedido) {
         };
     }
 
-    const cuantos = pedido.items.reduce((n, i) => n + i.cantidad, 0);
+    const pasos = [
+        paso('pedido_del_menu_recibido', {
+            items: pedido.items.length,
+            unidades: unidades(pedido.items),
+        }),
+    ];
+    const nombre = (ctx.conversacion.variables || {}).nombre;
 
-    return {
-        pasos: [paso('pedido_del_menu_recibido', { items: pedido.items.length, unidades: cuantos })],
-        respuestas: [
-            `¡Listo, ya tengo tu pedido! ${cuantos === 1 ? 'Es 1 producto' : `Son ${cuantos} productos`}. ` +
-                '¿A qué dirección te lo llevamos? 🛵 Dime también si hay alguna indicación para llegar.',
-        ],
-        // Los productos quedan en la memoria de la conversación, no en una tarea: el modelo los
-        // lee del contexto y llama a `tomar_pedido` cuando tenga la dirección y el sí. Abrir una
-        // tarea devolvería la conversación a este flujo, que no sabe terminarla.
-        variables: conMemoria(ctx.conversacion, { pedido_pendiente: pedido.items }),
-        tarea: null,
-        resultado: 'resuelto',
+    if (nombre) {
+        const cuantos = unidades(pedido.items);
+        return {
+            ...pedirDireccion(ctx, { items: pedido.items, nombre }, pasos),
+            respuestas: [
+                `¡Listo, ya tengo tu pedido! ${cuantos === 1 ? 'Es 1 producto' : `Son ${cuantos} productos`}, ` +
+                    `a nombre de ${nombre}. ¿A qué dirección te lo llevamos? 🛵 Dime también si hay ` +
+                    'alguna indicación para llegar.',
+            ],
+        };
+    }
+
+    return pedirNombre(ctx, pedido.items, pasos);
+}
+
+/**
+ * Sigue el pedido con lo que acaba de escribir el cliente.
+ *
+ * Solo se llega aquí con la tarea abierta, o sea con los productos ya guardados. Lo que se lee
+ * es texto libre —un nombre, una dirección— y por eso no se valida más allá de que no esté
+ * vacío: quien sabe si «Carrera 3e 19 a» es una dirección real es el domiciliario, no una
+ * expresión regular. Los límites de longitud los pone la capacidad, que es donde tienen que
+ * estar.
+ */
+function seguirPedido(ctx, { solicitarConfirmacion }) {
+    const datos = datosDelPedido(ctx.conversacion);
+    const dicho = ultimaLinea(ctx.texto).trim();
+
+    // «Cancelar» durante el pedido significa cancelar el pedido, no salir de la conversación.
+    if (esComando(ctx.texto, COMANDO.CANCELAR)) {
+        return {
+            pasos: [paso('pedido_cancelado', { paso: datos.paso ?? null })],
+            respuestas: ['Listo, no te lo apunto. Si quieres pedir otra cosa, dime 😊'],
+            variables: conMemoria(ctx.conversacion),
+            tarea: null,
+            resultado: 'resuelto',
+            nivel: 'determinista',
+        };
+    }
+
+    if (!dicho) {
+        return {
+            pasos: [paso('pedido_dato_vacio', { paso: datos.paso ?? null })],
+            respuestas: [
+                datos.paso === PASO_PEDIDO.NOMBRE
+                    ? '¿A nombre de quién lo dejo?'
+                    : '¿A qué dirección te lo llevamos?',
+            ],
+            variables: conMemoria(ctx.conversacion),
+            tarea: tareaPedido(datos),
+            resultado: 'resuelto',
+            nivel: 'determinista',
+        };
+    }
+
+    // Lo que llega no siempre es la respuesta. «¿Y cuánto sale el domicilio?» no es un nombre
+    // ni una dirección, y apuntarlo como tal deja un pedido a nombre de una pregunta.
+    //
+    // Se repregunta, y **siempre se ofrece la salida**. La tarea NO se suelta sola: soltarla
+    // dejaría el carrito huérfano —el modelo no ve la tarea— y el cliente tendría que armarlo
+    // otra vez. Y callarse tampoco es opción: en este sistema el modo de fallo caro es el
+    // silencio, no la insistencia. Quien quiera irse escribe «cancelar», que está en el mensaje.
+    if (/[?¿]/.test(dicho)) {
+        const cortesia =
+            Number(datos.repreguntas || 0) < 1
+                ? 'Ahora te cuento 😊 '
+                : 'Perdona, es que sin eso no puedo mandarlo. ';
+        return {
+            pasos: [paso('pedido_respuesta_no_era', { paso: datos.paso })],
+            respuestas: [
+                cortesia +
+                    (datos.paso === PASO_PEDIDO.NOMBRE
+                        ? '¿A nombre de quién dejo el pedido?'
+                        : '¿A qué dirección te lo llevamos?') +
+                    ' Si prefieres dejarlo, escríbeme *cancelar*.',
+            ],
+            variables: conMemoria(ctx.conversacion),
+            tarea: tareaPedido({ ...datos, repreguntas: Number(datos.repreguntas || 0) + 1 }),
+            resultado: 'resuelto',
+            nivel: 'determinista',
+        };
+    }
+
+    if (datos.paso === PASO_PEDIDO.NOMBRE) {
+        // Se le da las gracias por su nombre: cuesta dos palabras y es la diferencia entre un
+        // formulario y alguien atendiendo.
+        return pedirDireccion(
+            ctx,
+            { ...datos, nombre: dicho, repreguntas: 0 },
+            [paso('pedido_nombre_recibido')],
+            { saludarPorNombre: dicho.split(/\s+/)[0] }
+        );
+    }
+
+    // Con la dirección ya está todo. **No se crea nada**: se pregunta, y el Policy Gate se
+    // niega a ejecutar `tomar_pedido` sin la prueba de que el cliente dijo que sí (ADR-010).
+    return solicitarConfirmacion({
+        capacidad: 'tomar_pedido',
+        args: {
+            items: datos.items,
+            cliente_nombre: datos.nombre,
+            direccion: dicho,
+        },
+        conversacion: {
+            ...ctx.conversacion,
+            variables: conMemoria(ctx.conversacion, { nombre: datos.nombre }),
+        },
+        pasos: [paso('pedido_direccion_recibida')],
         nivel: 'determinista',
-    };
+    });
 }
 
 /**
@@ -356,6 +531,21 @@ async function cartaDe(idNegocio) {
 }
 
 /**
+ * ¿Es este mensaje de este flujo? Lo pregunta la política de enrutado (`engine/flujos.js`).
+ *
+ * Solo el pedido del menú: es un dato exacto con un código que una expresión regular lee mejor
+ * que un modelo. Todo lo demás sigue decidiéndolo la tabla — un «¿tienen sopa?» tiene que poder
+ * irse al Nivel 4, y reclamar de más convertiría este flujo en un contestador.
+ *
+ * Hasta el 2026-08-26 esto no existía y el pedido **nunca llegaba aquí**: caía en el comodín
+ * `pregunta_libre` y se lo quedaba el modelo, que se apañaba decodificando el código a mano
+ * hasta que se le olvidó el carrito a mitad de conversación.
+ */
+function reclama(texto) {
+    return Boolean(codigoPedido.leer(texto));
+}
+
+/**
  * Crea el manejador. La inyección existe para los tests, igual que en el flujo de `reserva`.
  * `ahora` también se inyecta: el saludo depende de la hora y una prueba no puede esperar a que
  * sean las ocho de la tarde.
@@ -364,22 +554,57 @@ function crearFlujoRestaurante({
     contextoNegocio: ctxNegocio = contextoNegocio,
     leerCarta = cartaDe,
     ahora = () => new Date(),
+    // El Gate y la identidad solo hacen falta para cerrar un pedido: son lo que convierte el
+    // «sí» del cliente en una orden. Se inyectan por lo mismo que en la FSM de citas — que un
+    // test del flujo no necesite Postgres.
+    gate = policyGate,
+    identidad = identidadReal,
 } = {}) {
-    return async function manejarRestaurante({ conversacion, texto }) {
+    return async function manejarRestaurante({ conversacion, mensajes, turno, texto }) {
         const negocio = await ctxNegocio.obtener(conversacion.id_negocio);
+        const invocaciones = [];
         const ctx = {
             conversacion,
+            mensajes,
+            turno,
             texto,
             negocio,
+            invocaciones,
             idNegocio: Number(conversacion.id_negocio),
             ahora,
         };
 
-        // Lo PRIMERO: ¿viene con el carrito del menú digital? Va antes que cualquier otra
-        // lectura porque el mensaje trae texto humano delante («Hola, quiero pedir…») que si no
-        // se confundiría con un saludo, y el cliente recibiría la bienvenida en vez de su pedido.
+        // ⚠️ La confirmación pendiente manda sobre todo lo demás.
+        //
+        // Cuando hay una mutación esperando el sí, la política de enrutado manda el turno al
+        // Nivel 1 — y desde el 24, «Nivel 1» significa **el flujo de esta vertical**, no la FSM
+        // de citas. Sin esta rama, el cliente decía «sí» a «¿confirmo tu pedido?» y caía en
+        // `delegar`: turno sin respuesta, silencio, y un pedido que nunca se creó. Nadie lo vio
+        // porque hasta hoy ninguna confirmación de restaurante llegó a abrirse.
+        if (confirmacion.pendiente(conversacion)) {
+            ctx.identidad = await identidad.resolver(conversacion);
+            ctx.principal = ctx.identidad.principal;
+            const decision = await confirmacion.resolver(ctx, { gate });
+            return { ...decision, invocaciones: [...invocaciones, ...(decision.invocaciones || [])] };
+        }
+
+        // Lo PRIMERO después: ¿viene con el carrito del menú digital? Va antes que cualquier
+        // otra lectura porque el mensaje trae texto humano delante («Hola, quiero pedir…») que
+        // si no se confundiría con un saludo, y el cliente recibiría la bienvenida en vez de su
+        // pedido.
         const delMenu = codigoPedido.leer(texto);
         if (delMenu) return recibirPedidoDelMenu(ctx, delMenu);
+
+        // Un pedido a medias: falta el nombre o la dirección. Mientras la tarea esté abierta, la
+        // política de enrutado devuelve aquí cada mensaje, así que el modelo no puede llevarse
+        // la conversación a mitad de camino ni olvidarse de lo que ya está apuntado.
+        if (conversacion.tarea_actual === TAREA_PEDIDO) {
+            ctx.identidad = await identidad.resolver(conversacion);
+            ctx.principal = ctx.identidad.principal;
+            return seguirPedido(ctx, {
+                solicitarConfirmacion: (peticion) => confirmacion.solicitar(peticion),
+            });
+        }
 
         const t = normalizar(ultimaLinea(texto));
 
@@ -411,6 +636,9 @@ module.exports = {
     VERTICAL,
     TIPOS_NEGOCIO,
     OPCION,
+    TAREA_PEDIDO,
+    PASO_PEDIDO,
+    reclama,
     crearFlujoRestaurante,
     manejarRestaurante: crearFlujoRestaurante(),
     enlaceDelMenu,

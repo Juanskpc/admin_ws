@@ -438,6 +438,10 @@ function registrarFlujo({ flujos }) {
         vertical: VERTICAL,
         tipos: flujo.TIPOS_NEGOCIO,
         manejar: flujo.manejarRestaurante,
+        // «Este mensaje es mío»: el pedido armado en el menú digital. Sin esto la política de
+        // enrutado lo mandaba al modelo por el comodín y el flujo no lo veía nunca — que es lo
+        // que rompió el pedido del 2026-08-26. Ver `engine/flujos.js`.
+        reclama: flujo.reclama,
     });
 }
 

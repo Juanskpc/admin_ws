@@ -371,43 +371,281 @@ describe('el código compacto del menú digital', () => {
     });
 });
 
-describe('el flujo recibe el pedido del menú', () => {
-    const { crearFlujoRestaurante } = require('../../intelligence/adapters/restaurante/flujo');
+describe('el flujo lleva el pedido del menú hasta el final, sin modelo', () => {
+    // ## El fallo que estas pruebas existen para que no vuelva (2026-08-26, en producción)
+    //
+    // El dueño armó un carrito, lo mandó por WhatsApp, dijo su nombre — y el bot le contestó
+    // «¿Qué quieres pedir hoy?». Se le había olvidado el carrito que acababa de recibir.
+    //
+    // No fue culpa del modelo: **el mensaje nunca llegó a quien sabía leerlo**. El pedido del
+    // menú no es un comando ni abre tarea, así que la política de enrutado lo mandaba al Nivel 4
+    // por el comodín `pregunta_libre`. El modelo se apañaba decodificando el código a mano, y a
+    // la tercera conversación se le fue.
+    //
+    // Ahora el flujo lo reclama (`reclama`) y lo lleva entero: productos → nombre → dirección →
+    // confirmación. Sin un token, y sin nada que recordar.
+    const {
+        crearFlujoRestaurante,
+        TAREA_PEDIDO,
+        reclama,
+    } = require('../../intelligence/adapters/restaurante/flujo');
+    const confirmacion = require('../../intelligence/engine/confirmacion');
+    const registry = require('../../intelligence/core/registry');
 
     const negocioFalso = {
         obtener: async (id) => ({ id, nombre: 'Pregonchos', tratamiento: 'Pregonchos', tipoNegocio: 'RESTAURANTE' }),
     };
-    const flujo = crearFlujoRestaurante({
-        contextoNegocio: negocioFalso,
-        leerCarta: async () => ({ productos: [], total: 0 }),
+    const identidadFalsa = {
+        resolver: async () => ({ principal: { tipo: 'contacto' }, persona: null, nombre: null }),
+    };
+
+    /** Gate de mentira que anota cómo se le llamó: es la mitad de lo que se prueba. */
+    function gateFalso() {
+        const llamadas = [];
+        return {
+            llamadas,
+            async ejecutar(invocacion) {
+                llamadas.push(invocacion);
+                // El Gate de verdad se niega sin la prueba del sí (ADR-010). El de mentira tiene
+                // que hacer lo mismo o esto probaría un mundo donde esa regla no existe.
+                if (!invocacion.confirmadoPor) {
+                    const e = new Error('Exige confirmación humana explícita.');
+                    e.code = 'CONFIRMACION_REQUERIDA';
+                    e.statusCode = 403;
+                    throw e;
+                }
+                return {
+                    capacidad: invocacion.capacidad,
+                    vertical: 'restaurante',
+                    resultado: { numero_orden: 'ORD-77', estado: 'PENDIENTE', total: 96000 },
+                };
+            },
+        };
+    }
+
+    let gate;
+    let flujo;
+
+    beforeAll(() => {
+        // `confirmacion` lee del Registry el texto de la pregunta y el del «hecho». Sin la
+        // capacidad registrada, la conversación seguiría funcionando pero diría «Hecho.» a secas.
+        registry.registrar({
+            nombre: 'tomar_pedido',
+            descripcion: 'Crea el pedido a domicilio.',
+            vertical: 'restaurante',
+            tipo: registry.TIPO.MUTACION,
+            idempotente: false,
+            confirmacion: {
+                pregunta: ({ args }) =>
+                    `¿Confirmo tu pedido a nombre de ${args.cliente_nombre} para ${args.direccion}?`,
+                hecho: ({ resultado }) => `¡Listo! Tu pedido quedó tomado. El número es ${resultado.numero_orden}.`,
+            },
+            feature: 'asistente_ia',
+            parametros: {
+                items: {
+                    tipo: 'lista', requerido: true, min_items: 1, max_items: 20,
+                    elemento: {
+                        id_producto: { tipo: 'entero', requerido: true, min: 1 },
+                        cantidad: { tipo: 'entero', requerido: true, min: 1, max: 50 },
+                    },
+                },
+                cliente_nombre: { tipo: 'string', requerido: true, min_longitud: 2, max_longitud: 150 },
+                direccion: { tipo: 'string', requerido: true, min_longitud: 5, max_longitud: 300 },
+            },
+            ejecutar: async () => ({ numero_orden: 'ORD-77' }),
+        });
     });
 
-    const mensaje = 'Hola, quiero pedir:\n\n• 2 × Bandeja paisa\n\n#P12-4x2';
+    afterAll(() => registry._limpiar());
 
-    it('pide la dirección y guarda los productos, SIN crear la orden', async () => {
-        // Crear la orden es una mutación que exige el sí del cliente (ADR-010, paso 5), y
-        // pulsar «Continuar por WhatsApp» es abrir un chat, no confirmar un pedido. Además
-        // falta la dirección, sin la cual no hay domicilio que llevar.
-        const d = await flujo(entrada(mensaje, 12));
-
-        expect(d.respuestas[0]).toMatch(/dirección/i);
-        expect(d.variables.pedido_pendiente).toEqual([{ id_producto: 4, cantidad: 2 }]);
-        expect(d.tarea).toBeNull();
+    beforeEach(() => {
+        gate = gateFalso();
+        flujo = crearFlujoRestaurante({
+            contextoNegocio: negocioFalso,
+            leerCarta: async () => ({ productos: [], total: 0 }),
+            identidad: identidadFalsa,
+            gate,
+        });
     });
 
-    it('el pedido de OTRO negocio se rechaza con su motivo', async () => {
+    /** Tal como lo compone `carrito.service.ts` en el menú. Es el contrato entre los dos repos. */
+    const DEL_MENU = [
+        'Hola, quiero pedir:',
+        '',
+        '• 1 × Bandeja paisa',
+        '• 2 × Limonada de coco',
+        '',
+        'Total aproximado: $ 54.000',
+        '',
+        '#P12-106x1,111x2',
+    ].join('\n');
+
+    /** Encadena mensajes arrastrando el estado, como haría el motor entre turnos. */
+    async function conversar(...textos) {
+        let conversacion = {
+            id_conversacion: 'conv-1', id_negocio: 12, canal: 'whatsapp',
+            variables: { turnos: 1 }, tarea_actual: null, tarea_datos: {},
+        };
+        const salidas = [];
+        for (const texto of textos) {
+            const d = await flujo({ conversacion, texto, turno: { id_turno: 't-1' } });
+            salidas.push(d);
+            conversacion = {
+                ...conversacion,
+                variables: d.variables ?? conversacion.variables,
+                tarea_actual: d.tarea?.nombre ?? null,
+                tarea_datos: d.tarea?.datos ?? {},
+            };
+        }
+        return salidas;
+    }
+
+    const texto = (d) => (typeof d.respuestas[0] === 'string' ? d.respuestas[0] : d.respuestas[0].texto);
+
+    it('el flujo RECLAMA el pedido del menú: sin esto no le llega nunca', () => {
+        // La fila `flujo_reclama` de la política de enrutado se apoya en esto. Es lo único que
+        // separa «lo lee una expresión regular» de «que lo adivine el modelo».
+        expect(reclama(DEL_MENU)).toBe(true);
+        expect(reclama('¿tienen sopa hoy?')).toBe(false);
+    });
+
+    it('recibe el carrito y pide el nombre, dejando TAREA abierta', async () => {
+        const [d] = await conversar(DEL_MENU);
+
+        expect(texto(d)).toMatch(/3 productos/); // 1 bandeja + 2 limonadas
+        expect(texto(d)).toMatch(/a nombre de quién/i);
+        // La tarea es lo que hace que el siguiente mensaje vuelva aquí y no al modelo.
+        expect(d.tarea.nombre).toBe(TAREA_PEDIDO);
+        expect(d.tarea.datos.items).toEqual([
+            { id_producto: 106, cantidad: 1 },
+            { id_producto: 111, cantidad: 2 },
+        ]);
+    });
+
+    it('con la dirección PREGUNTA, y no ha creado nada todavía', async () => {
+        // ADR-010: el modelo —y aquí el guion— puede proponer; solo el cliente dispara. Sin el
+        // sí no se ha tocado el Gate ni una vez.
+        const [, , tercero] = await conversar(DEL_MENU, 'Nicolás Pantoja', 'Carrera 3e 19 a');
+
+        expect(texto(tercero)).toMatch(/¿Confirmo tu pedido a nombre de Nicolás Pantoja/);
+        expect(gate.llamadas).toHaveLength(0);
+    });
+
+    it('el camino entero: carrito → nombre → dirección → confirmación → pedido', async () => {
+        const [, , , cuarto] = await conversar(
+            DEL_MENU,
+            'Nicolás Pantoja',
+            'Carrera 3e 19 a',
+            'sí'
+        );
+
+        // El «sí» —que lee el Nivel 1, gratis— es lo que lo crea.
+        expect(gate.llamadas).toHaveLength(1);
+        expect(gate.llamadas[0].confirmadoPor).toBeTruthy();
+        expect(texto(cuarto)).toContain('ORD-77');
+        expect(cuarto.tarea).toBeNull();
+    });
+
+    it('el pedido se crea con los ids del carrito, no con lo que nadie recuerde', async () => {
+        const [, , , cuarto] = await conversar(DEL_MENU, 'Nicolás Pantoja', 'Carrera 3e 19 a', 'sí');
+
+        const creada = gate.llamadas.find((l) => l.capacidad === 'tomar_pedido' && l.confirmadoPor);
+        expect(creada.args.items).toEqual([
+            { id_producto: 106, cantidad: 1 },
+            { id_producto: 111, cantidad: 2 },
+        ]);
+        expect(creada.args.cliente_nombre).toBe('Nicolás Pantoja');
+        expect(creada.args.direccion).toBe('Carrera 3e 19 a');
+        expect(cuarto.resultado).toBe('resuelto');
+    });
+
+    it('el «sí» del cliente NO se queda sin respuesta', async () => {
+        // El agujero que había justo detrás: con una confirmación abierta, la política manda el
+        // turno al Nivel 1 — y desde el 24 eso significa el flujo de ESTA vertical, que no sabía
+        // resolverla. El cliente decía «sí» y recibía silencio.
+        const [, , , cuarto] = await conversar(DEL_MENU, 'Nicolás Pantoja', 'Carrera 3e 19 a', 'sí');
+        expect(cuarto.respuestas.length).toBeGreaterThan(0);
+        expect(cuarto.resultado).not.toBe('sin_respuesta');
+    });
+
+    it('si ya sabe su nombre no lo vuelve a preguntar', async () => {
+        const conversacion = {
+            id_conversacion: 'conv-2', id_negocio: 12, canal: 'whatsapp',
+            variables: { turnos: 3, nombre: 'Ana' }, tarea_actual: null, tarea_datos: {},
+        };
+        const d = await flujo({ conversacion, texto: DEL_MENU, turno: { id_turno: 't-1' } });
+
+        expect(texto(d)).toMatch(/a nombre de Ana/i);
+        expect(texto(d)).toMatch(/dirección/i);
+        expect(d.tarea.datos.paso).toBe('direccion');
+    });
+
+    it('una pregunta en vez del nombre no se apunta como nombre', async () => {
+        // «¿Y cuánto sale el domicilio?» no es un nombre. Apuntarlo dejaría un pedido a nombre
+        // de una pregunta, y el domiciliario buscando a alguien que no existe.
+        const [, segundo] = await conversar(DEL_MENU, '¿y cuánto sale el domicilio?');
+
+        expect(texto(segundo)).toMatch(/a nombre de quién/i);
+        expect(segundo.tarea.datos.nombre).toBeUndefined();
+        // Y nunca se calla: la salida va en el propio mensaje.
+        expect(texto(segundo)).toMatch(/cancelar/i);
+    });
+
+    it('insistiendo con preguntas no se queda mudo ni pierde el carrito', async () => {
+        // El modo de fallo caro de este sistema es el silencio, no la insistencia. Soltar la
+        // tarea dejaría el carrito huérfano —el modelo no ve las tareas— y habría que armarlo
+        // otra vez.
+        const [, , tercero] = await conversar(DEL_MENU, '¿tienen sopa?', '¿y postres?');
+
+        expect(tercero.respuestas.length).toBeGreaterThan(0);
+        expect(tercero.tarea.datos.items).toHaveLength(2);
+    });
+
+    it('«cancelar» a mitad del pedido lo cancela, y lo dice', async () => {
+        const [, segundo] = await conversar(DEL_MENU, 'cancelar');
+
+        expect(segundo.tarea).toBeNull();
+        expect(texto(segundo)).toMatch(/no te lo apunto/i);
+        expect(gate.llamadas).toHaveLength(0);
+    });
+
+    it('el pedido de OTRO negocio se rechaza con su motivo y sin abrir tarea', async () => {
         // Alguien armó el carrito en la carta de un restaurante y lo mandó al WhatsApp de otro.
         // Sin comprobarlo, el pedido se crearía con ids que aquí son otra cosa, o no existen.
-        const d = await flujo(entrada('#P99-4x2', 12));
+        const [d] = await conversar('#P99-4x2');
 
-        expect(d.respuestas[0]).toMatch(/otro negocio/i);
-        expect(d.variables.pedido_pendiente).toBeUndefined();
+        expect(texto(d)).toMatch(/otro negocio/i);
+        expect(d.tarea).toBeNull();
     });
 
     it('el saludo del mensaje NO se confunde con un «hola» suelto', async () => {
         // El mensaje del menú empieza por «Hola, quiero pedir:». Si el código se leyera después
         // del saludo, el cliente recibiría la bienvenida en vez de su pedido.
-        const d = await flujo(entrada(mensaje, 12));
-        expect(d.respuestas[0]).not.toMatch(/Te saluda/);
+        const [d] = await conversar(DEL_MENU);
+        expect(texto(d)).not.toMatch(/Te saluda/);
+    });
+
+    it('una confirmación pendiente se atiende ANTES que nada', async () => {
+        // Aunque el mensaje se parezca a otra cosa: con el sí en el aire, lo único que toca es
+        // resolverla. Es la rama que faltaba y que dejaba mudo al cliente.
+        const conversacion = {
+            id_conversacion: 'conv-3', id_negocio: 12, canal: 'whatsapp',
+            variables: { turnos: 5 },
+            tarea_actual: 'confirmar_mutacion',
+            tarea_datos: {
+                capacidad: 'tomar_pedido',
+                args: {
+                    items: [{ id_producto: 106, cantidad: 1 }],
+                    cliente_nombre: 'Ana',
+                    direccion: 'Calle 1 # 2-3',
+                },
+                preguntado_en: new Date().toISOString(),
+                repreguntas: 0,
+            },
+        };
+        const d = await flujo({ conversacion, texto: 'sí', turno: { id_turno: 't-9' } });
+
+        expect(texto(d)).toContain('ORD-77');
+        expect(gate.llamadas[0].confirmadoPor).toBeTruthy();
     });
 });

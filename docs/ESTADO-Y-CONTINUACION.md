@@ -16,7 +16,7 @@ proyecto después de semanas, **lee este documento primero** y sigue por donde d
 
 **Estado en una frase:** el asistente atiende **dos verticales** en producción —citas y
 restaurante— por WhatsApp, y desde el menú digital se puede armar un pedido y mandarlo al bot ya
-escrito. **550 pruebas de backend + 15 de frontend en verde.** El roadmap original está agotado:
+escrito. **560 pruebas de backend + 15 de frontend en verde.** El roadmap original está agotado:
 lo que se hace ahora sale del uso real.
 
 ### Qué hay vivo, y dónde apunta
@@ -66,7 +66,7 @@ de restaurante. `saludoPorLaHora` vive en `engine/texto.js` y no en un flujo: un
 barbería saludan igual, y tenerlo dos veces sería tener **dos relojes** — el día que alguien mueva
 el corte de la tarde en uno, el otro se queda como estaba.
 
-**550 pruebas de backend en verde**, arnés de enrutado 28/28 a $0.00, y **desplegado en
+**560 pruebas de backend en verde**, arnés de enrutado 28/28 a $0.00, y **desplegado en
 producción el 2026-08-26** (commit `dd5e19b`). Verificado contra la carta real de pregonchos.
 
 > ⚠️ **Trampa cobrada al desplegar esto:** `git pull` en el VPS decía **«Already up to date»** con
@@ -87,6 +87,23 @@ Detalle en [`asistente-restaurante.md`](asistente-restaurante.md).
 
 > **La regla que se saca de esto:** un rastro que no se puede escribir puede perderse; lo que no
 > puede es llevarse por delante la conversación que estaba contando.
+
+**Y detrás de ese, el de fondo.** Con el rastro arreglado, el dueño volvió a probar: mandó el
+carrito, dijo su nombre, y el bot contestó «¿Qué quieres pedir hoy?». `recibirPedidoDelMenu` existe
+desde el 25 y está probado, pero **el mensaje nunca le llegaba**: un pedido del menú no es un
+comando ni abre tarea, así que la política de enrutado lo mandaba al modelo por el comodín. El
+modelo se apañaba decodificando el código a mano hasta que se le olvidó. Los unitarios no lo vieron
+porque llaman al flujo directamente — **el enrutado nunca estuvo en el camino de una prueba**.
+
+Ahora un flujo puede declarar `reclama(texto)` («esto es mío») y la tabla tiene una fila que lo
+consulta; el núcleo sigue sin saber qué es un código de carrito (ADR-009). Y el pedido lo termina el
+guion entero —carrito → nombre → dirección → confirmación— en cuatro turnos y **cero tokens**. Al
+tirar del hilo salieron dos agujeros más: el «sí» del cliente se habría perdido igual (el flujo de
+la vertical no sabía resolver una confirmación) y `tarea_en_curso` comparaba contra la tarea de
+agendar, literal. Detalle en [`asistente-restaurante.md`](asistente-restaurante.md).
+
+> **Y la que se saca de este:** cuando el modelo «se olvida» de algo exacto, mirar primero si
+> alguien le pidió que lo recordara en vez de dárselo.
 
 ### Lo que se hizo el 2026-08-24/25
 

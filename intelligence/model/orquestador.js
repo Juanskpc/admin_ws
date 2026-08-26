@@ -136,6 +136,17 @@ const POLITICA = [
         cuando: (ctx) => TODOS_LOS_COMANDOS.has(normalizar(ctx.texto)),
     },
     {
+        regla: 'flujo_reclama',
+        motivo:
+            'El flujo de la vertical dice que este mensaje es suyo. Un pedido armado en el menú ' +
+            'digital no es una pregunta: es un dato exacto que una expresión regular lee mejor ' +
+            'que un modelo, y más barato.',
+        nivel: NIVEL.DETERMINISTA,
+        // Quién decide es el adaptador (`flujos.registrar({ reclama })`); esta tabla solo lo
+        // pregunta. El núcleo no sabe —ni debe— qué es un código de carrito (ADR-009).
+        cuando: (ctx) => Boolean(ctx.flujoReclama),
+    },
+    {
         regla: 'intencion_mutacion',
         motivo:
             'Quiere cancelar o mover una cita, y la FSM no sabe hacer ni lo uno ni lo otro. ' +

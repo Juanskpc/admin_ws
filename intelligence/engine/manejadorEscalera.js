@@ -55,13 +55,34 @@ function crearManejadorEscalera({
             return optout.decision(ctx.conversacion);
         }
 
+        // ⚠️ El flujo de la vertical se resuelve ANTES de enrutar, no después.
+        //
+        // Hasta el 2026-08-26 se resolvía dentro de `deterministaDelNegocio`, o sea **después**
+        // de que la tabla ya hubiera decidido el nivel. Con eso, la tabla no podía preguntarle
+        // al flujo si el mensaje era suyo, y un pedido armado en el menú digital —que el flujo
+        // de restaurante sabe leer exactamente— se iba al modelo por el comodín. Ver
+        // `flujos.reclamaEl`.
+        //
+        // Cuesta una consulta por clave primaria en los turnos que van al modelo, donde ya se
+        // hacía otra igual para el prompt. Al lado de una llamada de dos segundos al proveedor,
+        // no se nota.
+        const flujo = await flujoDelNegocio(ctx);
+
         const ruta = enrutar({
             texto: ctx.texto,
-            tareaEnCurso: ctx.conversacion?.tarea_actual === TAREA_AGENDAR,
+            // Cualquier tarea abierta, no solo la de agendar.
+            //
+            // Era `=== TAREA_AGENDAR` de cuando esa era la única que existía. Una tarea abierta
+            // significa que un flujo determinista tiene el hilo a medias, sea cual sea: con la
+            // comparación literal, la primera tarea de otra vertical se habría ido al modelo a
+            // mitad de camino, que es la forma más cara de perder el estado que ya tenías.
+            tareaEnCurso: Boolean(ctx.conversacion?.tarea_actual),
             // Una mutación esperando el sí del cliente (F7). Se calcula aquí y se le pasa a la
             // tabla como un hecho más: el enrutado no lee la base ni sabe qué es una tarea.
             confirmacionPendiente: Boolean(confirmacion.pendiente(ctx.conversacion)),
             llmDisponible: Boolean(llm),
+            // «Este mensaje es mío» — lo decide el adaptador, no esta tabla (ADR-009).
+            flujoReclama: flujos.reclamaEl(flujo, ctx.texto),
         });
 
         const pasoDeRuta = {
@@ -83,16 +104,16 @@ function crearManejadorEscalera({
                     decision: (error.code || 'NIVEL4_FALLO').slice(0, 80),
                     motivo: { mensaje: error.message, se_baja_a: NIVEL.DETERMINISTA },
                 };
-                const decision = await determinista(ctx);
+                const decision = await (flujo ? flujo.manejar(ctx) : determinista(ctx));
                 return conPaso(conPaso(decision, caida), pasoDeRuta);
             }
         }
 
-        return conPaso(await deterministaDelNegocio(ctx), pasoDeRuta);
+        return conPaso(await (flujo ? flujo.manejar(ctx) : determinista(ctx)), pasoDeRuta);
     };
 
     /**
-     * El flujo determinista que le toca a ESTE negocio.
+     * El flujo determinista que le toca a ESTE negocio, o `null` si nadie lo declaró.
      *
      * Hasta el 2026-08-24 había uno solo y era el de agendar citas. El día que el canal apuntó a
      * un restaurante, el primer «hola» pidió `consultar_servicios` —una capacidad de citas—
@@ -102,12 +123,13 @@ function crearManejadorEscalera({
      * Ahora se pregunta. Los flujos los declaran los adaptadores (`engine/flujos.js`), así que
      * este archivo sigue sin nombrar ninguna vertical.
      *
-     * **Si nadie declaró flujo para ese tipo de negocio**, se usa el que se inyectó por defecto
-     * —hoy el de citas— y se avisa por consola. Es el comportamiento que había antes de todo
-     * esto, así que no rompe nada existente; pero se grita, porque un gimnasio recibiendo el
-     * menú de una peluquería es un fallo que de otro modo solo se ve en la cara del cliente.
+     * **Si nadie declaró flujo para ese tipo de negocio**, devuelve `null` y quien llama usa el
+     * que se inyectó por defecto —hoy el de citas—, avisando por consola. Es el comportamiento
+     * que había antes de todo esto, así que no rompe nada existente; pero se grita, porque un
+     * gimnasio recibiendo el menú de una peluquería es un fallo que de otro modo solo se ve en
+     * la cara del cliente.
      */
-    async function deterministaDelNegocio(ctx) {
+    async function flujoDelNegocio(ctx) {
         // Si no se puede averiguar de qué negocio se trata —la base no responde, o esto corre
         // en un test sin Postgres— NO se pierde el turno: se atiende con el flujo por defecto,
         // que es exactamente lo que se hacía antes de que existiera el enrutado por vertical.
@@ -120,7 +142,7 @@ function crearManejadorEscalera({
         }
 
         const flujo = negocio && flujos.para(negocio.tipoNegocio);
-        if (flujo) return flujo.manejar(ctx);
+        if (flujo) return flujo;
 
         if (negocio?.tipoNegocio && flujos.listar().length > 0) {
             console.warn(
@@ -129,7 +151,7 @@ function crearManejadorEscalera({
                     'que probablemente hable de otra cosa. Declara sus TIPOS_NEGOCIO en el adaptador.'
             );
         }
-        return determinista(ctx);
+        return null;
     }
 }
 

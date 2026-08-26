@@ -357,6 +357,74 @@ de Postgres palabra por palabra.
 
 ---
 
+## El pedido del menú nunca llegaba al flujo (2026-08-26, tercera vuelta)
+
+Arreglado lo del rastro, el dueño volvió a probar: mandó el carrito, dijo su nombre — y el bot le
+contestó **«¿Qué quieres pedir hoy?»**. Se le había olvidado el pedido que acababa de recibir.
+
+### La causa: el mensaje nunca llegó a quien sabía leerlo
+
+`recibirPedidoDelMenu` existe desde el 25, está probado y lee el código perfectamente. Pero **el
+mensaje no le llegaba nunca.** El pedido del menú no es un comando conocido ni abre una tarea, así
+que la política de enrutado lo mandaba al Nivel 4 por el comodín `pregunta_libre`.
+
+El modelo se apañaba: **decodificaba el código a mano** (por eso su primer intento mandó
+`items: "106x1,109x1,111x2"`, que es el código tal cual). Funcionó dos veces y a la tercera se le
+olvidó el carrito. Culpar al modelo sería mirar al sitio equivocado — nadie debería estar
+pidiéndole que recuerde un dato exacto que una expresión regular lee sin fallar.
+
+Los unitarios no lo vieron porque llaman al flujo **directamente**. El enrutado nunca estuvo en el
+camino de una prueba: es exactamente el punto 2 de los pendientes —«probar el círculo completo con
+gente de verdad»— cobrándose lo suyo.
+
+### El arreglo: el flujo reclama lo suyo, y lo lleva hasta el final
+
+**1. Una fila más en la tabla de enrutado.** El núcleo no puede saber qué es un código de carrito
+—eso es dominio (ADR-009)— pero sí puede *preguntar*. Un flujo declara opcionalmente
+`reclama(texto)` al registrarse, y la política tiene una fila `flujo_reclama` que lo consulta. El
+de restaurante reclama solo el pedido del menú: un «¿tienen sopa?» tiene que poder irse al modelo.
+
+**2. El pedido lo termina el guion, no el modelo.** La cabecera del flujo defendía que pedir comida
+no es un formulario, y es verdad *para quien pide escribiendo*. Un carrito ya armado es lo
+contrario: los productos están elegidos, exactos y con su id; faltan dos datos. Eso es un
+formulario de dos campos, y dárselo a un modelo era pagar por que lo hiciera peor.
+
+```
+← [carrito del menú]   → ¡Listo, ya tengo tu pedido! Son 3 productos. ¿A nombre de quién lo dejo? 📝
+← Nicolás Pantoja      → Gracias, Nicolás. ¿A qué dirección te lo llevamos? 🛵
+← Carrera 3e 19 a      → ¿Confirmo tu pedido a nombre de Nicolás Pantoja para Carrera 3e 19 a?
+← sí                   → ¡Listo! Tu pedido quedó tomado. El número es ORD-77
+```
+
+Cuatro turnos, **cero tokens**, y nada que recordar. Los productos van en la **tarea** (ADR-014: lo
+acotado y retomable) y no en `variables`, que es donde estaban antes — donde, dicho sea, **nadie
+los leía nunca**: ni el modelo, que no ve las variables, ni el flujo, que cerraba sin tarea.
+
+El sí sigue siendo del cliente: con los datos completos no se crea nada, se pide la confirmación
+por el mismo camino que usa el modelo, y es el Policy Gate quien se niega a ejecutar sin la prueba
+(ADR-010). Este flujo no tiene puerta trasera a `tomar_pedido`.
+
+### Dos agujeros más que salieron al tirar del hilo
+
+- **El «sí» del cliente se habría perdido igual.** Con una confirmación pendiente, la política
+  manda el turno al Nivel 1 — y desde el 24 «Nivel 1» significa *el flujo de esta vertical*, que no
+  sabía resolverla y caía en `delegar`: turno sin respuesta. Nadie lo vio porque hasta ahora
+  ninguna confirmación de restaurante había llegado a abrirse. El flujo la atiende ahora, antes que
+  nada.
+- **`tarea_en_curso` comparaba contra la tarea de agendar**, literal, de cuando era la única que
+  existía. La primera tarea de cualquier otra vertical se habría ido al modelo a mitad de camino.
+  Ahora: cualquier tarea abierta es del flujo determinista.
+
+### Y una decisión de producto
+
+Si en vez del nombre llega una pregunta («¿y cuánto sale el domicilio?»), **no se apunta como
+nombre** — un pedido a nombre de una pregunta manda al domiciliario a buscar a alguien que no
+existe. Se repregunta, y el mensaje **siempre lleva la salida** («escríbeme *cancelar*»). La tarea
+no se suelta sola: soltarla dejaría el carrito huérfano y habría que armarlo otra vez. Callarse
+tampoco era opción — en este sistema el modo de fallo caro es el silencio, no la insistencia.
+
+---
+
 ## Lo que queda pendiente
 
 - **El bot va lento.** Señalado por el dueño el 2026-08-24 y aplazado. Sospecha razonable: la
