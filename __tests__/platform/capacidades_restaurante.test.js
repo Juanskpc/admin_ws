@@ -87,22 +87,38 @@ afterAll(async () => {
 
 // ────────────────────────────────────────────────────────────────────────────────────────
 describe('consultar_carta', () => {
-    it('sin categoría devuelve las categorías, no la carta entera', async () => {
-        // La carta completa no cabe en un mensaje y abruma: primero se enseña por dónde entrar.
+    it('sin categoría devuelve los PRODUCTOS con su precio, no un índice de categorías', async () => {
+        // El cambio del 2026-08-26. Antes esto devolvía solo la lista de categorías, y el bot
+        // hacía lo que la forma del dato le pedía: «tenemos Hamburguesas, Bebidas y Postres,
+        // ¿cuál quieres ver?». A quien pide comida no le importa cómo ordena su carta el
+        // restaurante — quiere saber qué hay y cuánto vale.
         const { resultado } = await ejecutar('consultar_carta');
 
-        const nombres = resultado.categorias.map((c) => c.nombre);
-        expect(nombres).toEqual(expect.arrayContaining(['Hamburguesas', 'Bebidas', 'Postres']));
-        expect(resultado.productos).toBeUndefined();
+        const categorias = resultado.carta.map((c) => c.categoria);
+        expect(categorias).toEqual(expect.arrayContaining(['Hamburguesas', 'Bebidas', 'Postres']));
+
+        const todos = resultado.carta.flatMap((c) => c.productos);
+        const doble = todos.find((p) => p.nombre === 'Hamburguesa doble');
+        expect(doble.precio).toBe(32000);
+        expect(typeof doble.precio).toBe('number');
+    });
+
+    it('los ids de categoría siguen viajando: son los que hacen falta para acotar', async () => {
+        // Que el cliente no los vea no significa que el modelo no los necesite. Sin ellos,
+        // «¿qué bebidas tienen?» obligaría a adivinar un id — que es exactamente el fallo del
+        // 2026-08-24.
+        const { resultado } = await ejecutar('consultar_carta');
+        expect(resultado.carta.every((c) => Number.isInteger(c.id_categoria))).toBe(true);
     });
 
     it('con categoría devuelve sus productos con precio', async () => {
-        const { resultado: cats } = await ejecutar('consultar_carta');
-        const hamburguesas = cats.categorias.find((c) => c.nombre === 'Hamburguesas');
+        const { resultado: carta } = await ejecutar('consultar_carta');
+        const hamburguesas = carta.carta.find((c) => c.categoria === 'Hamburguesas');
 
         const { resultado } = await ejecutar('consultar_carta', { id_categoria: hamburguesas.id_categoria });
         const doble = resultado.productos.find((p) => p.nombre === 'Hamburguesa doble');
 
+        expect(resultado.categoria).toBe('Hamburguesas');
         expect(doble.precio).toBe(32000);
         expect(typeof doble.precio).toBe('number');
     });
@@ -136,12 +152,8 @@ describe('consultar_carta', () => {
         // Son dos filtros distintos de la vertical —`visible` y `disponible`— y el que se
         // olvida es siempre el segundo. Un bot que ofrece algo agotado hace que el negocio
         // quede mal con su cliente.
-        const { resultado: cats } = await ejecutar('consultar_carta');
-        const todos = [];
-        for (const c of cats.categorias) {
-            const { resultado } = await ejecutar('consultar_carta', { id_categoria: c.id_categoria });
-            todos.push(...resultado.productos.map((p) => p.nombre));
-        }
+        const { resultado } = await ejecutar('consultar_carta');
+        const todos = resultado.carta.flatMap((c) => c.productos.map((p) => p.nombre));
 
         expect(todos).toContain('Hamburguesa clásica');
         expect(todos).not.toContain('Menú del personal');  // visible = false
@@ -155,6 +167,15 @@ describe('buscar_producto', () => {
         const nombres = resultado.productos.map((p) => p.nombre);
 
         expect(nombres).toEqual(expect.arrayContaining(['Hamburguesa clásica', 'Hamburguesa doble']));
+    });
+
+    it('tampoco por búsqueda sale lo que el negocio esconde', async () => {
+        // `cartaService.buscarProductos` NO filtra `visible`: es la misma búsqueda que usa el
+        // panel del negocio, donde ver lo oculto es justo lo que se quiere. Por el bot no puede
+        // salir, así que el adaptador lo filtra. Sin esto, «menú del personal» —oculto a
+        // propósito— aparecía en el chat de un cliente con solo escribir «menú».
+        const { resultado } = await ejecutar('buscar_producto', { termino: 'personal' });
+        expect(resultado.productos.map((p) => p.nombre)).not.toContain('Menú del personal');
     });
 
     it('devuelve vacío en vez de inventarse algo', async () => {

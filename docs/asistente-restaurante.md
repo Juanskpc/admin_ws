@@ -22,7 +22,7 @@ no se había podido comprobar con una segunda vertical.
 
 | Capacidad | Tipo | Qué hace |
 |---|---|---|
-| `consultar_carta` | consulta | Las categorías, o los productos de una |
+| `consultar_carta` | consulta | Los productos con su precio; acotable a una categoría |
 | `buscar_producto` | consulta | Por nombre («¿tienen hamburguesa doble?») |
 | `consultar_estado_pedido` | consulta | En qué va un pedido, por su número |
 | `tomar_pedido` | **mutación** | Crea la orden a domicilio |
@@ -114,7 +114,8 @@ una sin chicharrón, y una limonada sin azúcar» es una frase, no cinco pulsaci
 convierte un pedido de tres cosas en doce mensajes y sigue sin entender «sin cebolla».
 
 Así que el flujo hace **solo lo que un guion hace mejor que un modelo**: recibir, enseñar el
-enlace del menú, ofrecer las categorías. En cuanto el cliente elige pedir por chat, **se aparta y
+enlace del menú y poner delante los platos que más piden **con su precio** — una lectura de
+tabla, no una conversación. En cuanto el cliente elige pedir por chat, **se aparta y
 no deja tarea abierta**, y el comodín de la política de enrutado (`pregunta_libre` → Nivel 4) manda
 el resto al modelo. Es literalmente para lo que existe la escalera de ADR-018.
 
@@ -125,8 +126,10 @@ el resto al modelo. Es literalmente para lo que existe la escalera de ADR-018.
 - **Con `detalle`, el canal pinta una LISTA**; sin él y con pocas opciones, botones
   (`adaptador.js`: `<= LIMITES.botones && !conDetalle`). Una lista de una sola entrada obliga a
   desplegar un menú para pulsar lo único que hay dentro.
-- **Las categorías las pinta el flujo, no el modelo.** Leer una tabla no merece un turno de
-  modelo — y sobre todo, **el modelo no se inventa una categoría que ya tiene delante**.
+- **La carta la pinta el flujo, no el modelo.** Leer una tabla no merece un turno de modelo.
+  Hasta el 2026-08-26 lo que pintaba eran las **categorías**, para que el modelo no se
+  inventara un id; ahora pinta productos con precio, que además quita la ronda entera (ver
+  «Que no suene a bot»).
 
 ---
 
@@ -214,6 +217,97 @@ nombres se comen el largo disponible.
 
 ---
 
+## Que no suene a bot (2026-08-26)
+
+El dueño leyó las conversaciones reales y dijo la frase que resume el problema: **«ahora mismo el
+bot es eso, un bot»**. Y puso el dedo en el sitio exacto: *«no me gusta que diga "tenemos las
+siguientes categorías". Los encargados del restaurante lo entienden porque así hay más orden, pero
+¿qué le importa a un cliente? Él quiere ver los productos, lo que valen…»*.
+
+Tenía razón, y el fallo no estaba en la redacción: estaba en la **forma de los datos**.
+
+### La causa: la capacidad devolvía un índice, no una carta
+
+`consultar_carta` sin argumentos devolvía **solo la lista de categorías**. Se hizo así con un
+motivo razonable —«la carta entera no cabe en un mensaje y abruma»— y el modelo hizo lo único
+sensato que se podía hacer con ese dato: leerlo en voz alta y preguntar por cuál empezar.
+
+El flujo determinista hacía lo mismo un paso antes: al pulsar «Pedir por aquí» pintaba las tres
+categorías como botones. Eso se añadió el 24 para que el modelo no se inventara un id de
+categoría, y **funcionó**; pero resolvió un problema nuestro pasándole al cliente un problema de
+organización interna del restaurante.
+
+Las categorías existen para que el negocio ordene su carta. Quien pide comida quiere ver platos y
+precios. Cada pregunta intermedia es un turno entero gastado en no decir nada, y en un chat cada
+turno de más es una oportunidad de que se vaya.
+
+### Lo que cambió
+
+| Antes | Ahora |
+|---|---|
+| `consultar_carta` sin args → lista de categorías | → **productos con precio**, agrupados, hasta 30, con `hay_mas` |
+| «Pedir por aquí» → tres botones de categoría | → los **8 más pedidos con su precio**, y el enlace a la carta completa |
+| «¡Hola! Te comunicas con X.» | Saludo por la hora del día, el nombre en `*negrita*` y qué más sabe hacer |
+| Prompt `sistema.v2` | `sistema.v3` |
+
+El fallo del 2026-08-24 —el modelo pidiendo la categoría «2», un ordinal— sigue cubierto, y por
+una vía mejor que la de entonces: **si nadie tiene que elegir una categoría, no hay id que
+inventar**. La validación estricta de `id_categoria` se queda igual, para cuando el cliente sí
+nombre una parte de la carta («¿qué bebidas tienen?»).
+
+`hay_mas` no es cosmético: sin él, una carta recortada le enseña al modelo a decir «esto es todo
+lo que tenemos», que es mentira. Es el mismo principio que ya obligó a que una categoría
+inexistente fallara en vez de devolver vacío.
+
+### El prompt: `sistema.v3`, y por qué es una versión nueva
+
+Los prompts son artefactos versionados (ADR-019), así que un cambio de comportamiento se ve en un
+`git diff` como un archivo nuevo, no como una edición encima. La `v2` sigue en el repositorio: es
+lo que permite al arnés comparar.
+
+`v3` **solo cambia el estilo**, y ahí estaban dos contradicciones que explicaban medio problema:
+
+1. **Pedía «cercano y breve» y a la vez prohibía toda lista.** En una barbería eso está bien. En
+   un restaurante, que enumera platos con precio, obligaba a escribir párrafos. Ahora: lista corta
+   **solo cuando se enumeran cosas** —platos con precio, horas libres—, y frases para todo lo demás.
+2. **No decía nada sobre la organización interna del negocio.** Ahora lo dice explícitamente: las
+   categorías, secciones y códigos internos existen para que el negocio se ordene, al cliente no le
+   importan y **no se le preguntan**.
+
+Y tres cosas más: un emoji de vez en cuando está permitido (rellenar de emojis, no); la negrita de
+WhatsApp es **un** asterisco, no dos, que es un detalle que se ve feo en el móvil en cuanto se
+escapa; y se pide **un dato cada vez** en vez de un cuestionario.
+
+### Lo que NO se copió del ejemplo del dueño
+
+El bot que le atendió en otro restaurante manda un formulario: «Dirección y Barrio: / Número de
+celular: / Nombres: / Medio de pago:», y remata con *«por favor enviar los datos en un solo
+mensaje»*. Ese negocio lo necesita porque al otro lado hay **una persona** leyendo mensajes a mano
+y quiere recibirlo todo de una vez.
+
+Aquí no hay nadie leyendo. Pedirle al cliente que rellene un formulario, cuando el asistente puede
+preguntar lo que falte justo cuando falte, sería añadirle trabajo para no usar lo único que
+tenemos de más. Lo que sí se tomó de ese ejemplo es el tono: saludar por la hora, decir quién eres,
+y poner el enlace del menú donde se ve.
+
+### Un agujero encontrado por el camino
+
+`cartaService.buscarProductos` **no filtra `visible`** —es la misma búsqueda que usa el panel del
+negocio, donde ver lo oculto es justo lo que se quiere—, así que `buscar_producto` podía enseñarle
+a un cliente un producto que el negocio esconde a propósito: escribir «personal» sacaba el «Menú
+del personal». Se filtra ahora en el adaptador, no en el servicio: el contrato de la vertical es
+suyo, y cambiárselo desde `intelligence/` es la flecha al revés.
+
+La prueba se comprobó **rompiendo el código a propósito** antes de darla por buena.
+
+### Y el saludo de citas, por lo mismo
+
+La `reserva` arrancaba con «¡Hola! Te comunicas con X». Se cambió igual el mismo día:
+`saludoPorLaHora` vive en `intelligence/engine/texto.js` —no en un flujo— porque un restaurante y
+una barbería saludan igual, y dos copias serían dos relojes.
+
+---
+
 ## Lo que queda pendiente
 
 - **El bot va lento.** Señalado por el dueño el 2026-08-24 y aplazado. Sospecha razonable: la
@@ -227,3 +321,6 @@ nombres se comen el largo disponible.
   con caja abierta. Borrarla o reemplazarla si se usa de verdad.
 - **`tomar_pedido` no pregunta método de pago ni exclusiones** («sin cebolla»). El dominio las
   soporta (`pedid_detalle_exclu`); la capacidad todavía no.
+- **El arnés de evaluación no tiene ni una conversación de restaurante.** Sus tres suites son
+  todas de `reserva`, así que un cambio de prompt como el de la `v3` no se puede medir donde
+  más se nota. `enrutado` es gratis; `respuestas` cuesta unos centavos por tanda.

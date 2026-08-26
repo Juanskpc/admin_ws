@@ -52,4 +52,27 @@ function esComando(texto, lista) {
     return lista.some((palabra) => t === normalizar(palabra));
 }
 
-module.exports = { COMANDO, normalizar, ultimaLinea, esComando };
+/**
+ * «¡Buenos días!» / «¡Buenas tardes!» / «¡Buenas noches!», en la hora del NEGOCIO.
+ *
+ * Vive aquí y no en un flujo porque no es conocimiento de dominio —un restaurante y una barbería
+ * saludan igual— y porque tenerlo dos veces sería tener dos relojes: el día que alguien mueva el
+ * corte de la tarde en uno, el otro se queda como estaba.
+ *
+ * ⚠️ Se calcula con `Intl` y **no** con `getHours()` ni pasando por `toISOString()`. El proceso
+ * corre en UTC en el VPS, así que `getHours()` daría «buenas noches» a las seis de la tarde en
+ * Bogotá — y un saludo desfasado cinco horas es exactamente la clase de detalle que delata a un
+ * bot. Es la misma trampa que ya se pagó con las fechas (ESTADO-Y-CONTINUACION §8).
+ */
+function saludoPorLaHora(ahora = new Date(), zona = 'America/Bogota') {
+    const hora = Number(
+        new Intl.DateTimeFormat('en-GB', { timeZone: zona, hour: '2-digit', hour12: false }).format(
+            ahora
+        )
+    );
+    if (hora < 12) return '¡Buenos días!';
+    if (hora < 19) return '¡Buenas tardes!';
+    return '¡Buenas noches!';
+}
+
+module.exports = { COMANDO, normalizar, ultimaLinea, esComando, saludoPorLaHora };

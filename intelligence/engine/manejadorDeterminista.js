@@ -61,7 +61,7 @@ const contextoNegocioReal = require('../core/contextoNegocio');
 // Leer «sí», «cancelar» y la última línea de una ráfaga vive en `texto.js` desde F7: la
 // confirmación de una mutación necesita exactamente la misma lectura, y dos lecturas distintas
 // de «sí» sería un bot que confirma en un sitio y repregunta en el otro.
-const { COMANDO, normalizar, ultimaLinea, esComando } = require('./texto');
+const { COMANDO, normalizar, ultimaLinea, esComando, saludoPorLaHora } = require('./texto');
 const confirmacion = require('./confirmacion');
 
 /** Pasos de la tarea de agendar. Enum-like: se registran en el Ledger y se miden. */
@@ -329,14 +329,24 @@ function crearManejadorDeterminista({
      * El nombre sale del contexto del inquilino, no de una constante ni del texto de la FSM: el
      * día que sea configurable por negocio (Business Context, ADR-020/F6) cambia de origen sin
      * tocar esto. Y si no se conoce, `tratamiento` ya trae una fórmula neutra — aquí no se
-     * comprueba si hay nombre, porque el olvido saldría publicado como «te comunicas con null».
+     * comprueba si hay nombre, porque el olvido saldría publicado como «te saluda null».
+     *
+     * ## Por qué cambió el 2026-08-26
+     *
+     * Decía «¡Hola! Te comunicas con X.», que es como contesta un conmutador, no un negocio. Se
+     * cambió en el restaurante primero —lo señaló el dueño— y aquí por lo mismo: **el saludo por
+     * la hora del día es lo que más barato compra la sensación de que hay alguien**. Cuesta una
+     * línea y se nota en el primer mensaje, que es el único que todo el mundo lee.
+     *
+     * La negrita es la de WhatsApp: **un** asterisco. Con dos, el cliente ve los asteriscos.
      */
     function saludo(ctx) {
         const nombre = (ctx.conversacion.variables || {}).nombre;
         const quien = ctx.negocio?.tratamiento || 'el negocio';
+        const hora = saludoPorLaHora(ahora());
         return nombre
-            ? `¡Hola de nuevo, ${nombre}! Te comunicas con ${quien}.`
-            : `¡Hola! Te comunicas con ${quien}.`;
+            ? `👋 ${hora} Qué bueno tenerte de vuelta, ${nombre}. Te saluda *${quien}*.`
+            : `👋 ${hora} Te saluda *${quien}*.`;
     }
 
     async function ofrecerServicios(ctx, pasosPrevios = [], { saludar = false } = {}) {

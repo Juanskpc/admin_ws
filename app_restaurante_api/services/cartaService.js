@@ -49,6 +49,36 @@ async function getCategoriasPublicas(idNegocio) {
 }
 
 /**
+ * La carta pública ENTERA: categorías visibles con sus productos y sus precios.
+ *
+ * `getCategoriasPublicas` trae los productos solo como ids —le basta, porque quien la usa pinta
+ * una rejilla de categorías y luego pide la que se toque—. Quien necesita enseñar precios de una
+ * sola vez tenía que pedir cada categoría por separado: N+1 consultas para armar una lista que
+ * cabe en un mensaje de chat.
+ *
+ * Mismos filtros que las otras `...Publicas`: `visible` además de `disponible`, que es la
+ * diferencia entre lo que el negocio gestiona y lo que le enseña a un cliente.
+ */
+async function getCartaPublica(idNegocio) {
+    return Models.CartaCategoria.findAll({
+        where: { id_negocio: idNegocio, estado: 'A', visible: true },
+        attributes: ['id_categoria', 'nombre', 'descripcion', 'orden'],
+        include: [{
+            model: Models.CartaProducto,
+            as: 'productos',
+            where: { estado: 'A', disponible: true, visible: true },
+            required: false,
+            attributes: ['id_producto', 'nombre', 'descripcion', 'precio', 'es_popular'],
+        }],
+        order: [
+            ['orden', 'ASC'],
+            [{ model: Models.CartaProducto, as: 'productos' }, 'es_popular', 'DESC'],
+            [{ model: Models.CartaProducto, as: 'productos' }, 'nombre', 'ASC'],
+        ],
+    });
+}
+
+/**
  * Lista los productos de una categoría, con ingredientes.
  */
 async function getProductosByCategoria(idNegocio, idCategoria) {
@@ -150,6 +180,7 @@ module.exports = {
     getCategorias,
     getProductosByCategoria,
     getCategoriasPublicas,
+    getCartaPublica,
     getProductosPublicosByCategoria,
     buscarProductos,
 };

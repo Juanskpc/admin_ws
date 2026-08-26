@@ -131,19 +131,27 @@ describe('el registro de flujos', () => {
 describe('el flujo de restaurante', () => {
     const { crearFlujoRestaurante, OPCION, enlaceDelMenu } = require('../../intelligence/adapters/restaurante/flujo');
 
-    const CATEGORIAS = [
-        { id_categoria: 38, nombre: 'Entradas', descripcion: 'Para empezar' },
-        { id_categoria: 39, nombre: 'Platos', descripcion: 'Fuertes' },
-        { id_categoria: 40, nombre: 'Bebidas', descripcion: 'Frías' },
-    ];
+    /** Lo que devuelve `leerCarta`: lo que cabe en el chat, y cuántos hay en total. */
+    const CARTA = {
+        productos: [
+            { nombre: 'Hamburguesa doble', precio: 22000, es_popular: true },
+            { nombre: 'Salchipapa especial', precio: 18000, es_popular: true },
+            { nombre: 'Limonada de coco', precio: 8000, es_popular: false },
+        ],
+        total: 14,
+    };
 
     const negocioFalso = {
         obtener: async (id) => ({ id, nombre: 'Pregonchos', tratamiento: 'Pregonchos', tipoNegocio: 'RESTAURANTE' }),
     };
 
+    /** Las 15:00 en Bogotá. El saludo depende de la hora y una prueba no puede esperar. */
+    const LAS_TRES = () => new Date('2026-08-26T20:00:00Z');
+
     const flujo = crearFlujoRestaurante({
         contextoNegocio: negocioFalso,
-        listarCategorias: async () => CATEGORIAS,
+        leerCarta: async () => CARTA,
+        ahora: LAS_TRES,
     });
 
     /** Una conversación que ya lleva turnos: no es alguien que acaba de llegar. */
@@ -160,6 +168,32 @@ describe('el flujo de restaurante', () => {
 
         expect(d.respuestas[0].texto).toContain('Pregonchos');
         expect(d.respuestas[0].texto).toContain(enlaceDelMenu(12));
+    });
+
+    it('saluda por la hora del día, en la hora del NEGOCIO', async () => {
+        // El proceso corre en UTC en el VPS. Calcular esto con `getHours()` daría «buenas
+        // noches» a las seis de la tarde en Bogotá, que es justo la clase de detalle que
+        // delata a un bot.
+        const alas9 = crearFlujoRestaurante({
+            contextoNegocio: negocioFalso,
+            leerCarta: async () => CARTA,
+            ahora: () => new Date('2026-08-26T14:00:00Z'), // 09:00 en Bogotá
+        });
+        const alas8 = crearFlujoRestaurante({
+            contextoNegocio: negocioFalso,
+            leerCarta: async () => CARTA,
+            ahora: () => new Date('2026-08-27T01:00:00Z'), // 20:00 en Bogotá
+        });
+
+        expect((await alas9(entrada('hola', 12))).respuestas[0].texto).toContain('Buenos días');
+        expect((await flujo(entrada('hola', 12))).respuestas[0].texto).toContain('Buenas tardes');
+        expect((await alas8(entrada('hola', 12))).respuestas[0].texto).toContain('Buenas noches');
+    });
+
+    it('el nombre del negocio va en negrita de WhatsApp: un asterisco, no dos', async () => {
+        const d = await flujo(entrada('hola', 12));
+        expect(d.respuestas[0].texto).toContain('*Pregonchos*');
+        expect(d.respuestas[0].texto).not.toContain('**Pregonchos**');
     });
 
     it('el saludo deja UN botón, para pedir por chat', async () => {
@@ -188,22 +222,41 @@ describe('el flujo de restaurante', () => {
         expect(d.respuestas[0].opciones).toBeUndefined();
     });
 
-    it('«pedir por aquí» enseña las categorías, con sus ids REALES', async () => {
-        // Que las pinte el flujo y no el modelo evita que el modelo las adivine: el 2026-08-24
-        // pidió la categoría «2» —un ordinal— cuando las de ese negocio eran 38, 39 y 40.
+    it('«pedir por aquí» enseña PRODUCTOS con su precio', async () => {
+        // Lo que el cliente quiere saber es qué hay y cuánto vale. Que lo pinte el flujo y no
+        // el modelo es además gratis: es una lectura de tabla, no una conversación.
         const d = await flujo(entrada(OPCION.CHAT, 12));
-        expect(d.respuestas[0].opciones.map((o) => o.id)).toEqual(['38', '39', '40']);
-        expect(d.respuestas[0].opciones.map((o) => o.etiqueta)).toEqual(['Entradas', 'Platos', 'Bebidas']);
+
+        expect(d.respuestas[0].texto).toContain('Hamburguesa doble');
+        expect(d.respuestas[0].texto).toContain('$22.000');
+        expect(d.respuestas[0].texto).toContain('Limonada de coco');
     });
 
-    it('las categorías tampoco llevan detalle: con tres, botones y no menú', async () => {
+    it('«pedir por aquí» NO le pregunta al cliente por categorías', async () => {
+        // La regresión que esta prueba existe para que no vuelva. Hasta el 2026-08-26 este paso
+        // pintaba las categorías como botones —«Entradas, Platos, Bebidas»— y le pasaba al
+        // cliente el problema de organización del restaurante. Nadie escribe a un restaurante
+        // para navegar un índice.
         const d = await flujo(entrada(OPCION.CHAT, 12));
-        expect(d.respuestas[0].opciones.every((o) => o.detalle === undefined)).toBe(true);
+
+        expect(d.respuestas[0].texto).not.toMatch(/categor/i);
+        expect(d.respuestas[0].opciones).toBeUndefined();
     });
 
-    it('dice «elige o dime»: quien ya sabe qué quiere no debería navegar un menú', async () => {
+    it('si la carta no cabe entera, lo dice en vez de dar a entender que eso es todo', async () => {
         const d = await flujo(entrada(OPCION.CHAT, 12));
-        expect(d.respuestas[0].texto).toMatch(/elige.*o dime|dime directamente/i);
+        expect(d.respuestas[0].texto).toMatch(/hay más/i);
+        expect(d.respuestas[0].texto).toContain(enlaceDelMenu(12));
+    });
+
+    it('si cabe entera, no promete un «hay más» que no existe', async () => {
+        const cartaCorta = crearFlujoRestaurante({
+            contextoNegocio: negocioFalso,
+            leerCarta: async () => ({ productos: CARTA.productos, total: 3 }),
+            ahora: LAS_TRES,
+        });
+        const d = await cartaCorta(entrada(OPCION.CHAT, 12));
+        expect(d.respuestas[0].texto).not.toMatch(/hay más/i);
     });
 
     it('«pedir por aquí» NO deja tarea abierta: así el siguiente mensaje lo atiende el modelo', async () => {
@@ -213,24 +266,27 @@ describe('el flujo de restaurante', () => {
         expect(d.tarea).toBeNull();
     });
 
-    it('sin categorías no se queda mudo: pide que le digan qué quieren', async () => {
+    it('sin carta cargada no se queda mudo: pide que le digan qué quieren', async () => {
         const sinCarta = crearFlujoRestaurante({
             contextoNegocio: negocioFalso,
-            listarCategorias: async () => [],
+            leerCarta: async () => ({ productos: [], total: 0 }),
+            ahora: LAS_TRES,
         });
         const d = await sinCarta(entrada(OPCION.CHAT, 12));
         expect(d.respuestas[0]).toMatch(/qué quieres pedir/i);
     });
 
-    it('si leer las categorías falla, tampoco se cae', async () => {
+    it('si leer la carta falla, tampoco se cae', async () => {
         const rota = crearFlujoRestaurante({
             contextoNegocio: negocioFalso,
-            listarCategorias: async () => {
+            leerCarta: async () => {
                 throw new Error('base caída');
             },
+            ahora: LAS_TRES,
         });
         const d = await rota(entrada(OPCION.CHAT, 12));
         expect(d.resultado).toBe('resuelto');
+        expect(d.respuestas[0]).toMatch(/qué quieres pedir/i);
     });
 
     it('el saludo tampoco deja tarea: una pregunta suelta no se queda atrapada en el menú', async () => {
@@ -323,7 +379,7 @@ describe('el flujo recibe el pedido del menú', () => {
     };
     const flujo = crearFlujoRestaurante({
         contextoNegocio: negocioFalso,
-        listarCategorias: async () => [],
+        leerCarta: async () => ({ productos: [], total: 0 }),
     });
 
     const mensaje = 'Hola, quiero pedir:\n\n• 2 × Bandeja paisa\n\n#P12-4x2';
@@ -352,6 +408,6 @@ describe('el flujo recibe el pedido del menú', () => {
         // El mensaje del menú empieza por «Hola, quiero pedir:». Si el código se leyera después
         // del saludo, el cliente recibiría la bienvenida en vez de su pedido.
         const d = await flujo(entrada(mensaje, 12));
-        expect(d.respuestas[0]).not.toMatch(/Te comunicas con/);
+        expect(d.respuestas[0]).not.toMatch(/Te saluda/);
     });
 });

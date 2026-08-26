@@ -63,20 +63,44 @@ const VERTICAL = 'restaurante';
 /** Cuántos productos se devuelven como mucho. Una lista de WhatsApp son 10 filas. */
 const MAX_PRODUCTOS = 10;
 
+/**
+ * Cuántos productos caben en la carta entera, sumando todas las categorías.
+ *
+ * No es un límite de WhatsApp —el bot no vuelca esto tal cual, lo lee y contesta— sino del
+ * prompt: la carta viaja **después** del corte de caché, así que cada producto se paga entero en
+ * cada vuelta del turno. Treinta es el orden de magnitud de una carta de barrio completa; una
+ * carta más grande se recorta y el modelo lo sabe (`hay_mas`), con `buscar_producto` para lo que
+ * falte.
+ */
+const MAX_CARTA = 30;
+
 function precio(valor) {
     return valor != null ? Number(valor) : null;
+}
+
+/** La forma en que un producto llega al modelo. Un solo sitio para que las tres salidas coincidan. */
+function producto(p) {
+    return {
+        id_producto: p.id_producto,
+        nombre: p.nombre,
+        descripcion: p.descripcion || null,
+        precio: precio(p.precio),
+        es_popular: Boolean(p.es_popular),
+    };
 }
 
 function registrarCapacidades() {
     registry.registrar({
         nombre: 'consultar_carta',
         descripcion:
-            'Lista las categorías de la carta del restaurante y, si le pasas una categoría, ' +
-            'los productos de esa categoría con su precio. Úsala cuando el cliente pregunte ' +
-            'qué venden, qué hay de comer, o pida ver el menú. Sin categoría devuelve solo las ' +
-            'categorías, que es lo que hay que enseñar primero: la carta entera no cabe en un ' +
-            'mensaje y abruma. El id_categoria es el que devuelve esta misma capacidad sin ' +
-            'argumentos: NO son 1, 2, 3 — usa el número exacto o te dirá que no existe.',
+            'Devuelve los productos de la carta con su precio, agrupados por categoría. Úsala ' +
+            'cuando el cliente pregunte qué venden, qué hay de comer, o pida ver el menú. ' +
+            'Sin argumentos devuelve la carta entera: eso es lo normal, porque lo que el ' +
+            'cliente quiere saber es QUÉ HAY y CUÁNTO VALE. **Nunca le preguntes de qué ' +
+            'categoría quiere ver**: las categorías son la forma en que el restaurante ordena ' +
+            'su carta, no una pregunta que se le hace a nadie. Pásale id_categoria solo si el ' +
+            'propio cliente nombró una parte de la carta ("¿qué bebidas tienen?"), y usa ' +
+            'entonces el id exacto que devolvió esta misma capacidad: NO son 1, 2, 3.',
         vertical: VERTICAL,
         tipo: registry.TIPO.CONSULTA,
         feature: FEATURE.ASISTENTE_IA,
@@ -85,19 +109,44 @@ function registrarCapacidades() {
         },
 
         async ejecutar({ idNegocio, args, contexto }) {
-            // Se usan las variantes PÚBLICAS (`...Publicas`, `...PublicosByCategoria`) y no las
-            // de administración: filtran por `visible` además de por `disponible`, que es
-            // justo la diferencia entre lo que el negocio gestiona y lo que le enseña a un
+            // Se usan las variantes PÚBLICAS (`getCartaPublica`, `...PublicosByCategoria`) y
+            // no las de administración: filtran por `visible` además de por `disponible`, que
+            // es justo la diferencia entre lo que el negocio gestiona y lo que le enseña a un
             // cliente. Un producto oculto a propósito no debe salir por el bot.
+
+            // ⚠️ Sin categoría se devuelve la CARTA, no el índice.
+            //
+            // Antes esto devolvía solo la lista de categorías, y el bot hacía lo que la forma
+            // del dato le pedía: contestar «tenemos Entradas, Platos y Bebidas, ¿cuál quieres
+            // ver?». Un cliente no escribe a un restaurante para navegar un índice; escribe
+            // para saber qué hay y cuánto vale. Cada pregunta intermedia es un turno más, y en
+            // un chat cada turno es una oportunidad de que se vaya.
+            //
+            // De paso desaparece la ronda que causó el fallo del 2026-08-24: si el modelo nunca
+            // tiene que elegir una categoría, tampoco puede inventarse su id.
             if (!args.id_categoria) {
-                const categorias = await cartaService.getCategoriasPublicas(idNegocio);
-                return {
-                    categorias: categorias.map((c) => ({
+                const carta = await cartaService.getCartaPublica(idNegocio);
+
+                let quedan = MAX_CARTA;
+                const grupos = [];
+                for (const c of carta) {
+                    const productos = (c.productos || []).slice(0, Math.max(quedan, 0));
+                    if (productos.length === 0) continue;
+                    quedan -= productos.length;
+                    grupos.push({
                         id_categoria: c.id_categoria,
-                        nombre: c.nombre,
-                        descripcion: c.descripcion || null,
-                        cuantos_productos: (c.productos || []).length,
-                    })),
+                        categoria: c.nombre,
+                        productos: productos.map(producto),
+                    });
+                }
+
+                const total = carta.reduce((n, c) => n + (c.productos || []).length, 0);
+                return {
+                    carta: grupos,
+                    // `hay_mas` no es cosmética: sin él, una carta recortada le enseña al modelo
+                    // a decir «esto es todo lo que tenemos», que es mentira.
+                    hay_mas: total > MAX_CARTA,
+                    cuantos_productos: total,
                 };
             }
 
@@ -133,13 +182,8 @@ function registrarCapacidades() {
             );
             return {
                 id_categoria: args.id_categoria,
-                productos: productos.slice(0, MAX_PRODUCTOS).map((p) => ({
-                    id_producto: p.id_producto,
-                    nombre: p.nombre,
-                    descripcion: p.descripcion || null,
-                    precio: precio(p.precio),
-                    es_popular: Boolean(p.es_popular),
-                })),
+                categoria: categoria.nombre,
+                productos: productos.slice(0, MAX_PRODUCTOS).map(producto),
                 hay_mas: productos.length > MAX_PRODUCTOS,
             };
         },
@@ -160,15 +204,16 @@ function registrarCapacidades() {
         },
 
         async ejecutar({ idNegocio, args }) {
-            const productos = await cartaService.buscarProductos(idNegocio, args.termino);
+            // ⚠️ `buscarProductos` NO filtra `visible`: es la búsqueda que usa también el
+            // panel del negocio, donde ver lo oculto es justo lo que se quiere. Por el bot no
+            // puede salir. Se filtra aquí y no en el servicio para no cambiarle el
+            // comportamiento a la vertical desde el adaptador — es su contrato, no el nuestro.
+            const productos = (await cartaService.buscarProductos(idNegocio, args.termino)).filter(
+                (p) => p.visible !== false
+            );
             return {
                 termino: args.termino,
-                productos: productos.slice(0, MAX_PRODUCTOS).map((p) => ({
-                    id_producto: p.id_producto,
-                    nombre: p.nombre,
-                    descripcion: p.descripcion || null,
-                    precio: precio(p.precio),
-                })),
+                productos: productos.slice(0, MAX_PRODUCTOS).map(producto),
             };
         },
     });

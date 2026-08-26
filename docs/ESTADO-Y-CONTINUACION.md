@@ -1,6 +1,6 @@
 # EscalApp Intelligence — estado y cómo continuar
 
-**Última actualización:** 2026-08-25 (**dos verticales en producción** y pedido desde el menú digital)
+**Última actualización:** 2026-08-26 (el asistente de restaurante deja de sonar a bot)
 **Propósito:** que retomar el trabajo no cueste una sesión de arqueología. Si vuelves a este
 proyecto después de semanas, **lee este documento primero** y sigue por donde diga.
 
@@ -9,14 +9,14 @@ proyecto después de semanas, **lee este documento primero** y sigue por donde d
 
 ---
 
-## 4-0. POR DÓNDE SE SIGUE (cierre del 2026-08-25)
+## 4-0. POR DÓNDE SE SIGUE (cierre del 2026-08-26)
 
 > Esta sección es lo primero que hay que leer al retomar. Las de más abajo son historia de fases
 > ya cerradas y se conservan porque explican **por qué** las cosas están como están.
 
 **Estado en una frase:** el asistente atiende **dos verticales** en producción —citas y
 restaurante— por WhatsApp, y desde el menú digital se puede armar un pedido y mandarlo al bot ya
-escrito. **534 pruebas de backend + 15 de frontend en verde.** El roadmap original está agotado:
+escrito. **541 pruebas de backend + 15 de frontend en verde.** El roadmap original está agotado:
 lo que se hace ahora sale del uso real.
 
 ### Qué hay vivo, y dónde apunta
@@ -32,6 +32,41 @@ lo que se hace ahora sale del uso real.
 
 ⚠️ **Un número, un negocio.** Apuntarlo a otro deja de atender al anterior. El Salón Demo
 (`id_negocio` 10) quedó sin bot cuando el número pasó a pregonchos.
+
+### Lo que se hizo el 2026-08-26: el trato con el cliente
+
+El dueño leyó las conversaciones reales: **«ahora mismo el bot es eso, un bot»**, y señaló lo
+concreto — *«no me gusta que diga "tenemos las siguientes categorías"… al cliente qué le importan
+las categorías, él quiere ver los productos y lo que valen»*. Tenía razón, y el fallo no estaba en
+la redacción sino en la **forma del dato**: `consultar_carta` devolvía un índice de categorías, y
+el modelo hacía lo único sensato que se puede hacer con un índice — leerlo en voz alta y preguntar
+por dónde empezar. El flujo determinista hacía lo mismo un paso antes, con botones.
+
+| Antes | Ahora |
+|---|---|
+| `consultar_carta` sin args → categorías | → **productos con precio**, agrupados, hasta 30, con `hay_mas` |
+| «Pedir por aquí» → tres botones de categoría | → los **8 más pedidos con su precio** + enlace a la carta |
+| «¡Hola! Te comunicas con X.» | Saludo por la hora, nombre en `*negrita*`, y qué más sabe hacer |
+| Prompt `sistema.v2` | **`sistema.v3`** (solo estilo; la `v2` se queda para comparar) |
+
+Lo importante del cambio no es el texto: **el fallo del 24 —el modelo inventándose el id de
+categoría «2»— queda cubierto por una vía mejor. Si nadie tiene que elegir una categoría, no hay
+id que inventar.** La validación estricta sigue puesta para cuando el cliente sí nombre una parte
+de la carta.
+
+De paso salió un agujero real: `cartaService.buscarProductos` **no filtra `visible`** (es la misma
+búsqueda del panel del negocio), así que `buscar_producto` enseñaba lo que el negocio esconde a
+propósito — escribir «personal» sacaba el «Menú del personal». Filtrado en el adaptador, no en el
+servicio. Detalle completo en [`asistente-restaurante.md`](asistente-restaurante.md) §«Que no
+suene a bot».
+
+**El saludo de citas cambió igual.** Decía «¡Hola! Te comunicas con X», que es como contesta un
+conmutador. Ahora saluda por la hora del día y nombra al negocio en negrita, exactamente como el
+de restaurante. `saludoPorLaHora` vive en `engine/texto.js` y no en un flujo: un restaurante y una
+barbería saludan igual, y tenerlo dos veces sería tener **dos relojes** — el día que alguien mueva
+el corte de la tarde en uno, el otro se queda como estaba.
+
+**541 pruebas de backend en verde** y el arnés de enrutado 28/28, $0.00.
 
 ### Lo que se hizo el 2026-08-24/25
 
@@ -111,6 +146,7 @@ Vale la pena leerlos juntos porque **comparten forma**: ninguno daba error donde
 | El caso `i12` del arnés falla una de cada dos tandas: es una aserción de redacción | §4-sexies |
 | El WebChat sigue **sin autenticar** — pero ya **no se enciende de rebote** con el webhook (`INTELLIGENCE_WEBCHAT_ENABLED`, 2026-08-22). Falta clave pública por negocio, orígenes y límite por sesión antes de que sea producto | §6 decisión 9 · [`canal-whatsapp.md`](canal-whatsapp.md) |
 | Un `sent`/`delivered`/`read` de Meta no se guarda: solo los fallos | §4-octies |
+| El arnés no tiene ni una conversación de restaurante: sus tres suites son de `reserva`, así que un cambio de prompt no se mide donde más se nota | `asistente-restaurante.md` |
 
 **Cerrada:** los **~14 días** de la coexistencia están **confirmados en la documentación de Meta**
 (`PRIMARY_INACTIVITY`, y companion a los 30). Dejó de ser un rumor de blogs y además dejó de ser un
@@ -1874,7 +1910,7 @@ estado por consumidor y la Ficha 360 no agrega verticales vacías.
 | Reglas de la agenda (F3) | `app_reserva_api/services/reglasAgenda.js` · `estadoCita.js` · `holdService.js` |
 | Consola de Intelligence (F5-E) | API: `app_admin_api/controllers/intelligenceConsolaController.js` · vista: `admin_app-v21` → `/admin/intelligence`. Desde F8-B tiene **una** escritura: deshacer una baja, con motivo y auditada |
 | `ModelPort` y proveedor (F6) | `intelligence/model/` — `puerto.js` · `precios.js` · `promptBuilder.js` · `orquestador.js` · `adaptadores/anthropic.js` |
-| Prompt como artefacto versionado | `intelligence/model/prompts/sistema.v1.md` (F6) · `sistema.v2.md` (F7, el que se usa) |
+| Prompt como artefacto versionado | `sistema.v1.md` (F6) · `sistema.v2.md` (F7) · **`sistema.v3.md`** (2026-08-26, el que se usa) |
 | Nivel 4 y la escalera (F6) | `intelligence/engine/manejadorLlm.js` · `manejadorEscalera.js` |
 | Confirmación humana de mutaciones (F7) | declaración: `core/registry.js` (`CONFIRMACION`) + el manifiesto del adaptador · regla: `core/policyGate.js` · conversación: `engine/confirmacion.js` |
 | Canal de WhatsApp (F8-A) | `intelligence/channels/whatsapp/` — `config.js` (costura número→negocio) · `firma.js` · `adaptador.js` · `api.js` (el único que habla con Meta) · `rutas.js` |

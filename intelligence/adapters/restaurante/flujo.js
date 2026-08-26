@@ -12,8 +12,10 @@
  * más? convierte un pedido de tres cosas en doce mensajes, y sigue sin entender «sin cebolla».
  *
  * Así que este flujo hace **solo lo que un guion hace mejor que un modelo**: recibir a quien
- * llega, decirle de qué negocio se trata y ofrecerle los dos caminos. En cuanto el cliente elige
- * pedir por chat, esto se aparta y **no deja tarea abierta**: el comodín de la política de
+ * llega, decirle de qué negocio se trata, ofrecerle los dos caminos y —si elige el chat— poner
+ * delante los platos que más piden **con su precio**, que es una lectura de tabla y no una
+ * conversación. En cuanto el cliente elige pedir por chat, esto se aparta y **no deja tarea
+ * abierta**: el comodín de la política de
  * enrutado (`pregunta_libre` → Nivel 4) manda el resto al modelo, que sí sabe conversar y ya
  * tiene las cuatro capacidades de restaurante. Es literalmente para lo que existe la escalera de
  * ADR-018 — el peldaño barato atiende lo previsible y el caro solo lo que hace falta.
@@ -30,7 +32,7 @@
 'use strict';
 
 const contextoNegocio = require('../../core/contextoNegocio');
-const { COMANDO, normalizar, ultimaLinea, esComando } = require('../../engine/texto');
+const { COMANDO, normalizar, ultimaLinea, esComando, saludoPorLaHora } = require('../../engine/texto');
 const codigoPedido = require('./codigoPedido');
 
 const VERTICAL = 'restaurante';
@@ -58,8 +60,23 @@ function enlaceDelMenu(idNegocio) {
     return `${base}/${idNegocio}`;
 }
 
+/**
+ * Cuántos productos se enseñan en el chat.
+ *
+ * No es el tamaño de la carta: es el tamaño de lo que alguien lee en un móvil sin hacer scroll
+ * y sin sentir que le han volcado un PDF encima. La carta entera ya tiene su sitio —el enlace
+ * del menú— y esto es el aperitivo: lo que más piden, con su precio, para que el cliente pueda
+ * contestar «una de esas y una limonada» sin abrir nada.
+ */
+const MAX_EN_EL_CHAT = 8;
+
 function paso(decision, motivo = {}) {
     return { tipo: 'regla', decision, motivo };
+}
+
+/** «$22.000». Un precio sin formato («22000») se lee como un número de teléfono. */
+function enPesos(valor) {
+    return valor == null ? '' : `$${Number(valor).toLocaleString('es-CO')}`;
 }
 
 /** Memoria mínima. Se conserva lo que ya hubiera: `variables` reemplaza, no fusiona. */
@@ -74,6 +91,25 @@ function conMemoria(conversacion, extra = {}) {
     };
 }
 
+/**
+ * El primer mensaje. Es el único que todo el mundo lee, así que es el que más se nota.
+ *
+ * ## Por qué se parece a lo que escribe un negocio, y no a lo que escribe un sistema
+ *
+ * Un restaurante de barrio saluda por la hora del día, se nombra, y dice de una lo que se puede
+ * hacer. Un sistema informa. La diferencia no es decorativa: el cliente decide en el primer
+ * mensaje si esto le va a servir o le va a hacer perder el tiempo, y «Te comunicas con X» suena
+ * a contestador automático.
+ *
+ * Lo que se añadió respecto de la versión anterior —el saludo por la hora, el nombre en negrita
+ * y una frase con lo demás que sabe hacer— cabe en tres líneas y quita la sensación de máquina.
+ *
+ * Lo que **no** se copió del ejemplo que dio el dueño es el formulario de datos («Dirección: /
+ * Celular: / Nombre:»). Ese negocio lo necesita porque al otro lado hay una persona leyendo
+ * mensajes a mano y quiere recibirlo todo de una vez. Aquí no hay nadie leyendo: pedirle al
+ * cliente que rellene un formulario, cuando el asistente puede preguntar lo que falte justo
+ * cuando falte, sería añadirle trabajo para no usar lo único que tenemos de más.
+ */
 function bienvenida(ctx, pasosPrevios = []) {
     const enlace = enlaceDelMenu(ctx.idNegocio);
     return {
@@ -87,14 +123,15 @@ function bienvenida(ctx, pasosPrevios = []) {
                 // bot contesta con el enlace— para algo que debería ser un toque. En el texto,
                 // WhatsApp lo hace pulsable solo.
                 texto: [
-                    `¡Hola! Te comunicas con ${ctx.negocio.tratamiento}.`,
+                    `👋 ${saludoPorLaHora(ctx.ahora())} Te saluda *${ctx.negocio.tratamiento}*.`,
                     '',
-                    '🍽️ *Ver el menú y pedir desde ahí:*',
+                    'Aquí tienes la carta completa, con fotos y precios 👇',
                     enlace,
                     '',
-                    'Ahí ves fotos y precios, armas el pedido y vuelves aquí con todo listo.',
+                    'Armas tu pedido ahí y vuelves a este chat con todo listo 🛵',
                     '',
-                    'O si prefieres, dime por aquí qué quieres y yo lo anoto.',
+                    'O si prefieres, dime por aquí qué se te antoja y yo te lo anoto. ' +
+                        'También te digo precios o en qué va un pedido que ya hiciste.',
                 ].join('\n'),
                 // Una sola opción y sin `detalle`: con detalle, el canal la pinta como una
                 // LISTA —un menú que hay que desplegar para ver una única entrada—, y eso es
@@ -121,9 +158,9 @@ function mandarElMenu(ctx) {
             // devuelven un id al bot en vez de abrir una URL.
             {
                 texto:
-                    `Aquí tienes la carta: ${enlace}\n\n` +
+                    `Claro, aquí tienes la carta 👉 ${enlace}\n\n` +
                     'Elige lo que quieras y, cuando termines, el mismo menú te trae de vuelta ' +
-                    'aquí con el pedido listo. Solo tendrás que darme la dirección.',
+                    'aquí con el pedido listo. Solo tendrás que decirme la dirección 🛵',
             },
         ],
         variables: conMemoria(ctx.conversacion, { enlace_menu: enlace }),
@@ -134,24 +171,39 @@ function mandarElMenu(ctx) {
 }
 
 /**
- * Arranca el pedido por chat: enseña las categorías y se aparta.
+ * Arranca el pedido por chat: enseña QUÉ HAY y CUÁNTO VALE, y se aparta.
  *
- * Enseñarlas aquí y no dejárselo al modelo tiene dos motivos. El barato: son una consulta
- * determinista, y gastarse un turno de modelo en leer una tabla es tirar dinero. El importante:
- * **el modelo no se inventa una categoría que ya tiene delante**. El 2026-08-24 pidió la
- * categoría «2» —un ordinal— porque estaba adivinando; con la lista puesta en el mensaje, y los
- * ids en las opciones, no hay nada que adivinar.
+ * ## Por qué esto ya no pregunta por categorías
  *
- * El texto dice «elige o dime» a propósito: quien ya sabe lo que quiere no debería tener que
- * navegar un menú para pedirlo.
+ * Hasta el 2026-08-26 este paso decía «esto es lo que tenemos» y pintaba las categorías como
+ * botones: Entradas, Platos, Bebidas. Se hizo así por un motivo bueno —que el modelo no se
+ * inventara un id de categoría, que es lo que pasó en producción el 24— y resolvió ese fallo.
+ * Pero le pasó al cliente el problema de organización del restaurante.
+ *
+ * Las categorías existen para que el negocio ordene su carta. **A quien pide comida no le
+ * importan**: quiere ver los platos y los precios. Preguntarle por cuál empieza es un turno
+ * entero gastado en no decirle nada, y en un chat cada turno de más es una oportunidad de que
+ * se vaya.
+ *
+ * Así que ahora se enseñan los productos directamente, los más pedidos primero. El fallo del 24
+ * sigue cubierto y por una vía mejor: si nadie tiene que elegir una categoría, no hay id que
+ * inventar. Y sigue siendo el flujo quien lo pinta —no el modelo— porque leer una tabla es
+ * determinista y gastar un turno de modelo en eso es tirar dinero (ADR-018).
+ *
+ * El texto dice «dime qué se te antoja» y no «elige una opción» a propósito: quien ya sabe lo
+ * que quiere no debería tener que navegar nada.
  */
-async function pasarAlModelo(ctx, listarCategorias) {
-    const categorias = await listarCategorias(ctx.idNegocio).catch(() => []);
+async function abrirPedidoPorChat(ctx, leerCarta) {
+    const enlace = enlaceDelMenu(ctx.idNegocio);
+    const carta = await leerCarta(ctx.idNegocio).catch(() => ({ productos: [], total: 0 }));
+    const productos = carta.productos || [];
 
-    if (categorias.length === 0) {
+    // Sin carta cargada no se finge una: se pregunta. Un restaurante que aún no ha subido sus
+    // productos sigue pudiendo vender por aquí, y el modelo se apaña con lo que le digan.
+    if (productos.length === 0) {
         return {
-            pasos: [paso('pedido_por_chat_delegado', { a: 'nivel4', categorias: 0 })],
-            respuestas: ['Claro. Dime qué quieres pedir y de paso la dirección de entrega.'],
+            pasos: [paso('pedido_por_chat_delegado', { a: 'nivel4', productos: 0 })],
+            respuestas: ['¡De una! Dime qué quieres pedir y la dirección de entrega 📝'],
             variables: conMemoria(ctx.conversacion),
             tarea: null,
             resultado: 'resuelto',
@@ -159,21 +211,35 @@ async function pasarAlModelo(ctx, listarCategorias) {
         };
     }
 
+    const lineas = productos.map((p) => `• *${p.nombre}* — ${enPesos(p.precio)}`);
+    const hayMas = carta.total > productos.length;
+
     return {
-        pasos: [paso('pedido_por_chat_delegado', { a: 'nivel4', categorias: categorias.length })],
+        pasos: [
+            paso('pedido_por_chat_delegado', {
+                a: 'nivel4',
+                productos: productos.length,
+                de: carta.total,
+            }),
+        ],
         respuestas: [
             {
-                texto: 'Esto es lo que tenemos. Elige una categoría o dime directamente qué quieres:',
-                // Sin `detalle` a propósito: el canal pinta BOTONES cuando hay pocas opciones
-                // y ninguna lleva detalle, y una lista con tres entradas obliga a desplegar un
-                // menú para algo que cabe en un toque. Con muchas categorías cae solo a lista.
-                opciones: categorias.map((c) => ({
-                    id: String(c.id_categoria),
-                    etiqueta: c.nombre,
-                })),
+                texto: [
+                    hayMas ? '¡De una! 😋 Esto es lo que más nos piden:' : '¡De una! 😋 Esto es lo que tenemos:',
+                    '',
+                    ...lineas,
+                    '',
+                    hayMas ? `Y hay más en la carta completa 👉 ${enlace}` : `Y la carta con fotos está aquí 👉 ${enlace}`,
+                    '',
+                    'Dime qué se te antoja y cuántos, y yo te lo anoto 📝',
+                ].join('\n'),
+                // Sin opciones: las que había eran las categorías. Un producto como botón
+                // tampoco serviría —el título de un botón son 20 caracteres y no cabe el
+                // precio— y una lista de diez filas devolvería un id que este flujo tendría que
+                // saber convertir en un pedido, que es justo lo que no hace (ver la cabecera).
             },
         ],
-        variables: conMemoria(ctx.conversacion),
+        variables: conMemoria(ctx.conversacion, { enlace_menu: enlace }),
         // **Sin tarea a propósito.** Es lo que hace que el siguiente mensaje caiga en la regla
         // `pregunta_libre` de la política de enrutado y lo atienda el Nivel 4. Abrir una tarea
         // aquí lo devolvería a este flujo, que no sabe tomar un pedido.
@@ -228,8 +294,8 @@ function recibirPedidoDelMenu(ctx, pedido) {
     return {
         pasos: [paso('pedido_del_menu_recibido', { items: pedido.items.length, unidades: cuantos })],
         respuestas: [
-            `¡Recibí tu pedido! Son ${cuantos} producto(s). ` +
-                '¿A qué dirección te lo llevamos? Dime también si hay alguna indicación para llegar.',
+            `¡Listo, ya tengo tu pedido! ${cuantos === 1 ? 'Es 1 producto' : `Son ${cuantos} productos`}. ` +
+                '¿A qué dirección te lo llevamos? 🛵 Dime también si hay alguna indicación para llegar.',
         ],
         // Los productos quedan en la memoria de la conversación, no en una tarea: el modelo los
         // lee del contexto y llama a `tomar_pedido` cuando tenga la dirección y el sí. Abrir una
@@ -261,32 +327,53 @@ function delegar(ctx) {
 }
 
 /**
- * Crea el manejador. La inyección existe para los tests, igual que en el flujo de `reserva`.
- */
-/**
- * Las categorías visibles del negocio.
+ * Lo que se enseña de la carta en el chat: productos con su precio, los más pedidos primero.
  *
  * Lectura directa del modelo de la vertical y no de una capacidad: esto no lo pide el cliente ni
- * lo decide el asistente, es el flujo pintando su propio menú. Pasarlo por el Policy Gate
+ * lo decide el asistente, es el flujo pintando su propio mensaje. Pasarlo por el Policy Gate
  * gastaría una clave de idempotencia y una fila de Ledger por cada saludo, para leer una tabla
  * pública que ya se sirve sin autenticación en el menú digital.
+ *
+ * Devuelve también el `total` de la carta, no solo lo que cabe: es lo que permite decir «y hay
+ * más» en vez de dar a entender que eso es todo lo que hay.
  */
-async function categoriasDe(idNegocio) {
+async function cartaDe(idNegocio) {
     const cartaService = require('../../../app_restaurante_api/services/cartaService');
-    const categorias = await cartaService.getCategoriasPublicas(idNegocio);
-    return categorias
-        .filter((c) => (c.productos || []).length > 0)
-        .slice(0, 9)
-        .map((c) => ({ id_categoria: c.id_categoria, nombre: c.nombre, descripcion: c.descripcion }));
+    const categorias = await cartaService.getCartaPublica(idNegocio);
+
+    const todos = [];
+    for (const c of categorias) {
+        for (const p of c.productos || []) {
+            todos.push({ nombre: p.nombre, precio: p.precio, es_popular: Boolean(p.es_popular) });
+        }
+    }
+
+    // `sort` es estable en V8, así que los populares suben a la cabeza sin descolocar el orden
+    // que la carta ya trae (el que puso el negocio, categoría por categoría).
+    const ordenados = todos.slice().sort((a, b) => Number(b.es_popular) - Number(a.es_popular));
+
+    return { productos: ordenados.slice(0, MAX_EN_EL_CHAT), total: todos.length };
 }
 
+/**
+ * Crea el manejador. La inyección existe para los tests, igual que en el flujo de `reserva`.
+ * `ahora` también se inyecta: el saludo depende de la hora y una prueba no puede esperar a que
+ * sean las ocho de la tarde.
+ */
 function crearFlujoRestaurante({
     contextoNegocio: ctxNegocio = contextoNegocio,
-    listarCategorias = categoriasDe,
+    leerCarta = cartaDe,
+    ahora = () => new Date(),
 } = {}) {
     return async function manejarRestaurante({ conversacion, texto }) {
         const negocio = await ctxNegocio.obtener(conversacion.id_negocio);
-        const ctx = { conversacion, texto, negocio, idNegocio: Number(conversacion.id_negocio) };
+        const ctx = {
+            conversacion,
+            texto,
+            negocio,
+            idNegocio: Number(conversacion.id_negocio),
+            ahora,
+        };
 
         // Lo PRIMERO: ¿viene con el carrito del menú digital? Va antes que cualquier otra
         // lectura porque el mensaje trae texto humano delante («Hola, quiero pedir…») que si no
@@ -300,7 +387,7 @@ function crearFlujoRestaurante({
             return mandarElMenu(ctx);
         }
         if (t === OPCION.CHAT || /\b(pedir por aqui|por aqui|por chat)\b/.test(t)) {
-            return pasarAlModelo(ctx, listarCategorias);
+            return abrirPedidoPorChat(ctx, leerCarta);
         }
 
         // ⚠️ Solo un saludo o «menú» reabren la bienvenida.

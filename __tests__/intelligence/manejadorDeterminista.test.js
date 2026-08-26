@@ -255,6 +255,38 @@ describe('el saludo dice a qué negocio escribiste', () => {
         expect(texto(d)).toContain('Barbería Don Nico');
     });
 
+    test('saluda por la hora del día, en la hora del NEGOCIO', async () => {
+        // El proceso corre en UTC en el VPS. Con `getHours()` esto diría «buenas noches» a las
+        // seis de la tarde en Bogotá, que es justo la clase de detalle que delata a un bot.
+        const alas = (iso) =>
+            crearManejadorDeterminista({
+                gate: gateCompleto(),
+                contextoNegocio: NEGOCIO_FALSO,
+                identidad: identidadFalsa(),
+                ahora: () => new Date(iso),
+            });
+
+        const manana = await alas('2026-08-26T14:00:00Z')(entrada('hola', conversacion())); // 09:00
+        const tarde = await alas('2026-08-26T20:00:00Z')(entrada('hola', conversacion())); // 15:00
+        const noche = await alas('2026-08-27T01:00:00Z')(entrada('hola', conversacion())); // 20:00
+
+        expect(texto(manana)).toContain('Buenos días');
+        expect(texto(tarde)).toContain('Buenas tardes');
+        expect(texto(noche)).toContain('Buenas noches');
+    });
+
+    test('el nombre del negocio va en negrita de WhatsApp: un asterisco, no dos', async () => {
+        const manejar = crearManejadorDeterminista({
+            gate: gateCompleto(),
+            contextoNegocio: NEGOCIO_FALSO,
+            identidad: identidadFalsa(),
+        });
+        const d = await manejar(entrada('hola', conversacion()));
+
+        expect(texto(d)).toContain('*Barbería Don Nico*');
+        expect(texto(d)).not.toContain('**Barbería Don Nico**');
+    });
+
     test('sin nombre de negocio dice una frase, nunca "null"', async () => {
         const manejar = crearManejadorDeterminista({
             gate: gateCompleto(),
@@ -268,7 +300,7 @@ describe('el saludo dice a qué negocio escribiste', () => {
     });
 
     test('volver al menú a mitad de una tarea NO vuelve a saludar', async () => {
-        // Repetir «¡Hola! Te comunicas con…» a quien lleva cinco turnos hablando suena a que
+        // Repetir «¡Buenas tardes! Te saluda…» a quien lleva cinco turnos hablando suena a que
         // el bot se olvidó de él.
         const manejar = crearManejadorDeterminista({
             gate: gateCompleto(),
@@ -281,7 +313,7 @@ describe('el saludo dice a qué negocio escribiste', () => {
         });
         const d = await manejar(entrada('menu', conv));
 
-        expect(texto(d)).not.toContain('Te comunicas con');
+        expect(texto(d)).not.toContain('Te saluda');
         expect(d.respuestas[0].opciones).toHaveLength(2); // pero sí reofrece el menú
     });
 });

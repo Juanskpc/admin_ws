@@ -51,12 +51,21 @@ const puerto = require('./puerto');
 /**
  * Versión del prompt del sistema que se está usando. Viaja al Ledger con cada turno.
  *
- * `v2` (F7) es `v1` con una diferencia de comportamiento, no de estilo: el asistente ya puede
- * **pedir** mutaciones, y lo que se le prohíbe ahora es decir que ya están hechas. La `v1` sigue
- * en el repositorio a propósito — es lo que hace que el arnés pueda comparar las dos y decir si
- * la nueva mejora o empeora, que es la razón de que los prompts sean archivos versionados.
+ * `v2` (F7) fue `v1` con una diferencia de comportamiento, no de estilo: el asistente ya podía
+ * **pedir** mutaciones, y lo que se le prohibía era decir que ya estaban hechas.
+ *
+ * `v3` (2026-08-26) es lo contrario: **solo cambia el estilo**, y por eso importa. El dueño
+ * miró las conversaciones de producción y dijo lo que se ve enseguida — «es eso, un bot». La
+ * `v2` pedía «cercano y breve» y a la vez prohibía toda lista, así que un restaurante que
+ * enumera platos con precio escribía párrafos; y no decía nada sobre no hacerle navegar al
+ * cliente la organización interna del negocio, que es de donde salía el «tenemos las siguientes
+ * categorías, ¿cuál quieres ver?».
+ *
+ * Las versiones anteriores se quedan en el repositorio a propósito — es lo que hace que el arnés
+ * pueda comparar y decir si la nueva mejora o empeora, que es la razón de que los prompts sean
+ * archivos versionados y no cadenas en el código.
  */
-const PROMPT_SISTEMA = 'sistema.v2';
+const PROMPT_SISTEMA = 'sistema.v3';
 
 /**
  * Los prompts se leen una vez y se quedan en memoria.
