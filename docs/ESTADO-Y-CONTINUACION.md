@@ -16,7 +16,7 @@ proyecto después de semanas, **lee este documento primero** y sigue por donde d
 
 **Estado en una frase:** el asistente atiende **dos verticales** en producción —citas y
 restaurante— por WhatsApp, y desde el menú digital se puede armar un pedido y mandarlo al bot ya
-escrito. **569 pruebas de backend + 15 de frontend en verde.** El roadmap original está agotado:
+escrito. **576 pruebas de backend + 15 de frontend en verde.** El roadmap original está agotado:
 lo que se hace ahora sale del uso real.
 
 ### Qué hay vivo, y dónde apunta
@@ -66,7 +66,7 @@ de restaurante. `saludoPorLaHora` vive en `engine/texto.js` y no en un flujo: un
 barbería saludan igual, y tenerlo dos veces sería tener **dos relojes** — el día que alguien mueva
 el corte de la tarde en uno, el otro se queda como estaba.
 
-**569 pruebas de backend en verde**, arnés de enrutado 28/28 a $0.00, y **desplegado en
+**576 pruebas de backend en verde**, arnés de enrutado 28/28 a $0.00, y **desplegado en
 producción el 2026-08-26** (commit `dd5e19b`). Verificado contra la carta real de pregonchos.
 
 > ⚠️ **Trampa cobrada al desplegar esto:** `git pull` en el VPS decía **«Already up to date»** con
@@ -132,7 +132,20 @@ identifica a la persona en el resto de la plataforma) y se le contesta con **`re
 > cerradas (correcto), pero **`tomar_pedido` guarda `contacto_telefono` nulo**: el restaurante
 > recibe un domicilio sin número al que llamar. No falla — sale mal en la puerta del cliente. Lo
 > natural: pedir el teléfono **solo** cuando el canal no probó ninguno, y guardarlo como dato de
-> contacto, nunca como prueba de identidad.
+> contacto, nunca como prueba de identidad. **Hecho el mismo día**, junto con el método de pago:
+> el flujo del pedido es ahora `carrito → nombre → [teléfono] → dirección → [cómo paga] →
+> confirmación`, con los dos corchetes condicionados (el teléfono solo a quien llegó sin número;
+> el pago solo si el negocio tiene métodos configurados).
+
+**Dos huecos del dominio que salieron al mirar el seguimiento del pedido, y que NO son del
+asistente:**
+
+- **Un pedido del bot no entra en la pantalla de cocina.** `crearOrden` no toca `estado_cocina` y
+  el KDS filtra por `PENDIENTE|EN_PREPARACION|LISTO`. La orden queda `ABIERTA` y se ve en el POS,
+  pero la cocina no la ve hasta que alguien pulse «enviar a cocina». Decidir si un pedido de
+  WhatsApp entra solo o lo acepta una persona **es una decisión de producto**, no un bug.
+- **No hay forma de asignar un domiciliario a un pedido ya creado.** `id_domiciliario` solo se
+  puede poner al crear la orden; lo único que existe para domiciliarios es la liquidación de caja.
 
 ### Lo que se hizo el 2026-08-24/25
 

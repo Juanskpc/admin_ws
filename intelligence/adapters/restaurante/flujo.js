@@ -284,7 +284,25 @@ async function abrirPedidoPorChat(ctx, leerCarta) {
  * (ADR-010). Este flujo no tiene una puerta trasera a `tomar_pedido`.
  */
 const TAREA_PEDIDO = 'pedido_domicilio';
-const PASO_PEDIDO = { NOMBRE: 'nombre', DIRECCION: 'direccion' };
+
+/**
+ * Los pasos del pedido, en orden.
+ *
+ * `TELEFONO` **solo aparece cuando el canal no probó ninguno**. Desde el cambio de identidad de
+ * WhatsApp (BSUID, 2026) hay clientes que escriben sin enseñar su número, y un domicilio sin un
+ * número al que llamar es un domicilio que se pierde en la puerta cuando el domiciliario no
+ * encuentra la casa. Para todos los demás —que hoy son casi todos— no hay paso de más: el
+ * teléfono ya lo probó el canal y preguntarlo sería pedir dos veces lo que ya tienes.
+ *
+ * `PAGO` se salta si el negocio no tiene métodos configurados. Quedarse sin poder pedir porque
+ * nadie llenó una tabla de catálogo sería peor que tomar el pedido sin saber cómo paga.
+ */
+const PASO_PEDIDO = {
+    NOMBRE: 'nombre',
+    TELEFONO: 'telefono',
+    DIRECCION: 'direccion',
+    PAGO: 'pago',
+};
 
 /** Lo que hace falta para crear la orden, y que nadie más sabe. */
 function datosDelPedido(conversacion) {
@@ -299,35 +317,99 @@ function unidades(items) {
     return items.reduce((n, i) => n + i.cantidad, 0);
 }
 
-/** El texto que resume lo que se va a pedir. Sin ids: el cliente no los tiene que ver. */
-function pedirNombre(ctx, items, pasos) {
-    const cuantos = unidades(items);
-    return {
-        pasos,
-        respuestas: [
-            `¡Listo, ya tengo tu pedido! ${cuantos === 1 ? 'Es 1 producto' : `Son ${cuantos} productos`}. ` +
-                '¿A nombre de quién lo dejo? 📝',
-        ],
-        variables: conMemoria(ctx.conversacion),
-        tarea: tareaPedido({ paso: PASO_PEDIDO.NOMBRE, items }),
-        resultado: 'resuelto',
-        nivel: 'determinista',
-    };
+/**
+ * El siguiente hueco por llenar, o `null` si ya está todo.
+ *
+ * Una sola función decide el orden de las preguntas, y por eso saltarse una es no devolverla
+ * aquí. La alternativa —cada paso decidiendo cuál es el siguiente— es donde se cuela el camino
+ * que nadie probó: basta que dos de ellos discrepen sobre si el teléfono hace falta.
+ */
+function loQueFalta(datos, { telefonoProbado }) {
+    if (!datos.nombre) return PASO_PEDIDO.NOMBRE;
+    // Solo a quien llegó sin número. Ver la cabecera de `PASO_PEDIDO`.
+    if (!datos.telefono && !telefonoProbado) return PASO_PEDIDO.TELEFONO;
+    if (!datos.direccion) return PASO_PEDIDO.DIRECCION;
+    // Y solo si el negocio tiene métodos que ofrecer.
+    if (!datos.id_metodo_pago && (datos.metodos || []).length > 0) return PASO_PEDIDO.PAGO;
+    return null;
 }
 
-function pedirDireccion(ctx, datos, pasos, { saludarPorNombre = null } = {}) {
-    const apertura = saludarPorNombre ? `Gracias, ${saludarPorNombre}. ` : '';
-    return {
+/** Qué se le dice al cliente en cada paso. Las opciones solo las tiene el del pago. */
+function pregunta(paso, datos) {
+    switch (paso) {
+        case PASO_PEDIDO.NOMBRE:
+            return { texto: '¿A nombre de quién lo dejo? 📝' };
+        case PASO_PEDIDO.TELEFONO:
+            // Se dice PARA QUÉ. Un bot que pide un teléfono sin explicarse parece que está
+            // recogiendo datos; el motivo —que el domiciliario pueda llamar— es real y además
+            // es el que hace que la gente lo dé.
+            return {
+                texto:
+                    '¿Me das un número de contacto? 📱 Es para que el domiciliario pueda ' +
+                    'llamarte cuando esté cerca.',
+            };
+        case PASO_PEDIDO.DIRECCION:
+            return {
+                texto:
+                    '¿A qué dirección te lo llevamos? 🛵 Dime también si hay alguna indicación ' +
+                    'para llegar.',
+            };
+        case PASO_PEDIDO.PAGO:
+            return {
+                texto: '¿Cómo vas a pagar? 💵',
+                // Los ids son los reales del negocio, no ordinales: es la misma lección que
+                // dejó la categoría «2» del 2026-08-24. Y el canal los pinta como botones o
+                // lista según cuántos haya.
+                opciones: datos.metodos.map((m) => ({ id: String(m.id), etiqueta: m.nombre })),
+            };
+        default:
+            return { texto: '¿Seguimos?' };
+    }
+}
+
+/**
+ * Avanza al siguiente hueco, o pide la confirmación si ya no queda ninguno.
+ *
+ * `apertura` es la cortesía que arrastra el paso anterior («Gracias, Nicolás.»): va aquí y no
+ * dentro de `pregunta` porque depende de lo que se acaba de contestar, no de lo que se va a
+ * preguntar.
+ */
+function seguirOConfirmar(ctx, datos, pasos, { apertura = '', solicitarConfirmacion }) {
+    const falta = loQueFalta(datos, ctx);
+
+    if (falta) {
+        const q = pregunta(falta, datos);
+        return {
+            pasos,
+            respuestas: [{ ...q, texto: `${apertura}${q.texto}` }],
+            variables: conMemoria(ctx.conversacion, datos.nombre ? { nombre: datos.nombre } : {}),
+            tarea: tareaPedido({ ...datos, paso: falta }),
+            resultado: 'resuelto',
+            nivel: 'determinista',
+        };
+    }
+
+    // Ya no falta nada. **No se crea nada**: se pregunta, y el Policy Gate se niega a ejecutar
+    // `tomar_pedido` sin la prueba de que el cliente dijo que sí (ADR-010).
+    return solicitarConfirmacion({
+        capacidad: 'tomar_pedido',
+        args: {
+            items: datos.items,
+            cliente_nombre: datos.nombre,
+            direccion: datos.direccion,
+            ...(datos.telefono ? { cliente_telefono: datos.telefono } : {}),
+            ...(datos.id_metodo_pago ? { id_metodo_pago: datos.id_metodo_pago } : {}),
+        },
+        conversacion: {
+            ...ctx.conversacion,
+            variables: conMemoria(ctx.conversacion, {
+                nombre: datos.nombre,
+                ...(datos.telefono ? { telefono: datos.telefono } : {}),
+            }),
+        },
         pasos,
-        respuestas: [
-            `${apertura}¿A qué dirección te lo llevamos? 🛵 Dime también si hay alguna indicación ` +
-                'para llegar.',
-        ],
-        variables: conMemoria(ctx.conversacion, datos.nombre ? { nombre: datos.nombre } : {}),
-        tarea: tareaPedido({ ...datos, paso: PASO_PEDIDO.DIRECCION }),
-        resultado: 'resuelto',
         nivel: 'determinista',
-    };
+    });
 }
 
 /**
@@ -339,13 +421,12 @@ function pedirDireccion(ctx, datos, pasos, { saludarPorNombre = null } = {}) {
  * armó el carrito en la carta de un restaurante y lo mandó al WhatsApp de otro. Sin comprobarlo,
  * el pedido se crearía con ids de productos que aquí son otra cosa — o no existen.
  *
- * ## Si ya sabemos su nombre, no se pregunta
+ * ## Lo que ya se sabe no se pregunta
  *
- * Es la misma regla que en las citas: preguntar dos veces lo que ya te dijeron es lo que hace
- * que un bot parezca un formulario. El nombre vive en `variables` —memoria larga— y el pedido
- * en la tarea.
+ * El nombre vive en `variables` (memoria larga) y el teléfono lo prueba el canal. Preguntar dos
+ * veces lo que ya te dijeron es lo que hace que un bot parezca un formulario.
  */
-function recibirPedidoDelMenu(ctx, pedido) {
+function recibirPedidoDelMenu(ctx, pedido, { solicitarConfirmacion }) {
     if (pedido.idNegocio !== ctx.idNegocio) {
         return {
             pasos: [
@@ -362,27 +443,25 @@ function recibirPedidoDelMenu(ctx, pedido) {
         };
     }
 
-    const pasos = [
-        paso('pedido_del_menu_recibido', {
-            items: pedido.items.length,
-            unidades: unidades(pedido.items),
-        }),
-    ];
-    const nombre = (ctx.conversacion.variables || {}).nombre;
+    const previas = ctx.conversacion.variables || {};
+    const cuantos = unidades(pedido.items);
+    const datos = {
+        items: pedido.items,
+        metodos: ctx.metodosDePago || [],
+        ...(previas.nombre ? { nombre: previas.nombre } : {}),
+    };
 
-    if (nombre) {
-        const cuantos = unidades(pedido.items);
-        return {
-            ...pedirDireccion(ctx, { items: pedido.items, nombre }, pasos),
-            respuestas: [
-                `¡Listo, ya tengo tu pedido! ${cuantos === 1 ? 'Es 1 producto' : `Son ${cuantos} productos`}, ` +
-                    `a nombre de ${nombre}. ¿A qué dirección te lo llevamos? 🛵 Dime también si hay ` +
-                    'alguna indicación para llegar.',
-            ],
-        };
-    }
-
-    return pedirNombre(ctx, pedido.items, pasos);
+    return seguirOConfirmar(
+        ctx,
+        datos,
+        [paso('pedido_del_menu_recibido', { items: pedido.items.length, unidades: cuantos })],
+        {
+            apertura:
+                `¡Listo, ya tengo tu pedido! ${cuantos === 1 ? 'Es 1 producto' : `Son ${cuantos} productos`}` +
+                `${previas.nombre ? `, a nombre de ${previas.nombre}` : ''}. `,
+            solicitarConfirmacion,
+        }
+    );
 }
 
 /**
@@ -411,13 +490,10 @@ function seguirPedido(ctx, { solicitarConfirmacion }) {
     }
 
     if (!dicho) {
+        const q = pregunta(datos.paso, datos);
         return {
             pasos: [paso('pedido_dato_vacio', { paso: datos.paso ?? null })],
-            respuestas: [
-                datos.paso === PASO_PEDIDO.NOMBRE
-                    ? '¿A nombre de quién lo dejo?'
-                    : '¿A qué dirección te lo llevamos?',
-            ],
+            respuestas: [q],
             variables: conMemoria(ctx.conversacion),
             tarea: tareaPedido(datos),
             resultado: 'resuelto',
@@ -433,6 +509,7 @@ function seguirPedido(ctx, { solicitarConfirmacion }) {
     // otra vez. Y callarse tampoco es opción: en este sistema el modo de fallo caro es el
     // silencio, no la insistencia. Quien quiera irse escribe «cancelar», que está en el mensaje.
     if (/[?¿]/.test(dicho)) {
+        const q = pregunta(datos.paso, datos);
         const cortesia =
             Number(datos.repreguntas || 0) < 1
                 ? 'Ahora te cuento 😊 '
@@ -440,11 +517,10 @@ function seguirPedido(ctx, { solicitarConfirmacion }) {
         return {
             pasos: [paso('pedido_respuesta_no_era', { paso: datos.paso })],
             respuestas: [
-                cortesia +
-                    (datos.paso === PASO_PEDIDO.NOMBRE
-                        ? '¿A nombre de quién dejo el pedido?'
-                        : '¿A qué dirección te lo llevamos?') +
-                    ' Si prefieres dejarlo, escríbeme *cancelar*.',
+                {
+                    ...q,
+                    texto: `${cortesia}${q.texto} Si prefieres dejarlo, escríbeme *cancelar*.`,
+                },
             ],
             variables: conMemoria(ctx.conversacion),
             tarea: tareaPedido({ ...datos, repreguntas: Number(datos.repreguntas || 0) + 1 }),
@@ -453,33 +529,69 @@ function seguirPedido(ctx, { solicitarConfirmacion }) {
         };
     }
 
-    if (datos.paso === PASO_PEDIDO.NOMBRE) {
-        // Se le da las gracias por su nombre: cuesta dos palabras y es la diferencia entre un
-        // formulario y alguien atendiendo.
-        return pedirDireccion(
-            ctx,
-            { ...datos, nombre: dicho, repreguntas: 0 },
-            [paso('pedido_nombre_recibido')],
-            { saludarPorNombre: dicho.split(/\s+/)[0] }
-        );
+    const conLoDicho = { ...datos, repreguntas: 0 };
+    let apertura = '';
+
+    switch (datos.paso) {
+        case PASO_PEDIDO.NOMBRE:
+            conLoDicho.nombre = dicho;
+            // Dos palabras de cortesía: la diferencia entre un formulario y alguien atendiendo.
+            apertura = `Gracias, ${dicho.split(/\s+/)[0]}. `;
+            break;
+        case PASO_PEDIDO.TELEFONO:
+            conLoDicho.telefono = dicho;
+            break;
+        case PASO_PEDIDO.DIRECCION:
+            conLoDicho.direccion = dicho;
+            break;
+        case PASO_PEDIDO.PAGO: {
+            const elegido = elegirMetodo(dicho, datos.metodos || []);
+            if (!elegido) {
+                // No se adivina. Un método de pago mal leído es una discusión en la puerta con
+                // el domiciliario delante — la misma razón por la que el precio se relee del
+                // catálogo en vez de creerse el de la conversación.
+                const q = pregunta(PASO_PEDIDO.PAGO, datos);
+                return {
+                    pasos: [paso('pedido_pago_no_reconocido', { dijo: dicho.slice(0, 40) })],
+                    respuestas: [{ ...q, texto: `No te entendí cuál. ${q.texto}` }],
+                    variables: conMemoria(ctx.conversacion),
+                    tarea: tareaPedido(conLoDicho),
+                    resultado: 'resuelto',
+                    nivel: 'determinista',
+                };
+            }
+            conLoDicho.id_metodo_pago = elegido.id;
+            conLoDicho.metodo_nombre = elegido.nombre;
+            break;
+        }
+        default:
+            break;
     }
 
-    // Con la dirección ya está todo. **No se crea nada**: se pregunta, y el Policy Gate se
-    // niega a ejecutar `tomar_pedido` sin la prueba de que el cliente dijo que sí (ADR-010).
-    return solicitarConfirmacion({
-        capacidad: 'tomar_pedido',
-        args: {
-            items: datos.items,
-            cliente_nombre: datos.nombre,
-            direccion: dicho,
-        },
-        conversacion: {
-            ...ctx.conversacion,
-            variables: conMemoria(ctx.conversacion, { nombre: datos.nombre }),
-        },
-        pasos: [paso('pedido_direccion_recibida')],
-        nivel: 'determinista',
+    return seguirOConfirmar(ctx, conLoDicho, [paso('pedido_dato_recibido', { paso: datos.paso })], {
+        apertura,
+        solicitarConfirmacion,
     });
+}
+
+/**
+ * Resuelve lo que dijo el cliente contra los métodos que se le ofrecieron.
+ *
+ * Tres pasadas, la misma idea que en la FSM de citas: el id exacto (lo que manda un botón), el
+ * nombre exacto, y por último que uno contenga al otro («efectivo» ↔ «Efectivo contra entrega»).
+ * Se resuelve **contra la lista real** y no sacando un número del texto: el WebChat manda la
+ * etiqueta del chip al pulsarlo, y «Efectivo (2)» daría el método 2, que es otro.
+ */
+function elegirMetodo(dicho, metodos) {
+    const t = normalizar(dicho);
+    if (!t || metodos.length === 0) return null;
+
+    return (
+        metodos.find((m) => String(m.id) === t) ||
+        metodos.find((m) => normalizar(m.nombre) === t) ||
+        metodos.find((m) => normalizar(m.nombre).includes(t) || t.includes(normalizar(m.nombre))) ||
+        null
+    );
 }
 
 /**
@@ -531,6 +643,24 @@ async function cartaDe(idNegocio) {
 }
 
 /**
+ * Los métodos de pago que ofrece ESTE negocio.
+ *
+ * Lectura directa del contrato público de la vertical, por lo mismo que la carta: es el flujo
+ * pintando su propia pregunta, no el asistente decidiendo nada. Pasarlo por el Policy Gate
+ * gastaría una clave de idempotencia y una fila de Ledger por cada pedido para leer un catálogo
+ * de tres filas.
+ *
+ * Si falla, se devuelve vacío y el paso del pago **se salta**: quedarse sin poder pedir porque
+ * no se pudo leer una tabla de catálogo sería cambiar un dato que falta por una venta que no se
+ * hace.
+ */
+async function metodosDePagoDe(idNegocio) {
+    const metodoPagoService = require('../../../app_restaurante_api/services/metodoPagoService');
+    const metodos = await metodoPagoService.listar(idNegocio).catch(() => []);
+    return metodos.slice(0, 10).map((m) => ({ id: m.id_metodo_pago, nombre: m.nombre }));
+}
+
+/**
  * ¿Es este mensaje de este flujo? Lo pregunta la política de enrutado (`engine/flujos.js`).
  *
  * Solo el pedido del menú: es un dato exacto con un código que una expresión regular lee mejor
@@ -553,6 +683,7 @@ function reclama(texto) {
 function crearFlujoRestaurante({
     contextoNegocio: ctxNegocio = contextoNegocio,
     leerCarta = cartaDe,
+    leerMetodosPago = metodosDePagoDe,
     ahora = () => new Date(),
     // El Gate y la identidad solo hacen falta para cerrar un pedido: son lo que convierte el
     // «sí» del cliente en una orden. Se inyectan por lo mismo que en la FSM de citas — que un
@@ -560,6 +691,20 @@ function crearFlujoRestaurante({
     gate = policyGate,
     identidad = identidadReal,
 } = {}) {
+    /**
+     * Rellena el contexto con quién es el cliente.
+     *
+     * `telefonoProbado` es la mitad que decide si hay que pedirle el número: es lo que el canal
+     * **probó**, no lo que nadie dijo. Con el BSUID de WhatsApp puede ser nulo, y ahí es donde
+     * aparece el paso del teléfono.
+     */
+    async function conIdentidad(ctx) {
+        ctx.identidad = await identidad.resolver(ctx.conversacion);
+        ctx.principal = ctx.identidad.principal;
+        ctx.telefonoProbado = ctx.principal?.telefono_verificado || null;
+        return ctx;
+    }
+
     return async function manejarRestaurante({ conversacion, mensajes, turno, texto }) {
         const negocio = await ctxNegocio.obtener(conversacion.id_negocio);
         const invocaciones = [];
@@ -582,8 +727,7 @@ function crearFlujoRestaurante({
         // `delegar`: turno sin respuesta, silencio, y un pedido que nunca se creó. Nadie lo vio
         // porque hasta hoy ninguna confirmación de restaurante llegó a abrirse.
         if (confirmacion.pendiente(conversacion)) {
-            ctx.identidad = await identidad.resolver(conversacion);
-            ctx.principal = ctx.identidad.principal;
+            await conIdentidad(ctx);
             const decision = await confirmacion.resolver(ctx, { gate });
             return { ...decision, invocaciones: [...invocaciones, ...(decision.invocaciones || [])] };
         }
@@ -593,14 +737,23 @@ function crearFlujoRestaurante({
         // si no se confundiría con un saludo, y el cliente recibiría la bienvenida en vez de su
         // pedido.
         const delMenu = codigoPedido.leer(texto);
-        if (delMenu) return recibirPedidoDelMenu(ctx, delMenu);
+        if (delMenu) {
+            await conIdentidad(ctx);
+            // Los métodos se leen **al empezar** y viajan en la tarea. Es el mismo patrón que
+            // los servicios ofrecidos en la FSM de citas: se resuelve la respuesta contra la
+            // lista que se enseñó, no contra lo que haya en la base tres mensajes después.
+            ctx.metodosDePago = await leerMetodosPago(ctx.idNegocio).catch(() => []);
+            return recibirPedidoDelMenu(ctx, delMenu, {
+                solicitarConfirmacion: (peticion) => confirmacion.solicitar(peticion),
+            });
+        }
 
-        // Un pedido a medias: falta el nombre o la dirección. Mientras la tarea esté abierta, la
-        // política de enrutado devuelve aquí cada mensaje, así que el modelo no puede llevarse
-        // la conversación a mitad de camino ni olvidarse de lo que ya está apuntado.
+        // Un pedido a medias: falta el nombre, el teléfono, la dirección o cómo paga. Mientras
+        // la tarea esté abierta, la política de enrutado devuelve aquí cada mensaje, así que el
+        // modelo no puede llevarse la conversación a mitad de camino ni olvidarse de lo que ya
+        // está apuntado.
         if (conversacion.tarea_actual === TAREA_PEDIDO) {
-            ctx.identidad = await identidad.resolver(conversacion);
-            ctx.principal = ctx.identidad.principal;
+            await conIdentidad(ctx);
             return seguirPedido(ctx, {
                 solicitarConfirmacion: (peticion) => confirmacion.solicitar(peticion),
             });

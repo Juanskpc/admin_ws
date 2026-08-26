@@ -425,6 +425,63 @@ tampoco era opción — en este sistema el modo de fallo caro es el silencio, no
 
 ---
 
+
+---
+
+## El teléfono y el método de pago (2026-08-26)
+
+El flujo del pedido pasó de tres huecos a cinco, y uno de ellos **solo aparece a veces**:
+
+```
+carrito → nombre → [teléfono] → dirección → [cómo paga] → confirmación
+```
+
+### `teléfono`: solo a quien llegó sin número
+
+Es la consecuencia directa del BSUID. Un cliente que escribe por su nombre de usuario no trae
+teléfono, y `tomar_pedido` guardaba `contacto_telefono` nulo: **el restaurante recibía un
+domicilio sin nadie a quien llamar** cuando el domiciliario no encuentra la casa. No fallaba
+nada; salía mal en la puerta.
+
+Para todos los demás —hoy, casi todos— **no hay paso de más**: el teléfono ya lo probó el canal y
+preguntarlo sería pedir dos veces lo que ya tienes.
+
+Se dice **para qué** se pide: *«Es para que el domiciliario pueda llamarte cuando esté cerca.»*
+Un bot que pide un teléfono sin explicarse parece que está recogiendo datos, y el motivo es real.
+
+> ⚠️ **La línea que no se cruza:** ese número es **dato de contacto, nunca identidad**. Viaja en
+> `cliente_telefono` y se guarda en `contacto_telefono`, pero la pertenencia de un pedido se
+> sigue comprobando contra `principal.telefono_verificado` — que para este cliente sigue siendo
+> nulo. **Decir un número no prueba que sea el tuyo**, y si valiera, cualquiera podría consultar
+> el pedido de cualquiera diciendo su número. Hay una prueba que falla si alguien los mezcla.
+
+### `cómo paga`: los métodos del negocio, con sus ids reales
+
+Salen de `restaurante.rest_metodo_pago` (los mismos del POS) y se ofrecen como opciones, que el
+canal pinta como botones o lista según cuántos haya. Los ids son los reales — la lección de la
+categoría «2» del 24: no son ordinales.
+
+La respuesta se resuelve **contra la lista que se enseñó**, en tres pasadas: id exacto (lo que
+manda un botón), nombre exacto, y que uno contenga al otro («transferencia» ↔ «Transferencia
+Nequi»). Si no se reconoce, **se repregunta**: un método de pago adivinado es una discusión en la
+puerta con el domiciliario delante.
+
+**Si el negocio no tiene métodos configurados, el paso se salta.** Quedarse sin poder vender
+porque nadie llenó una tabla de catálogo sería cambiar un dato que falta por una venta que no se
+hace.
+
+La validación de que el método sea **de este negocio** no se repite aquí: ya la hace
+`pedidoService.validarMetodoPagoParaNegocio`, con su error tipado. Una segunda versión de esa
+comprobación es la que se queda vieja el día que la vertical cambie la regla.
+
+### Un solo sitio decide el orden
+
+`loQueFalta(datos, ctx)` devuelve el siguiente hueco, y saltarse un paso es no devolverlo. La
+alternativa —cada paso decidiendo cuál va después— es donde se cuela el camino que nadie probó:
+basta que dos de ellos discrepen sobre si el teléfono hace falta.
+
+---
+
 ## Lo que queda pendiente
 
 - **El bot va lento.** Señalado por el dueño el 2026-08-24 y aplazado. Sospecha razonable: la
@@ -436,8 +493,16 @@ tampoco era opción — en este sistema el modo de fallo caro es el silencio, no
   negativo). No se tocó: está fuera del encargo, pero es una bomba de relojería.
 - **La carta de pregonchos son datos de demo** («(demo)» en las descripciones) en un negocio real
   con caja abierta. Borrarla o reemplazarla si se usa de verdad.
-- **`tomar_pedido` no pregunta método de pago ni exclusiones** («sin cebolla»). El dominio las
-  soporta (`pedid_detalle_exclu`); la capacidad todavía no.
+- **`tomar_pedido` no pregunta exclusiones** («sin cebolla»). El dominio las soporta
+  (`pedid_detalle_exclu`); la capacidad todavía no. El método de pago **ya se pregunta** desde el
+  2026-08-26.
+- **⚠️ Un pedido del bot NO entra en la pantalla de cocina.** `crearOrden` no toca
+  `estado_cocina`, y el KDS filtra por `PENDIENTE|EN_PREPARACION|LISTO`: la orden queda `ABIERTA`
+  y visible en el POS, pero **nadie en la cocina la ve** hasta que alguien le da a «enviar a
+  cocina». Mientras eso no se decida, el seguimiento que consulta el cliente no se mueve.
+- **No existe endpoint para asignar un domiciliario a un pedido ya creado.** `id_domiciliario`
+  solo se puede poner **al crear** la orden (y el pedido del bot nace sin él). Lo único que hay
+  para domiciliarios es la liquidación de caja (`/caja/domiciliarios/transferir`).
 - **El arnés de evaluación no tiene ni una conversación de restaurante.** Sus tres suites son
   todas de `reserva`, así que un cambio de prompt como el de la `v3` no se puede medir donde
   más se nota. `enrutado` es gratis; `respuestas` cuesta unos centavos por tanda.

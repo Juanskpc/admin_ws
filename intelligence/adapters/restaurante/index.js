@@ -299,8 +299,16 @@ function registrarCapacidades() {
         // Aquí nace una orden en la caja de un negocio real, con inventario que se consume. No
         // se ejecuta sin un sí explícito del cliente en el canal (ADR-010, paso 5).
         confirmacion: {
-            pregunta: ({ args }) =>
-                `¿Confirmo tu pedido a nombre de ${args.cliente_nombre} para ${args.direccion}?`,
+            // Se dice CUÁNTO se pide, no solo a nombre de quién. Quien confirma un domicilio
+            // está aceptando que salga de la cocina: el mensaje tiene que dejarle comprobar de
+            // un vistazo que es su pedido y no el de otra conversación.
+            pregunta: ({ args }) => {
+                const unidades = (args.items || []).reduce((n, i) => n + Number(i.cantidad || 0), 0);
+                return (
+                    `¿Confirmo tu pedido de ${unidades} ${unidades === 1 ? 'producto' : 'productos'} ` +
+                    `a nombre de ${args.cliente_nombre}, para ${args.direccion}?`
+                );
+            },
             hecho: ({ resultado }) =>
                 `¡Listo! Tu pedido quedó tomado. El número es ${resultado.numero_orden} — ` +
                 'guárdalo para consultar cómo va.',
@@ -322,6 +330,18 @@ function registrarCapacidades() {
             },
             cliente_nombre: { tipo: 'string', requerido: true, min_longitud: 2, max_longitud: 150 },
             direccion: { tipo: 'string', requerido: true, min_longitud: 5, max_longitud: 300 },
+            // ⚠️ Un teléfono de CONTACTO, no una identidad.
+            //
+            // Solo se usa cuando el canal no probó ninguno — desde el cambio de identidad de
+            // WhatsApp (BSUID) hay clientes que llegan sin número, y un domicilio sin un número
+            // al que llamar es un domicilio que se pierde en la puerta. Lo que **nunca** hace es
+            // autorizar: quien dice un número no prueba nada, y la pertenencia de un pedido se
+            // sigue comprobando contra `principal.telefono_verificado`.
+            cliente_telefono: { tipo: 'string', requerido: false, min_longitud: 7, max_longitud: 40 },
+            // El del negocio, de `restaurante.rest_metodo_pago`. Opcional porque un negocio
+            // puede no tener ninguno configurado, y quedarse sin poder pedir por eso sería
+            // peor que tomar el pedido sin saber cómo paga.
+            id_metodo_pago: { tipo: 'entero', requerido: false, min: 1 },
             nota: { tipo: 'string', requerido: false, max_longitud: 500 },
         },
 
@@ -386,10 +406,35 @@ function registrarCapacidades() {
                 transaction: contexto.transaction,
             });
 
-            // El teléfono lo impone la plataforma, no el modelo: es el que probó el canal. Misma
-            // regla que en `reservar_turno`, y por el mismo motivo — de él cuelga que después
-            // solo el dueño pueda consultar su pedido.
-            const telefono = contexto.principal?.telefono_verificado || null;
+            // ── El teléfono: dos cosas distintas con el mismo aspecto ────────────────────
+            //
+            // El que **prueba** quién es manda siempre, y lo impone la plataforma, no el modelo:
+            // de él cuelga que después solo el dueño pueda consultar su pedido. Misma regla que
+            // en `reservar_turno`.
+            //
+            // Pero desde el cambio de identidad de WhatsApp (BSUID, 2026) hay clientes que
+            // llegan **sin número**: el canal no prueba ninguno. Ahí el pedido se guardaba con
+            // `contacto_telefono` nulo y el restaurante recibía un domicilio sin nadie a quien
+            // llamar cuando el domiciliario no encuentra la casa. Así que se acepta el que el
+            // cliente **diga**, y solo entonces — nunca por encima del probado.
+            //
+            // Lo que se guarda aquí es dato de contacto para el domiciliario. **No autoriza
+            // nada**: la comprobación de pertenencia sigue mirando `telefono_verificado`, que
+            // para este cliente seguirá siendo nulo. Decir un número no prueba que sea el tuyo.
+            const telefono =
+                contexto.principal?.telefono_verificado ||
+                (args.cliente_telefono ? String(args.cliente_telefono).trim() : null);
+
+            // ── El método de pago ────────────────────────────────────────────────────────
+            //
+            // **No se valida aquí a propósito.** `pedidoService.validarMetodoPagoParaNegocio` ya
+            // comprueba que sea de ESTE negocio y que esté activo, y lanza un error tipado. Una
+            // segunda versión de esa comprobación es la que se queda vieja el día que la
+            // vertical cambie la regla — el mismo argumento por el que el manejador de modelo
+            // pasa por el Gate aunque espere que deniegue.
+            //
+            // Que tenga que ser de este negocio no es formalismo: un id de otro inquilino en esa
+            // columna es la fuga que cerró F2.
 
             const orden = await pedidoService.crearOrden(
                 {
@@ -401,6 +446,7 @@ function registrarCapacidades() {
                     contactoTelefono: telefono,
                     direccionDomicilio: args.direccion,
                     notaDomicilio: args.nota || null,
+                    idMetodoPago: args.id_metodo_pago || null,
                     // `precio_unitario` sale del producto que se acaba de releer, NUNCA de la
                     // conversación. Es la mitad que hace útil esa relectura: si el precio
                     // viniera del modelo, un pedido podría cobrarse a lo que el bot recordara
