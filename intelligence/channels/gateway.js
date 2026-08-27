@@ -96,6 +96,43 @@ function limpiar() {
 }
 
 /**
+ * Pide al canal que enseñe que el asistente está trabajando, si su canal sabe hacerlo.
+ *
+ * Es la **tercera** mitad del gateway y conviene no confundirla con las otras dos: no es entrada
+ * ni es salida. No pasa por `intelligence.mensaje`, no se encola, no se reintenta y no deja
+ * rastro — y las cuatro cosas son a propósito. Una señal de actividad que llega un segundo tarde
+ * ya no es una señal de actividad; pedirle durabilidad sería garantizar la entrega de algo cuyo
+ * valor caduca antes de que el sondeo la recoja.
+ *
+ * `mostrarActividad` es **opcional** en el `ChannelPort`. Un canal que no lo declare —el WebChat
+ * hoy— simplemente no hace nada, que es exactamente la degradación con gracia que ADR-017 exige
+ * a cambio de dejar que un adaptador aproveche lo que su canal tenga de más.
+ *
+ * **No lanza nunca.** Quien llama está a mitad de un turno con una transacción abierta: un
+ * indicador que no se enciende es cosmético, y una excepción desde aquí se llevaría por delante
+ * la respuesta que el cliente sí estaba esperando.
+ *
+ * @returns {Promise<boolean>} si el canal llegó a mostrar algo.
+ */
+async function senalarActividad({ canal, idConversacion, idExterno, idExternoMensaje, idNegocio }) {
+    try {
+        const adaptador = adaptadores.get(canal);
+        if (!adaptador || typeof adaptador.mostrarActividad !== 'function') return false;
+        return Boolean(
+            await adaptador.mostrarActividad({
+                idConversacion,
+                idExterno,
+                idExternoMensaje,
+                idNegocio,
+            })
+        );
+    } catch (error) {
+        console.warn(`[gateway] no se pudo señalar actividad en "${canal}": ${error.message}`);
+        return false;
+    }
+}
+
+/**
  * Entrega un lote. Cada mensaje se reclama, entrega y marca dentro de la misma transacción,
  * de modo que un mensaje problemático no arrastra a los demás.
  *
@@ -231,4 +268,5 @@ function detener() {
     }
 }
 
-module.exports = { CONFIG, registrar, obtener, limpiar, entregarUnaVez, iniciar, detener };
+module.exports = {
+    CONFIG, registrar, obtener, limpiar, entregarUnaVez, senalarActividad, iniciar, detener };

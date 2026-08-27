@@ -1,6 +1,6 @@
 # EscalApp Intelligence — estado y cómo continuar
 
-**Última actualización:** 2026-08-26 (el asistente de restaurante deja de sonar a bot)
+**Última actualización:** 2026-08-27 (por qué va lento, medido; y la tarea de ayer deja de secuestrar el turno de hoy)
 **Propósito:** que retomar el trabajo no cueste una sesión de arqueología. Si vuelves a este
 proyecto después de semanas, **lee este documento primero** y sigue por donde diga.
 
@@ -9,7 +9,7 @@ proyecto después de semanas, **lee este documento primero** y sigue por donde d
 
 ---
 
-## 4-0. POR DÓNDE SE SIGUE (cierre del 2026-08-26)
+## 4-0. POR DÓNDE SE SIGUE (cierre del 2026-08-27)
 
 > Esta sección es lo primero que hay que leer al retomar. Las de más abajo son historia de fases
 > ya cerradas y se conservan porque explican **por qué** las cosas están como están.
@@ -147,6 +147,161 @@ asistente:**
 - **No hay forma de asignar un domiciliario a un pedido ya creado.** `id_domiciliario` solo se
   puede poner al crear la orden; lo único que existe para domiciliarios es la liquidación de caja.
 
+### Lo que se hizo el 2026-08-27: por qué va lento, medido
+
+El dueño dijo «va lento» el 26 y se aplazó con una nota que decía **medir antes de tocar**. Se
+midió. Son 114 turnos reales de producción, leídos del Ledger sin tocar una fila.
+
+| | Turnos | Media | p90 | Máx |
+|---|---|---|---|---|
+| Nivel 1 (determinista) | 73 | **58 ms** | 105 ms | 552 ms |
+| Nivel 4 (el modelo) | 41 | **2 317 ms** | 3 746 ms | 5 287 ms |
+
+**Factor 40.** Y tres cosas que cambian dónde hay que mirar:
+
+1. **El prompt no es el problema, y conviene que quede escrito porque era la sospecha natural.**
+   La correlación entre tamaño de entrada y latencia es **0,054** —ninguna—. La caché va bien
+   (90 078 de 128 002 tokens de entrada llegan cacheados, 70 %) y el modelo escribe **27 tokens de
+   media**. Ese segundo y pico es el viaje de ida y vuelta al proveedor, no trabajo nuestro.
+   Recortar el prompt no habría ahorrado nada, y se habría descubierto después de hacerlo.
+2. **Las capacidades tampoco.** `consultar_carta` 27 ms, `reservar_turno` 126 ms, ninguna pasa de
+   453 ms en su peor caso. Al lado de 1 370 ms por llamada al modelo, es ruido.
+3. **Aquí está el hallazgo.** Repartiendo los turnos por la regla de enrutado que los mandó:
+
+   | Regla | Turnos al modelo |
+   |---|---|
+   | `intencion_mutacion` — la única fila que **decide** subir | 2 |
+   | `pregunta_libre` — el comodín del final de la tabla | **36** |
+
+   O sea: **el 95 % de lo que sube al modelo no sube porque una regla lo eligiera, sino porque no
+   hay ninguna que lo retenga.** Cae por el «esto no sé qué es». Y de esos 36, **23 no invocaron
+   ni una capacidad**: el modelo solo redactó una frase, y se pagaron 1 735 ms por ella.
+
+> **Un dato que ahorra un susto:** los tres turnos más lentos de todos (3,2–4,5 s) eran los
+> `MANEJADOR_FALLO` del rastro, **corregidos el 26**. Al mirar la tabla de los más lentos parecen
+> el problema y no lo son: son historia. Si se vuelve a medir, filtrar por `resultado = 'resuelto'`.
+
+Reparto de resultados, para tener la línea base: **108 resueltos, 5 en error, 1 sin respuesta**, y
+todos con `intentos = 1`. Coste acumulado de todo lo medido: **0,12 USD**.
+
+#### Lo que se hizo con eso: el turno deja de ser silencio
+
+De las tres salidas posibles se eligió la que **no toca la inteligencia de nada**: avisar a la
+persona de que seguimos trabajando. Acelerar el modelo no está en nuestra mano, y bajar cosas del
+comodín al Nivel 1 es una decisión de producto que sigue abierta (más abajo).
+
+En WhatsApp eso es el **indicador nativo de «escribiendo…»**, no un mensaje de texto. Las dos
+razones por las que un mensaje era peor, y ninguna es de estilo:
+
+- **Llegaría tarde.** Un mensaje sale por la cola del gateway, que se sondea cada segundo: el
+  aviso aterrizaría a la vez que la respuesta que anunciaba.
+- **Ensucia la conversación para siempre.** El indicador se apaga solo; un «un momento» se queda
+  en el historial, y una conversación de veinte turnos acaba con diez.
+
+**Qué cambió, y dónde:**
+
+| Pieza | Qué hace |
+|---|---|
+| `engine/motor.js` | Arma un temporizador de **800 ms** antes de llamar al manejador; si vence, avisa. Lo cancela en un `finally`. |
+| `channels/gateway.js` | `senalarActividad()` — busca el adaptador y llama a su `mostrarActividad` **si lo declara**. |
+| `channels/whatsapp/adaptador.js` | Declara `mostrarActividad`. |
+| `channels/whatsapp/api.js` | `enviarIndicadorEscritura()` — el único sitio que habla con Meta. |
+| `intelligence/index.js` | Los presenta. **El motor no importa el gateway.** |
+
+**Las tres decisiones que no eran obvias:**
+
+1. **Un temporizador, y no «si el nivel es LLM, avisa».** El motor no sabe —ni debe— a qué
+   peldaño va un turno: eso lo decide la tabla de enrutado *dentro* del manejador, y el motor
+   solo ve una promesa que tarda. Preguntarlo obligaría al manejador a contarlo **antes** de
+   decidir, que es el orden contrario al que tiene. Y sale mejor de lo que se pedía: así avisa
+   también un turno determinista atascado en una capacidad lenta, un caso que una condición
+   sobre el nivel no habría cubierto nunca.
+2. **El umbral existe para que no parpadee.** 800 ms cae en el hueco entre el peor turno
+   determinista medido (552 ms) y el turno de modelo más rápido (1 735 ms): ninguno del Nivel 1
+   lo enciende, todos los del modelo sí. Un «escribiendo…» que aparece y desaparece en 60 ms se
+   ve peor que no ponerlo. `CONVERSACION_AVISO_ACTIVIDAD_MS=0` lo apaga.
+3. **La señal se inyecta, no se importa.** El día que `motor.js` hiciera
+   `require('../channels/gateway')`, el núcleo sabría que existen los canales y el argumento para
+   no meter luego un `if (canal === 'whatsapp')` se quedaría sin base. `mostrarActividad` es
+   **opcional** en el `ChannelPort`: el WebChat no lo declara y no le pasa nada — que es
+   literalmente la mitigación que [ADR-017](adr/ADR-017-channel-gateway.md) prescribe a cambio de
+   dejar que un adaptador aproveche lo que su canal tenga de más. **No hizo falta ADR nuevo.**
+
+**El `status: 'read'` no es un extra, es el precio.** La Cloud API no tiene endpoint de «solo
+escribiendo»: el indicador viaja *dentro* del acuse de lectura. Encenderlo implica marcar el
+mensaje como leído —algo que hasta hoy el bot no hacía y que se quería de todas formas—, pero no
+se puede tener uno sin el otro.
+
+**Verificado rompiéndolo, que es la única forma que vale aquí.** 16 pruebas nuevas
+(`__tests__/intelligence/aviso_actividad.test.js`) y **592 de backend en verde**. Las cuatro que
+importan no comprueban que se encienda, sino que **no pueda romper nada**: la señal lanza y el
+cliente recibe su respuesta igual; el canal dice que no mostró nada y no se inventa el rastro; el
+turno revienta antes del umbral y el temporizador no queda vivo detrás; un canal sin la capacidad
+no se entera. Es la forma de fallo que este proyecto ya pagó dos veces —una pieza secundaria
+matando a la principal— y por eso se atacó primero.
+
+> ⚠ **Lo único que no se puede verificar aquí:** que Meta acepte el `typing_indicator`. Es código
+> escrito contra una documentación, igual que todo `api.js`, y falla en silencio a propósito. Al
+> desplegar, mirar el log: si Meta lo rechaza, sale `[whatsapp] el indicador de escritura no se
+> encendió (400)` y **nada más se rompe**. Comprobarlo también por el Ledger: los turnos que lo
+> encendieron dejan un paso `actividad_senalada`.
+
+#### Y una tarea a medias ya no se retoma al día siguiente
+
+Salió probando lo anterior: el dueño dejó una prueba a medias a las 21:11 y al día siguiente
+escribió otra vez. El bot **siguió por donde iba**. En el Ledger se ve exacto:
+
+| Conversación | Último turno | Siguiente | Hueco | Regla que ganó |
+|---|---|---|---|---|
+| `01a036ef` | 08-26 21:11 | 08-27 16:56 | **19 h 45 min** | `tarea_en_curso` |
+| `01a03701` | 08-26 17:24 | 08-27 16:42 | **23 h 18 min** | `tarea_en_curso` |
+| `01a03637` | 08-24 21:41 | — | **3 días abierta** | (sigue esperando) |
+
+**La asimetría que lo hacía invisible: la confirmación sí caducaba y la tarea que la contiene
+no.** `confirmacion.js` lleva desde F7 con sus diez minutos y su «caducar nunca ejecuta»; la
+tarea —`agendar_cita`, `pedido`— no tenía reloj de ninguna clase. Y `estado = 'dormida'` existe
+en el CHECK de la tabla desde F5-A y **ningún código lo escribe**: toda conversación es `activa`
+para siempre.
+
+`tarea_en_curso` es la **tercera fila** de la tabla de enrutado y se lleva el turno entero, así
+que un «hola» de hoy entraba directo al paso 4 del pedido de anoche.
+
+**Lo que NO estaba roto, y conviene saberlo antes de asustarse:** no hubo ni pudo haber daño
+real. La confirmación caduca a los 10 min, así que un «sí» de hoy no ejecuta una mutación
+propuesta ayer (ADR-010 intacto). `tomar_pedido` **relee los precios del catálogo** y nunca los
+cree de la conversación. Y la disponibilidad la revalidan las invariantes de `reservar_turno`
+(F4-B). El daño era otro: **el bot parecía roto**.
+
+**El arreglo, con la forma que ya tenía el caso resuelto.** Se copió la de `confirmacion.js`
+porque es literalmente el mismo problema un nivel más arriba:
+
+- El motor **le pone hora a la tarea** cada vez que la guarda (`_actualizada_en` dentro de
+  `tarea_datos`, clave reservada). Dentro de los datos y no en una columna nueva: viaja con la
+  cosa cuya edad se mide, se renueva sola y **no necesita migración** — que sobre una base de
+  producción viva no es poca cosa.
+- La **escalera** decide cuánto vive (3 h, `CONVERSACION_TAREA_VIDA_MS`), porque el motor no
+  decide qué se contesta. Pasado eso vacía la tarea antes de enrutar y **antepone el aviso a la
+  respuesta, en el mismo turno**: hacerle repetir al cliente lo que acaba de escribir sería
+  cobrarle a él un despiste nuestro.
+- **Sin sello legible = caducada.** Misma dirección de fallo que `confirmacion.caducado`: entre
+  retomar un hilo que no toca y empezar de cero, empezar de cero es lo que no puede salir mal. Y
+  de paso, las tres tareas que ya estaban abiertas se cerrarán solas al primer mensaje.
+- **La confirmación conserva su reloj propio** y se excluye a mano. Dos relojes sobre la misma
+  tarea acaban con el más tonto ganando, y el suyo dice lo único que el cliente necesita oír:
+  que **no se hizo nada**.
+
+Las 3 h no son arquitectura, son producto: cubren «me interrumpieron y vuelvo» y dejan fuera «al
+día siguiente». El techo sí es duro — pasadas **24 h** WhatsApp no deja contestar con texto
+libre, así que una vida mayor prometería algo que el canal no puede cumplir.
+
+**15 pruebas nuevas** (`__tests__/intelligence/tarea_caducada.test.js`), dos de ellas contra
+Postgres porque lo que fallaba era **la fila**, no el objeto en memoria. **607 de backend en
+verde.**
+
+> ⚠ **Al desplegar esto**: cualquier conversación que esté a medias en ese momento no tiene sello
+> y recibirá «empiezo de cero» en su siguiente mensaje. Es la limpieza que se busca, pero conviene
+> no desplegarlo en plena hora de pedidos.
+
 ### Lo que se hizo el 2026-08-24/25
 
 Está detallado en [`asistente-restaurante.md`](asistente-restaurante.md) y
@@ -186,10 +341,14 @@ Vale la pena leerlos juntos porque **comparten forma**: ninguno daba error donde
 
 ### Lo siguiente, en orden
 
-1. **El bot va lento.** Lo señaló el dueño y se aplazó. **Medir antes de tocar**:
-   `intelligence.turno` tiene `nivel` y `latencia_ms`, así que se puede saber cuánto tarda cada
-   peldaño y cuántas veces sube al modelo sin necesidad. Sospecha razonable: sube más de lo
-   necesario.
+1. **El bot va lento — medido, y a medias resuelto.** La espera ya no es silencio (arriba), pero
+   los 2 317 ms siguen ahí. La sospecha era buena: **sube más de lo necesario, y no por una regla
+   sino por el comodín** — 36 de los 38 turnos que fueron al modelo cayeron por `pregunta_libre`,
+   y 23 de ellos no consultaron nada. Lo que queda es **una decisión de producto, no código**:
+   qué preguntas contesta el Nivel 1 sin preguntarle al modelo (horario, dirección, «¿hacen
+   domicilio?»). Bajarlas ahorra 1 735 ms y $0 por turno; pasarse devuelve al bot a sonar a bot,
+   que es justo lo que se arregló el 26. **Para decidirlo hace falta saber qué preguntan de
+   verdad**, y eso son conversaciones de clientes: ver ADR-024 y la Ley 1581 antes de leerlas.
 2. **Probar el círculo completo del menú digital** con gente de verdad: carrito → WhatsApp →
    dirección → `tomar_pedido`. Es la primera vez que los dos repos se hablan fuera de un test.
 3. **El código de cita sigue siendo un UUID** (punto 2 de `mejoras-flujo-agenda.md`). Su
@@ -212,6 +371,8 @@ Vale la pena leerlos juntos porque **comparten forma**: ninguno daba error donde
 - **`restaurante_app` está en la rama `feature/pedido-menu-digital`**, no en `master`. El backend
   sigue en `feature/escalapp_intelligence` — **y el VPS corre esa rama, no `master`**.
 - **Copia del frontend anterior**: `~/backups/frontend_restaurante_20260825_0000.tgz` en el VPS.
+- **El indicador de «escribiendo…» no está probado contra Meta.** Solo se sabrá al desplegar, y si falla no avisa más que por el log (a propósito). Ver la sección del 2026-08-27.
+- **`estado = 'dormida'` sigue sin tener quien lo escriba.** Existe en el CHECK desde F5-A y ningún código lo usa: toda conversación es `activa` para siempre. Ahora importa menos —la tarea ya caduca— pero el estado sigue siendo decorativo.
 
 ### Deudas conocidas, ninguna bloqueante
 

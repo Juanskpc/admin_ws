@@ -36,6 +36,47 @@ const confirmacion = require('./confirmacion');
 const optout = require('./optout');
 
 /**
+ * Cuánto vive una tarea sin que nadie la toque. Tres horas.
+ *
+ * ## El número, y por qué ése
+ *
+ * Cubre «me interrumpieron y vuelvo» —una comida, una reunión— y deja fuera «al día
+ * siguiente», que es el caso que lo destapó. Y tiene un techo que no es negociable: pasadas
+ * **24 h** WhatsApp no deja contestar con texto libre (`WHATSAPP_FUERA_DE_VENTANA`), así que una
+ * vida más larga que eso sería prometer algo que el canal no puede cumplir.
+ *
+ * Es una decisión de producto, no de arquitectura: cambiarla es cambiar este número.
+ */
+const TAREA_VIDA_MS = Number(process.env.CONVERSACION_TAREA_VIDA_MS) || 3 * 60 * 60 * 1000;
+
+/**
+ * La tarea de confirmar una mutación **no** pasa por aquí: tiene su propia vida, más corta
+ * (diez minutos, `confirmacion.js`), y su propio mensaje al caducar, que es mejor que el de aquí
+ * porque dice lo único que el cliente necesita saber — que **no se hizo nada**. Dos relojes
+ * sobre la misma tarea acabarían con el más tonto ganando.
+ */
+const TAREA_CON_RELOJ_PROPIO = confirmacion.TAREA;
+
+/**
+ * ¿La tarea que hay abierta es de hace demasiado como para retomarla sin avisar?
+ *
+ * **Sin sello legible se considera caducada.** Es la misma dirección en la que falla
+ * `confirmacion.caducado`, y por la misma razón: entre retomar un hilo que no toca y empezar de
+ * cero, empezar de cero es lo que no puede salir mal. De paso, es lo que hace que las tareas que
+ * ya estaban abiertas antes de que existiera el sello —dos, en producción— se cierren solas la
+ * primera vez que alguien escriba.
+ */
+function tareaCaducada(conversacion, ahora = Date.now()) {
+    const nombre = conversacion?.tarea_actual;
+    if (!nombre || nombre === TAREA_CON_RELOJ_PROPIO) return false;
+    if (TAREA_VIDA_MS <= 0) return false;
+
+    const sello = Date.parse(conversacion.tarea_datos?._actualizada_en || '');
+    if (!Number.isFinite(sello)) return true;
+    return ahora - sello > TAREA_VIDA_MS;
+}
+
+/**
  * @param {Object}   deps
  * @param {Function} deps.determinista — el Nivel 1. Siempre presente.
  * @param {Function} [deps.llm]        — el Nivel 4. Ausente = escalera de un peldaño, que es
@@ -68,6 +109,31 @@ function crearManejadorEscalera({
         // no se nota.
         const flujo = await flujoDelNegocio(ctx);
 
+        // ⚠ Antes de enrutar, porque `tarea_en_curso` es la tercera fila de la tabla y se lleva
+        // el turno entero. Una tarea rancia enrutada es un «hola» contestado con el paso 4 del
+        // pedido de anoche, que es exactamente lo que pasó el 2026-08-27.
+        //
+        // Se **muta** `ctx.conversacion`, y no es descuido: el motor guarda el estado leyendo
+        // este mismo objeto cuando la decisión no trae `tarea`, así que vaciarlo aquí es lo que
+        // cierra la tarea en la base. Hacerlo de otro modo obligaría a que cada rama de abajo se
+        // acordara de devolver `tarea: null`, y la que se olvidara dejaría el hilo colgado otra
+        // vez.
+        const caducada = tareaCaducada(ctx.conversacion);
+        let pasoDeCaducidad = null;
+        if (caducada) {
+            pasoDeCaducidad = {
+                tipo: 'regla',
+                decision: 'tarea_caducada',
+                motivo: {
+                    tarea: ctx.conversacion.tarea_actual,
+                    vida_ms: TAREA_VIDA_MS,
+                    sello: ctx.conversacion.tarea_datos?._actualizada_en ?? null,
+                },
+            };
+            ctx.conversacion.tarea_actual = null;
+            ctx.conversacion.tarea_datos = {};
+        }
+
         const ruta = enrutar({
             texto: ctx.texto,
             // Cualquier tarea abierta, no solo la de agendar.
@@ -91,10 +157,32 @@ function crearManejadorEscalera({
             motivo: { nivel: ruta.nivel, por_que: ruta.motivo },
         };
 
+        /**
+         * Le antepone a la decisión el aviso de que se empezó de cero, si tocó.
+         *
+         * Decirlo importa, y el precedente está en `confirmacion.js`: cuando algo caduca se dice
+         * en voz alta, porque el cliente tiene que saber dónde quedó su asunto. Callarlo y
+         * contestar como si nada es justo la versión silenciosa del mismo fallo.
+         *
+         * Va **antes** de la respuesta y en el mismo turno, no en uno propio: obligar al cliente
+         * a repetir lo que acaba de escribir para que se lo atiendan sería cobrarle a él un
+         * despiste nuestro.
+         */
+        const conAviso = (decision) => {
+            if (!caducada) return decision;
+            return {
+                ...decision,
+                respuestas: [
+                    'Pasó un buen rato desde la última vez, así que empiezo de cero.',
+                    ...(decision.respuestas || []),
+                ],
+            };
+        };
+
         if (ruta.nivel === NIVEL.LLM) {
             try {
                 const decision = await llm(ctx);
-                return conPaso(decision, pasoDeRuta);
+                return conPaso(conPaso(conAviso(decision), pasoDeRuta), pasoDeCaducidad);
             } catch (error) {
                 // El manejador de Nivel 4 ya atrapa los fallos del proveedor y responde con el
                 // handoff. Llegar aquí significa que se rompió algo que no previó, y aun así el
@@ -105,11 +193,17 @@ function crearManejadorEscalera({
                     motivo: { mensaje: error.message, se_baja_a: NIVEL.DETERMINISTA },
                 };
                 const decision = await (flujo ? flujo.manejar(ctx) : determinista(ctx));
-                return conPaso(conPaso(decision, caida), pasoDeRuta);
+                return conPaso(
+                    conPaso(conPaso(conAviso(decision), caida), pasoDeRuta),
+                    pasoDeCaducidad
+                );
             }
         }
 
-        return conPaso(await (flujo ? flujo.manejar(ctx) : determinista(ctx)), pasoDeRuta);
+        return conPaso(
+            conPaso(conAviso(await (flujo ? flujo.manejar(ctx) : determinista(ctx))), pasoDeRuta),
+            pasoDeCaducidad
+        );
     };
 
     /**
@@ -155,9 +249,10 @@ function crearManejadorEscalera({
     }
 }
 
-/** Antepone un paso a la decisión, sin mutarla: la del manejador es suya. */
+/** Antepone un paso a la decisión, sin mutarla: la del manejador es suya. `null` no añade nada. */
 function conPaso(decision, paso) {
+    if (!paso) return decision;
     return { ...decision, pasos: [paso, ...(decision.pasos || [])] };
 }
 
-module.exports = { crearManejadorEscalera };
+module.exports = { crearManejadorEscalera, tareaCaducada, TAREA_VIDA_MS };

@@ -181,6 +181,15 @@ function arrancarCanales({ iniciarEntrega = true } = {}) {
     for (const adaptador of CANALES) gateway.registrar(adaptador);
     if (iniciarEntrega) gateway.iniciar();
 
+    // El único punto del sistema donde el motor y los canales se conocen. El motor no importa
+    // el gateway a propósito (ver `motor.registrarSenalDeActividad`): si lo hiciera, el núcleo
+    // sabría que existen los canales y ADR-017 dejaría de tener quien lo defienda.
+    //
+    // Quién sabe mostrar algo lo decide cada adaptador declarando `mostrarActividad`; el que no
+    // lo declare —el WebChat hoy— no hace nada, que es la degradación con gracia que ADR-017
+    // exige a cambio de dejar que un canal aproveche lo que tenga de más.
+    motor.registrarSenalDeActividad((sobre) => gateway.senalarActividad(sobre));
+
     // Qué canales traen una identidad probada. Se lee de la declaración del adaptador y no se
     // nombra a ninguno aquí: añadir un canal no debe obligar a editar la composición ni el motor.
     // De esto cuelga que un cliente pueda cancelar su cita y no la de otro — ver `identidad.js`.

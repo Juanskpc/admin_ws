@@ -541,6 +541,36 @@ async function entregar({
     return { idExternoCanal: wamid };
 }
 
+/**
+ * «Estoy en ello» — el `mostrarActividad` del `ChannelPort`, que WhatsApp sirve con su indicador
+ * nativo de escritura.
+ *
+ * ## Por qué existe este método y no un mensaje de «dame un segundo»
+ *
+ * Medido en producción: un turno del Nivel 1 se resuelve en 58 ms y uno que sube al modelo tarda
+ * 2 317 ms de media. Ese silencio de dos segundos es lo que el dueño llamó «va lento», y no se
+ * arregla acelerando el modelo —el 95 % de esos milisegundos son el viaje de ida y vuelta al
+ * proveedor, no trabajo nuestro—: se arregla dejando de ser silencio.
+ *
+ * La alternativa evidente era mandar un mensaje de texto («un momento, lo consulto»). Se
+ * descartó por dos razones y ninguna es de estilo:
+ *
+ *   1. **Llegaría tarde.** Un mensaje sale por la cola del gateway, que se sondea cada segundo;
+ *      el aviso aterrizaría a la vez que la respuesta que anunciaba.
+ *   2. **Ensucia la conversación para siempre.** El indicador desaparece solo; un «un momento»
+ *      se queda en el historial, y una conversación de veinte turnos acaba con diez.
+ *
+ * ## Es opcional en el puerto, y eso es la mitad del diseño
+ *
+ * ADR-017 avisa del riesgo de mínimo común denominador y lo mitiga con esta regla exacta: un
+ * adaptador puede **aprovechar capacidades extra de su canal siempre que degrade con gracia**
+ * donde no existan. El WebChat no declara este método y no le pasa nada; el núcleo no sabe qué
+ * es un indicador de escritura, solo que el turno se está alargando.
+ */
+async function mostrarActividad({ idExternoMensaje, api = apiReal, config = configReal }) {
+    return api.enviarIndicadorEscritura({ wamid: idExternoMensaje, config });
+}
+
 async function auditar(accion, idNegocio, detalle) {
     try {
         await Audit.registrarEvento({
@@ -571,6 +601,7 @@ module.exports = {
      */
     idExternoEsIdentidad: true,
     entregar,
+    mostrarActividad,
     recibirWebhook,
     interpretarWebhook,
     renderizar,

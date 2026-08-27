@@ -128,5 +128,87 @@ async function enviarMensaje({ para, payload, fetchImpl = globalThis.fetch, conf
     return { wamid: datos?.messages?.[0]?.id ?? null };
 }
 
+/**
+ * Enciende el «escribiendo…» de WhatsApp sobre el mensaje que acaba de llegar.
+ *
+ * ## Por qué esto no es un mensaje, y por qué importa la diferencia
+ *
+ * No entra por el gateway, no se encola, no se reintenta y no deja rastro en
+ * `intelligence.mensaje`. Es una **señal efímera**: o llega ahora o no sirve de nada. Meterla en
+ * la cola de salida —que se sondea cada segundo y garantiza la entrega al menos una vez— sería
+ * pedirle durabilidad a algo cuyo valor caduca en dos segundos, y encima llegaría tarde: la
+ * respuesta de verdad viaja por esa misma cola.
+ *
+ * Meta la apaga sola cuando sale el mensaje siguiente, y en todo caso a los 25 segundos. No hay
+ * nada que limpiar, y un turno que muere no deja al cliente mirando un «escribiendo…» eterno.
+ *
+ * ## El `status: 'read'` no es un extra: es el precio
+ *
+ * La Cloud API no tiene un endpoint de «solo escribiendo». El indicador viaja **dentro** del
+ * acuse de lectura, así que encenderlo implica marcar el mensaje como leído. Es lo que uno
+ * querría de todas formas —hasta hoy el bot no marcaba nada y las conversaciones se quedaban en
+ * negrita para siempre—, pero conviene que esté escrito: no se puede tener uno sin el otro.
+ *
+ * ## Falla en silencio, a propósito
+ *
+ * Quien llama a esto está a mitad de un turno. Un indicador que no se enciende es un detalle
+ * cosmético; una excepción que sube desde aquí se llevaría por delante la respuesta que el
+ * cliente sí estaba esperando. Esa es la forma de fallo que ya costó cara dos veces en este
+ * proyecto —el rastro tumbando la conversación, la validación tumbando el lote de al lado—, así
+ * que aquí se corta de raíz: **devuelve `false` y no lanza nunca.**
+ *
+ * @param {string} opciones.wamid — el id del mensaje ENTRANTE al que se responde. Sin él no hay
+ *                 sobre qué mostrar el indicador; Meta no acepta un indicador «suelto».
+ * @returns {Promise<boolean>} si Meta lo aceptó.
+ */
+async function enviarIndicadorEscritura({
+    wamid,
+    fetchImpl = globalThis.fetch,
+    config = configReal,
+}) {
+    if (!wamid) return false;
+
+    const c = config.leer();
+    if (!c.token || !c.phoneNumberId) return false;
+
+    const control = new AbortController();
+    const reloj = setTimeout(() => control.abort(), TIMEOUT_MS);
+
+    try {
+        const respuesta = await fetchImpl(
+            `${c.baseUrl}/${c.versionApi}/${c.phoneNumberId}/messages`,
+            {
+                method: 'POST',
+                headers: {
+                    Authorization: `Bearer ${c.token}`,
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    messaging_product: 'whatsapp',
+                    status: 'read',
+                    message_id: wamid,
+                    typing_indicator: { type: 'text' },
+                }),
+                signal: control.signal,
+            }
+        );
+        if (!respuesta.ok) {
+            // Se anota una vez y se sigue. Si Meta lo rechaza siempre —una versión de API sin
+            // indicador, por ejemplo— esto es lo único que lo va a decir.
+            console.warn(
+                `[whatsapp] el indicador de escritura no se encendió (${respuesta.status}).`
+            );
+            return false;
+        }
+        return true;
+    } catch (error) {
+        console.warn(`[whatsapp] el indicador de escritura no se encendió: ${error.message}`);
+        return false;
+    } finally {
+        clearTimeout(reloj);
+    }
+}
+
 module.exports = {
-    esBsuid, enviarMensaje, TIMEOUT_MS };
+    esBsuid, enviarMensaje, enviarIndicadorEscritura, TIMEOUT_MS };
+

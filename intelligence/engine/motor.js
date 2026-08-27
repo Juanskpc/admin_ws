@@ -55,6 +55,21 @@ const CONFIG = {
     ventanaPendientesDias: numeroDeEntorno('CONVERSACION_VENTANA_DIAS', 7),
     /** A partir de aquí, un turno en `procesando` se da por muerto. Cero es válido: ver tests. */
     turnoColgadoMinutos: numeroDeEntorno('CONVERSACION_TURNO_COLGADO_MIN', 10),
+    /**
+     * Cuánto puede tardar un turno antes de avisarle a la persona que seguimos aquí.
+     *
+     * El número sale de una medición, no de una intuición. En producción el Nivel 1 resuelve en
+     * 58 ms de media y 105 ms en el p90 —su peor caso observado fueron 552 ms—, mientras que el
+     * turno más rápido de los que suben al modelo tarda 1735 ms. Entre 552 y 1735 hay sitio de
+     * sobra, y 800 ms cae ahí: **ningún turno determinista llega a encender el indicador y
+     * todos los del modelo lo encienden**, sin que el motor haya preguntado a qué nivel va nada.
+     *
+     * Que el umbral exista, en vez de avisar siempre, es lo que evita el parpadeo: un
+     * «escribiendo…» que aparece y desaparece en 60 ms se ve peor que no ponerlo.
+     *
+     * `0` lo apaga.
+     */
+    avisoActividadMs: numeroDeEntorno('CONVERSACION_AVISO_ACTIVIDAD_MS', 800),
 };
 
 /** Motivos por los que un despertar no produce turno. Se miden, así que son enum-like. */
@@ -66,6 +81,7 @@ const OMITIDO = {
 
 let manejador = null;
 let cola = null;
+let senalDeActividad = null;
 
 /**
  * Instala el manejador de turnos. Es el punto de extensión del motor y su contrato completo:
@@ -84,6 +100,10 @@ let cola = null;
  * }
  * ```
  *
+ * En `tarea.datos` el motor añade y mantiene una clave reservada, `_actualizada_en` (ver
+ * `sellarTarea`): la hora del último turno que tocó la tarea. Un manejador no la escribe, pero
+ * puede leerla — `manejadorEscalera.js` la usa para no retomar un hilo de ayer.
+ *
  * `consumo` es un **recolector que aporta el motor**: `consumo.costos.push({...})` por cada
  * llamada a un modelo (ver `intelligence/model/precios.js` para la forma). Es un array y no un
  * valor de retorno por una razón de ADR-022: el costo **factura**, y si viajara en la decisión
@@ -99,6 +119,85 @@ function registrarManejador(fn) {
         throw new Error('El manejador de turnos debe ser una función manejar(contexto).');
     }
     manejador = fn;
+}
+
+/**
+ * Instala cómo se le dice a la persona «sigo aquí» cuando un turno se alarga.
+ *
+ * ## Por qué se inyecta en vez de importar el gateway
+ *
+ * Porque el motor no conoce canales, y ésa no es una preferencia de estilo: es lo que ADR-017
+ * compra. En el momento en que este archivo hiciera `require('../channels/gateway')`, el núcleo
+ * pasaría a saber que existen los canales, y el argumento para no meter después un
+ * `if (canal === 'whatsapp')` se quedaría sin base. La composición vive en
+ * `intelligence/index.js#arrancarCanales`, igual que la lista de canales.
+ *
+ * Hay una segunda razón, más práctica: sin esto, probar que un turno lento avisa exigiría
+ * levantar un canal. Con esto, es pasar una función que apunte en un array.
+ *
+ * **Nadie la registra = no se avisa.** El motor funciona igual, que es como funcionó hasta hoy.
+ *
+ * @param {Function|null} fn — async ({ canal, idConversacion, idExterno, idExternoMensaje,
+ *        idNegocio }) => boolean. No debería lanzar; si lanza, se traga aquí.
+ */
+function registrarSenalDeActividad(fn) {
+    if (fn !== null && typeof fn !== 'function') {
+        throw new Error('La señal de actividad debe ser una función o null.');
+    }
+    senalDeActividad = fn;
+}
+
+/**
+ * Arma el aviso de «esto se está alargando» y devuelve con qué cancelarlo.
+ *
+ * ## Por qué un temporizador y no «si el nivel es LLM, avisa»
+ *
+ * Porque el motor no sabe —ni debe— a qué peldaño va un turno: eso lo decide la tabla de
+ * enrutado dentro del manejador, y el motor solo ve una promesa que tarda. Preguntárselo
+ * obligaría a que el manejador se lo contase antes de decidir, que es el orden contrario al
+ * que tiene.
+ *
+ * Y sale mejor de lo que se pedía: así avisa también un turno determinista que se atasca en
+ * una capacidad lenta, un caso que una condición sobre el nivel no habría cubierto nunca.
+ *
+ * ## `unref`, como el sondeo del gateway y al revés que el debounce
+ *
+ * Este temporizador no representa trabajo pendiente: representa un detalle cosmético sobre un
+ * trabajo que **ya está en curso** y que alguien está esperando con un `await`. Si el proceso
+ * quiere morir mientras tanto, que muera; retenerlo por un «escribiendo…» sería justo el error
+ * contrario al que documenta `cola.js` para el debounce.
+ */
+function armarAvisoDeActividad({ conversacion, mensajes }) {
+    if (!senalDeActividad || CONFIG.avisoActividadMs <= 0) return null;
+
+    const marca = { mostrada: false, aLosMs: CONFIG.avisoActividadMs };
+    // El último entrante es al que se responde. En WhatsApp el indicador cuelga de un mensaje
+    // concreto; un canal que no lo necesite puede ignorarlo.
+    const ultimo = mensajes[mensajes.length - 1];
+
+    const reloj = setTimeout(() => {
+        Promise.resolve()
+            .then(() =>
+                senalDeActividad({
+                    canal: conversacion.canal,
+                    idConversacion: conversacion.id_conversacion,
+                    idExterno: conversacion.id_externo,
+                    idExternoMensaje: ultimo ? ultimo.id_externo : null,
+                    idNegocio: conversacion.id_negocio,
+                })
+            )
+            .then((mostrada) => {
+                marca.mostrada = Boolean(mostrada);
+            })
+            // Que no se encienda un indicador no puede tumbar el turno que iba a acompañar. Es
+            // la forma de fallo que este proyecto ya pagó dos veces (ver ESTADO §4-0).
+            .catch((error) => {
+                console.warn(`[motor] el aviso de actividad falló: ${error.message}`);
+            });
+    }, CONFIG.avisoActividadMs);
+    reloj.unref?.();
+
+    return { marca, cancelar: () => clearTimeout(reloj) };
 }
 
 function obtenerCola() {
@@ -284,6 +383,40 @@ async function procesarConversacion(idConversacion, contexto = {}) {
     }
 }
 
+/** Clave reservada del motor dentro de `tarea_datos`. Ver `sellarTarea`. */
+const SELLO_TAREA = '_actualizada_en';
+
+/**
+ * Le pone hora a la tarea cada vez que se guarda.
+ *
+ * ## Por qué hace falta, dicho por lo que pasó sin esto
+ *
+ * La tarea no caducaba. Una conversación con `agendar_cita` a medias del 24 a las 21:41 seguía
+ * abierta tres días después, y el 27 alguien escribió tras **19 h 45 min** de silencio y el
+ * turno entró derecho por `tarea_en_curso`: el bot contestó el paso 4 del pedido de ayer a
+ * quien acababa de decir «hola». La confirmación sí caducaba —diez minutos, `confirmacion.js`—
+ * y la tarea que la contiene no, que es la asimetría que lo hacía difícil de ver.
+ *
+ * ## Por qué dentro de `tarea_datos` y no en una columna nueva
+ *
+ * Porque viaja con la cosa cuya edad se mide: si un manejador reemplaza la tarea, el sello se
+ * renueva solo, y si la cierra, desaparece con ella. Una columna habría que acordarse de tocarla
+ * en los dos sitios. Es además el patrón que ya usa `confirmacion.js` con `preguntado_en`, y no
+ * necesita migración — que sobre una base de producción viva no es poca cosa.
+ *
+ * La clave lleva guión bajo para que se lea como lo que es: contabilidad del motor, no un dato
+ * del flujo. Quien decide **cuánto** vive una tarea no es este archivo (el motor no decide qué se
+ * contesta): es `manejadorEscalera.js`, que es quien enruta.
+ */
+function sellarTarea(tarea) {
+    if (!tarea) return {};
+    const datos = tarea.datos || {};
+    // Sin nombre no hay tarea que fechar: el motor la está cerrando, y un sello sobre una
+    // tarea cerrada solo confundiría a quien lo lea después.
+    if (!tarea.nombre) return datos;
+    return { ...datos, [SELLO_TAREA]: new Date().toISOString() };
+}
+
 /**
  * Ejecuta el manejador y escribe lo que decidió: pasos, respuestas y estado conversacional.
  *
@@ -309,19 +442,54 @@ async function decidir({ conversacion, mensajes, turno, transaction }) {
     // ocurrió, y un gasto sin registrar es un agujero en la factura (ADR-022).
     const consumo = { costos: [] };
 
+    // Fuera del savepoint y fuera del try del manejador: cancelarlo no puede depender de que
+    // el manejador haya ido bien. Un turno que revienta a los tres segundos ya encendió el
+    // indicador, y lo que toca entonces es apagar el temporizador, no olvidarse de él.
+    const aviso = armarAvisoDeActividad({ conversacion, mensajes });
+
     try {
         await sequelize.transaction({ transaction }, async (savepoint) => {
-            const decision =
-                (await manejador({
-                    conversacion,
-                    mensajes,
-                    turno,
-                    consumo,
-                    // El texto agrupado, que es lo que el debounce existe para producir.
-                    texto: mensajes.map((m) => m.contenido).join('\n'),
-                })) || {};
+            let decision;
+            try {
+                decision =
+                    (await manejador({
+                        conversacion,
+                        mensajes,
+                        turno,
+                        consumo,
+                        // El texto agrupado, que es lo que el debounce existe para producir.
+                        texto: mensajes.map((m) => m.contenido).join('\n'),
+                    })) || {};
+            } finally {
+                aviso?.cancelar();
+            }
 
             let secuencia = 0;
+
+            // Se registra si llegó a encenderse, no si se armó: ADR-022 pide que el
+            // comportamiento sea observable, y «el cliente vio que estábamos trabajando» es
+            // justo lo que habrá que mirar para saber si esto sirvió de algo. Va de primero
+            // porque ocurrió antes que nada de lo que decidiera el manejador.
+            //
+            // ⚠ Puede quedarse corto, y es a propósito: si el turno acaba justo después del
+            // umbral, la llamada al canal puede no haber contestado todavía y aquí aún vale
+            // `false`. Esperarla implicaría que un turno rápido se quedase colgado de una
+            // llamada de red por un detalle cosmético, que es exactamente lo que este cambio
+            // existe para evitar. Se registra lo **confirmado**, nunca lo supuesto: la cuenta
+            // de `actividad_senalada` es un suelo, no un total.
+            if (aviso && aviso.marca.mostrada) {
+                await repositorio.registrarPaso(
+                    {
+                        idTurno: turno.id_turno,
+                        idNegocio: conversacion.id_negocio,
+                        secuencia: ++secuencia,
+                        tipo: 'respuesta',
+                        decision: 'actividad_senalada',
+                        motivo: { a_los_ms: aviso.marca.aLosMs, canal: conversacion.canal },
+                    },
+                    { transaction: savepoint }
+                );
+            }
 
             for (const paso of decision.pasos || []) {
                 await repositorio.registrarPaso(
@@ -403,7 +571,7 @@ async function decidir({ conversacion, mensajes, turno, transaction }) {
                 {
                     variables: decision.variables ?? conversacion.variables,
                     tareaActual: tarea ? tarea.nombre : null,
-                    tareaDatos: tarea ? tarea.datos : {},
+                    tareaDatos: sellarTarea(tarea),
                     estado: decision.estado || conversacion.estado,
                 },
                 { transaction: savepoint }
@@ -541,12 +709,14 @@ function detener() {
 function _reiniciar() {
     detener();
     manejador = null;
+    senalDeActividad = null;
 }
 
 module.exports = {
     CONFIG,
     OMITIDO,
     registrarManejador,
+    registrarSenalDeActividad,
     recibir,
     procesarConversacion,
     recuperar,
