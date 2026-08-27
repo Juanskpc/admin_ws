@@ -334,6 +334,29 @@ function loQueFalta(datos, { telefonoProbado }) {
     return null;
 }
 
+/**
+ * La pregunta del pago, con los datos de cada método pegados a su nombre.
+ *
+ * ## Por qué los datos van AQUÍ y no después de elegir
+ *
+ * Porque el cliente decide cómo paga **sabiendo** si puede. Preguntar primero y enseñar la
+ * cuenta después obliga a quien no tiene Nequi a elegirlo para descubrirlo, y a volver atrás
+ * — y volver atrás en un flujo determinista es justo donde se pierde la gente.
+ *
+ * Un método sin datos sale solo con su nombre, sin guión suelto ni hueco: la mayoría no
+ * necesita ninguno («Efectivo» se explica solo).
+ *
+ * Las opciones estructuradas siguen yendo aparte, en `opciones[]`, para que cada canal las
+ * pinte como sepa (ADR-017). Esto es solo el texto que las acompaña.
+ */
+function textoDelPago(metodos = []) {
+    const conDatos = metodos.filter((m) => m.datos);
+    if (conDatos.length === 0) return '¿Cómo vas a pagar? 💵';
+
+    const lineas = metodos.map((m) => (m.datos ? `• *${m.nombre}* — ${m.datos}` : `• *${m.nombre}*`));
+    return `¿Cómo vas a pagar? 💵\n\n${lineas.join('\n')}`;
+}
+
 /** Qué se le dice al cliente en cada paso. Las opciones solo las tiene el del pago. */
 function pregunta(paso, datos) {
     switch (paso) {
@@ -356,7 +379,7 @@ function pregunta(paso, datos) {
             };
         case PASO_PEDIDO.PAGO:
             return {
-                texto: '¿Cómo vas a pagar? 💵',
+                texto: textoDelPago(datos.metodos),
                 // Los ids son los reales del negocio, no ordinales: es la misma lección que
                 // dejó la categoría «2» del 2026-08-24. Y el canal los pinta como botones o
                 // lista según cuántos haya.
@@ -468,10 +491,14 @@ function recibirPedidoDelMenu(ctx, pedido, { solicitarConfirmacion }) {
  * Sigue el pedido con lo que acaba de escribir el cliente.
  *
  * Solo se llega aquí con la tarea abierta, o sea con los productos ya guardados. Lo que se lee
- * es texto libre —un nombre, una dirección— y por eso no se valida más allá de que no esté
- * vacío: quien sabe si «Carrera 3e 19 a» es una dirección real es el domiciliario, no una
- * expresión regular. Los límites de longitud los pone la capacidad, que es donde tienen que
- * estar.
+ * es texto libre —un nombre, una dirección— y **casi** no se valida: quien sabe si
+ * «Carrera 3e 19 a» es una dirección real es el domiciliario, no una expresión regular. Los
+ * límites de longitud los pone la capacidad, que es donde tienen que estar.
+ *
+ * El «casi» lo puso el 2026-08-27: el dueño escribió una broma donde iba la dirección y el
+ * pedido se creó con ella. Desde entonces `pareceDireccion` **repregunta una vez** cuando lo
+ * que llega no se parece de lejos a una dirección —y acepta a la segunda—. El guardarraíl avisa;
+ * no manda.
  */
 function seguirPedido(ctx, { solicitarConfirmacion }) {
     const datos = datosDelPedido(ctx.conversacion);
@@ -542,7 +569,33 @@ function seguirPedido(ctx, { solicitarConfirmacion }) {
             conLoDicho.telefono = dicho;
             break;
         case PASO_PEDIDO.DIRECCION:
+            // Si no se parece a una dirección se pregunta otra vez, **una sola**. A la segunda
+            // se apunta lo que diga: el cliente manda sobre su propia dirección, y bloquearle
+            // el pedido por no gustarle a una expresión regular sería cambiar una venta por una
+            // discusión. Queda el rastro para que se vea desde fuera cuál pasó así.
+            if (!pareceDireccion(dicho) && !datos.direccion_dudosa) {
+                const q = pregunta(PASO_PEDIDO.DIRECCION, datos);
+                return {
+                    pasos: [paso('pedido_direccion_dudosa', { largo: dicho.length })],
+                    respuestas: [
+                        {
+                            ...q,
+                            texto:
+                                'Perdona, no me quedó clara la dirección \uD83D\uDE45\u200D♂️ ' +
+                                '¿Me la escribes con la calle y el número? ' +
+                                'Si prefieres dejarlo, escríbeme *cancelar*.',
+                        },
+                    ],
+                    variables: conMemoria(ctx.conversacion),
+                    tarea: tareaPedido({ ...datos, direccion_dudosa: true }),
+                    resultado: 'resuelto',
+                    nivel: 'determinista',
+                };
+            }
             conLoDicho.direccion = dicho;
+            // Se anota que entró tras insistir: si un domicilio sale mal, esto lo explica.
+            if (!pareceDireccion(dicho)) conLoDicho.direccion_forzada = true;
+            delete conLoDicho.direccion_dudosa;
             break;
         case PASO_PEDIDO.PAGO: {
             const elegido = elegirMetodo(dicho, datos.metodos || []);
@@ -572,6 +625,42 @@ function seguirPedido(ctx, { solicitarConfirmacion }) {
         apertura,
         solicitarConfirmacion,
     });
+}
+
+/**
+ * Palabras con las que empieza una dirección por aquí. No pretende ser exhaustiva.
+ */
+const PALABRAS_DE_DIRECCION =
+    /\b(calle|cll|cl|carrera|cra|kra|kr|avenida|av|ave|diagonal|dg|transversal|tv|tr|manzana|mz|apto|apartamento|torre|bloque|casa|barrio|conjunto|edificio|vereda|km|kilometro|autopista|circunvalar|sector|etapa|local|piso)\b/;
+
+/**
+ * ¿Esto se parece siquiera a una dirección?
+ *
+ * ## Lo que esta función NO hace, y es deliberado
+ *
+ * **No valida que la dirección exista ni que esté bien escrita.** Quien sabe si «Carrera 3e 19 a»
+ * lleva a algún sitio es el domiciliario, no una expresión regular, y ése era el argumento por el
+ * que aquí no había ninguna comprobación. Sigue siendo bueno: una validación estricta rechazaría
+ * direcciones reales de barrios que no siguen la nomenclatura, y dejar a un cliente sin poder
+ * pedir es mucho peor que un pedido con una dirección rara.
+ *
+ * Lo que sí hace es cazar lo que **evidentemente** no es una dirección — «jajaja», un emoji
+ * suelto, cuatro letras— para **repreguntar una vez**. Si el cliente insiste, se acepta: ver
+ * `PASO_PEDIDO.DIRECCION` en `seguirPedido`. El guardarraíl avisa; no manda.
+ *
+ * Se aprueba con **cualquiera** de las dos señales, no con las dos:
+ *   - un número (casi toda dirección lleva al menos uno), o
+ *   - una palabra de las de arriba (para «el conjunto de siempre, casa blanca»).
+ */
+function pareceDireccion(texto) {
+    const t = String(texto || '').trim();
+    if (t.length < 6) return false;
+
+    const normalizado = normalizar(t);
+    // Al menos tres letras: descarta emojis sueltos y garabatos.
+    if ((normalizado.match(/[a-z]/g) || []).length < 3) return false;
+
+    return /\d/.test(normalizado) || PALABRAS_DE_DIRECCION.test(normalizado);
 }
 
 /**
@@ -657,7 +746,13 @@ async function cartaDe(idNegocio) {
 async function metodosDePagoDe(idNegocio) {
     const metodoPagoService = require('../../../app_restaurante_api/services/metodoPagoService');
     const metodos = await metodoPagoService.listar(idNegocio).catch(() => []);
-    return metodos.slice(0, 10).map((m) => ({ id: m.id_metodo_pago, nombre: m.nombre }));
+    return metodos.slice(0, 10).map((m) => ({
+        id: m.id_metodo_pago,
+        nombre: m.nombre,
+        // A dónde se paga. Viaja en la tarea junto al resto: el cliente tiene que ver la misma
+        // cuenta que se le enseñó, aunque el dueño la cambie a mitad del pedido.
+        datos: m.datos_pago || null,
+    }));
 }
 
 /**
@@ -792,6 +887,10 @@ module.exports = {
     TAREA_PEDIDO,
     PASO_PEDIDO,
     reclama,
+    // Expuestos para las pruebas, como `tareaCaducada` en la escalera: son las dos piezas de
+    // producto que conviene poder ejercitar sin montar una conversación entera.
+    pareceDireccion,
+    textoDelPago,
     crearFlujoRestaurante,
     manejarRestaurante: crearFlujoRestaurante(),
     enlaceDelMenu,

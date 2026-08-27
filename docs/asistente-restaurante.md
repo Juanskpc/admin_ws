@@ -1,6 +1,6 @@
 # El asistente en un restaurante, y el pedido desde el menú digital
 
-**Estado al 2026-08-25:** en producción, atendiendo `Restaurante pregonchos` (`id_negocio` 12) en
+**Estado al 2026-08-27:** en producción, atendiendo `Restaurante pregonchos` (`id_negocio` 12) en
 el número `+57 315 281 2484`. Cuatro capacidades, flujo propio y el pedido armado desde la carta.
 
 ---
@@ -199,6 +199,102 @@ nombres se comen el largo disponible.
   catálogo. Prometer aquí un total exacto sería prometer por cuenta de otro.
 - **El botón solo aparece con `url_whatsapp` puesto.** Sin número, el menú sigue siendo un menú
   útil y no se ofrece un botón que no lleva a ningún sitio.
+
+---
+
+---
+
+## La dirección de broma y el pago que nunca se preguntó (2026-08-27)
+
+Dos cosas que salieron de que el dueño probara el pedido de verdad. Las dos son de producto y
+ninguna era un fallo de código — que es lo que las hace interesantes.
+
+### El pago no se preguntó porque no había nada que preguntar
+
+Seis pedidos seguidos llegaron a la confirmación sin pasar por el paso del pago. La primera
+sospecha fue un fallo del flujo; el Ledger dijo otra cosa:
+
+```
+17:25:41  pedido_del_menu_recibido    (3 items)
+17:26:16  pedido_dato_recibido        (paso: direccion)
+17:26:16  confirmacion_solicitada     ← se salta el pago
+```
+
+La regla es `if (!datos.id_metodo_pago && (datos.metodos || []).length > 0)`, o sea **solo se
+pregunta si el negocio tiene métodos**. Y `rest_metodo_pago.fecha_creacion` lo zanjó: los dos
+métodos del negocio 12 se crearon a las **17:29:39** y **17:29:45**, tres minutos *después* del
+último pedido. El código hizo exactamente lo que estaba escrito.
+
+**Correcto y malísimo.** Un domicilio en el que nadie dice cómo se paga es una discusión en la
+puerta con el domiciliario delante. Así que ahora hay **métodos por defecto**: `migrate:restaurante-datos-pago`
+siembra `Efectivo` y `Transferencia` en todo restaurante que no tenga ninguno.
+
+> **Por qué el defecto son filas y no un valor en el código.** Un `|| ['Efectivo', 'Transferencia']`
+> escondido en el flujo habría arreglado el síntoma y creado uno peor: el dueño vería su pantalla
+> de configuración vacía mientras el bot ofrece cosas que él no puso, no podría quitar la
+> transferencia el día que deje de aceptarla, y la orden guardaría un nulo donde va un
+> `id_metodo_pago`. Sembrando filas, lo que el bot dice es exactamente lo que el dueño ve y edita.
+
+Lo que la migración **no** hace es tocar a quien ya configuró los suyos: sembrar «Efectivo» en un
+negocio que solo acepta transferencia sería ponerle al bot en la boca algo que nadie dijo.
+
+> ⚠️ **Queda un hueco:** un restaurante **nuevo** sigue naciendo sin métodos. La migración cubre a
+> los que ya existen. Lo natural es sembrarlos al crear el negocio, y no está hecho.
+
+### A dónde se paga
+
+`rest_metodo_pago.datos_pago` (200 caracteres, opcional) — el Nequi, la cuenta del banco, lo que
+el cliente necesita para poder pagar. Texto libre y no columnas por banco: cada negocio lo dice a
+su manera y ninguna estructura sobrevive al segundo cliente.
+
+El bot lo dice **junto a las opciones**, no después de elegir:
+
+```
+¿Cómo vas a pagar? 💵
+
+• *Físico*
+• *Transferencia* — Nequi 315 281 2484 a nombre de Pregonchos
+
+[Físico]  [Transferencia]
+```
+
+Es decisión del dueño (2026-08-27) y tiene un motivo que la sostiene: preguntar primero y enseñar
+la cuenta después obliga a quien no tiene Nequi a elegirlo para descubrirlo, y a volver atrás —
+que en un flujo determinista es donde se pierde la gente. Un método sin datos sale solo con su
+nombre, sin guión suelto.
+
+Las opciones estructuradas siguen viajando aparte en `opciones[]`: esto es solo el texto que las
+acompaña, y cada canal las pinta como sepa (ADR-017).
+
+Se administra en **Configuración → Opciones de pago** del `restaurante_app`, con un aviso debajo
+del campo diciendo que eso es lo que va a leer el cliente por WhatsApp — porque no es una nota
+interna.
+
+### La dirección: el guardarraíl avisa, no manda
+
+El dueño escribió una broma donde iba la dirección y **el pedido se creó con ella**. No había
+comprobación, y había un motivo escrito para no tenerla:
+
+> «quien sabe si "Carrera 3e 19 a" es una dirección real es el domiciliario, no una expresión
+> regular»
+
+Ese motivo **sigue siendo bueno**, así que lo que se añadió no es una validación. `pareceDireccion`
+pide una de dos señales —un número, o una palabra tipo *calle / carrera / barrio / km*— más tres
+letras y seis caracteres. Si no la ve, **repregunta una vez**. Si el cliente insiste, se apunta lo
+que diga y se marca `direccion_forzada` en la tarea.
+
+| Entra | Qué pasa |
+|---|---|
+| `Calle 45 #12-30` · `Cra 3e 19 a` · `el conjunto de siempre, casa blanca` | pasa a la primera |
+| `jajaja` · `😂` · `no te lo pienso decir jaja` | repregunta una vez, y acepta a la segunda |
+
+**Aceptar a la segunda no es una concesión, es el diseño.** Bloquear un pedido porque una
+expresión regular no reconoce un barrio es cambiar una venta por una discusión, y hay barrios
+enteros donde la nomenclatura no existe. Queda el rastro (`pedido_direccion_dudosa`,
+`direccion_forzada`) para que un domicilio que salga mal se pueda explicar.
+
+**21 pruebas** en `__tests__/intelligence/pedido_direccion_y_pago.test.js`, con las direcciones
+raras-pero-reales listadas explícitamente: rechazar una de ésas sería peor que aceptar una broma.
 
 ---
 

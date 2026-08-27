@@ -353,8 +353,9 @@ Vale la pena leerlos juntos porque **comparten forma**: ninguno daba error donde
    dirección → `tomar_pedido`. Es la primera vez que los dos repos se hablan fuera de un test.
 3. **El código de cita sigue siendo un UUID** (punto 2 de `mejoras-flujo-agenda.md`). Su
    prerrequisito de seguridad ya está hecho, así que ahora es solo trabajo.
-4. **`tomar_pedido` no pregunta método de pago ni exclusiones** («sin cebolla»). El dominio las
-   soporta; la capacidad no.
+4. **`tomar_pedido` no pregunta exclusiones** («sin cebolla»). El dominio las soporta; la
+   capacidad no. *(El método de pago **sí** se pregunta desde el 2026-08-27, con los datos de la
+   cuenta pegados a cada opción — ver [`asistente-restaurante.md`](asistente-restaurante.md).)*
 5. **Alta de números de clientes (Embedded Signup)** — el techo de «un número, un negocio» se nota
    ya. Merece un ADR. Ver [`canal-whatsapp.md`](canal-whatsapp.md).
 
@@ -366,6 +367,9 @@ Vale la pena leerlos juntos porque **comparten forma**: ninguno daba error donde
   INTEGER)` sobre todas las órdenes del negocio. Un número con otra forma deja al negocio sin
   poder crear pedidos. Los `TEST-*` de la base de desarrollo sobreviven por casualidad.
 - **La carta de pregonchos son datos de demo** en un negocio real con caja abierta.
+- **Un restaurante nuevo nace sin métodos de pago.** `migrate:restaurante-datos-pago` siembra
+  `Efectivo`/`Transferencia` en los que ya existían, pero nadie los siembra al crear un negocio, y
+  sin métodos el bot **se salta el paso del pago en silencio**.
 - **Particiones del Ledger hasta 2027-10.** Una tabla particionada sin la partición del mes
   rechaza TODO INSERT: `node scripts/intelligence_mantenimiento.js particiones --meses 12`.
 - **`restaurante_app` está en la rama `feature/pedido-menu-digital`**, no en `master`. El backend
