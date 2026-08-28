@@ -807,6 +807,79 @@ razonable; para vender en serio, es cuando toca Embedded Signup.
 [`asistente-restaurante.md`](asistente-restaurante.md): plan Avanzado (donde vive `asistente_ia`),
 habilitar sus capacidades, que tenga carta, y `url_whatsapp` para el botón del menú digital.
 
+### La verificación de negocio, paso a paso (iniciada el 2026-08-27)
+
+Es lo primero de la lista porque **la revisa una persona en Meta** y no depende de nosotros. Todo
+lo demás se puede hacer mientras tanto.
+
+> ⚠️ **Esto no se puede hacer ni consultar desde la API con el token que hay.** Es un
+> `SYSTEM_USER` con `whatsapp_business_management`, `whatsapp_business_messaging` y
+> `public_profile` — sin `business_management`. Comprobado el 2026-08-27:
+> `GET /{business-id}?fields=verification_status` responde `(#200) Requires business_management`.
+> Si se quiere poder mirar el estado desde el servidor, hay que **añadir ese permiso al usuario
+> de sistema**; no hace falta para verificar, solo para no tener que entrar al panel a mirar.
+>
+> Lo que sí se ve sin ese permiso, y es suficiente para saber si pasó, es el `health_status` de la
+> WABA: mientras no esté verificado dice `141010` sobre la entidad `BUSINESS`.
+
+#### Lo único que de verdad decide el resultado
+
+La verificación no evalúa el producto ni la app. Comprueba **una sola cosa**: que existe una
+empresa real con ese nombre y que quien la solicita puede demostrarlo. Se rechaza casi siempre por
+incoherencias aburridas, no por sospecha:
+
+1. **El nombre legal tiene que coincidir con el del documento, carácter por carácter.** El
+   portafolio se llama **`Escalapp`**. Si la empresa registrada es, por ejemplo, `ESCALAPP S.A.S.`,
+   hay que **poner el nombre legal completo** en el portafolio antes de enviar. Un nombre comercial
+   distinto del legal es la causa de rechazo número uno, y se arregla en dos minutos **antes** de
+   enviar y en una semana después.
+2. **Documento que pruebe la existencia de la empresa.** En Colombia, el **certificado de
+   existencia y representación legal de la Cámara de Comercio** (reciente, no de hace tres años) y
+   el **RUT**. Meta acepta también facturas de servicios o extractos bancarios a nombre de la
+   empresa como prueba de dirección.
+3. **La dirección y el teléfono del portafolio tienen que coincidir** con los del documento. Si el
+   documento dice una dirección y el portafolio otra, es rechazo.
+4. **Un dominio y un correo del dominio ayudan mucho.** `escalapp.cloud` ya existe y es nuestro:
+   conviene declararlo en el portafolio y, si se puede, dar un correo `@escalapp.cloud` en vez de
+   uno de Gmail. No es obligatorio, pero es la diferencia entre «revisión rápida» y «nos piden más
+   papeles».
+
+> ### La pregunta que hay que contestar antes de empezar
+>
+> **¿Existe una persona jurídica llamada Escalapp, registrada y con papeles?**
+>
+> - **Sí** → se pone el nombre legal exacto en el portafolio, se suben los documentos y a esperar.
+> - **No, todavía es solo una marca** → entonces esto no es un trámite de una tarde. Meta verifica
+>   **empresas**, y sin registro mercantil no hay documento que subir. Habría que registrarla, o
+>   verificar con otra entidad legal que sí exista.
+>
+> **Es la decisión que bloquea todo lo demás, y no es técnica.** Conviene resolverla antes de
+> tocar el panel: enviar una solicitud incompleta cuesta el tiempo de revisión **y** el de volver
+> a enviarla.
+
+#### Dónde se hace
+
+En **Meta Business Suite → Configuración del negocio → Centro de seguridad** (el nombre exacto del
+menú cambia cada pocos meses; lo que se busca es *«Verificación del negocio»* / *«Business
+verification»*). Desde ahí: iniciar verificación, elegir el país, escribir los datos legales,
+subir los documentos y confirmar por correo o teléfono.
+
+**La revisión suele tardar de un par de días a dos semanas.** Meta avisa por correo, y aquí se ve
+sin entrar al panel:
+
+```bash
+# Mientras salga 141010 sobre BUSINESS, no ha pasado.
+curl -s "https://graph.facebook.com/v21.0/4199925320246584?fields=health_status" \
+  -H "Authorization: Bearer $WHATSAPP_TOKEN"
+```
+
+#### Qué se desbloquea cuando pase
+
+- El techo de **2 números** sube, que es lo único que impide conectar al tercer conocido.
+- La entidad `BUSINESS` deja de estar `LIMITED` en `health_status`.
+- Y queda pendiente **aparte**: el `141006` del método de pago, que es otra cosa y se arregla en
+  *Billing & Payments*. **Verificar el negocio no lo arregla.**
+
 ### Lo que NO hace falta para esto
 
 - **Embedded Signup** y ser **Proveedor de tecnología**: son para que el cliente conecte su número
