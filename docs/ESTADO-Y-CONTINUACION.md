@@ -25,7 +25,7 @@ lo que se hace ahora sale del uso real.
 |---|---|
 | Número `+57 315 281 2484` | Atiende a **`id_negocio` 12, Restaurante pregonchos** |
 | Verticales con flujo | `reserva` (citas) y `restaurante` |
-| Capacidades | 10: seis de reserva, cuatro de restaurante |
+| Capacidades | 11: seis de reserva, cinco de restaurante |
 | Menú digital con carrito | `escalapp.cloud/restaurante/carta/12`, desplegado el 2026-08-25 |
 | Escalera | Nivel 1 determinista + `openai/gpt-5.6-terra` |
 | WebChat | **apagado**, y sigue sin autenticar |

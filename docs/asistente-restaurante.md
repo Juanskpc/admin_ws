@@ -298,6 +298,107 @@ raras-pero-reales listadas explícitamente: rechazar una de ésas sería peor qu
 
 ---
 
+---
+
+## Dos caminos, un solo cliente (2026-08-27, tarde)
+
+### El pago seguía sin preguntarse — y esta vez sí era el código
+
+Con los métodos ya sembrados, el dueño hizo otro pedido y **tampoco le preguntaron**. El Ledger
+enseñó por qué, y es distinto de la vez anterior:
+
+```
+pregunta_libre → prompt_armado → clasificacion/capacidades → confirmacion_solicitada
+```
+
+Ni un `pedido_dato_recibido`, ni un `tarea_en_curso`. **El pedido lo tomó el modelo entero**, no
+el flujo determinista — porque no vino del carrito del menú sino de conversar. Y el paso del pago
+vivía **solo** en el flujo determinista.
+
+Mirado de cerca, el modelo no tenía forma de hacerlo bien:
+
+| | Flujo determinista | Modelo |
+|---|---|---|
+| ¿Sabe qué métodos hay? | sí, lee `rest_metodo_pago` | **no había herramienta** |
+| ¿Está obligado a mandarlo? | sí, es un paso | `id_metodo_pago` es **opcional** |
+| ¿Alguien le dice que pregunte? | el paso lo obliga | **nada, en ningún sitio** |
+
+> **La forma del fallo, que ya se repitió tres veces esta semana:** dos caminos hacia lo mismo y
+> uno solo de ellos mantenido. El del carrito preguntaba, el del chat no, y el cliente no sabe
+> por cuál entró.
+
+Se cerró con lo mínimo: una capacidad de consulta **`consultar_metodos_pago`** (devuelve nombre,
+id y `datos_pago`) y una línea en la descripción de `tomar_pedido` que la exige antes de tomar el
+pedido. `id_metodo_pago` sigue siendo opcional a propósito: un negocio sin métodos configurados
+tiene que poder vender igual.
+
+### Los datos del cliente, en un solo mensaje
+
+Petición del dueño: *«está pidiendo nombre, en ocasiones teléfono, dirección… ¿hay manera de
+pedir todo lo necesario en un solo mensaje, excepto el nombre?»*.
+
+Cambia una decisión que estaba escrita —«pide **uno cada vez**»— y el argumento de entonces era
+bueno: un cuestionario de cinco campos es lo que se hace cuando al otro lado hay alguien leyendo a
+mano. Lo que no se midió es el otro lado: **cuatro turnos y cuatro esperas para tres datos que el
+cliente tiene en la cabeza a la vez.**
+
+```
+Para mandártelo necesito dos cositas. Puedes contestarme todo junto 👇
+
+📍 La dirección, con el barrio o alguna indicación para llegar
+
+💵 Cómo vas a pagar:
+• *Físico*
+• *Transferencia* — Nequi 315 281 2484 a nombre de Pregonchos
+```
+
+**El nombre se queda aparte**, y no por capricho: se contesta con una palabra, va primero, y es lo
+que convierte el trámite en una conversación. Mezclarlo con la dirección lo volvería la primera
+casilla de un formulario.
+
+**Sin botones en el mensaje combinado.** Un botón «Transferencia» al lado de «mándame tu
+dirección» invita a pulsarlo y dejar el resto sin contestar. Los botones vuelven si hay que
+repreguntar el pago a solas.
+
+#### Lo difícil no es preguntar, es leer la respuesta
+
+Una respuesta suelta trae las tres cosas mezcladas, y **una dirección está llena de números**.
+`interpretarDatos` reconoce solo lo inequívoco y trata la dirección como **lo que sobra**:
+
+1. **Teléfono**: un celular colombiano —diez dígitos empezando por 3, con o sin `+57`—. Un fijo de
+   siete dígitos se queda fuera **a propósito**: es indistinguible de un número de calle, y un
+   domiciliario llamando a un número inventado es peor que un domiciliario sin número.
+2. **Método de pago**: se busca el nombre real dentro del texto («pago con *Nequi*»). El más
+   largo gana, para que «Nequi Bancolombia» no pierda contra «Nequi».
+3. **Dirección**: lo que queda, con los bordes limpios.
+
+| Llega | Se lee |
+|---|---|
+| `Calle 45 #12-30, barrio El Prado. Mi cel es 3152812484 y pago con transferencia` | los tres, y la dirección **sin** el «Mi cel es y pago con» colgando |
+| `Calle 45 #12-30, barrio El Prado` | la dirección; se repregunta **solo** el pago, ya con botones |
+| `jajaja adivina` | nada; se repregunta entero **sin perder el carrito** |
+
+**Lo que llegó bien nunca se tira.** Hacerle repetir la dirección porque no se entendió el pago
+sería castigarle por haber contestado.
+
+> ### La regresión que cazó un test viejo
+>
+> La limpieza de bordes quita el relleno que queda al recortar el teléfono y el método («mi cel
+> es», «y pago con»). La primera versión se comió la «a» de **`Carrera 3e 19 a`** —el ejemplo
+> canónico de este proyecto, la frase que justifica que las direcciones casi no se validen— y
+> devolvió `Carrera 3e 19`: **otra casa**.
+>
+> Lo cazó un test que ya existía. La regla que lo arregla no es una excepción sino una
+> observación sobre la nomenclatura: **una letra suelta detrás de un número es parte de la
+> dirección** (19 a, 3 e); una palabra entera, no («Av. Boyacá 100, tel» → sobra el «tel»).
+
+El modelo hace lo mismo por su lado: prompt **`sistema.v5`** pide los datos del cliente juntos,
+se queda con lo que llegue y repregunta solo lo que falte. Y deja claro que esto vale para los
+datos **del cliente**, no para el pedido: qué quiere comer se conversa plato por plato si hace
+falta.
+
+**22 pruebas nuevas** (`__tests__/intelligence/pedido_un_solo_mensaje.test.js`). **664 en verde.**
+
 ## Cómo activar el asistente en otro restaurante
 
 1. **Plan Avanzado** — es donde vive `asistente_ia` (`intelligence/core/features.js`). Sin él, el

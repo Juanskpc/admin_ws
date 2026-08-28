@@ -299,6 +299,22 @@ const TAREA_PEDIDO = 'pedido_domicilio';
  */
 const PASO_PEDIDO = {
     NOMBRE: 'nombre',
+    /**
+     * Todo lo demás, en una sola pregunta: teléfono (a quien haga falta), dirección y cómo paga.
+     *
+     * Hasta el 2026-08-27 se pedían de uno en uno, y estaba escrito por qué: «un cuestionario de
+     * cinco campos es lo que se hace cuando al otro lado hay una persona leyendo a mano». El
+     * argumento era bueno y el resultado, no: cuatro turnos y cuatro esperas para tres datos que
+     * el cliente tiene en la cabeza a la vez. Decisión del dueño ese día.
+     *
+     * El nombre se queda aparte a propósito. Es el primero, se contesta con una palabra y es lo
+     * que convierte el trámite en una conversación; mezclarlo con la dirección y el pago lo
+     * volvería la primera casilla de un formulario.
+     *
+     * Los tres sueltos siguen existiendo porque **una respuesta parcial vuelve a preguntar solo
+     * lo que falte**, y ahí sí se pregunta de a uno.
+     */
+    DATOS: 'datos',
     TELEFONO: 'telefono',
     DIRECCION: 'direccion',
     PAGO: 'pago',
@@ -324,14 +340,30 @@ function unidades(items) {
  * aquí. La alternativa —cada paso decidiendo cuál es el siguiente— es donde se cuela el camino
  * que nadie probó: basta que dos de ellos discrepen sobre si el teléfono hace falta.
  */
-function loQueFalta(datos, { telefonoProbado }) {
-    if (!datos.nombre) return PASO_PEDIDO.NOMBRE;
+/**
+ * Los huecos que quedan, en orden y sin el nombre. Vacío = ya no falta nada.
+ *
+ * Una sola función decide qué se pide y cuándo, por lo mismo de siempre: si cada paso decidiera
+ * su siguiente, bastaría que dos discreparan sobre si el teléfono hace falta para que apareciera
+ * el camino que nadie probó.
+ */
+function huecosDelCliente(datos, { telefonoProbado }) {
+    const faltan = [];
     // Solo a quien llegó sin número. Ver la cabecera de `PASO_PEDIDO`.
-    if (!datos.telefono && !telefonoProbado) return PASO_PEDIDO.TELEFONO;
-    if (!datos.direccion) return PASO_PEDIDO.DIRECCION;
+    if (!datos.telefono && !telefonoProbado) faltan.push(PASO_PEDIDO.TELEFONO);
+    if (!datos.direccion) faltan.push(PASO_PEDIDO.DIRECCION);
     // Y solo si el negocio tiene métodos que ofrecer.
-    if (!datos.id_metodo_pago && (datos.metodos || []).length > 0) return PASO_PEDIDO.PAGO;
-    return null;
+    if (!datos.id_metodo_pago && (datos.metodos || []).length > 0) faltan.push(PASO_PEDIDO.PAGO);
+    return faltan;
+}
+
+function loQueFalta(datos, ctx) {
+    if (!datos.nombre) return PASO_PEDIDO.NOMBRE;
+    const faltan = huecosDelCliente(datos, ctx);
+    if (faltan.length === 0) return null;
+    // Uno solo se pregunta por su nombre; varios, todos juntos. Preguntar «necesito una cosita»
+    // y listar un solo punto se lee peor que preguntarla directamente.
+    return faltan.length === 1 ? faltan[0] : PASO_PEDIDO.DATOS;
 }
 
 /**
@@ -349,16 +381,48 @@ function loQueFalta(datos, { telefonoProbado }) {
  * Las opciones estructuradas siguen yendo aparte, en `opciones[]`, para que cada canal las
  * pinte como sepa (ADR-017). Esto es solo el texto que las acompaña.
  */
-function textoDelPago(metodos = []) {
-    const conDatos = metodos.filter((m) => m.datos);
-    if (conDatos.length === 0) return '¿Cómo vas a pagar? 💵';
+function lineasDePago(metodos = []) {
+    return metodos.map((m) => (m.datos ? `• *${m.nombre}* — ${m.datos}` : `• *${m.nombre}*`));
+}
 
-    const lineas = metodos.map((m) => (m.datos ? `• *${m.nombre}* — ${m.datos}` : `• *${m.nombre}*`));
-    return `¿Cómo vas a pagar? 💵\n\n${lineas.join('\n')}`;
+function textoDelPago(metodos = []) {
+    const conDatos = (metodos || []).filter((m) => m.datos);
+    if (conDatos.length === 0) return '¿Cómo vas a pagar? 💵';
+    return `¿Cómo vas a pagar? 💵\n\n${lineasDePago(metodos).join('\n')}`;
+}
+
+/**
+ * Los dos o tres datos que faltan, en un solo mensaje.
+ *
+ * Se enumera con viñetas y no en prosa a propósito: una lista corta se contesta mirándola, y el
+ * cliente puede mandar las tres cosas en una línea o en tres. Lo que llegue se lee con
+ * `interpretarDatos`, y **lo que no se entienda se vuelve a preguntar solo**.
+ *
+ * Las opciones estructuradas del pago **no** viajan aquí aunque el pago esté entre lo que falta:
+ * un botón «Transferencia» al lado de «mándame tu dirección» invita a pulsarlo y dejar el resto
+ * sin contestar. Los botones vuelven si hay que repreguntar el pago a solas.
+ */
+function preguntaCombinada(datos, ctx) {
+    const faltan = huecosDelCliente(datos, ctx || {});
+    const lineas = faltan.map((hueco) => {
+        if (hueco === PASO_PEDIDO.TELEFONO) {
+            return '📱 Un número de contacto, para que el domiciliario te llame al llegar';
+        }
+        if (hueco === PASO_PEDIDO.DIRECCION) {
+            return '📍 La dirección, con el barrio o alguna indicación para llegar';
+        }
+        return `💵 Cómo vas a pagar:\n${lineasDePago(datos.metodos).join('\n')}`;
+    });
+
+    return {
+        texto:
+            `Para mandártelo necesito ${faltan.length === 2 ? 'dos cositas' : 'tres cositas'}. ` +
+            `Puedes contestarme todo junto 👇\n\n${lineas.join('\n\n')}`,
+    };
 }
 
 /** Qué se le dice al cliente en cada paso. Las opciones solo las tiene el del pago. */
-function pregunta(paso, datos) {
+function pregunta(paso, datos, ctx) {
     switch (paso) {
         case PASO_PEDIDO.NOMBRE:
             return { texto: '¿A nombre de quién lo dejo? 📝' };
@@ -377,6 +441,8 @@ function pregunta(paso, datos) {
                     '¿A qué dirección te lo llevamos? 🛵 Dime también si hay alguna indicación ' +
                     'para llegar.',
             };
+        case PASO_PEDIDO.DATOS:
+            return preguntaCombinada(datos, ctx);
         case PASO_PEDIDO.PAGO:
             return {
                 texto: textoDelPago(datos.metodos),
@@ -401,7 +467,7 @@ function seguirOConfirmar(ctx, datos, pasos, { apertura = '', solicitarConfirmac
     const falta = loQueFalta(datos, ctx);
 
     if (falta) {
-        const q = pregunta(falta, datos);
+        const q = pregunta(falta, datos, ctx);
         return {
             pasos,
             respuestas: [{ ...q, texto: `${apertura}${q.texto}` }],
@@ -517,7 +583,7 @@ function seguirPedido(ctx, { solicitarConfirmacion }) {
     }
 
     if (!dicho) {
-        const q = pregunta(datos.paso, datos);
+        const q = pregunta(datos.paso, datos, ctx);
         return {
             pasos: [paso('pedido_dato_vacio', { paso: datos.paso ?? null })],
             respuestas: [q],
@@ -536,7 +602,7 @@ function seguirPedido(ctx, { solicitarConfirmacion }) {
     // otra vez. Y callarse tampoco es opción: en este sistema el modo de fallo caro es el
     // silencio, no la insistencia. Quien quiera irse escribe «cancelar», que está en el mensaje.
     if (/[?¿]/.test(dicho)) {
-        const q = pregunta(datos.paso, datos);
+        const q = pregunta(datos.paso, datos, ctx);
         const cortesia =
             Number(datos.repreguntas || 0) < 1
                 ? 'Ahora te cuento 😊 '
@@ -559,6 +625,46 @@ function seguirPedido(ctx, { solicitarConfirmacion }) {
     const conLoDicho = { ...datos, repreguntas: 0 };
     let apertura = '';
 
+    // ── La respuesta que trae varias cosas a la vez ────────────────────────────────────────
+    //
+    // Se lee lo que se entienda y se guarda; lo que no, `seguirOConfirmar` lo vuelve a preguntar
+    // —y ya de a uno, porque quedará uno solo—. Nunca se descarta lo que sí llegó: hacerle
+    // repetir la dirección porque no se entendió el método de pago sería castigarle por
+    // habernos contestado.
+    if (datos.paso === PASO_PEDIDO.DATOS) {
+        const faltan = huecosDelCliente(datos, ctx);
+        const leido = interpretarDatos(dicho, { faltan, metodos: datos.metodos || [] });
+
+        if (Object.keys(leido).length === 0) {
+            const q = pregunta(PASO_PEDIDO.DATOS, datos, ctx);
+            return {
+                pasos: [paso('pedido_datos_no_entendidos', { faltan })],
+                respuestas: [
+                    {
+                        ...q,
+                        texto: `Perdona, no logré sacar los datos de ahí 🙈\n\n${q.texto}`,
+                    },
+                ],
+                variables: conMemoria(ctx.conversacion),
+                tarea: tareaPedido(datos),
+                resultado: 'resuelto',
+                nivel: 'determinista',
+            };
+        }
+
+        Object.assign(conLoDicho, leido);
+        // La dirección leída de un mensaje mezclado pasa por el mismo filtro que la suelta: si
+        // no se parece a una dirección no se apunta, y se vuelve a preguntar sola.
+        if (leido.direccion && !pareceDireccion(leido.direccion)) delete conLoDicho.direccion;
+
+        return seguirOConfirmar(
+            ctx,
+            conLoDicho,
+            [paso('pedido_datos_recibidos', { leidos: Object.keys(leido), faltaban: faltan })],
+            { apertura: '¡Anotado! ', solicitarConfirmacion }
+        );
+    }
+
     switch (datos.paso) {
         case PASO_PEDIDO.NOMBRE:
             conLoDicho.nombre = dicho;
@@ -574,7 +680,7 @@ function seguirPedido(ctx, { solicitarConfirmacion }) {
             // el pedido por no gustarle a una expresión regular sería cambiar una venta por una
             // discusión. Queda el rastro para que se vea desde fuera cuál pasó así.
             if (!pareceDireccion(dicho) && !datos.direccion_dudosa) {
-                const q = pregunta(PASO_PEDIDO.DIRECCION, datos);
+                const q = pregunta(PASO_PEDIDO.DIRECCION, datos, ctx);
                 return {
                     pasos: [paso('pedido_direccion_dudosa', { largo: dicho.length })],
                     respuestas: [
@@ -603,7 +709,7 @@ function seguirPedido(ctx, { solicitarConfirmacion }) {
                 // No se adivina. Un método de pago mal leído es una discusión en la puerta con
                 // el domiciliario delante — la misma razón por la que el precio se relee del
                 // catálogo en vez de creerse el de la conversación.
-                const q = pregunta(PASO_PEDIDO.PAGO, datos);
+                const q = pregunta(PASO_PEDIDO.PAGO, datos, ctx);
                 return {
                     pasos: [paso('pedido_pago_no_reconocido', { dijo: dicho.slice(0, 40) })],
                     respuestas: [{ ...q, texto: `No te entendí cuál. ${q.texto}` }],
@@ -625,6 +731,147 @@ function seguirPedido(ctx, { solicitarConfirmacion }) {
         apertura,
         solicitarConfirmacion,
     });
+}
+
+/**
+ * Un teléfono colombiano dentro de un texto que también lleva una dirección.
+ *
+ * ## Por qué solo el celular, y no «cualquier grupo de dígitos»
+ *
+ * Porque una dirección **está llena de números**: «Calle 45 #12-30 apto 502» tiene cuatro
+ * grupos. Un patrón laxo se llevaría el primero y dejaría al domiciliario llamando a un número
+ * inventado, que es peor que no tener número — el paso del teléfono existe precisamente para
+ * que alguien pueda llamar.
+ *
+ * Así que se busca solo lo inequívoco: un celular colombiano, diez dígitos empezando por 3, con
+ * o sin `+57` delante y con los separadores que la gente escribe. Un fijo de siete dígitos se
+ * queda fuera a propósito: es indistinguible de un número de calle, y prefiero repreguntar.
+ */
+const CELULAR_CO = /(?:\+?57[\s.-]?)?(3\d{2})[\s.-]?(\d{3})[\s.-]?(\d{4})(?!\d)/;
+
+function leerTelefono(texto) {
+    const m = CELULAR_CO.exec(String(texto || ''));
+    if (!m) return null;
+    return `${m[1]}${m[2]}${m[3]}`;
+}
+
+/**
+ * Lee de un mensaje suelto los datos que se le pidieron juntos.
+ *
+ * Devuelve **solo lo que reconoce**. Lo que no, se vuelve a preguntar: adivinar aquí sale caro
+ * en la puerta de una casa, y el coste de repreguntar es un mensaje.
+ *
+ * ## El orden importa, y no es casual
+ *
+ * Se saca primero el teléfono y luego el método de pago, y **lo que sobra** es la dirección.
+ * Al revés, «Nequi» se colaría dentro de la dirección y el número de contacto se quedaría
+ * pegado al número de la casa. La dirección es lo más difícil de reconocer y lo más fácil de
+ * describir por descarte: es el resto.
+ */
+function interpretarDatos(texto, { faltan, metodos = [] }) {
+    const original = String(texto || '').trim();
+    let resto = original;
+    const leido = {};
+
+    if (faltan.includes(PASO_PEDIDO.TELEFONO)) {
+        const tel = leerTelefono(resto);
+        if (tel) {
+            leido.telefono = tel;
+            resto = resto.replace(CELULAR_CO, ' ');
+        }
+    }
+
+    if (faltan.includes(PASO_PEDIDO.PAGO)) {
+        // Se busca el nombre del método dentro del texto, no una línea entera: el cliente
+        // escribe «pago con Nequi» y no «Nequi» a secas.
+        const metodo = metodoMencionado(resto, metodos);
+        if (metodo) {
+            leido.id_metodo_pago = metodo.id;
+            leido.metodo_nombre = metodo.nombre;
+            resto = quitarMencion(resto, metodo.nombre);
+        }
+    }
+
+    if (faltan.includes(PASO_PEDIDO.DIRECCION)) {
+        // De lo que queda, la línea que más se parezca a una dirección. Si vino todo en una
+        // línea, esa misma línea es la candidata.
+        const candidatas = resto
+            .split(/\r?\n|\s{2,}/)
+            .map((l) => limpiarBordes(l))
+            .filter(Boolean);
+        const direccion = candidatas.find((c) => pareceDireccion(c));
+        if (direccion) leido.direccion = direccion;
+    }
+
+    return leido;
+}
+
+/**
+ * Palabras de relleno que quedan colgando cuando se recorta el teléfono y el método de pago.
+ *
+ * «Calle 45 #12-30, barrio El Prado. Mi cel es 3152812484 y pago con transferencia» deja, tras
+ * quitar las dos piezas reconocidas, un «Mi cel es y pago con» pegado al final de la dirección.
+ * No estorba al domiciliario, pero se guarda en la orden y se imprime en la comanda.
+ *
+ * Solo se limpian los **bordes**, nunca el medio: una de estas palabras dentro de la dirección
+ * —«vereda El Contacto»— es parte de ella.
+ */
+const RELLENO = new Set([
+    'mi', 'me', 'es', 'son', 'y', 'e', 'o', 'el', 'la', 'los', 'las', 'de', 'del', 'al', 'a',
+    'en', 'por', 'con', 'para', 'cel', 'celu', 'celular', 'tel', 'telefono', 'numero', 'num',
+    'contacto', 'direccion', 'dir', 'pago', 'pagar', 'queda', 'vivo', 'llevar',
+]);
+
+/**
+ * Quita puntuación y palabras de relleno de los dos extremos. Nunca del medio.
+ *
+ * ## La excepción que costó una prueba
+ *
+ * «Carrera 3e 19 a» es una dirección real y es **el ejemplo canónico** de este proyecto — la
+ * frase que justifica que las direcciones casi no se validen. La primera versión de esto le
+ * comió la «a» final, porque «a» está en la lista de relleno, y devolvió «Carrera 3e 19»: otra
+ * casa. Lo cazó un test que ya existía, que para eso estaba.
+ *
+ * La regla que lo arregla no es una lista de excepciones sino una observación sobre la
+ * nomenclatura: **una letra suelta detrás de un número es parte de la dirección** —19 a, 3 e—,
+ * mientras que detrás de una palabra es relleno («mi cel es»). Una palabra entera detrás de un
+ * número no se salva: en «Av. Boyacá 100, tel 300…» el «tel» sobra igual.
+ */
+function limpiarBordes(texto) {
+    const soloBordes = (t) => t.replace(BORDES, '').trim();
+    const partes = soloBordes(String(texto || '')).split(/\s+/).filter(Boolean);
+
+    const esRelleno = (palabra) => RELLENO.has(normalizar(soloBordes(palabra)));
+    // Una LETRA suelta detrás de un número: «19 a», «3 e». Una palabra no.
+    const esSufijoDeNomenclatura = (i) =>
+        i > 0 &&
+        /^[a-zñ]$/.test(normalizar(soloBordes(partes[i]))) &&
+        /\d$/.test(soloBordes(partes[i - 1]));
+
+    while (partes.length && esRelleno(partes[partes.length - 1])) {
+        if (esSufijoDeNomenclatura(partes.length - 1)) break;
+        partes.pop();
+    }
+    while (partes.length && esRelleno(partes[0])) partes.shift();
+
+    return soloBordes(partes.join(' '));
+}
+
+/** Puntuación y espacios pegados a los extremos. */
+const BORDES = /^[\s•\-*·:,.]+|[\s•\-*·:,.]+$/g;
+
+/** ¿Se nombra alguno de los métodos dentro del texto? Devuelve el más largo que case. */
+function metodoMencionado(texto, metodos) {
+    const t = normalizar(texto);
+    if (!t) return null;
+    // El más largo primero: si hay «Nequi» y «Nequi Bancolombia», gana el específico.
+    const ordenados = [...(metodos || [])].sort((a, b) => b.nombre.length - a.nombre.length);
+    return ordenados.find((m) => t.includes(normalizar(m.nombre))) || null;
+}
+
+function quitarMencion(texto, nombre) {
+    const escapado = String(nombre).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return texto.replace(new RegExp(escapado, 'ig'), ' ');
 }
 
 /**
@@ -887,6 +1134,9 @@ module.exports = {
     TAREA_PEDIDO,
     PASO_PEDIDO,
     reclama,
+    huecosDelCliente,
+    interpretarDatos,
+    leerTelefono,
     // Expuestos para las pruebas, como `tareaCaducada` en la escalera: son las dos piezas de
     // producto que conviene poder ejercitar sin montar una conversación entera.
     pareceDireccion,

@@ -617,7 +617,10 @@ describe('el flujo lleva el pedido del menú hasta el final, sin modelo', () => 
 
         expect(texto(d)).toMatch(/a nombre de Ana/i);
         expect(texto(d)).toMatch(/dirección/i);
-        expect(d.tarea.datos.paso).toBe('direccion');
+        // Desde el 2026-08-27 lo que falta se pide junto, no de a uno: con el nombre ya sabido
+        // quedan la dirección y el pago, y los dos caben en el mismo mensaje.
+        expect(d.tarea.datos.paso).toBe('datos');
+        expect(texto(d)).toMatch(/todo junto/i);
     });
 
     it('una pregunta en vez del nombre no se apunta como nombre', async () => {
