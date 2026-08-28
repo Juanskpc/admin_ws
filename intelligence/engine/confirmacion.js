@@ -82,7 +82,25 @@ function textoDePregunta(capacidad, args, { registry = registryReal } = {}) {
         // reventar: el cliente no tiene culpa de un manifiesto incompleto.
         return '¿Confirmo que lo hago?';
     }
-    return declarada.pregunta({ args });
+    try {
+        return declarada.pregunta({ args });
+    } catch (error) {
+        // ⚠️ Esto corre sobre los argumentos **crudos del modelo**, antes de que nadie los
+        // valide. O sea: la redacción de la pregunta es la primera pieza que toca datos en los
+        // que no se puede confiar, y hasta el 2026-08-27 podía tumbar el turno entero.
+        //
+        // Pasó: el modelo mandó `items` serializado, `tomar_pedido.pregunta` hizo `.reduce`
+        // sobre una cadena, la excepción subió hasta la escalera como `NIVEL4_FALLO` y el
+        // cliente **no recibió nada**. Es la misma forma que ya costó cara dos veces — una
+        // pieza secundaria matando a la principal.
+        //
+        // Se pregunta igual, con la frase genérica. Confirmar sigue siendo obligatorio: lo que
+        // se degrada es la redacción, nunca la garantía de ADR-010.
+        console.warn(
+            `[confirmacion] la pregunta de "${capacidad}" no se pudo redactar: ${error.message}`
+        );
+        return '¿Confirmo que lo hago?';
+    }
 }
 
 function opcionesSiNo() {

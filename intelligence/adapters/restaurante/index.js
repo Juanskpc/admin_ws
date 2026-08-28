@@ -49,6 +49,7 @@
 'use strict';
 const registry = require('../../core/registry');
 const { FEATURE } = require('../../core/features');
+const { comoLista } = require('../../core/argumentos');
 const { TIPO } = require('../../../app_core/authz/principal');
 const { normalizarE164Colombia } = require('../../../app_core/helpers/telefono');
 
@@ -303,7 +304,14 @@ function registrarCapacidades() {
             // está aceptando que salga de la cocina: el mensaje tiene que dejarle comprobar de
             // un vistazo que es su pedido y no el de otra conversación.
             pregunta: ({ args }) => {
-                const unidades = (args.items || []).reduce((n, i) => n + Number(i.cantidad || 0), 0);
+                // `comoLista` porque esto corre sobre los argumentos CRUDOS: el modelo manda
+                // `items` serializado de vez en cuando, y aquí todavía no ha pasado por el
+                // validador. Ver `core/argumentos.js#comoLista`.
+                const items = comoLista(args.items);
+                const unidades = (Array.isArray(items) ? items : []).reduce(
+                    (n, i) => n + Number(i?.cantidad || 0),
+                    0
+                );
                 return (
                     `¿Confirmo tu pedido de ${unidades} ${unidades === 1 ? 'producto' : 'productos'} ` +
                     `a nombre de ${args.cliente_nombre}, para ${args.direccion}?`

@@ -1,6 +1,6 @@
 # EscalApp Intelligence — estado y cómo continuar
 
-**Última actualización:** 2026-08-27 (por qué va lento, medido; y la tarea de ayer deja de secuestrar el turno de hoy)
+**Última actualización:** 2026-08-27 (medición de latencia, tarea que caduca, y el silencio cerrado por todos lados)
 **Propósito:** que retomar el trabajo no cueste una sesión de arqueología. Si vuelves a este
 proyecto después de semanas, **lee este documento primero** y sigue por donde diga.
 
@@ -302,6 +302,79 @@ verde.**
 > y recibirá «empiezo de cero» en su siguiente mensaje. Es la limpieza que se busca, pero conviene
 > no desplegarlo en plena hora de pedidos.
 
+#### Y los tres turnos que no contestaron nada
+
+El dueño llevó al modelo a una conversación larga y **tres turnos murieron en silencio**: #58
+(11 302 ms — el turno más lento jamás registrado), #60 y #61. Ninguno dio error visible. En el
+Ledger la cadena entera cabe en dos líneas:
+
+```
+#58 s3 | error | NIVEL4_FALLO | "(args.items || []).reduce is not a function"
+#58 s4 | regla | cedido_al_modelo | {}          ← y ahí se acabó
+```
+
+**Dos fallos apilados, y el segundo es el que importa.**
+
+**1. La pregunta de confirmación reventó.** `tomar_pedido.pregunta` hace `.reduce` sobre
+`args.items` para decir «¿Confirmo tu pedido de 3 productos…?». Y corre sobre los argumentos
+**crudos del modelo**, antes de que nadie los valide. El modelo mandó la lista serializada —cosa
+conocida desde el 26, y para la que el *validador* ya estaba arreglado— pero el validador corre
+**después**. La redacción del mensaje se cayó y se llevó el turno.
+
+> **La lección:** la redacción de la pregunta de confirmación es la **primera** pieza que toca
+> datos en los que no se puede confiar. Se arregló en los dos sitios: `comoLista` se extrajo de
+> `argumentos.js` para que exista una sola forma de desenvolver una lista, y `textoDePregunta`
+> **ya no puede propagar**: si la redacción lanza, se pregunta con la frase genérica. Se degrada
+> el texto, nunca la garantía de ADR-010.
+
+**2. El paracaídas no tenía tela.** Al fallar el Nivel 4 se baja al flujo determinista. El flujo
+no reconoció el mensaje y llamó a `delegar()`:
+
+```js
+function delegar(ctx) {
+    return { pasos: [paso('cedido_al_modelo')], respuestas: [], … };
+```
+
+Se llama **«cedido al modelo»** desde el 2026-08-24 y **nadie recogía la cesión**. El turno
+terminaba con cero mensajes. Y en este caso el modelo era justo lo que acababa de fallar.
+
+Eso explica también **#60**, donde no falló nada: la ruta fue `comando_conocido` («ok», «gracias»),
+el flujo no supo qué hacer con eso en contexto, cedió, y silencio — en 19 ms.
+
+**Ahora ningún camino puede acabar sin una palabra.** Se cerraron los cuatro:
+
+| Camino | Antes | Ahora |
+|---|---|---|
+| Nivel 1 cede y hay modelo | silencio | se recoge la cesión (`cesion_recogida`) |
+| Nivel 1 cede y el modelo falla o calla | silencio | handoff |
+| Nivel 1 cede y no hay Nivel 4 | silencio | handoff |
+| Nivel 4 revienta y el respaldo cede | silencio | handoff |
+| Nivel 4 devuelve una decisión **vacía** sin lanzar | silencio | `nivel4_mudo` → respaldo → handoff |
+
+> **Por qué recoger la cesión NO contradice ADR-018.** El ADR prohíbe subir al modelo un turno
+> **que el Nivel 1 resolvió**, «por si acaso lo hace mejor» — eso convertiría la FSM en un
+> preámbulo caro. Aquí es lo contrario: el Nivel 1 **declara que no puede** (devuelve cero
+> mensajes) y la alternativa a subir no es una respuesta barata, es ninguna. La escalera sube
+> cuando el peldaño se acaba, que es para lo que existe.
+
+La última fila la encontró una prueba, no producción: al escribir los tests salió que un Nivel 4
+que devuelve una decisión válida y **vacía** —sin lanzar— no pasaba por ningún `catch`. Para quien
+escribió es exactamente el mismo suceso que una excepción: no llegó nada.
+
+**14 pruebas** en `__tests__/intelligence/sin_respuesta.test.js`, todas rompiendo algo a
+propósito. **642 de backend en verde.**
+
+#### El bot dejó de sonar a vendedor
+
+El dueño señaló una frase: *«Si quieres algo más contundente, la bandeja paisa vale $34.000.
+**¿Cuál te anoto?**»*. Tenía razón — «¿cuál te anoto?» obliga a elegir entre lo que el bot
+propuso y **deja fuera la respuesta más normal del mundo**, que es «déjame pensarlo» o «mejor otra
+cosa».
+
+Prompt **`sistema.v4`** (la `v3` se queda para comparar, como la `v2`): una sugerencia se cierra
+preguntando si gusta la idea —«¿te suena?», «¿qué te parece?»— y no dando por hecho que ya está
+comprando. Y la regla general detrás: **deja siempre sitio para el no**.
+
 ### Lo que se hizo el 2026-08-24/25
 
 Está detallado en [`asistente-restaurante.md`](asistente-restaurante.md) y
@@ -376,6 +449,7 @@ Vale la pena leerlos juntos porque **comparten forma**: ninguno daba error donde
   sigue en `feature/escalapp_intelligence` — **y el VPS corre esa rama, no `master`**.
 - **Copia del frontend anterior**: `~/backups/frontend_restaurante_20260825_0000.tgz` en el VPS.
 - **El indicador de «escribiendo…» no está probado contra Meta.** Solo se sabrá al desplegar, y si falla no avisa más que por el log (a propósito). Ver la sección del 2026-08-27.
+- **`resultado = 'sin_respuesta'` debería ser casi imposible ahora.** Si vuelve a aparecer en `intelligence.turno`, es un camino nuevo que se escapó: mirar los pasos del turno antes que nada.
 - **`estado = 'dormida'` sigue sin tener quien lo escriba.** Existe en el CHECK desde F5-A y ningún código lo usa: toda conversación es `activa` para siempre. Ahora importa menos —la tarea ya caduca— pero el estado sigue siendo decorativo.
 
 ### Deudas conocidas, ninguna bloqueante

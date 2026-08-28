@@ -34,6 +34,9 @@ const confirmacion = require('./confirmacion');
 // La baja (STOP/BAJA) va por encima de la tabla de enrutado: no es una decisión de costo, es una
 // obligación legal, y ninguna otra regla puede ganarle. Ver la cabecera de `optout.js`.
 const optout = require('./optout');
+// Para cuando ningún peldaño tiene nada que decir. Un turno sin respuesta es el fallo caro de
+// este sistema; decir «te contestan luego» siempre es mejor que callarse.
+const handoff = require('./handoff');
 
 /**
  * Cuánto vive una tarea sin que nadie la toque. Tres horas.
@@ -182,6 +185,21 @@ function crearManejadorEscalera({
         if (ruta.nivel === NIVEL.LLM) {
             try {
                 const decision = await llm(ctx);
+                // Un Nivel 4 que devuelve una decisión válida y **vacía** deja al cliente igual
+                // de solo que uno que revienta, y no pasa por el `catch`. Se trata igual: se
+                // baja al peldaño de abajo y, si tampoco hay nada, se dice algo.
+                if (sinNadaQueDecir(decision)) {
+                    return conPaso(
+                        conPaso(
+                            conPaso(
+                                conAviso(await respaldoQueSiempreHabla(ctx, flujo)),
+                                { tipo: 'regla', decision: 'nivel4_mudo', motivo: {} }
+                            ),
+                            pasoDeRuta
+                        ),
+                        pasoDeCaducidad
+                    );
+                }
                 return conPaso(conPaso(conAviso(decision), pasoDeRuta), pasoDeCaducidad);
             } catch (error) {
                 // El manejador de Nivel 4 ya atrapa los fallos del proveedor y responde con el
@@ -192,7 +210,17 @@ function crearManejadorEscalera({
                     decision: (error.code || 'NIVEL4_FALLO').slice(0, 80),
                     motivo: { mensaje: error.message, se_baja_a: NIVEL.DETERMINISTA },
                 };
-                const decision = await (flujo ? flujo.manejar(ctx) : determinista(ctx));
+                // ⚠️ El respaldo puede no tener nada que decir, y entonces el turno se apaga.
+                //
+                // Pasó el 2026-08-27: el modelo mandó `items` serializado, la pregunta de
+                // confirmación reventó al hacer `.reduce`, se bajó al flujo de restaurante, el
+                // flujo no reconoció el mensaje y **cedió al modelo** — que es justo lo que
+                // acababa de fallar. Tres turnos seguidos sin una palabra, y el cliente
+                // creyendo que el bot se colgó.
+                //
+                // El paracaídas tiene que abrirse aunque el de reserva también falle.
+                const decision = await respaldoQueSiempreHabla(ctx, flujo);
+
                 return conPaso(
                     conPaso(conPaso(conAviso(decision), caida), pasoDeRuta),
                     pasoDeCaducidad
@@ -200,11 +228,97 @@ function crearManejadorEscalera({
             }
         }
 
-        return conPaso(
-            conPaso(conAviso(await (flujo ? flujo.manejar(ctx) : determinista(ctx))), pasoDeRuta),
-            pasoDeCaducidad
-        );
+        const decision = await (flujo ? flujo.manejar(ctx) : determinista(ctx));
+
+        // ── La cesión al modelo, por fin recogida ──────────────────────────────────────────
+        //
+        // `delegar()` se llamaba «cedido_al_modelo» desde el 2026-08-24 y **nadie recogía la
+        // cesión**: el turno terminaba con cero mensajes y `sin_respuesta`. El 2026-08-27 el
+        // dueño se lo encontró de frente — escribió algo que la FSM no supo leer y el bot se
+        // quedó mudo.
+        //
+        // ## Por qué esto NO contradice ADR-018
+        //
+        // ADR-018 prohíbe subir al modelo un turno **que el Nivel 1 resolvió**, «por si acaso lo
+        // hace mejor»: eso convertiría la FSM en un preámbulo caro. Aquí es lo contrario. El
+        // Nivel 1 **declara que no puede** —devuelve cero mensajes— y la alternativa a subir no
+        // es una respuesta barata: es ninguna. La escalera sube cuando el peldaño se acaba, que
+        // es para lo que existe.
+        //
+        // Y no se sube dos veces: si la ruta ya era LLM, esta rama no se ejecuta.
+        if (sinNadaQueDecir(decision)) {
+            const cesion = {
+                tipo: 'regla',
+                decision: 'cesion_recogida',
+                motivo: { de: NIVEL.DETERMINISTA, a: llm ? NIVEL.LLM : null, regla: ruta.regla },
+            };
+            // Sin Nivel 4 montado no hay a quien ceder, y el turno cae directo al handoff. Es
+            // peor respuesta que la del modelo y sigue siendo infinitamente mejor que ninguna:
+            // el sistema de F5 entero funcionaba así y el silencio nunca fue parte del diseño.
+            if (llm) {
+                try {
+                    const delModelo = await llm(ctx);
+                    if (!sinNadaQueDecir(delModelo)) {
+                        return conPaso(
+                            conPaso(conPaso(conAviso(delModelo), cesion), pasoDeRuta),
+                            pasoDeCaducidad
+                        );
+                    }
+                } catch (error) {
+                    console.warn(`[intelligence] la cesión al modelo falló: ${error.message}`);
+                }
+            }
+            // Nadie tiene nada. Antes que callar, se dice.
+            return conPaso(
+                conPaso(
+                    conPaso(
+                        conAviso({
+                            ...decision,
+                            respuestas: [handoff.mensaje(await negocioDe(ctx))],
+                            resultado: 'handoff',
+                        }),
+                        cesion
+                    ),
+                    pasoDeRuta
+                ),
+                pasoDeCaducidad
+            );
+        }
+
+        return conPaso(conPaso(conAviso(decision), pasoDeRuta), pasoDeCaducidad);
     };
+
+    /**
+     * El peldaño de abajo, con la garantía de que sale una frase.
+     *
+     * Se usa en los dos caminos por los que el Nivel 4 puede dejar tirado a alguien —revienta, o
+     * contesta vacío— porque para quien escribió son el mismo suceso: no llegó nada.
+     */
+    async function respaldoQueSiempreHabla(ctx, flujo) {
+        let decision;
+        try {
+            decision = await (flujo ? flujo.manejar(ctx) : determinista(ctx));
+        } catch (error) {
+            // El respaldo del respaldo. Si esto también lanza, ya no queda nadie debajo.
+            console.warn(`[intelligence] el respaldo determinista falló: ${error.message}`);
+            decision = { nivel: NIVEL.DETERMINISTA };
+        }
+        if (!sinNadaQueDecir(decision)) return decision;
+        return {
+            ...decision,
+            respuestas: [handoff.mensaje(await negocioDe(ctx))],
+            resultado: 'handoff',
+        };
+    }
+
+    /** El contexto del negocio, para que el handoff diga cuándo contestan. Nunca revienta. */
+    async function negocioDe(ctx) {
+        try {
+            return await resolverNegocio(ctx.conversacion?.id_negocio);
+        } catch (_) {
+            return null;
+        }
+    }
 
     /**
      * El flujo determinista que le toca a ESTE negocio, o `null` si nadie lo declaró.
@@ -247,6 +361,20 @@ function crearManejadorEscalera({
         }
         return null;
     }
+}
+
+/**
+ * ¿Esta decisión deja a la persona sin una sola palabra?
+ *
+ * No es lo mismo que fallar. Un manejador puede devolver una decisión perfectamente válida con
+ * cero mensajes —`delegar()` del flujo de restaurante lo hace, y se llama a sí mismo
+ * «cedido al modelo»—, y el resultado para quien escribió es idéntico al de un error: silencio.
+ *
+ * En este sistema **el modo de fallo caro es el silencio, no la excepción**. Así que se mira lo
+ * único que el cliente percibe: si salieron mensajes o no.
+ */
+function sinNadaQueDecir(decision) {
+    return !decision || (decision.respuestas || []).length === 0;
 }
 
 /** Antepone un paso a la decisión, sin mutarla: la del manejador es suya. `null` no añade nada. */

@@ -95,15 +95,7 @@ function coercionar(nombre, decl, valor) {
             // primero era terquedad cara: los datos estaban bien y completos, y la única
             // diferencia era una comilla. Se aceptan **solo** si el texto parsea a un array;
             // cualquier otra cosa sigue siendo un argumento inválido y se dice.
-            let lista = valor;
-            if (typeof lista === 'string') {
-                try {
-                    const parseado = JSON.parse(lista);
-                    if (Array.isArray(parseado)) lista = parseado;
-                } catch (_) {
-                    // Se cae al rechazo de abajo con el mensaje de siempre.
-                }
-            }
+            const lista = comoLista(valor);
             if (!Array.isArray(lista)) rechazar(`"${nombre}" debe ser una lista.`);
             if (decl.min_items && lista.length < decl.min_items) {
                 rechazar(`"${nombre}" necesita al menos ${decl.min_items} elemento(s).`);
@@ -171,4 +163,27 @@ function validar(capacidad, argumentos = {}) {
     return limpios;
 }
 
-module.exports = { validar };
+/**
+ * Lo que el modelo mandó, leído como lista — o lo que sea, si no lo es.
+ *
+ * Se extrajo de `coercionar` el 2026-08-27 porque **hacía falta en dos sitios y solo estaba en
+ * uno**. El otro es el texto de la pregunta de confirmación, que corre sobre los argumentos
+ * CRUDOS —antes de validar nada— y hacía `.reduce` sobre ellos. Cuando el modelo mandó `items`
+ * serializado, `pregunta()` reventó, el turno cayó al respaldo y el cliente no recibió nada.
+ *
+ * No valida: solo desenvuelve. Quien valida sigue siendo `validar`.
+ */
+function comoLista(valor) {
+    if (Array.isArray(valor)) return valor;
+    if (typeof valor === 'string') {
+        try {
+            const parseado = JSON.parse(valor);
+            if (Array.isArray(parseado)) return parseado;
+        } catch (_) {
+            // No era una lista serializada. Se devuelve tal cual y quien llame decide.
+        }
+    }
+    return valor;
+}
+
+module.exports = { validar, comoLista };
