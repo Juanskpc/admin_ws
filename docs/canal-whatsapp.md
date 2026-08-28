@@ -699,13 +699,121 @@ terceros bajo nuestra custodia. Eso no se improvisa: **merece su propio ADR**.
 **3. En la app.** El botón de Embedded Signup en la Consola y la máquina de estados del alta, con
 más ramas de las que parece: número ya en uso, verificación pendiente, cliente que abandona a medias.
 
-> ⚠️ **Y el bloqueo de verdad no es ninguno de los tres.** El asistente **solo sabe agendar citas**:
-> las seis capacidades son de `reserva` y el único adaptador es `reserva`. Conectar hoy el número de
-> un restaurante le daría un bot que ofrece cortes de cabello. La fontanería del alta multi-inquilino
-> solo rinde cuando hay producto que entregar, y los dos clientes activos son restaurantes. **El
-> adaptador de restaurante va antes que el Embedded Signup.**
+> ⚠️ **Esto se escribió cuando el asistente solo sabía agendar citas**, y decía que el bloqueo de
+> verdad era ése: conectar el número de un restaurante le habría dado un bot que ofrece cortes de
+> cabello. **Resuelto el 2026-08-24/25**: el adaptador de restaurante existe y está en producción.
+>
+> **Y el camino de arriba no es el único.** Lo de abajo —medido contra la API el 2026-08-27— es una
+> vía mucho más corta para los primeros clientes, que **no necesita Embedded Signup ni ser
+> Proveedor de tecnología**.
 
 ---
+
+---
+
+## Abrir el servicio a los primeros clientes (medido el 2026-08-27)
+
+El dueño quiere dar la app a unos conocidos para que la rompan. Antes de planear nada se le
+preguntó a Meta el estado real, en vez de fiarse de lo escrito aquí — y había dos sorpresas.
+
+### Lo que dice la API, no el doc
+
+| Qué | Estado |
+|---|---|
+| Número `+57 315 2812484` | `CONNECTED` · `VERIFIED` · calidad **GREEN** |
+| Nombre visible `Escalapp` | **`AVAILABLE_WITHOUT_REVIEW`** (el 24 estaba `PENDING`) |
+| App suscrita a la WABA | sí, `1552342763052863` |
+| `account_review_status` de la WABA | **`APPROVED`** |
+| Plantilla `recordatorio_cita` | **`APPROVED`** (`UTILITY`, `es`) |
+| Límite de mensajería | **`TIER_250`** — 250 conversaciones iniciadas por el negocio cada 24 h |
+| Mensajes salientes en producción | **160, todos entregados, cero fallos** |
+
+```bash
+# El comando que lo dice todo de una vez. health_status es el campo que importa.
+curl -s "https://graph.facebook.com/v21.0/<WABA_ID>?fields=name,account_review_status,health_status" \
+  -H "Authorization: Bearer $WHATSAPP_TOKEN"
+```
+
+### Los dos bloqueos, y Meta los nombra
+
+`health_status` no obliga a adivinar: da entidad, código y solución.
+
+| Entidad | `can_send_message` | Error |
+|---|---|---|
+| **WABA** | **`BLOCKED`** | `141006` — *There is an error with the payment method. This will block business initiated conversations.* |
+| **Negocio** | **`LIMITED`** | `141010` — *The Business has not passed business verification.* |
+| App | `AVAILABLE` | — |
+
+**1. El método de pago está fallando.** El 2026-08-24 se anotó aquí que estaba cargado y en verde;
+ya no lo está. **Todavía no ha roto nada** —160 salientes, 0 fallos— porque el bot solo
+**responde**, y responder dentro de la ventana de 24 h no es una conversación iniciada por el
+negocio. Morderá en cuanto salga el primer `recordatorio_cita`, o cualquier plantilla. Se arregla
+en el panel (*Business Settings → Billing & Payments*), no en el código.
+
+> **La forma vuelve a repetirse:** un sistema que parece sano porque el camino que se usa a diario
+> no toca la parte rota. Es la misma trampa del número desconectado por inactividad.
+
+**2. La verificación de negocio no está pasada.** Es la que pone el techo: **sin verificar, 2
+números → 2 inquilinos**. Ese techo, y no el de 250 destinatarios, es el que muerde al tercer
+conocido.
+
+### El hallazgo que acorta el trabajo
+
+El plan que había escrito —Embedded Signup, Proveedor de tecnología, custodia de tokens de
+terceros, un ADR— es el **producto final**, y para tres o cuatro conocidos es la ruta larga.
+
+Para los primeros clientes hay otra: **dar de alta sus números a mano, dentro de la WABA que ya
+existe.** Y eso cambia lo más delicado de todo el asunto:
+
+> **Con los números bajo TU WABA no hay tokens de terceros que custodiar.** El token de la Cloud
+> API va contra la **app + la WABA**, no contra un número: el mismo `WHATSAPP_TOKEN` envía desde
+> cualquier número de esa WABA, cambiando el `phone_number_id` de la URL. El `APP_SECRET` y el
+> `VERIFY_TOKEN` también son de app, o sea compartidos. **Desaparece la decisión que pedía un ADR**
+> —porque los secretos siguen siendo nuestros, no de un tercero— y con ella la mitad del trabajo.
+>
+> ⚠ Confirmarlo con el segundo número en la mano, que es cuando se puede probar de verdad.
+
+La contrapartida honesta: los números son de **tu** WABA, no del cliente. Si un cliente se va,
+llevárselo es una migración, no un botón. Para conocidos que están probando, es un precio
+razonable; para vender en serio, es cuando toca Embedded Signup.
+
+### Lo que hay que hacer, en orden
+
+**En Meta** (no es código, y va primero porque tiene esperas ajenas):
+
+1. **Arreglar el método de pago.** Desbloquea las plantillas y los recordatorios.
+2. **Pasar la verificación de negocio.** Sube el techo de 2 números. Pide documentos del negocio y
+   la revisa una persona: **empezar por aquí**, porque es lo único que no depende de nosotros.
+3. Por cada cliente: **añadir su número a la WABA** y verificarlo con su PIN. El número **no puede
+   estar ya en WhatsApp** — si lo está, hay que borrarlo de la app de WhatsApp primero, y eso le
+   borra el historial: **avísale antes, no después**.
+
+**En el código** (más pequeño de lo que parecía, porque la costura ya estaba puesta):
+
+4. **Una tabla de números**, `phone_number_id ↔ id_negocio`, en los dos sentidos. Hoy eso son dos
+   variables de entorno (`WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_NEGOCIO_ID`) leídas en
+   `channels/whatsapp/config.js`.
+5. **`resolverNegocio(phoneNumberId)`** pasa a consultarla. Es **el único punto de traducción** que
+   existe, y ya devuelve `null` para lo que no es nuestro — la propiedad que impide que un webhook
+   mal enrutado escriba en la conversación de otro inquilino (F2).
+6. **`entregar()` debe enviar DESDE el número del negocio dueño de la conversación**, no desde el
+   único global. Hoy `api.enviarMensaje` compone la URL con `config.leer().phoneNumberId`; pasa a
+   resolverse desde el `idNegocio` que ya viaja en el sobre del gateway. **Es el cambio que más
+   fácil se olvida y el que peor falla**: sin él, el bot de un cliente contestaría desde el número
+   de otro.
+7. `estado()` deja de decir «un solo número» y pasa a listar los que haya.
+
+**Por cada negocio que se conecte** — el runbook ya existe en
+[`asistente-restaurante.md`](asistente-restaurante.md): plan Avanzado (donde vive `asistente_ia`),
+habilitar sus capacidades, que tenga carta, y `url_whatsapp` para el botón del menú digital.
+
+### Lo que NO hace falta para esto
+
+- **Embedded Signup** y ser **Proveedor de tecnología**: son para que el cliente conecte su número
+  **solo**, desde un botón. Con alta manual, no.
+- **Publicar la app**: hace falta para pedir permisos **en nombre de otros negocios**, que es
+  justamente Embedded Signup. Con la WABA propia y un token permanente, no.
+- **El número de prueba del sandbox**: se abandonó el 2026-08-21 y sigue sin hacer falta.
 
 ## Un mensaje sin remitente, y un lote entero perdido (2026-08-26)
 

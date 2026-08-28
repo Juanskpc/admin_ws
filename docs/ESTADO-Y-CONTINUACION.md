@@ -429,8 +429,13 @@ Vale la pena leerlos juntos porque **comparten forma**: ninguno daba error donde
 4. **`tomar_pedido` no pregunta exclusiones** («sin cebolla»). El dominio las soporta; la
    capacidad no. *(El método de pago **sí** se pregunta desde el 2026-08-27, con los datos de la
    cuenta pegados a cada opción — ver [`asistente-restaurante.md`](asistente-restaurante.md).)*
-5. **Alta de números de clientes (Embedded Signup)** — el techo de «un número, un negocio» se nota
-   ya. Merece un ADR. Ver [`canal-whatsapp.md`](canal-whatsapp.md).
+5. **Abrir el servicio a los primeros clientes** — decidido el 2026-08-27: **alta manual dentro de
+   la WABA que ya existe**, no Embedded Signup. Al medir contra la API salió que con los números
+   bajo nuestra WABA **no hay tokens de terceros que custodiar** (el token va contra la app+WABA,
+   no contra el número), y con eso **desaparece el ADR que este punto pedía**. Bloqueos que Meta
+   nombra hoy: el **método de pago está fallando** (`141006`, bloquea plantillas y recordatorios;
+   aún no ha mordido porque el bot solo responde) y la **verificación de negocio sin pasar**
+   (`141010`, techo de 2 números). Plan completo en [`canal-whatsapp.md`](canal-whatsapp.md).
 
 ### Cosas que hay que vigilar
 
