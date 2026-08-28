@@ -445,8 +445,10 @@ Vale la pena leerlos juntos porque **comparten forma**: ninguno daba error donde
   sin métodos el bot **se salta el paso del pago en silencio**.
 - **Particiones del Ledger hasta 2027-10.** Una tabla particionada sin la partición del mes
   rechaza TODO INSERT: `node scripts/intelligence_mantenimiento.js particiones --meses 12`.
-- **`restaurante_app` está en la rama `feature/pedido-menu-digital`**, no en `master`. El backend
-  sigue en `feature/escalapp_intelligence` — **y el VPS corre esa rama, no `master`**.
+- **`restaurante_app` está en la rama `feature/pedido-menu-digital`**, no en `master`. El
+  backend, en cambio, **se consolidó en `master` el 2026-08-27** y el VPS ya sigue `master`:
+  `feature/escalapp_intelligence` se conserva apuntando al mismo commit, pero el trabajo nuevo
+  va en `master`.
 - **Copia del frontend anterior**: `~/backups/frontend_restaurante_20260825_0000.tgz` en el VPS.
 - **El indicador de «escribiendo…» no está probado contra Meta.** Solo se sabrá al desplegar, y si falla no avisa más que por el log (a propósito). Ver la sección del 2026-08-27.
 - **`resultado = 'sin_respuesta'` debería ser casi imposible ahora.** Si vuelve a aparecer en `intelligence.turno`, es un camino nuevo que se escapó: mirar los pasos del turno antes que nada.
@@ -485,7 +487,7 @@ consumidor de `cita.creada.v1`.
 
 | Repo | Rama | Qué contiene |
 |---|---|---|
-| `admin_ws` | `feature/escalapp_intelligence` | Todo el backend + el corpus de arquitectura en `docs/` |
+| `admin_ws` | **`master`** (desde 2026-08-27; antes `feature/escalapp_intelligence`) | Todo el backend + el corpus de arquitectura en `docs/` |
 | `admin_app-v21` | `feature/escalapp_intelligence` | La Ficha 360 y la **Intelligence Console** |
 | `reserva_app` | `feature/escalapp_intelligence` | Un cambio pequeño de F3: mostrar el motivo del rechazo del dominio en vez de un texto fijo |
 
@@ -1674,7 +1676,7 @@ Se hizo en dos fases el mismo día, con los clientes a punto de entrar a trabaja
 | Paso | Resultado real |
 |---|---|
 | Backup previo | `db_2026-08-24_1659.dump` |
-| Rama en el VPS | `git checkout feature/escalapp_intelligence` (no se fusionó a `master`) |
+| Rama en el VPS | `feature/escalapp_intelligence` **hasta el 2026-08-27**; desde entonces `master` |
 | Las 9 migraciones | Todas OK. `platform` 6 tablas, `intelligence` 83, `reserva` 9 |
 | Backfill | **1,36 s** — 1.450 órdenes con móvil válido → **819 personas**; 70 con teléfono no utilizable (esperado) |
 | Volumen real | **5.633 órdenes**, no las ~1.056 estimadas. Aun así el bloqueo fue un parpadeo |
