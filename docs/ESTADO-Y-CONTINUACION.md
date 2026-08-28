@@ -1,6 +1,6 @@
 # EscalApp Intelligence — estado y cómo continuar
 
-**Última actualización:** 2026-08-27 (medición de latencia, tarea que caduca, y el silencio cerrado por todos lados)
+**Última actualización:** 2026-08-27, cierre de sesión (todo en `master`; siguiente paso: la verificación de negocio en Meta)
 **Propósito:** que retomar el trabajo no cueste una sesión de arqueología. Si vuelves a este
 proyecto después de semanas, **lee este documento primero** y sigue por donde diga.
 
@@ -16,8 +16,38 @@ proyecto después de semanas, **lee este documento primero** y sigue por donde d
 
 **Estado en una frase:** el asistente atiende **dos verticales** en producción —citas y
 restaurante— por WhatsApp, y desde el menú digital se puede armar un pedido y mandarlo al bot ya
-escrito. **576 pruebas de backend + 15 de frontend en verde.** El roadmap original está agotado:
+escrito. **661 pruebas de backend + 15 de frontend en verde.** El roadmap original está agotado:
 lo que se hace ahora sale del uso real.
+
+> ## ⏭️ SI ESTÁS RETOMANDO, EMPIEZA AQUÍ
+>
+> El trabajo se paró el 2026-08-27 en un punto concreto: **abrir el servicio a los primeros
+> clientes**, y lo que bloquea **no es código**.
+>
+> **Lo que le toca al dueño, en Meta** (nada de esto se puede hacer ni consultar con el token que
+> hay — le falta `business_management`):
+>
+> 1. **Verificación de negocio.** *Iniciada como decisión, no como trámite: al cerrar la sesión
+>    aún no se había enviado.* La revisa una persona y tarda de días a dos semanas. Antes de
+>    enviarla hay que contestar una pregunta que **no es técnica y bloquea todo lo demás**:
+>    ¿existe una persona jurídica registrada llamada Escalapp, con papeles? Meta verifica
+>    **empresas**. El runbook y las causas reales de rechazo están en
+>    [`canal-whatsapp.md`](canal-whatsapp.md) §«La verificación de negocio, paso a paso».
+> 2. **El método de pago** (`141006`). Es **otra cosa, en otro sitio** del panel — verificar el
+>    negocio no lo arregla. Hoy no rompe nada porque el bot solo responde; morderá con el primer
+>    recordatorio.
+>
+> **Cómo se comprueba si ya pasó, sin entrar al panel:**
+>
+> ```bash
+> curl -s "https://graph.facebook.com/v21.0/4199925320246584?fields=health_status" \
+>   -H "Authorization: Bearer $WHATSAPP_TOKEN"
+> # 141010 sobre BUSINESS = verificación pendiente
+> # 141006 sobre WABA     = método de pago pendiente
+> ```
+>
+> **Lo que se puede hacer sin esperar a Meta** — está detallado abajo, punto 1 de «Lo siguiente»:
+> los tres cambios de código del alta multi-número. Son de un día y no dependen de nadie.
 
 ### Qué hay vivo, y dónde apunta
 
@@ -25,7 +55,7 @@ lo que se hace ahora sale del uso real.
 |---|---|
 | Número `+57 315 281 2484` | Atiende a **`id_negocio` 12, Restaurante pregonchos** |
 | Verticales con flujo | `reserva` (citas) y `restaurante` |
-| Capacidades | 11: seis de reserva, cinco de restaurante |
+| Capacidades | 10: seis de reserva, cuatro de restaurante |
 | Menú digital con carrito | `escalapp.cloud/restaurante/carta/12`, desplegado el 2026-08-25 |
 | Escalera | Nivel 1 determinista + `openai/gpt-5.6-terra` |
 | WebChat | **apagado**, y sigue sin autenticar |
@@ -414,7 +444,27 @@ Vale la pena leerlos juntos porque **comparten forma**: ninguno daba error donde
 
 ### Lo siguiente, en orden
 
-1. **El bot va lento — medido, y a medias resuelto.** La espera ya no es silencio (arriba), pero
+1. **Abrir el servicio a los primeros clientes — LO QUE ESTABA EN MARCHA AL PARAR.** Decidido
+   el 2026-08-27: **alta manual dentro de la WABA que ya existe**, no Embedded Signup. Al medir
+   contra la API salió que con los números bajo nuestra WABA **no hay tokens de terceros que
+   custodiar** (el token va contra la app+WABA, no contra el número), y con eso **desaparece el
+   ADR que este punto pedía**. Lo que bloquea es de Meta y del dueño (ver el recuadro de arriba).
+
+   **Los tres cambios de código no dependen de Meta y se pueden hacer ya:**
+
+   - Una **tabla de números**, `phone_number_id ↔ id_negocio`, en los dos sentidos. Hoy son dos
+     variables de entorno leídas en `channels/whatsapp/config.js`.
+   - **`resolverNegocio(phoneNumberId)`** pasa a consultarla. Es **el único punto de traducción**
+     que existe, y ya devuelve `null` para lo que no es nuestro — la propiedad que impide que un
+     webhook mal enrutado escriba en la conversación de otro inquilino (F2).
+   - **`entregar()` debe enviar DESDE el número del negocio dueño de la conversación**, no desde
+     el único global. Hoy `api.enviarMensaje` compone la URL con `config.leer().phoneNumberId`.
+     **Es el que más fácil se olvida y el que peor falla**: sin él, el bot de un cliente
+     contestaría desde el número de otro.
+
+   Plan completo, límites del canal y runbook en [`canal-whatsapp.md`](canal-whatsapp.md).
+
+2. **El bot va lento — medido, y a medias resuelto.** La espera ya no es silencio (arriba), pero
    los 2 317 ms siguen ahí. La sospecha era buena: **sube más de lo necesario, y no por una regla
    sino por el comodín** — 36 de los 38 turnos que fueron al modelo cayeron por `pregunta_libre`,
    y 23 de ellos no consultaron nada. Lo que queda es **una decisión de producto, no código**:
@@ -422,20 +472,54 @@ Vale la pena leerlos juntos porque **comparten forma**: ninguno daba error donde
    domicilio?»). Bajarlas ahorra 1 735 ms y $0 por turno; pasarse devuelve al bot a sonar a bot,
    que es justo lo que se arregló el 26. **Para decidirlo hace falta saber qué preguntan de
    verdad**, y eso son conversaciones de clientes: ver ADR-024 y la Ley 1581 antes de leerlas.
-2. **Probar el círculo completo del menú digital** con gente de verdad: carrito → WhatsApp →
+3. **Probar el círculo completo del menú digital** con gente de verdad: carrito → WhatsApp →
    dirección → `tomar_pedido`. Es la primera vez que los dos repos se hablan fuera de un test.
-3. **El código de cita sigue siendo un UUID** (punto 2 de `mejoras-flujo-agenda.md`). Su
+4. **El código de cita sigue siendo un UUID** (punto 2 de `mejoras-flujo-agenda.md`). Su
    prerrequisito de seguridad ya está hecho, así que ahora es solo trabajo.
-4. **`tomar_pedido` no pregunta exclusiones** («sin cebolla»). El dominio las soporta; la
-   capacidad no. *(El método de pago **sí** se pregunta desde el 2026-08-27, con los datos de la
-   cuenta pegados a cada opción — ver [`asistente-restaurante.md`](asistente-restaurante.md).)*
-5. **Abrir el servicio a los primeros clientes** — decidido el 2026-08-27: **alta manual dentro de
-   la WABA que ya existe**, no Embedded Signup. Al medir contra la API salió que con los números
-   bajo nuestra WABA **no hay tokens de terceros que custodiar** (el token va contra la app+WABA,
-   no contra el número), y con eso **desaparece el ADR que este punto pedía**. Bloqueos que Meta
-   nombra hoy: el **método de pago está fallando** (`141006`, bloquea plantillas y recordatorios;
-   aún no ha mordido porque el bot solo responde) y la **verificación de negocio sin pasar**
-   (`141010`, techo de 2 números). Plan completo en [`canal-whatsapp.md`](canal-whatsapp.md).
+5. **`tomar_pedido` no pregunta exclusiones** («sin cebolla»). El dominio las soporta; la
+   capacidad no.
+6. **El método de pago está RETIRADO del asistente** (2026-08-27, decisión del dueño tras
+   probarlo). El trabajo está hecho y documentado: **volver a ponerlo es revertir un commit**, no
+   rehacerlo. Ver [`asistente-restaurante.md`](asistente-restaurante.md) §«El método de pago,
+   retirado del asistente».
+
+### Lo que se hizo el 2026-08-27, de un vistazo
+
+Fue una sesión larga y con muchos frentes. Cada uno tiene su sección propia; esto es el índice,
+por si hay que encontrar algo concreto sin releerlo todo.
+
+| Qué | Dónde está contado | Commit |
+|---|---|---|
+| **Por qué va lento**, medido sobre 114 turnos reales | §«por qué va lento, medido» | `e6afb1c` |
+| El turno deja de ser silencio: **«escribiendo…» nativo** a los 800 ms | ídem | `e6afb1c` |
+| **La tarea caduca** a las 3 h — ya no se retoma el pedido de ayer | ídem | `e6afb1c` |
+| **Ningún camino del turno acaba en silencio** (5 caminos cerrados) | §«los tres turnos que no contestaron nada» | `a8b490c` |
+| La dirección se revisa (repregunta una vez, acepta a la segunda) | `asistente-restaurante.md` | `a5e1b56` |
+| Los datos del cliente **en un solo mensaje** | `asistente-restaurante.md` | `16f67cd` |
+| El método de pago: añadido… **y retirado** el mismo día | `asistente-restaurante.md` | `a5e1b56` → `1837c55` |
+| Encontrar lo que el bot acaba de ofrecer (2ª pasada por palabras) | `asistente-restaurante.md` | `5d005d5` |
+| **Los pedidos son para AHORA**, no se programan | ídem | `5d005d5` |
+| Todo consolidado en **`master`**, y el VPS lo sigue | `CLAUDE.md` | `2d429e9` |
+| **Estado real de Meta**, medido contra la API | `canal-whatsapp.md` | `ca28101`, `f103a1a` |
+
+**Prompt del sistema: de `v3` a `v7` en un día.** Cada versión anterior se conserva, que es para
+lo que existe el versionado en el nombre del archivo:
+
+| Versión | Qué introdujo |
+|---|---|
+| `v4` | Recomendar sin cobrar — se acabó el «¿Cuál te anoto?» |
+| `v5` | Los datos del cliente, todos en un mensaje |
+| `v6` | Sin método de pago (retirada) |
+| `v7` | Nombrar los productos como se llaman + los pedidos son para ahora |
+
+**De 576 a 661 pruebas de backend.** Suites nuevas: `aviso_actividad`, `tarea_caducada`,
+`sin_respuesta`, `pedido_direccion`, `pedido_un_solo_mensaje`, `buscar_producto`.
+
+> **Lo que se repitió tanto que ya es una regla del proyecto:** casi todo lo que se rompió esta
+> semana tenía la misma forma — **dos caminos hacia lo mismo y uno solo mantenido**. El pedido se
+> toma por el carrito del menú o conversando con el modelo, y tres veces seguidas algo vivía solo
+> en uno de los dos: el paso del pago, el rastro del Ledger, la lectura del carrito. Al añadir
+> algo al pedido, la pregunta obligatoria es **«¿y por el otro camino?»**.
 
 ### Cosas que hay que vigilar
 
