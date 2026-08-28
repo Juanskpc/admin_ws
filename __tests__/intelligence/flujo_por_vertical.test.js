@@ -409,11 +409,6 @@ describe('el flujo lleva el pedido del menú hasta el final, sin modelo', () => 
         resolver: async () => ({ principal: { tipo: 'contacto' }, persona: null, nombre: null }),
     };
 
-    const METODOS = [
-        { id: 7, nombre: 'Efectivo' },
-        { id: 9, nombre: 'Transferencia' },
-    ];
-
     /** Gate de mentira que anota cómo se le llamó: es la mitad de lo que se prueba. */
     function gateFalso() {
         const llamadas = [];
@@ -480,7 +475,6 @@ describe('el flujo lleva el pedido del menú hasta el final, sin modelo', () => 
         flujo = crearFlujoRestaurante({
             contextoNegocio: negocioFalso,
             leerCarta: async () => ({ productos: [], total: 0 }),
-            leerMetodosPago: async () => METODOS,
             identidad: identidadFalsa,
             gate,
         });
@@ -554,28 +548,27 @@ describe('el flujo lleva el pedido del menú hasta el final, sin modelo', () => 
         expect(gate.llamadas).toHaveLength(0);
     });
 
-    it('el camino entero: carrito → nombre → dirección → pago → confirmación → pedido', async () => {
-        const [, , , , quinto] = await conversar(
+    it('el camino entero: carrito → nombre → dirección → confirmación → pedido', async () => {
+        // Sin paso de pago desde el 2026-08-27: se retiró. Ver `docs/asistente-restaurante.md`.
+        const [, , , cuarto] = await conversar(
             DEL_MENU,
             'Nicolás Pantoja',
             'Carrera 3e 19 a',
-            'Efectivo',
             'sí'
         );
 
         // El «sí» —que lee el Nivel 1, gratis— es lo que lo crea.
         expect(gate.llamadas).toHaveLength(1);
         expect(gate.llamadas[0].confirmadoPor).toBeTruthy();
-        expect(texto(quinto)).toContain('ORD-77');
-        expect(quinto.tarea).toBeNull();
+        expect(texto(cuarto)).toContain('ORD-77');
+        expect(cuarto.tarea).toBeNull();
     });
 
     it('el pedido se crea con los ids del carrito, no con lo que nadie recuerde', async () => {
-        const [, , , , quinto] = await conversar(
+        const [, , , cuarto] = await conversar(
             DEL_MENU,
             'Nicolás Pantoja',
             'Carrera 3e 19 a',
-            'Efectivo',
             'sí'
         );
 
@@ -586,10 +579,9 @@ describe('el flujo lleva el pedido del menú hasta el final, sin modelo', () => 
         ]);
         expect(creada.args.cliente_nombre).toBe('Nicolás Pantoja');
         expect(creada.args.direccion).toBe('Carrera 3e 19 a');
-        expect(creada.args.id_metodo_pago).toBe(7);
         // El canal probó su número, así que NO se pide ni se manda: el que vale es el probado.
         expect(creada.args.cliente_telefono).toBeUndefined();
-        expect(quinto.resultado).toBe('resuelto');
+        expect(cuarto.resultado).toBe('resuelto');
     });
 
     it('a quien tiene número probado NO se le pide el teléfono', async () => {
@@ -617,10 +609,9 @@ describe('el flujo lleva el pedido del menú hasta el final, sin modelo', () => 
 
         expect(texto(d)).toMatch(/a nombre de Ana/i);
         expect(texto(d)).toMatch(/dirección/i);
-        // Desde el 2026-08-27 lo que falta se pide junto, no de a uno: con el nombre ya sabido
-        // quedan la dirección y el pago, y los dos caben en el mismo mensaje.
-        expect(d.tarea.datos.paso).toBe('datos');
-        expect(texto(d)).toMatch(/todo junto/i);
+        // Con el nombre ya sabido y el teléfono probado por el canal, el único hueco es la
+        // dirección: se pregunta sola, no como lista de uno.
+        expect(d.tarea.datos.paso).toBe('direccion');
     });
 
     it('una pregunta en vez del nombre no se apunta como nombre', async () => {
@@ -651,7 +642,6 @@ describe('el flujo lleva el pedido del menú hasta el final, sin modelo', () => 
         const sinTelefono = crearFlujoRestaurante({
             contextoNegocio: negocioFalso,
             leerCarta: async () => ({ productos: [], total: 0 }),
-            leerMetodosPago: async () => METODOS,
             identidad: identidadSinTelefono,
             gate,
         });
@@ -661,7 +651,7 @@ describe('el flujo lleva el pedido del menú hasta el final, sin modelo', () => 
             variables: { turnos: 1 }, tarea_actual: null, tarea_datos: {},
         };
         const salidas = [];
-        for (const t of [DEL_MENU, 'Ana Ruiz', '3150528532', 'Calle 5 # 4-3', 'Transferencia', 'sí']) {
+        for (const t of [DEL_MENU, 'Ana Ruiz', '3150528532', 'Calle 5 # 4-3', 'sí']) {
             const d = await sinTelefono({ conversacion, texto: t, turno: { id_turno: 't-1' } });
             salidas.push(d);
             conversacion = {
@@ -673,13 +663,14 @@ describe('el flujo lleva el pedido del menú hasta el final, sin modelo', () => 
         }
 
         // Se pide DESPUÉS del nombre, y diciendo el motivo: un bot que pide un teléfono sin
-        // explicarse parece que está recogiendo datos.
+        // explicarse parece que está recogiendo datos. Va junto a la dirección, en el mismo
+        // mensaje, desde el 2026-08-27.
         expect(texto(salidas[1])).toMatch(/número de contacto/i);
         expect(texto(salidas[1])).toMatch(/domiciliario/i);
+        expect(texto(salidas[1])).toMatch(/dirección/i);
 
         const creada = gate.llamadas.find((l) => l.capacidad === 'tomar_pedido' && l.confirmadoPor);
         expect(creada.args.cliente_telefono).toBe('3150528532');
-        expect(creada.args.id_metodo_pago).toBe(9);
     });
 
     it('el teléfono que el cliente DICE no se convierte en identidad', async () => {
@@ -689,7 +680,6 @@ describe('el flujo lleva el pedido del menú hasta el final, sin modelo', () => 
         const sinTelefono = crearFlujoRestaurante({
             contextoNegocio: negocioFalso,
             leerCarta: async () => ({ productos: [], total: 0 }),
-            leerMetodosPago: async () => [],
             identidad: identidadSinTelefono,
             gate,
         });
@@ -712,75 +702,6 @@ describe('el flujo lleva el pedido del menú hasta el final, sin modelo', () => 
         // Va en `cliente_telefono` —dato de contacto—, nunca como el principal.
         expect(creada.args.cliente_telefono).toBe('3150528532');
         expect(creada.principal.telefono_verificado).toBeUndefined();
-    });
-
-    it('sin métodos configurados, el paso del pago se salta', async () => {
-        // Quedarse sin poder pedir porque nadie llenó una tabla de catálogo sería cambiar un
-        // dato que falta por una venta que no se hace.
-        const sinMetodos = crearFlujoRestaurante({
-            contextoNegocio: negocioFalso,
-            leerCarta: async () => ({ productos: [], total: 0 }),
-            leerMetodosPago: async () => [],
-            identidad: identidadFalsa,
-            gate,
-        });
-
-        let conversacion = {
-            id_conversacion: 'c-sinpago', id_negocio: 12, canal: 'whatsapp',
-            variables: { turnos: 1 }, tarea_actual: null, tarea_datos: {},
-        };
-        let ultima = null;
-        for (const t of [DEL_MENU, 'Nicolás Pantoja', 'Carrera 3e 19 a']) {
-            ultima = await sinMetodos({ conversacion, texto: t, turno: { id_turno: 't-1' } });
-            conversacion = {
-                ...conversacion,
-                variables: ultima.variables ?? conversacion.variables,
-                tarea_actual: ultima.tarea?.nombre ?? null,
-                tarea_datos: ultima.tarea?.datos ?? {},
-            };
-        }
-
-        expect(texto(ultima)).toMatch(/¿Confirmo tu pedido/);
-    });
-
-    it('el método de pago se ofrece con los ids REALES del negocio', async () => {
-        // La lección de la categoría «2» del 2026-08-24: los ids no son ordinales.
-        const [, , tercero] = await conversar(DEL_MENU, 'Nicolás Pantoja', 'Carrera 3e 19 a');
-
-        expect(tercero.respuestas[0].opciones.map((o) => o.id)).toEqual(['7', '9']);
-        expect(tercero.respuestas[0].opciones.map((o) => o.etiqueta)).toEqual([
-            'Efectivo',
-            'Transferencia',
-        ]);
-    });
-
-    it('un método que no se entiende NO se adivina: se repregunta', async () => {
-        // Un método de pago mal leído es una discusión en la puerta con el domiciliario delante.
-        const [, , , cuarto] = await conversar(
-            DEL_MENU,
-            'Nicolás Pantoja',
-            'Carrera 3e 19 a',
-            'con lo que sea'
-        );
-
-        expect(texto(cuarto)).toMatch(/no te entendí/i);
-        expect(cuarto.tarea.datos.id_metodo_pago).toBeUndefined();
-        expect(gate.llamadas).toHaveLength(0);
-    });
-
-    it('«transferencia» acierta aunque el método se llame distinto', async () => {
-        // Tres pasadas: id exacto (lo que manda un botón), nombre exacto, y que uno contenga al
-        // otro. El WebChat manda la etiqueta del chip al pulsarlo, así que sacar un número del
-        // texto libre daría el método equivocado.
-        const [, , , cuarto] = await conversar(
-            DEL_MENU,
-            'Nicolás Pantoja',
-            'Carrera 3e 19 a',
-            'transferencia'
-        );
-
-        expect(texto(cuarto)).toMatch(/¿Confirmo tu pedido/);
-        expect(cuarto.tarea.datos.args.id_metodo_pago).toBe(9);
     });
 
     it('«cancelar» a mitad del pedido lo cancela, y lo dice', async () => {

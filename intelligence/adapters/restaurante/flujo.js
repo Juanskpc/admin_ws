@@ -294,30 +294,27 @@ const TAREA_PEDIDO = 'pedido_domicilio';
  * encuentra la casa. Para todos los demás —que hoy son casi todos— no hay paso de más: el
  * teléfono ya lo probó el canal y preguntarlo sería pedir dos veces lo que ya tienes.
  *
- * `PAGO` se salta si el negocio no tiene métodos configurados. Quedarse sin poder pedir porque
- * nadie llenó una tabla de catálogo sería peor que tomar el pedido sin saber cómo paga.
  */
 const PASO_PEDIDO = {
     NOMBRE: 'nombre',
     /**
-     * Todo lo demás, en una sola pregunta: teléfono (a quien haga falta), dirección y cómo paga.
+     * Todo lo demás en una sola pregunta: teléfono (a quien haga falta) y dirección.
      *
      * Hasta el 2026-08-27 se pedían de uno en uno, y estaba escrito por qué: «un cuestionario de
      * cinco campos es lo que se hace cuando al otro lado hay una persona leyendo a mano». El
-     * argumento era bueno y el resultado, no: cuatro turnos y cuatro esperas para tres datos que
-     * el cliente tiene en la cabeza a la vez. Decisión del dueño ese día.
+     * argumento era bueno y el resultado, no: un turno y una espera por cada dato que el cliente
+     * tiene en la cabeza a la vez. Decisión del dueño ese día.
      *
      * El nombre se queda aparte a propósito. Es el primero, se contesta con una palabra y es lo
-     * que convierte el trámite en una conversación; mezclarlo con la dirección y el pago lo
-     * volvería la primera casilla de un formulario.
+     * que convierte el trámite en una conversación; mezclarlo con la dirección lo volvería la
+     * primera casilla de un formulario.
      *
-     * Los tres sueltos siguen existiendo porque **una respuesta parcial vuelve a preguntar solo
-     * lo que falte**, y ahí sí se pregunta de a uno.
+     * Los sueltos siguen existiendo porque **una respuesta parcial vuelve a preguntar solo lo
+     * que falte**, y ahí sí se pregunta de a uno.
      */
     DATOS: 'datos',
     TELEFONO: 'telefono',
     DIRECCION: 'direccion',
-    PAGO: 'pago',
 };
 
 /** Lo que hace falta para crear la orden, y que nadie más sabe. */
@@ -352,8 +349,6 @@ function huecosDelCliente(datos, { telefonoProbado }) {
     // Solo a quien llegó sin número. Ver la cabecera de `PASO_PEDIDO`.
     if (!datos.telefono && !telefonoProbado) faltan.push(PASO_PEDIDO.TELEFONO);
     if (!datos.direccion) faltan.push(PASO_PEDIDO.DIRECCION);
-    // Y solo si el negocio tiene métodos que ofrecer.
-    if (!datos.id_metodo_pago && (datos.metodos || []).length > 0) faltan.push(PASO_PEDIDO.PAGO);
     return faltan;
 }
 
@@ -367,61 +362,32 @@ function loQueFalta(datos, ctx) {
 }
 
 /**
- * La pregunta del pago, con los datos de cada método pegados a su nombre.
- *
- * ## Por qué los datos van AQUÍ y no después de elegir
- *
- * Porque el cliente decide cómo paga **sabiendo** si puede. Preguntar primero y enseñar la
- * cuenta después obliga a quien no tiene Nequi a elegirlo para descubrirlo, y a volver atrás
- * — y volver atrás en un flujo determinista es justo donde se pierde la gente.
- *
- * Un método sin datos sale solo con su nombre, sin guión suelto ni hueco: la mayoría no
- * necesita ninguno («Efectivo» se explica solo).
- *
- * Las opciones estructuradas siguen yendo aparte, en `opciones[]`, para que cada canal las
- * pinte como sepa (ADR-017). Esto es solo el texto que las acompaña.
- */
-function lineasDePago(metodos = []) {
-    return metodos.map((m) => (m.datos ? `• *${m.nombre}* — ${m.datos}` : `• *${m.nombre}*`));
-}
-
-function textoDelPago(metodos = []) {
-    const conDatos = (metodos || []).filter((m) => m.datos);
-    if (conDatos.length === 0) return '¿Cómo vas a pagar? 💵';
-    return `¿Cómo vas a pagar? 💵\n\n${lineasDePago(metodos).join('\n')}`;
-}
-
-/**
- * Los dos o tres datos que faltan, en un solo mensaje.
+ * Los datos que faltan, en un solo mensaje.
  *
  * Se enumera con viñetas y no en prosa a propósito: una lista corta se contesta mirándola, y el
- * cliente puede mandar las tres cosas en una línea o en tres. Lo que llegue se lee con
+ * cliente puede mandar las dos cosas en una línea o en dos. Lo que llegue se lee con
  * `interpretarDatos`, y **lo que no se entienda se vuelve a preguntar solo**.
  *
- * Las opciones estructuradas del pago **no** viajan aquí aunque el pago esté entre lo que falta:
- * un botón «Transferencia» al lado de «mándame tu dirección» invita a pulsarlo y dejar el resto
- * sin contestar. Los botones vuelven si hay que repreguntar el pago a solas.
+ * Hoy son como mucho dos —teléfono y dirección—, porque el paso del pago se retiró el
+ * 2026-08-27 (ver `docs/asistente-restaurante.md`). La función sigue escrita para una lista de
+ * largo cualquiera: es lo único que hace falta el día que vuelva a haber un tercero.
  */
 function preguntaCombinada(datos, ctx) {
     const faltan = huecosDelCliente(datos, ctx || {});
-    const lineas = faltan.map((hueco) => {
-        if (hueco === PASO_PEDIDO.TELEFONO) {
-            return '📱 Un número de contacto, para que el domiciliario te llame al llegar';
-        }
-        if (hueco === PASO_PEDIDO.DIRECCION) {
-            return '📍 La dirección, con el barrio o alguna indicación para llegar';
-        }
-        return `💵 Cómo vas a pagar:\n${lineasDePago(datos.metodos).join('\n')}`;
-    });
+    const lineas = faltan.map((hueco) =>
+        hueco === PASO_PEDIDO.TELEFONO
+            ? '📱 Un número de contacto, para que el domiciliario te llame al llegar'
+            : '📍 La dirección, con el barrio o alguna indicación para llegar'
+    );
 
     return {
         texto:
-            `Para mandártelo necesito ${faltan.length === 2 ? 'dos cositas' : 'tres cositas'}. ` +
-            `Puedes contestarme todo junto 👇\n\n${lineas.join('\n\n')}`,
+            'Para mandártelo necesito dos cositas. Puedes contestarme todo junto 👇' +
+            `\n\n${lineas.join('\n\n')}`,
     };
 }
 
-/** Qué se le dice al cliente en cada paso. Las opciones solo las tiene el del pago. */
+/** Qué se le dice al cliente en cada paso. */
 function pregunta(paso, datos, ctx) {
     switch (paso) {
         case PASO_PEDIDO.NOMBRE:
@@ -443,14 +409,6 @@ function pregunta(paso, datos, ctx) {
             };
         case PASO_PEDIDO.DATOS:
             return preguntaCombinada(datos, ctx);
-        case PASO_PEDIDO.PAGO:
-            return {
-                texto: textoDelPago(datos.metodos),
-                // Los ids son los reales del negocio, no ordinales: es la misma lección que
-                // dejó la categoría «2» del 2026-08-24. Y el canal los pinta como botones o
-                // lista según cuántos haya.
-                opciones: datos.metodos.map((m) => ({ id: String(m.id), etiqueta: m.nombre })),
-            };
         default:
             return { texto: '¿Seguimos?' };
     }
@@ -487,7 +445,6 @@ function seguirOConfirmar(ctx, datos, pasos, { apertura = '', solicitarConfirmac
             cliente_nombre: datos.nombre,
             direccion: datos.direccion,
             ...(datos.telefono ? { cliente_telefono: datos.telefono } : {}),
-            ...(datos.id_metodo_pago ? { id_metodo_pago: datos.id_metodo_pago } : {}),
         },
         conversacion: {
             ...ctx.conversacion,
@@ -536,7 +493,6 @@ function recibirPedidoDelMenu(ctx, pedido, { solicitarConfirmacion }) {
     const cuantos = unidades(pedido.items);
     const datos = {
         items: pedido.items,
-        metodos: ctx.metodosDePago || [],
         ...(previas.nombre ? { nombre: previas.nombre } : {}),
     };
 
@@ -629,11 +585,11 @@ function seguirPedido(ctx, { solicitarConfirmacion }) {
     //
     // Se lee lo que se entienda y se guarda; lo que no, `seguirOConfirmar` lo vuelve a preguntar
     // —y ya de a uno, porque quedará uno solo—. Nunca se descarta lo que sí llegó: hacerle
-    // repetir la dirección porque no se entendió el método de pago sería castigarle por
-    // habernos contestado.
+    // repetir la dirección porque no se entendió el teléfono sería castigarle por habernos
+    // contestado.
     if (datos.paso === PASO_PEDIDO.DATOS) {
         const faltan = huecosDelCliente(datos, ctx);
-        const leido = interpretarDatos(dicho, { faltan, metodos: datos.metodos || [] });
+        const leido = interpretarDatos(dicho, { faltan });
 
         if (Object.keys(leido).length === 0) {
             const q = pregunta(PASO_PEDIDO.DATOS, datos, ctx);
@@ -703,26 +659,6 @@ function seguirPedido(ctx, { solicitarConfirmacion }) {
             if (!pareceDireccion(dicho)) conLoDicho.direccion_forzada = true;
             delete conLoDicho.direccion_dudosa;
             break;
-        case PASO_PEDIDO.PAGO: {
-            const elegido = elegirMetodo(dicho, datos.metodos || []);
-            if (!elegido) {
-                // No se adivina. Un método de pago mal leído es una discusión en la puerta con
-                // el domiciliario delante — la misma razón por la que el precio se relee del
-                // catálogo en vez de creerse el de la conversación.
-                const q = pregunta(PASO_PEDIDO.PAGO, datos, ctx);
-                return {
-                    pasos: [paso('pedido_pago_no_reconocido', { dijo: dicho.slice(0, 40) })],
-                    respuestas: [{ ...q, texto: `No te entendí cuál. ${q.texto}` }],
-                    variables: conMemoria(ctx.conversacion),
-                    tarea: tareaPedido(conLoDicho),
-                    resultado: 'resuelto',
-                    nivel: 'determinista',
-                };
-            }
-            conLoDicho.id_metodo_pago = elegido.id;
-            conLoDicho.metodo_nombre = elegido.nombre;
-            break;
-        }
         default:
             break;
     }
@@ -763,12 +699,11 @@ function leerTelefono(texto) {
  *
  * ## El orden importa, y no es casual
  *
- * Se saca primero el teléfono y luego el método de pago, y **lo que sobra** es la dirección.
- * Al revés, «Nequi» se colaría dentro de la dirección y el número de contacto se quedaría
- * pegado al número de la casa. La dirección es lo más difícil de reconocer y lo más fácil de
- * describir por descarte: es el resto.
+ * Se saca primero el teléfono y **lo que sobra** es la dirección. Al revés, el número de
+ * contacto se quedaría pegado al número de la casa. La dirección es lo más difícil de reconocer
+ * y lo más fácil de describir por descarte: es el resto.
  */
-function interpretarDatos(texto, { faltan, metodos = [] }) {
+function interpretarDatos(texto, { faltan }) {
     const original = String(texto || '').trim();
     let resto = original;
     const leido = {};
@@ -778,17 +713,6 @@ function interpretarDatos(texto, { faltan, metodos = [] }) {
         if (tel) {
             leido.telefono = tel;
             resto = resto.replace(CELULAR_CO, ' ');
-        }
-    }
-
-    if (faltan.includes(PASO_PEDIDO.PAGO)) {
-        // Se busca el nombre del método dentro del texto, no una línea entera: el cliente
-        // escribe «pago con Nequi» y no «Nequi» a secas.
-        const metodo = metodoMencionado(resto, metodos);
-        if (metodo) {
-            leido.id_metodo_pago = metodo.id;
-            leido.metodo_nombre = metodo.nombre;
-            resto = quitarMencion(resto, metodo.nombre);
         }
     }
 
@@ -807,11 +731,11 @@ function interpretarDatos(texto, { faltan, metodos = [] }) {
 }
 
 /**
- * Palabras de relleno que quedan colgando cuando se recorta el teléfono y el método de pago.
+ * Palabras de relleno que quedan colgando cuando se recorta el teléfono.
  *
- * «Calle 45 #12-30, barrio El Prado. Mi cel es 3152812484 y pago con transferencia» deja, tras
- * quitar las dos piezas reconocidas, un «Mi cel es y pago con» pegado al final de la dirección.
- * No estorba al domiciliario, pero se guarda en la orden y se imprime en la comanda.
+ * «Calle 45 #12-30, barrio El Prado. Mi cel es 3152812484» deja, tras quitar el número, un
+ * «Mi cel es» pegado al final de la dirección. No estorba al domiciliario, pero se guarda en la
+ * orden y se imprime en la comanda.
  *
  * Solo se limpian los **bordes**, nunca el medio: una de estas palabras dentro de la dirección
  * —«vereda El Contacto»— es parte de ella.
@@ -860,20 +784,6 @@ function limpiarBordes(texto) {
 /** Puntuación y espacios pegados a los extremos. */
 const BORDES = /^[\s•\-*·:,.]+|[\s•\-*·:,.]+$/g;
 
-/** ¿Se nombra alguno de los métodos dentro del texto? Devuelve el más largo que case. */
-function metodoMencionado(texto, metodos) {
-    const t = normalizar(texto);
-    if (!t) return null;
-    // El más largo primero: si hay «Nequi» y «Nequi Bancolombia», gana el específico.
-    const ordenados = [...(metodos || [])].sort((a, b) => b.nombre.length - a.nombre.length);
-    return ordenados.find((m) => t.includes(normalizar(m.nombre))) || null;
-}
-
-function quitarMencion(texto, nombre) {
-    const escapado = String(nombre).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    return texto.replace(new RegExp(escapado, 'ig'), ' ');
-}
-
 /**
  * Palabras con las que empieza una dirección por aquí. No pretende ser exhaustiva.
  */
@@ -908,26 +818,6 @@ function pareceDireccion(texto) {
     if ((normalizado.match(/[a-z]/g) || []).length < 3) return false;
 
     return /\d/.test(normalizado) || PALABRAS_DE_DIRECCION.test(normalizado);
-}
-
-/**
- * Resuelve lo que dijo el cliente contra los métodos que se le ofrecieron.
- *
- * Tres pasadas, la misma idea que en la FSM de citas: el id exacto (lo que manda un botón), el
- * nombre exacto, y por último que uno contenga al otro («efectivo» ↔ «Efectivo contra entrega»).
- * Se resuelve **contra la lista real** y no sacando un número del texto: el WebChat manda la
- * etiqueta del chip al pulsarlo, y «Efectivo (2)» daría el método 2, que es otro.
- */
-function elegirMetodo(dicho, metodos) {
-    const t = normalizar(dicho);
-    if (!t || metodos.length === 0) return null;
-
-    return (
-        metodos.find((m) => String(m.id) === t) ||
-        metodos.find((m) => normalizar(m.nombre) === t) ||
-        metodos.find((m) => normalizar(m.nombre).includes(t) || t.includes(normalizar(m.nombre))) ||
-        null
-    );
 }
 
 /**
@@ -979,30 +869,6 @@ async function cartaDe(idNegocio) {
 }
 
 /**
- * Los métodos de pago que ofrece ESTE negocio.
- *
- * Lectura directa del contrato público de la vertical, por lo mismo que la carta: es el flujo
- * pintando su propia pregunta, no el asistente decidiendo nada. Pasarlo por el Policy Gate
- * gastaría una clave de idempotencia y una fila de Ledger por cada pedido para leer un catálogo
- * de tres filas.
- *
- * Si falla, se devuelve vacío y el paso del pago **se salta**: quedarse sin poder pedir porque
- * no se pudo leer una tabla de catálogo sería cambiar un dato que falta por una venta que no se
- * hace.
- */
-async function metodosDePagoDe(idNegocio) {
-    const metodoPagoService = require('../../../app_restaurante_api/services/metodoPagoService');
-    const metodos = await metodoPagoService.listar(idNegocio).catch(() => []);
-    return metodos.slice(0, 10).map((m) => ({
-        id: m.id_metodo_pago,
-        nombre: m.nombre,
-        // A dónde se paga. Viaja en la tarea junto al resto: el cliente tiene que ver la misma
-        // cuenta que se le enseñó, aunque el dueño la cambie a mitad del pedido.
-        datos: m.datos_pago || null,
-    }));
-}
-
-/**
  * ¿Es este mensaje de este flujo? Lo pregunta la política de enrutado (`engine/flujos.js`).
  *
  * Solo el pedido del menú: es un dato exacto con un código que una expresión regular lee mejor
@@ -1025,7 +891,6 @@ function reclama(texto) {
 function crearFlujoRestaurante({
     contextoNegocio: ctxNegocio = contextoNegocio,
     leerCarta = cartaDe,
-    leerMetodosPago = metodosDePagoDe,
     ahora = () => new Date(),
     // El Gate y la identidad solo hacen falta para cerrar un pedido: son lo que convierte el
     // «sí» del cliente en una orden. Se inyectan por lo mismo que en la FSM de citas — que un
@@ -1081,10 +946,6 @@ function crearFlujoRestaurante({
         const delMenu = codigoPedido.leer(texto);
         if (delMenu) {
             await conIdentidad(ctx);
-            // Los métodos se leen **al empezar** y viajan en la tarea. Es el mismo patrón que
-            // los servicios ofrecidos en la FSM de citas: se resuelve la respuesta contra la
-            // lista que se enseñó, no contra lo que haya en la base tres mensajes después.
-            ctx.metodosDePago = await leerMetodosPago(ctx.idNegocio).catch(() => []);
             return recibirPedidoDelMenu(ctx, delMenu, {
                 solicitarConfirmacion: (peticion) => confirmacion.solicitar(peticion),
             });
@@ -1140,7 +1001,6 @@ module.exports = {
     // Expuestos para las pruebas, como `tareaCaducada` en la escalera: son las dos piezas de
     // producto que conviene poder ejercitar sin montar una conversación entera.
     pareceDireccion,
-    textoDelPago,
     crearFlujoRestaurante,
     manejarRestaurante: crearFlujoRestaurante(),
     enlaceDelMenu,

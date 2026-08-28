@@ -56,7 +56,6 @@ const { normalizarE164Colombia } = require('../../../app_core/helpers/telefono')
 const cartaService = require('../../../app_restaurante_api/services/cartaService');
 const pedidoService = require('../../../app_restaurante_api/services/pedidoService');
 const cajaService = require('../../../app_restaurante_api/services/cajaService');
-const metodoPagoService = require('../../../app_restaurante_api/services/metodoPagoService');
 const usuarioAsistenteDao = require('../../../app_core/dao/usuarioAsistenteDao');
 const Models = require('../../../app_core/models/conection');
 
@@ -282,51 +281,12 @@ function registrarCapacidades() {
         },
     });
 
-    /**
-     * Cómo se paga en este negocio — la que faltaba, y se notó en producción.
-     *
-     * El 2026-08-27 el modelo tomó un pedido entero sin preguntar cómo se pagaba. No fue un
-     * despiste suyo: **no tenía cómo saberlo**. `id_metodo_pago` es opcional, no había ninguna
-     * herramienta que listara los métodos, y nada le decía que preguntara. El flujo determinista
-     * sí lo preguntaba —lee `rest_metodo_pago` directamente— así que el pedido salía bien por el
-     * carrito del menú y mal por el chat. Dos caminos, dos comportamientos, un solo cliente.
-     *
-     * Devuelve también `datos_pago`: el Nequi o la cuenta a la que hay que transferir. Es lo que
-     * permite que el modelo lo diga junto a la opción, igual que hace la FSM.
-     */
-    registry.registrar({
-        nombre: 'consultar_metodos_pago',
-        vertical: VERTICAL,
-        descripcion:
-            'Devuelve las formas de pago que acepta este restaurante, con los datos de cada una ' +
-            '(a qué cuenta se transfiere, por ejemplo). Úsala ANTES de tomar un pedido a ' +
-            'domicilio para preguntarle al cliente cómo va a pagar, y pásale a `tomar_pedido` el ' +
-            '`id_metodo_pago` que elija. Si devuelve la lista vacía, el negocio no tiene formas ' +
-            'de pago configuradas: no preguntes nada y toma el pedido sin ese dato.',
-        tipo: registry.TIPO.CONSULTA,
-        idempotente: true,
-        feature: FEATURE.ASISTENTE_IA,
-        parametros: {},
-        async ejecutar({ idNegocio }) {
-            const metodos = await metodoPagoService.listar(idNegocio);
-            return {
-                metodos: metodos.map((m) => ({
-                    id_metodo_pago: m.id_metodo_pago,
-                    nombre: m.nombre,
-                    datos_pago: m.datos_pago || null,
-                })),
-            };
-        },
-    });
-
     registry.registrar({
         nombre: 'tomar_pedido',
         descripcion:
             'Crea un pedido a domicilio con los productos que el cliente eligió. Úsala solo ' +
             'cuando tengas los id_producto (de consultar_carta o buscar_producto), las ' +
-            'cantidades, el nombre, la dirección y cómo va a pagar. **Antes de usar esta, llama a ' +
-            'consultar_metodos_pago y pregúntale al cliente cómo paga**, salvo que devuelva la ' +
-            'lista vacía. Devuelve el número de pedido, que hace falta ' +
+            'cantidades, el nombre y la dirección. Devuelve el número de pedido, que hace falta ' +
             'para consultar su estado después. Al pedirla, el negocio le enseña al cliente una ' +
             'pregunta de confirmación y no se ejecuta hasta que diga sí: no le digas que ya está hecho.',
         vertical: VERTICAL,
@@ -386,10 +346,6 @@ function registrarCapacidades() {
             // autorizar: quien dice un número no prueba nada, y la pertenencia de un pedido se
             // sigue comprobando contra `principal.telefono_verificado`.
             cliente_telefono: { tipo: 'string', requerido: false, min_longitud: 7, max_longitud: 40 },
-            // El del negocio, de `restaurante.rest_metodo_pago`. Opcional porque un negocio
-            // puede no tener ninguno configurado, y quedarse sin poder pedir por eso sería
-            // peor que tomar el pedido sin saber cómo paga.
-            id_metodo_pago: { tipo: 'entero', requerido: false, min: 1 },
             nota: { tipo: 'string', requerido: false, max_longitud: 500 },
         },
 
@@ -494,7 +450,10 @@ function registrarCapacidades() {
                     contactoTelefono: telefono,
                     direccionDomicilio: args.direccion,
                     notaDomicilio: args.nota || null,
-                    idMetodoPago: args.id_metodo_pago || null,
+                    // Siempre nulo desde el 2026-08-27: el asistente dejó de preguntar cómo
+                    // se paga (ver `docs/asistente-restaurante.md`). La caja lo pone al
+                    // cobrar, que es donde el negocio sabe de verdad cómo pagó el cliente.
+                    idMetodoPago: null,
                     // `precio_unitario` sale del producto que se acaba de releer, NUNCA de la
                     // conversación. Es la mitad que hace útil esa relectura: si el precio
                     // viniera del modelo, un pedido podría cobrarse a lo que el bot recordara

@@ -399,6 +399,61 @@ falta.
 
 **22 pruebas nuevas** (`__tests__/intelligence/pedido_un_solo_mensaje.test.js`). **664 en verde.**
 
+---
+
+## El método de pago, retirado del asistente (2026-08-27, noche)
+
+**Decisión del dueño, tras probarlo:** el asistente deja de preguntar cómo se paga. No convence,
+y cada pieza que se añade al camino del pedido es una pieza que puede fallar delante de un
+cliente real. Se documenta aquí entero porque **el trabajo está hecho y volver a ponerlo es
+revertir un commit**, no rehacerlo.
+
+### Qué se quita
+
+| Pieza | Dónde estaba |
+|---|---|
+| Paso `PAGO` del flujo determinista | `adapters/restaurante/flujo.js` |
+| `consultar_metodos_pago` | `adapters/restaurante/index.js` |
+| Parámetro `id_metodo_pago` de `tomar_pedido` | ídem |
+| Instrucción de preguntar el pago | prompt `sistema.v5` → **`v6`** |
+| Campo «A dónde se paga» en Configuración | `restaurante_app` |
+| `datos_pago` en modelo, servicio, controlador y rutas | `admin_ws` |
+
+El flujo del pedido queda: **carrito → nombre → \[teléfono\] → dirección → confirmación**, con el
+teléfono aún condicionado a que el canal no haya probado ninguno.
+
+### Qué NO se quita, y por qué
+
+- **La tabla `restaurante.rest_metodo_pago` y su CRUD.** Son de antes y las usa el POS: la caja
+  cobra con ellas y `pedid_orden.id_metodo_pago` las referencia. Tocarlas sería romper el negocio
+  para arreglar el asistente.
+- **La columna `datos_pago`.** Se queda **vacía y sin usar**. Borrarla es un `ALTER TABLE` sobre
+  una base de producción viva a cambio de nada: no estorba, no se lee, y el día que esto vuelva
+  ya está puesta. Está aquí anotada para que dentro de seis meses nadie se pregunte de dónde salió.
+- **Los métodos sembrados** en los negocios **9, 11 y 13** (`Efectivo` y `Transferencia`, ids 21
+  a 26). Ninguno tiene órdenes, así que borrarlos sería seguro — pero son formas de pago
+  perfectamente válidas en el POS de esos negocios, y nadie ha pedido quitarlas. **Se dejan.** Si
+  molestan, se borran desde Configuración de cada negocio.
+  Los del negocio 12 (`Físico` e ids 19/20) los creó el dueño y uno ya tiene una orden: **no se
+  tocan bajo ningún concepto.**
+
+### Lo que sí conviene recordar de todo esto
+
+Aunque la funcionalidad se retire, los dos hallazgos que salieron por el camino siguen valiendo, y
+son de arquitectura, no de producto:
+
+1. **Dos caminos hacia lo mismo y uno solo mantenido.** El pedido se podía tomar por el carrito
+   del menú (flujo determinista) o conversando (modelo), y el paso del pago vivía **solo** en el
+   primero. El cliente no sabe por cuál entró. Cada vez que se añada algo al pedido hay que
+   preguntarse *«¿y por el otro camino?»* — pasó tres veces en la misma semana.
+2. **Una capacidad opcional que nadie obliga a usar, no se usa.** `id_metodo_pago` era opcional,
+   no había herramienta para listar los métodos y nada en el prompt lo pedía. El modelo no fue
+   descuidado: hizo lo único que podía hacer.
+
+> **Para volver a ponerlo:** revertir el commit de esta retirada. La migración
+> `migrate:restaurante-datos-pago` ya corrió y la columna sigue ahí, así que no hace falta tocar
+> la base.
+
 ## Cómo activar el asistente en otro restaurante
 
 1. **Plan Avanzado** — es donde vive `asistente_ia` (`intelligence/core/features.js`). Sin él, el

@@ -297,15 +297,12 @@ router.get('/metodos-pago', [
 router.post('/metodos-pago', [
 	body('id_negocio').isInt({ min: 1 }),
 	body('nombre').trim().notEmpty().isLength({ min: 1, max: 80 }),
-	// A donde se paga (Nequi, cuenta). Opcional: un metodo puede no necesitarlo.
-	body('datos_pago').optional({ nullable: true }).isString().trim().isLength({ max: 200 }),
 ], MetodoPagoController.crear);
 
 router.put('/metodos-pago/:id', [
 	param('id').isInt({ min: 1 }),
 	body('id_negocio').isInt({ min: 1 }),
 	body('nombre').trim().notEmpty().isLength({ min: 1, max: 80 }),
-	body('datos_pago').optional({ nullable: true }).isString().trim().isLength({ max: 200 }),
 ], MetodoPagoController.actualizar);
 
 router.patch('/metodos-pago/:id/inactivar', [

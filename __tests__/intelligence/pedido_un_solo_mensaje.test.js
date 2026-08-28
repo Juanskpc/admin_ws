@@ -8,16 +8,19 @@
  *
  * Hasta entonces se pedía de uno en uno, y estaba escrito por qué: «un cuestionario de cinco
  * campos es lo que se hace cuando al otro lado hay una persona leyendo a mano». El argumento era
- * bueno y el resultado no: cuatro turnos y cuatro esperas para tres datos que el cliente tiene en
- * la cabeza a la vez.
+ * bueno y el resultado no: un turno y una espera por cada dato que el cliente tiene en la cabeza
+ * a la vez.
  *
  * ## Lo difícil no es preguntar, es leer la respuesta
  *
- * Una respuesta suelta trae la dirección, el celular y el método mezclados, y **una dirección
- * está llena de números**. Por eso el intérprete solo reconoce lo inequívoco —un celular
- * colombiano, un método que se nombra— y trata la dirección como lo que sobra. Lo que no
- * entiende, lo vuelve a preguntar; lo que sí, **no se pierde nunca**: hacerle repetir la
- * dirección porque no se entendió el pago sería castigarle por haber contestado.
+ * Una respuesta suelta trae el celular y la dirección mezclados, y **una dirección está llena de
+ * números**. Por eso el intérprete solo reconoce lo inequívoco —un celular colombiano— y trata la
+ * dirección como lo que sobra. Lo que no entiende, lo vuelve a preguntar; lo que sí, **no se
+ * pierde nunca**: hacerle repetir la dirección porque no se entendió el teléfono sería
+ * castigarle por haber contestado.
+ *
+ * > El paso del método de pago se retiró el 2026-08-27 por decisión del dueño. Ver
+ * > `docs/asistente-restaurante.md`.
  *
  * Correr con:  npx jest __tests__/intelligence/pedido_un_solo_mensaje.test.js
  */
@@ -32,11 +35,7 @@ const {
     PASO_PEDIDO,
 } = flujo;
 
-const METODOS = [
-    { id: 19, nombre: 'Físico', datos: null },
-    { id: 20, nombre: 'Transferencia', datos: 'Nequi 315 281 2484 a nombre de Pregonchos' },
-];
-const TODO = [PASO_PEDIDO.TELEFONO, PASO_PEDIDO.DIRECCION, PASO_PEDIDO.PAGO];
+const TODO = [PASO_PEDIDO.TELEFONO, PASO_PEDIDO.DIRECCION];
 
 // ── Leer un teléfono que convive con una dirección ──────────────────────────────────────────
 
@@ -67,65 +66,53 @@ describe('leerTelefono', () => {
 
 describe('interpretarDatos', () => {
     test('todo en una línea, con relleno alrededor', () => {
-        const r = interpretarDatos(
-            'Calle 45 #12-30 apto 502, barrio El Prado. Mi cel es 3152812484 y pago con transferencia',
-            { faltan: TODO, metodos: METODOS }
-        );
+        const r = interpretarDatos('Calle 45 #12-30 apto 502, barrio El Prado. Mi cel es 3152812484', {
+            faltan: TODO,
+        });
         expect(r).toEqual({
             telefono: '3152812484',
-            id_metodo_pago: 20,
-            metodo_nombre: 'Transferencia',
-            // Sin el «Mi cel es y pago con» colgando: eso se guarda en la orden y se imprime.
+            // Sin el «Mi cel es» colgando: eso se guarda en la orden y se imprime en la comanda.
             direccion: 'Calle 45 #12-30 apto 502, barrio El Prado',
         });
     });
 
-    test('en tres líneas, como lo pide el mensaje', () => {
-        const r = interpretarDatos('3001234567\nCra 7 #45-12, casa blanca\nFísico', {
-            faltan: TODO,
-            metodos: METODOS,
-        });
+    test('en dos líneas, como lo pide el mensaje', () => {
+        const r = interpretarDatos('3001234567\nCra 7 #45-12, casa blanca', { faltan: TODO });
         expect(r.telefono).toBe('3001234567');
         expect(r.direccion).toBe('Cra 7 #45-12, casa blanca');
-        expect(r.id_metodo_pago).toBe(19);
     });
 
     test('con etiquetas delante', () => {
-        const r = interpretarDatos(
-            'dirección: Av. Boyacá 100 apto 502, tel 3009998877, transferencia',
-            { faltan: TODO, metodos: METODOS }
-        );
+        const r = interpretarDatos('dirección: Av. Boyacá 100 apto 502, tel 3009998877', {
+            faltan: TODO,
+        });
         expect(r.direccion).toBe('Av. Boyacá 100 apto 502');
         expect(r.telefono).toBe('3009998877');
-        expect(r.id_metodo_pago).toBe(20);
+    });
+
+    test('LA REGRESIÓN: una letra suelta detrás de un número es parte de la dirección', () => {
+        // «Carrera 3e 19 a» es el ejemplo canónico del proyecto. La primera versión de la
+        // limpieza se comió la «a» y devolvía «Carrera 3e 19»: otra casa. Lo cazó un test viejo.
+        const r = interpretarDatos('Carrera 3e 19 a', { faltan: [PASO_PEDIDO.DIRECCION] });
+        expect(r.direccion).toBe('Carrera 3e 19 a');
     });
 
     test('una palabra de relleno DENTRO de la dirección no se toca', () => {
         // «Contacto» está en la lista de relleno. Solo se limpian los bordes.
-        const r = interpretarDatos('vereda El Contacto, casa 3', {
-            faltan: [PASO_PEDIDO.DIRECCION],
-            metodos: METODOS,
-        });
+        const r = interpretarDatos('vereda El Contacto, casa 3', { faltan: [PASO_PEDIDO.DIRECCION] });
         expect(r.direccion).toBe('vereda El Contacto, casa 3');
     });
 
     test('lo que no se reconoce simplemente no sale', () => {
-        expect(interpretarDatos('jajaja no te digo', { faltan: TODO, metodos: METODOS })).toEqual({});
-    });
-
-    test('un método que este negocio no tiene no se inventa', () => {
-        const r = interpretarDatos('pago en efectivo', { faltan: TODO, metodos: METODOS });
-        expect(r.id_metodo_pago).toBeUndefined();
+        expect(interpretarDatos('jajaja no te digo', { faltan: TODO })).toEqual({});
     });
 
     test('solo se busca lo que se preguntó', () => {
-        // Si el teléfono ya lo probó el canal, un número en la dirección no lo pisa.
-        const r = interpretarDatos('Calle 45 #12-30, mi cel 3152812484, transferencia', {
+        // Si el teléfono ya lo probó el canal, un número suelto en el texto no lo pisa.
+        const r = interpretarDatos('Calle 45 #12-30, mi cel 3152812484', {
             faltan: [PASO_PEDIDO.DIRECCION],
-            metodos: METODOS,
         });
         expect(r.telefono).toBeUndefined();
-        expect(r.id_metodo_pago).toBeUndefined();
     });
 });
 
@@ -133,24 +120,23 @@ describe('interpretarDatos', () => {
 
 describe('huecosDelCliente', () => {
     test('con teléfono probado por el canal, ese hueco no existe', () => {
-        const faltan = huecosDelCliente({ metodos: METODOS }, { telefonoProbado: '573000000000' });
-        expect(faltan).toEqual([PASO_PEDIDO.DIRECCION, PASO_PEDIDO.PAGO]);
-    });
-
-    test('sin teléfono probado se piden los tres', () => {
-        expect(huecosDelCliente({ metodos: METODOS }, { telefonoProbado: null })).toEqual(TODO);
-    });
-
-    test('sin métodos configurados el pago no se pregunta', () => {
-        expect(huecosDelCliente({ metodos: [] }, { telefonoProbado: '57300' })).toEqual([
+        expect(huecosDelCliente({}, { telefonoProbado: '573000000000' })).toEqual([
             PASO_PEDIDO.DIRECCION,
         ]);
+    });
+
+    test('sin teléfono probado se piden los dos', () => {
+        expect(huecosDelCliente({}, { telefonoProbado: null })).toEqual(TODO);
+    });
+
+    test('con todo puesto no queda ninguno', () => {
+        expect(huecosDelCliente({ direccion: 'Calle 1' }, { telefonoProbado: '57300' })).toEqual([]);
     });
 });
 
 // ── El flujo, de punta a punta ──────────────────────────────────────────────────────────────
 
-function crear({ metodos = METODOS, telefonoProbado = '573000000000' } = {}) {
+function crear({ telefonoProbado = null } = {}) {
     return crearFlujoRestaurante({
         contextoNegocio: {
             obtener: async () => ({
@@ -161,7 +147,6 @@ function crear({ metodos = METODOS, telefonoProbado = '573000000000' } = {}) {
                 tipoNegocio: 'RESTAURANTE',
             }),
         },
-        leerMetodosPago: async () => metodos,
         identidad: { resolver: async () => ({ principal: { telefono_verificado: telefonoProbado } }) },
         gate: {},
         ahora: () => new Date('2026-08-27T18:00:00-05:00'),
@@ -178,7 +163,6 @@ function enPaso(paso, extra = {}) {
         tarea_actual: TAREA_PEDIDO,
         tarea_datos: {
             items: [{ id_producto: 106, cantidad: 1 }],
-            metodos: METODOS,
             nombre: 'Nicolás',
             paso,
             ...extra,
@@ -193,7 +177,7 @@ const decisiones = (d) => (d.pasos || []).map((p) => p.decision);
 const textos = (d) => (d.respuestas || []).map((r) => (typeof r === 'string' ? r : r.texto));
 
 describe('el flujo pregunta una vez y lee lo que llegue', () => {
-    test('tras el nombre pide dirección y pago JUNTOS, sin botones', async () => {
+    test('a quien llegó sin número, tras el nombre le pide teléfono y dirección JUNTOS', async () => {
         const conversacion = enPaso(PASO_PEDIDO.NOMBRE);
         delete conversacion.tarea_datos.nombre;
 
@@ -202,45 +186,35 @@ describe('el flujo pregunta una vez y lee lo que llegue', () => {
         expect(d.tarea.datos.paso).toBe(PASO_PEDIDO.DATOS);
         const texto = textos(d)[0];
         expect(texto).toContain('todo junto');
+        expect(texto).toContain('número de contacto');
         expect(texto).toContain('La dirección');
-        expect(texto).toContain('Cómo vas a pagar');
-        expect(texto).toContain('Nequi 315 281 2484');
-        // Un botón al lado de «mándame tu dirección» invita a pulsarlo y dejar el resto sin
-        // contestar. Los botones vuelven solo si hay que repreguntar el pago a solas.
-        expect(d.respuestas[0].opciones ?? []).toHaveLength(0);
     });
 
-    test('el cliente contesta todo junto y se confirma de una', async () => {
+    test('contesta todo junto y se confirma de una', async () => {
         const d = await decir(
             crear(),
             enPaso(PASO_PEDIDO.DATOS),
-            'Calle 45 #12-30, barrio El Prado. Pago con transferencia'
+            'Calle 45 #12-30, barrio El Prado. Mi cel 3152812484'
         );
 
         expect(decisiones(d)).toContain('pedido_datos_recibidos');
-        // Ya no falta nada: se pide el sí.
         expect(d.tarea.nombre).toBe('confirmar_mutacion');
         expect(d.tarea.datos.args.direccion).toBe('Calle 45 #12-30, barrio El Prado');
-        expect(d.tarea.datos.args.id_metodo_pago).toBe(20);
+        expect(d.tarea.datos.args.cliente_telefono).toBe('3152812484');
     });
 
     test('contesta a medias: se guarda lo que dio y se pregunta SOLO lo que falta', async () => {
-        const d = await decir(crear(), enPaso(PASO_PEDIDO.DATOS), 'Calle 45 #12-30, barrio El Prado');
+        const d = await decir(crear(), enPaso(PASO_PEDIDO.DATOS), 'mi celular es 3152812484');
 
-        // La dirección quedó apuntada…
-        expect(d.tarea.datos.direccion).toBe('Calle 45 #12-30, barrio El Prado');
-        // …y ahora solo falta el pago, que se pregunta solo y CON sus botones.
-        expect(d.tarea.datos.paso).toBe(PASO_PEDIDO.PAGO);
-        expect(textos(d)[0]).toContain('¿Cómo vas a pagar?');
-        expect(d.respuestas[0].opciones).toEqual([
-            { id: '19', etiqueta: 'Físico' },
-            { id: '20', etiqueta: 'Transferencia' },
-        ]);
+        // El teléfono quedó apuntado…
+        expect(d.tarea.datos.telefono).toBe('3152812484');
+        // …y ahora solo falta la dirección, que se pregunta sola.
+        expect(d.tarea.datos.paso).toBe(PASO_PEDIDO.DIRECCION);
+        expect(textos(d)[0]).toMatch(/dirección/i);
     });
 
     test('no se entiende nada: se repregunta entero, sin perder el pedido', async () => {
-        const conv = enPaso(PASO_PEDIDO.DATOS);
-        const d = await decir(crear(), conv, 'jajaja adivina');
+        const d = await decir(crear(), enPaso(PASO_PEDIDO.DATOS), 'jajaja adivina');
 
         expect(decisiones(d)).toContain('pedido_datos_no_entendidos');
         expect(textos(d)[0]).toContain('no logré sacar los datos');
@@ -249,22 +223,13 @@ describe('el flujo pregunta una vez y lee lo que llegue', () => {
         expect(d.tarea.datos.paso).toBe(PASO_PEDIDO.DATOS);
     });
 
-    test('una dirección que no lo parece no se cuela por venir mezclada', async () => {
-        // El guardarraíl del 2026-08-27 sigue puesto en el camino combinado.
-        const d = await decir(crear(), enPaso(PASO_PEDIDO.DATOS), 'jaja Transferencia');
-
-        expect(d.tarea.datos.direccion).toBeUndefined();
-        // Pero el método SÍ se guardó: lo que llegó bien no se tira.
-        expect(d.tarea.datos.id_metodo_pago).toBe(20);
-    });
-
-    test('con un solo hueco se pregunta ese, no una lista de uno', async () => {
-        const conversacion = enPaso(PASO_PEDIDO.NOMBRE, { direccion: 'Calle 45 #12-30' });
+    test('con el número ya probado, el único hueco es la dirección y se pregunta sola', async () => {
+        const conversacion = enPaso(PASO_PEDIDO.NOMBRE);
         delete conversacion.tarea_datos.nombre;
 
-        const d = await decir(crear(), conversacion, 'Nicolás');
+        const d = await decir(crear({ telefonoProbado: '573000000000' }), conversacion, 'Nicolás');
 
-        expect(d.tarea.datos.paso).toBe(PASO_PEDIDO.PAGO);
-        expect(textos(d)[0]).not.toContain('cositas');
+        expect(d.tarea.datos.paso).toBe(PASO_PEDIDO.DIRECCION);
+        expect(textos(d)[0]).not.toContain('todo junto');
     });
 });

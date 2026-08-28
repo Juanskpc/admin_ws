@@ -28,7 +28,6 @@ async function crear(req, res) {
         const m = await MetodoPagoService.crear({
             idNegocio: Number(req.body.id_negocio),
             nombre: req.body.nombre,
-            datosPago: req.body.datos_pago,
         });
         return Respuesta.success(res, 'Método de pago creado', m, 201);
     } catch (err) {
@@ -48,7 +47,6 @@ async function actualizar(req, res) {
             idMetodo: Number(req.params.id),
             idNegocio: Number(req.body.id_negocio),
             nombre: req.body.nombre,
-            datosPago: req.body.datos_pago,
         });
         if (!m) return Respuesta.error(res, 'Método de pago no encontrado', 404);
         return Respuesta.success(res, 'Método de pago actualizado', m);

@@ -3,10 +3,6 @@ module.exports = (sequelize, DataTypes) => {
     id_metodo_pago: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
     id_negocio:     { type: DataTypes.INTEGER, allowNull: false },
     nombre:         { type: DataTypes.STRING(80), allowNull: false },
-    // A dónde se paga: el Nequi, la cuenta del banco, «se paga al domiciliario».
-    // Texto libre porque cada negocio lo dice a su manera; lo lee el asistente para
-    // decírselo al cliente al preguntarle cómo paga.
-    datos_pago:     { type: DataTypes.STRING(200), allowNull: true },
     estado:         { type: DataTypes.CHAR(1), defaultValue: 'A' },
     fecha_creacion: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
   }, {
