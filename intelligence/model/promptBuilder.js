@@ -65,7 +65,7 @@ const puerto = require('./puerto');
  * pueda comparar y decir si la nueva mejora o empeora, que es la razón de que los prompts sean
  * archivos versionados y no cadenas en el código.
  */
-const PROMPT_SISTEMA = 'sistema.v6';
+const PROMPT_SISTEMA = 'sistema.v7';
 
 /**
  * Los prompts se leen una vez y se quedan en memoria.

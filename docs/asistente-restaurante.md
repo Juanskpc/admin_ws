@@ -454,6 +454,79 @@ son de arquitectura, no de producto:
 > `migrate:restaurante-datos-pago` ya corrió y la columna sigue ahí, así que no hace falta tocar
 > la base.
 
+---
+
+## Dos correcciones de una conversación real (2026-08-27, noche)
+
+El dueño leyó su propia conversación y señaló dos cosas. Las dos tenían causa concreta.
+
+### 1. El bot no encontraba lo que acababa de ofrecer
+
+```
+21:55:42  BOT      Para desayuno tenemos *empanadas de carne (x3)* por $9.000…
+21:56:11  CLIENTE  perfecto, las empanadas y el jugo está bien
+21:57:55  BOT      No encuentro las empanadas de carne en la carta ahora mismo.
+21:58:24  CLIENTE  por qué no lo encuentras? si me lo acabas de dar como opcion...
+```
+
+No era alucinación. El producto 103 se llama **`Empanadas (x3)`** y su descripción dice **`De
+carne, con ají`**. El modelo lo ofreció fusionando los dos campos —que es como lo diría
+cualquiera— y luego buscó esa frase. `cartaService.buscarProductos` compara la **frase entera**
+contra el nombre y contra la descripción, **cada uno por su lado**, y «empanadas de carne» no
+está completa en ninguno de los dos.
+
+Arreglado por las dos caras, y en ese orden de importancia:
+
+1. **Segunda pasada por palabras** en `buscar_producto` (adaptador). Si la frase entera no casa,
+   se busca por la palabra más larga —la más selectiva— y sobre esos candidatos se exige que
+   **todas** las demás aparezcan en el nombre o en la descripción. Una consulta más, y solo
+   cuando la primera devolvió vacío. **Ésta es la que no depende de que el modelo obedezca.**
+2. **Prompt `sistema.v7`**: llama a cada producto como se llama en la carta; la descripción se
+   cuenta, no se pega al nombre.
+
+> **Por qué en el adaptador y no en `cartaService`:** ese servicio es el contrato de la vertical y
+> lo usa también el panel del negocio. Ensanchar su búsqueda desde aquí sería cambiarle el
+> comportamiento a una pantalla que nadie ha pedido tocar (ADR-009). Es el mismo razonamiento por
+> el que el filtro de `visible` vive ahí y no en el servicio.
+
+La segunda pasada **ensancha la búsqueda, no la convierte en adivinanza**: exige todas las
+palabras, así que «bandeja de sushi» no devuelve la bandeja paisa. Y sigue sin sacar lo que el
+negocio esconde (`visible: false`), que fue un agujero real el día 26.
+
+### 2. Quería programar un pedido para el día siguiente
+
+```
+21:55:40  CLIENTE  quisiera algo para desayunar mañana, tienes alguna otra cosa?
+…
+22:01:15  BOT      Para enviártelas mañana necesito dos cositas…
+```
+
+**Los pedidos son para el momento.** `tomar_pedido` crea una orden en la caja abierta y sale de
+cocina enseguida; no existe programar un domicilio. El bot prometió algo que el sistema no puede
+cumplir —y el prompt ya decía «nunca ofrezcas plazos», que resultó demasiado abstracto—.
+
+Y el malentendido de fondo importa más que la promesa: el cliente **no** pedía una entrega para
+mañana. Pedía comprar ahora algo que se iba a **guardar** para el desayuno. Es la lectura normal
+de esa frase y el modelo eligió la otra.
+
+Ahora está dicho en los dos sitios donde el modelo lo va a ver:
+
+- **`tomar_pedido`**: «el pedido entra a la cocina AHORA y sale de inmediato: no existe
+  programarlo para más tarde ni para otro día».
+- **`sistema.v7`**, con el caso concreto: «que alguien diga *quiero algo para desayunar mañana*
+  casi nunca significa que quiera recibirlo mañana».
+
+**7 pruebas** en `__tests__/intelligence/buscar_producto.test.js`, con un doble que replica la
+semántica **exacta** del servicio real —si el doble fuera más listo que el servicio, la suite
+probaría un mundo que no existe—. **661 en verde.**
+
+> ⚠ **Queda un detalle sin arreglar, y es deliberado.** En ese mismo día, a las 21:18, el
+> cliente contestó «Es en la manzana 3 casa 4 del barrio nogales, voy a pagar cuando llegue el
+> domiciliario» y **la frase del pago entró dentro de la dirección**, que es lo que se imprime en
+> la comanda. Recortarla exigiría partir por comas o por frases, y ahí es donde ya se perdió una
+> vez la «a» de «Carrera 3e 19 a». Ensuciar una dirección es feo; cortarla es mandar al
+> domiciliario a otra casa.
+
 ## Cómo activar el asistente en otro restaurante
 
 1. **Plan Avanzado** — es donde vive `asistente_ia` (`intelligence/core/features.js`). Sin él, el

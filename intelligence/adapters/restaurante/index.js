@@ -80,6 +80,63 @@ function precio(valor) {
 }
 
 /** La forma en que un producto llega al modelo. Un solo sitio para que las tres salidas coincidan. */
+/** Sin tildes, en minúsculas. Para comparar lo que dijo alguien con lo que hay en la carta. */
+function normalizarTexto(texto) {
+    return String(texto || '')
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .trim();
+}
+
+/**
+ * Busca en la carta, y si la frase entera no casa, lo intenta por palabras.
+ *
+ * ## El fallo que obliga a la segunda pasada
+ *
+ * `cartaService.buscarProductos` compara la frase **completa** contra el nombre y contra la
+ * descripción, cada uno por su lado. Basta con que el cliente —o el modelo— nombre un producto
+ * mezclando los dos campos para que no encuentre nada.
+ *
+ * Pasó en producción el 2026-08-27, y el cliente lo cazó al vuelo. El producto 103 se llama
+ * `Empanadas (x3)` y su descripción dice `De carne, con ají`. El modelo ofreció «empanadas **de
+ * carne** (x3)» —correcto para un humano, y fusionando los dos campos—, el cliente dijo que sí,
+ * y al buscar «empanadas de carne» no apareció: esa frase no está entera en ninguno de los dos
+ * lados. El bot contestó «no encuentro las empanadas de carne en la carta» **treinta segundos
+ * después de ofrecerlas**, y se llevó la peor respuesta posible del cliente:
+ * *«¿por qué no lo encuentras? si me lo acabas de dar como opción...»*.
+ *
+ * ## Cómo funciona la segunda pasada
+ *
+ * Se busca por la palabra más larga —la más selectiva— y sobre esos candidatos se exige que
+ * **todas** las demás palabras aparezcan en el nombre o en la descripción. Una sola consulta
+ * más, y solo cuando la primera no devolvió nada.
+ *
+ * ## Por qué aquí y no en `cartaService`
+ *
+ * Por lo mismo que el filtro de `visible` que hay tres líneas más abajo: ese servicio es el
+ * contrato de la vertical y lo usa también el panel del negocio. Ensanchar su búsqueda desde
+ * aquí sería cambiarle el comportamiento a una pantalla que nadie ha pedido tocar (ADR-009).
+ */
+async function buscarEnLaCarta(idNegocio, termino) {
+    const directa = await cartaService.buscarProductos(idNegocio, termino);
+    if (directa.length > 0) return directa;
+
+    const palabras = normalizarTexto(termino)
+        .split(/\s+/)
+        .filter((w) => w.length >= 3);
+    // Con una sola palabra la segunda pasada sería idéntica a la primera.
+    if (palabras.length < 2) return directa;
+
+    const ancla = palabras.slice().sort((a, b) => b.length - a.length)[0];
+    const candidatos = await cartaService.buscarProductos(idNegocio, ancla);
+
+    return candidatos.filter((c) => {
+        const donde = normalizarTexto(`${c.nombre} ${c.descripcion || ''}`);
+        return palabras.every((w) => donde.includes(w));
+    });
+}
+
 function producto(p) {
     return {
         id_producto: p.id_producto,
@@ -193,7 +250,8 @@ function registrarCapacidades() {
     registry.registrar({
         nombre: 'buscar_producto',
         descripcion:
-            'Busca productos de la carta por nombre. Úsala cuando el cliente pregunte por algo ' +
+            'Busca productos de la carta por nombre o por lo que dice su descripción. Úsala ' +
+            'cuando el cliente pregunte por algo ' +
             'concreto ("¿tienen hamburguesa doble?", "¿cuánto vale la limonada?") en vez de ' +
             'pedir la carta entera. Si no encuentra nada, dilo y ofrece enseñar las categorías; ' +
             'no inventes productos ni precios: lo único que existe es lo que devuelve esto.',
@@ -209,7 +267,7 @@ function registrarCapacidades() {
             // panel del negocio, donde ver lo oculto es justo lo que se quiere. Por el bot no
             // puede salir. Se filtra aquí y no en el servicio para no cambiarle el
             // comportamiento a la vertical desde el adaptador — es su contrato, no el nuestro.
-            const productos = (await cartaService.buscarProductos(idNegocio, args.termino)).filter(
+            const productos = (await buscarEnLaCarta(idNegocio, args.termino)).filter(
                 (p) => p.visible !== false
             );
             return {
@@ -286,7 +344,9 @@ function registrarCapacidades() {
         descripcion:
             'Crea un pedido a domicilio con los productos que el cliente eligió. Úsala solo ' +
             'cuando tengas los id_producto (de consultar_carta o buscar_producto), las ' +
-            'cantidades, el nombre y la dirección. Devuelve el número de pedido, que hace falta ' +
+            'cantidades, el nombre y la dirección. **El pedido entra a la cocina AHORA y sale ' +
+            'para el domicilio de inmediato: no existe programarlo para más tarde ni para otro ' +
+            'día.** Devuelve el número de pedido, que hace falta ' +
             'para consultar su estado después. Al pedirla, el negocio le enseña al cliente una ' +
             'pregunta de confirmación y no se ejecuta hasta que diga sí: no le digas que ya está hecho.',
         vertical: VERTICAL,
