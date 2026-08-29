@@ -1,5 +1,7 @@
 'use strict';
 const Models = require('../../app_core/models/conection');
+const Reglas = require('./reglasAgenda');
+const { getIdsConPlanActivo } = require('../../app_core/helpers/planHelper');
 const { Op } = Models.Sequelize;
 
 /**
@@ -144,6 +146,78 @@ async function getPermisosVistaNegocio({ idNegocio, idTipoNegocio, rolesNegocio 
     })).sort((a, b) => a.url.localeCompare(b.url));
 }
 
+/**
+ * Permisos **por acción** del usuario dentro de un negocio.
+ *
+ * Los subniveles (`gener_nivel` con `id_tipo_nivel = 4`) son las operaciones que hay dentro de
+ * una vista: agendar, cancelar, cerrar caja… Su `url` es el código que consulta el frontend
+ * (`/citas/cancelar` → `citas_cancelar`).
+ *
+ * Sigue la misma regla que las vistas: el ajuste del negocio manda si existe, y si el negocio no
+ * ha dicho nada se cae a la plantilla del rol. La diferencia con `getPermisosVistaNegocio` es
+ * que aquí el ajuste **no puede añadir** acciones que el rol no tenga: una vista de más solo
+ * enseña información, una acción de más deja cancelar citas a quien no debía.
+ */
+async function getPermisosSubnivelNegocio({ idNegocio, idTipoNegocio, rolesNegocio }) {
+    const roleIds = [...new Set((rolesNegocio || []).map(r => Number(r.id_rol)).filter(Number.isInteger))];
+    if (roleIds.length === 0) return [];
+
+    const incluirNivel = {
+        model: Models.GenerNivel, as: 'nivel', required: true,
+        where: {
+            estado: 'A', id_tipo_negocio: idTipoNegocio,
+            id_tipo_nivel: 4, url: { [Op.ne]: null },
+        },
+        attributes: ['id_nivel', 'descripcion', 'url', 'id_nivel_padre'],
+    };
+
+    const ajustes = idNegocio
+        ? await Models.GenerNivelNegocio.findAll({
+            where: { id_negocio: idNegocio, id_rol: roleIds, estado: 'A', puede_ver: true },
+            attributes: ['id_rol', 'id_nivel', 'puede_ver'],
+            include: [incluirNivel],
+        })
+        : [];
+
+    const fuente = ajustes.length > 0
+        ? ajustes
+        : await Models.GenerRolNivel.findAll({
+            where: { id_rol: roleIds, estado: 'A', puede_ver: true },
+            attributes: ['id_rol', 'id_nivel', 'puede_ver'],
+            include: [incluirNivel],
+        });
+
+    // Con varios roles gana el más permisivo: es la misma unión que ya aplica a las vistas.
+    const porCodigo = new Map();
+    for (const p of fuente) {
+        const codigo = normalizarCodigoAccion(p.nivel?.url);
+        if (!codigo) continue;
+        const actual = porCodigo.get(codigo) ?? {
+            id_nivel: p.nivel.id_nivel,
+            codigo,
+            accion: p.nivel.descripcion || 'Acción',
+            id_nivel_padre: p.nivel.id_nivel_padre,
+            puede_ver: false,
+        };
+        actual.puede_ver = actual.puede_ver || Boolean(p.puede_ver);
+        porCodigo.set(codigo, actual);
+    }
+
+    return [...porCodigo.values()].sort((a, b) => a.codigo.localeCompare(b.codigo));
+}
+
+/**
+ * `/citas/no-show` → `citas_no_show`.
+ *
+ * Se normaliza también el **guion**, no solo la barra. Sin eso el código quedaba
+ * `citas_no-show` y no casaba con el que consulta la interfaz (`citas_no_show`): la
+ * comprobación devolvía `false` siempre y la acción parecía denegada aun estando concedida.
+ */
+function normalizarCodigoAccion(url) {
+    if (!url) return '';
+    return String(url).trim().toLowerCase().replace(/^\/+/, '').replace(/[/-]/g, '_');
+}
+
 async function verificarAccesoReserva(idUsuario) {
     const usuario = await Models.GenerUsuario.findOne({
         where: { id_usuario: idUsuario, estado: 'A' },
@@ -183,6 +257,15 @@ async function verificarAccesoReserva(idUsuario) {
     });
     const rolesGlobalesMap = rolesGlobales.map(r => ({ id_rol: r.rol.id_rol, descripcion: r.rol.descripcion }));
 
+    // El plan se resuelve **por negocio**, en una sola consulta para todos.
+    //
+    // Antes solo existía un `plan_activo` suelto en la raíz de la sesión, y lo fijaba
+    // únicamente `canjearCodigo`. Eso dejaba dos agujeros: `verificarTokenAcceso` devolvía la
+    // sesión sin el campo —así que al revalidar el token el front leía `undefined`, lo trataba
+    // como `false` y bloqueaba la app de un negocio que sí paga—, y con varios negocios la
+    // bandera se quedaba con el plan del primero aunque el usuario cambiara de inquilino.
+    const idsConPlan = await getIdsConPlanActivo(idNegocios);
+
     const negocios = await Promise.all(negociosUsuario.map(async (nu) => {
         const neg = nu.negocio;
         const roles = rolesUsuario
@@ -190,11 +273,18 @@ async function verificarAccesoReserva(idUsuario) {
             .map(r => ({ id_rol: r.rol.id_rol, descripcion: r.rol.descripcion }));
         const rolesContexto = [...roles, ...rolesGlobalesMap];
 
-        const permisos_vista = await getPermisosVistaNegocio({
-            idNegocio: neg.id_negocio,
-            idTipoNegocio: neg.id_tipo_negocio,
-            rolesNegocio: rolesContexto,
-        });
+        const [permisos_vista, permisos_subnivel] = await Promise.all([
+            getPermisosVistaNegocio({
+                idNegocio: neg.id_negocio,
+                idTipoNegocio: neg.id_tipo_negocio,
+                rolesNegocio: rolesContexto,
+            }),
+            getPermisosSubnivelNegocio({
+                idNegocio: neg.id_negocio,
+                idTipoNegocio: neg.id_tipo_negocio,
+                rolesNegocio: rolesContexto,
+            }),
+        ]);
 
         return {
             id_negocio: neg.id_negocio,
@@ -203,7 +293,8 @@ async function verificarAccesoReserva(idUsuario) {
             paleta: neg.paletaColor || null,
             roles,
             permisos_vista,
-            permisos_subnivel: [],
+            permisos_subnivel,
+            plan_activo: idsConPlan.has(neg.id_negocio),
         };
     }));
 
@@ -220,53 +311,89 @@ async function verificarAccesoReserva(idUsuario) {
         negocio: negocios[0] || null,
         roles: negocios[0]?.roles || [],
         permisos_vista: negocios[0]?.permisos_vista || [],
-        permisos_subnivel: [],
+        permisos_subnivel: negocios[0]?.permisos_subnivel || [],
         roles_globales: rolesGlobalesMap,
+        // Se conserva en la raíz por compatibilidad con lo que ya leía el front; la fuente
+        // buena es el `plan_activo` de cada negocio.
+        plan_activo: negocios[0]?.plan_activo ?? false,
     };
 }
 
+
 // ────────────────────────── KPIs del dashboard ──────────────────────────
 
-function startOfTodayLocal() {
-    const d = new Date();
-    d.setHours(0, 0, 0, 0);
-    return d;
+/**
+ * El «hoy» del dashboard es el de Bogotá, no el del proceso.
+ *
+ * `new Date().setHours(0,0,0,0)` daba la medianoche de la zona del proceso Node. En el VPS,
+ * que corre en UTC, eso son las 19:00 del día anterior en hora de pared: entre las 19:00 y la
+ * medianoche el dashboard contaba las citas del día siguiente y daba «0 citas hoy» con la
+ * agenda llena. Se usa la misma aritmética anclada en -05:00 que el resto del módulo
+ * (`reglasAgenda`), que es la que ya define qué día es cada cita.
+ */
+function rangoDelDia(fechaISO) {
+    const inicio = Reglas.inicioDelDia(fechaISO);
+    return [inicio, Reglas.addMinutes(inicio, 24 * 60)];
 }
 
+const ESTADOS_ACTIVOS = ['pendiente', 'confirmada', 'completada'];
+const ESTADOS_QUE_FACTURAN = ['confirmada', 'completada'];
+
+/**
+ * KPIs, agenda del día y tendencias del negocio.
+ *
+ * Además de los contadores, devuelve lo que hace falta para que la pantalla sea accionable en
+ * vez de decorativa: las citas de hoy con su cliente, el porcentaje de la jornada realmente
+ * ocupado, el acumulado de los últimos 7 días y los servicios que más se piden. Todo en una
+ * sola llamada — el dashboard es la primera pantalla y encadenar peticiones ahí se nota.
+ */
 async function getResumenDashboard(idNegocio) {
     if (!idNegocio) throw new Error('id_negocio requerido');
 
-    const inicioHoy = startOfTodayLocal();
-    const finHoy = (() => { const d = new Date(inicioHoy); d.setDate(d.getDate() + 1); return d; })();
+    const hoyISO = Reglas.fechaISOLocal(new Date());
+    const [inicioHoy, finHoy] = rangoDelDia(hoyISO);
+    const inicioSemana = Reglas.addMinutes(inicioHoy, -6 * 24 * 60);   // hoy + 6 días atrás
+    const inicioMes30 = Reglas.addMinutes(inicioHoy, -29 * 24 * 60);
+
+    const enHoy = { [Op.gte]: inicioHoy, [Op.lt]: finHoy };
 
     const [
         citasHoy,
         citasConfirmadas,
         citasPendientes,
+        citasCompletadasHoy,
+        citasCanceladasHoy,
         ingresosHoyRow,
         totalServicios,
         totalProfesionales,
         pagosPendientes,
+        semana,
+        agendaHoy,
+        topServicios,
+        ocupacion,
     ] = await Promise.all([
         Models.ReservaCita.count({
-            where: { id_negocio: idNegocio,
-                     fecha_hora_inicio: { [Op.gte]: inicioHoy, [Op.lt]: finHoy },
+            where: { id_negocio: idNegocio, fecha_hora_inicio: enHoy,
                      estado: { [Op.notIn]: ['cancelada'] } },
         }),
         Models.ReservaCita.count({
-            where: { id_negocio: idNegocio, estado: 'confirmada',
-                     fecha_hora_inicio: { [Op.gte]: inicioHoy, [Op.lt]: finHoy } },
+            where: { id_negocio: idNegocio, estado: 'confirmada', fecha_hora_inicio: enHoy },
         }),
         Models.ReservaCita.count({
-            where: { id_negocio: idNegocio, estado: 'pendiente',
-                     fecha_hora_inicio: { [Op.gte]: inicioHoy, [Op.lt]: finHoy } },
+            where: { id_negocio: idNegocio, estado: 'pendiente', fecha_hora_inicio: enHoy },
+        }),
+        Models.ReservaCita.count({
+            where: { id_negocio: idNegocio, estado: 'completada', fecha_hora_inicio: enHoy },
+        }),
+        Models.ReservaCita.count({
+            where: { id_negocio: idNegocio, estado: 'cancelada', fecha_hora_inicio: enHoy },
         }),
         Models.ReservaCita.findOne({
             attributes: [[Models.sequelize.fn('COALESCE', Models.sequelize.fn('SUM', Models.sequelize.col('monto_total')), 0), 'total']],
             where: {
                 id_negocio: idNegocio,
-                estado: { [Op.in]: ['confirmada', 'completada'] },
-                fecha_hora_inicio: { [Op.gte]: inicioHoy, [Op.lt]: finHoy },
+                estado: { [Op.in]: ESTADOS_QUE_FACTURAN },
+                fecha_hora_inicio: enHoy,
             },
             raw: true,
         }),
@@ -275,9 +402,16 @@ async function getResumenDashboard(idNegocio) {
         Models.ReservaCita.count({
             where: { id_negocio: idNegocio, pago_estado: 'pendiente_validacion' },
         }),
+        resumenSemana(idNegocio, inicioSemana, finHoy),
+        listarAgendaDelDia(idNegocio, inicioHoy, finHoy),
+        topServiciosDelPeriodo(idNegocio, inicioMes30, finHoy),
+        ocupacionDelDia(idNegocio, hoyISO, inicioHoy, finHoy),
     ]);
 
     return {
+        fecha: hoyISO,
+
+        // Contadores originales — el contrato que ya consumía el frontend.
         citas_hoy:          citasHoy,
         citas_confirmadas:  citasConfirmadas,
         citas_pendientes:   citasPendientes,
@@ -285,7 +419,159 @@ async function getResumenDashboard(idNegocio) {
         total_servicios:    totalServicios,
         total_profesionales: totalProfesionales,
         pagos_pendientes_validacion: pagosPendientes,
+
+        citas_completadas_hoy: citasCompletadasHoy,
+        citas_canceladas_hoy:  citasCanceladasHoy,
+
+        ocupacion_hoy: ocupacion,
+        semana,
+        agenda_hoy: agendaHoy,
+        top_servicios: topServicios,
     };
 }
 
-module.exports = { verificarAccesoReserva, getResumenDashboard };
+/** Acumulado de los últimos 7 días (hoy incluido). */
+async function resumenSemana(idNegocio, desde, hasta) {
+    const [row] = await Models.sequelize.query(
+        `SELECT
+            COUNT(*) FILTER (WHERE estado <> 'cancelada')                    AS citas,
+            COUNT(*) FILTER (WHERE estado = 'completada')                    AS completadas,
+            COUNT(*) FILTER (WHERE estado = 'cancelada')                     AS canceladas,
+            COUNT(*) FILTER (WHERE estado = 'no_show')                       AS no_show,
+            COALESCE(SUM(monto_total) FILTER (WHERE estado IN ('confirmada','completada')), 0) AS ingresos
+         FROM reserva.reserva_cita
+         WHERE id_negocio = :idNegocio
+           AND fecha_hora_inicio >= :desde
+           AND fecha_hora_inicio <  :hasta`,
+        { replacements: { idNegocio, desde, hasta }, type: Models.sequelize.QueryTypes.SELECT },
+    );
+    return {
+        citas:       Number(row?.citas ?? 0),
+        completadas: Number(row?.completadas ?? 0),
+        canceladas:  Number(row?.canceladas ?? 0),
+        no_show:     Number(row?.no_show ?? 0),
+        ingresos:    Number(row?.ingresos ?? 0),
+    };
+}
+
+/**
+ * Las citas de hoy, con lo mínimo para reconocerlas de un vistazo.
+ *
+ * Se devuelven todas (el tope de 25 es una salvaguarda, no una página): un salón con la agenda
+ * llena quiere verla entera, y quien pasa de 25 citas al día tiene el módulo de Agenda para eso.
+ */
+async function listarAgendaDelDia(idNegocio, desde, hasta) {
+    const citas = await Models.ReservaCita.findAll({
+        where: {
+            id_negocio: idNegocio,
+            fecha_hora_inicio: { [Op.gte]: desde, [Op.lt]: hasta },
+            estado: { [Op.ne]: 'cancelada' },
+        },
+        attributes: [
+            'id_cita', 'fecha_hora_inicio', 'fecha_hora_fin', 'estado', 'cliente_nombre',
+            'cliente_telefono', 'monto_total', 'pago_estado', 'requiere_pago',
+        ],
+        include: [
+            { model: Models.ReservaProfesional, as: 'profesional',
+              attributes: ['id_profesional', 'nombre', 'color_hex'] },
+            // `id_cita` es obligatorio en el include aunque no se use: es la clave con la que
+            // Sequelize reparte las filas hijas entre las citas. Sin ella, `servicios` llega vacío.
+            { model: Models.ReservaCitaServicio, as: 'servicios',
+              attributes: ['id_cita', 'id_servicio'],
+              include: [{ model: Models.ReservaServicio, as: 'servicio', attributes: ['nombre'] }] },
+        ],
+        order: [['fecha_hora_inicio', 'ASC']],
+        limit: 25,
+    });
+
+    return citas.map((c) => ({
+        id_cita: c.id_cita,
+        fecha_hora_inicio: c.fecha_hora_inicio,
+        fecha_hora_fin: c.fecha_hora_fin,
+        estado: c.estado,
+        cliente_nombre: c.cliente_nombre,
+        cliente_telefono: c.cliente_telefono,
+        monto_total: Number(c.monto_total ?? 0),
+        pago_estado: c.pago_estado,
+        requiere_pago: c.requiere_pago,
+        profesional: c.profesional
+            ? { id_profesional: c.profesional.id_profesional, nombre: c.profesional.nombre, color_hex: c.profesional.color_hex }
+            : null,
+        servicios: (c.servicios || []).map((s) => s.servicio?.nombre).filter(Boolean),
+    }));
+}
+
+/** Servicios más pedidos en el periodo, por número de citas. */
+async function topServiciosDelPeriodo(idNegocio, desde, hasta) {
+    const filas = await Models.sequelize.query(
+        `SELECT s.id_servicio,
+                s.nombre,
+                COUNT(*)                          AS citas,
+                COALESCE(SUM(cs.precio_snapshot), 0) AS ingresos
+         FROM reserva.reserva_cita_servicio cs
+         JOIN reserva.reserva_cita     c ON c.id_cita = cs.id_cita
+         JOIN reserva.reserva_servicio s ON s.id_servicio = cs.id_servicio
+         WHERE c.id_negocio = :idNegocio
+           AND c.fecha_hora_inicio >= :desde
+           AND c.fecha_hora_inicio <  :hasta
+           AND c.estado <> 'cancelada'
+         GROUP BY s.id_servicio, s.nombre
+         ORDER BY citas DESC, ingresos DESC
+         LIMIT 5`,
+        { replacements: { idNegocio, desde, hasta }, type: Models.sequelize.QueryTypes.SELECT },
+    );
+    return filas.map((f) => ({
+        id_servicio: Number(f.id_servicio),
+        nombre: f.nombre,
+        citas: Number(f.citas),
+        ingresos: Number(f.ingresos),
+    }));
+}
+
+/**
+ * Cuánto de la jornada de hoy está realmente vendido.
+ *
+ * El denominador **no** es «24 h × profesionales» sino los minutos de horario laboral de cada
+ * profesional según `reglasAgenda.intervalosLaborales` — el mismo horario que decide qué se
+ * puede reservar, y ya descontados los bloqueos. Así el número significa algo: 80 % es que
+ * quedan pocos huecos que vender hoy, no que falten horas en el día.
+ *
+ * Sin horario configurado el porcentaje es `null`, no 0: «no sé» y «vacío» son cosas distintas
+ * y la interfaz las muestra distinto.
+ */
+async function ocupacionDelDia(idNegocio, fechaISO, desde, hasta) {
+    const profesionales = await Models.ReservaProfesional.findAll({
+        where: { id_negocio: idNegocio, estado: 'A' },
+        attributes: ['id_profesional'],
+    });
+
+    const minutosPorPro = await Promise.all(profesionales.map(async (p) => {
+        const laborales = await Reglas.intervalosLaborales({
+            idNegocio, idProfesional: p.id_profesional, fechaISO,
+        });
+        return laborales.reduce((acc, [i, f]) => acc + (f - i) / 60_000, 0);
+    }));
+    const minutosDisponibles = minutosPorPro.reduce((a, b) => a + b, 0);
+
+    const citas = await Models.ReservaCita.findAll({
+        where: {
+            id_negocio: idNegocio,
+            fecha_hora_inicio: { [Op.gte]: desde, [Op.lt]: hasta },
+            estado: { [Op.in]: ESTADOS_ACTIVOS },
+        },
+        attributes: ['fecha_hora_inicio', 'fecha_hora_fin'],
+    });
+    const minutosOcupados = citas.reduce(
+        (acc, c) => acc + (new Date(c.fecha_hora_fin) - new Date(c.fecha_hora_inicio)) / 60_000, 0,
+    );
+
+    return {
+        minutos_disponibles: Math.round(minutosDisponibles),
+        minutos_ocupados: Math.round(minutosOcupados),
+        porcentaje: minutosDisponibles > 0
+            ? Math.min(100, Math.round((minutosOcupados / minutosDisponibles) * 100))
+            : null,
+    };
+}
+
+module.exports = { verificarAccesoReserva, getResumenDashboard, getPermisosSubnivelNegocio };

@@ -117,7 +117,8 @@ async function getDisponibilidad(req, res) {
         const idNegocio = Number(req.params.id_negocio);
         const data = await DisponibilidadService.calcularSlots({
             idNegocio,
-            idServicio:    Number(req.query.id_servicio),
+            idServicio:    req.query.id_servicio ? Number(req.query.id_servicio) : undefined,
+            idServicios:   req.query.id_servicios,
             idProfesional: Number(req.query.id_profesional),
             fechaISO:      String(req.query.fecha),
         });

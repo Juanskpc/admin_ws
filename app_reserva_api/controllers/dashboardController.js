@@ -4,7 +4,6 @@ const { v4: uuidv4 } = require('uuid');
 const DashboardService = require('../services/dashboardService');
 const AccessCodeStore = require('../../app_parqueadero_api/services/accessCodeStore');
 const Respuesta = require('../../app_core/helpers/respuesta');
-const { tienePlanActivo } = require('../../app_core/helpers/planHelper');
 
 /** POST /reserva/auth/verificar-token */
 async function verificarTokenAcceso(req, res) {
@@ -75,8 +74,9 @@ async function canjearCodigo(req, res) {
             }
         }
 
-        const idNegocioActivo = entry.idNegocio || acceso.negocio?.id_negocio || null;
-        acceso.plan_activo = idNegocioActivo ? await tienePlanActivo(idNegocioActivo) : false;
+        // `verificarAccesoReserva` ya trae `plan_activo` por negocio; aquí solo se alinea la
+        // bandera de la raíz con el negocio que el código de acceso seleccionó.
+        acceso.plan_activo = acceso.negocio?.plan_activo ?? false;
 
         return Respuesta.success(res, 'Acceso concedido', { token: entry.token, ...acceso });
     } catch (err) {

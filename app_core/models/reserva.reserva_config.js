@@ -7,6 +7,15 @@ module.exports = (sequelize, DataTypes) => {
     paso_slot_min:             { type: DataTypes.INTEGER, allowNull: false, defaultValue: 15 },
     cobro_adelantado:          { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
     instrucciones_pago:        DataTypes.TEXT,
+    /**
+     * Si el profesional cobra, cada servicio queda ligado a quien lo prestó y la caja liquida
+     * por persona al cerrar el día. Si no, el dinero solo se agrupa por forma de pago.
+     */
+    permite_cobro_profesional: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+    /** Permite saldar una cita con varias formas de pago a la vez. */
+    permite_multipago:         { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+    /** Con esto activo, no se puede completar una cita sin un turno de caja abierto. */
+    exige_caja_abierta:        { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
     fecha_creacion:            { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
     fecha_actualizacion:       { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
   }, {

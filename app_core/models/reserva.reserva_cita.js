@@ -21,6 +21,12 @@ module.exports = (sequelize, DataTypes) => {
     pago_validado_por_id_usuario:  DataTypes.INTEGER,
     pago_validado_en:              DataTypes.DATE,
     pago_rechazo_motivo:           DataTypes.TEXT,
+    // Cobro en mostrador. `id_metodo_pago` es el pago simple; si la cita se cobró con varias
+    // formas queda NULL y el desglose vive en `reserva_pago_cita` (relación `pagos`).
+    // `id_caja` deja constancia del turno en que se cobró: sin él, cuadrar una caja pasada
+    // dependería de las fechas de la cita, que se mueven al reagendar.
+    id_metodo_pago:                DataTypes.INTEGER,
+    id_caja:                       DataTypes.INTEGER,
     fecha_creacion:                { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
     fecha_actualizacion:           { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
   }, {
@@ -33,6 +39,8 @@ module.exports = (sequelize, DataTypes) => {
     ReservaCita.belongsTo(models.GenerUsuario,       { foreignKey: 'creado_por_id_usuario', as: 'creadoPor' });
     ReservaCita.belongsTo(models.GenerUsuario,       { foreignKey: 'pago_validado_por_id_usuario', as: 'pagoValidadoPor' });
     ReservaCita.hasMany(models.ReservaCitaServicio,  { foreignKey: 'id_cita', as: 'servicios' });
+    ReservaCita.belongsTo(models.ReservaMetodoPago,  { foreignKey: 'id_metodo_pago', as: 'metodoPago' });
+    ReservaCita.belongsTo(models.ReservaCaja,        { foreignKey: 'id_caja', as: 'caja' });
     ReservaCita.belongsToMany(models.ReservaServicio, {
       through: models.ReservaCitaServicio,
       foreignKey: 'id_cita',

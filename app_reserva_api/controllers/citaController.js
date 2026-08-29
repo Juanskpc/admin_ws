@@ -5,6 +5,7 @@ const { validationResult } = require('express-validator');
 const Models = require('../../app_core/models/conection');
 const CitaService = require('../services/citaService');
 const CitaListadoService = require('../services/citaListadoService');
+const CobroService = require('../services/cobroService');
 const Respuesta = require('../../app_core/helpers/respuesta');
 
 function check(req, res) {
@@ -111,14 +112,24 @@ async function confirmar(req, res) {
     }
 }
 
-/** POST /reserva/citas/:id/completar */
+/**
+ * POST /reserva/citas/:id/completar
+ *
+ * Completar es cobrar: además del estado, el cuerpo trae la forma de pago (`id_metodo_pago`) o
+ * el desglose multipago (`pagos[]`). `cobroService` lo asienta en la caja abierta dentro de la
+ * misma transacción, para que no exista el caso de «completada pero sin registrar el dinero».
+ */
 async function completar(req, res) {
     try {
-        const c = await CitaListadoService.cambiarEstado(
-            Number(req.params.id), Number(req.body.id_negocio), 'completada',
-        );
+        const c = await CobroService.completarYCobrar({
+            idCita: Number(req.params.id),
+            idNegocio: Number(req.body.id_negocio),
+            idUsuario: req.usuario?.id_usuario,
+            idMetodoPago: req.body.id_metodo_pago ?? null,
+            pagos: req.body.pagos,
+        });
         if (!c) return Respuesta.error(res, 'Cita no encontrada', 404);
-        return Respuesta.success(res, 'Cita completada', c);
+        return Respuesta.success(res, 'Cita completada y cobrada', c);
     } catch (err) {
         return fallo(res, err, 'completar', 'Error al completar la cita.');
     }
