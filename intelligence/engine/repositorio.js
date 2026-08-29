@@ -117,7 +117,13 @@ async function asegurarConversacion({ idNegocio, canal, idExterno }, { transacti
                estado = CASE WHEN conversacion.estado IN ('dormida', 'cerrada')
                              THEN 'activa' ELSE conversacion.estado END,
                cerrado_en = CASE WHEN conversacion.estado = 'cerrada'
-                                 THEN NULL ELSE conversacion.cerrado_en END
+                                 THEN NULL ELSE conversacion.cerrado_en END,
+               -- La persona volvió a escribir: si alguien la había dado por atendida, vuelve a
+               -- la bandeja. Sin esto, atenderla una vez la escondería para siempre y su
+               -- siguiente mensaje no lo vería nadie — el fallo silencioso de cualquier
+               -- bandeja. Nótese que NO se toca el estado: que el bot vuelva a hablar es otra
+               -- decisión, y ADR-023 dice que no vuelve.
+               atendida_en = NULL
         RETURNING id_conversacion, id_negocio, canal, id_externo, estado,
                   variables, tarea_actual, tarea_datos;
         `,

@@ -317,6 +317,27 @@ describe('responder', () => {
         }
     });
 
+    test('al responder deja de estar esperando', async () => {
+        // El fallo que se vio en producción el mismo día: «espera respuesta» se marcaba con
+        // `estado = handoff_humano`, y RESPONDER es justo lo que pone ese estado. Así que
+        // contestar dejaba la conversación en la lista de pendientes para siempre y la lista
+        // solo podía crecer. Por eso `atendida_en` es una columna aparte del estado.
+        const c = await nuevaConversacion({ idNegocio: negocioA });
+        await llamar(Bandeja.responder, {
+            idUsuario: usuarioA,
+            params: { id: c.id_conversacion },
+            body: { texto: 'te atiendo yo' },
+        });
+
+        const r = await llamar(Bandeja.listarConversaciones, { idUsuario: usuarioA });
+        const fila = r.cuerpo.data.conversaciones.find(
+            (x) => x.id_conversacion === c.id_conversacion
+        );
+        expect(fila.escalada).toBe(false);
+        // Pero el bot sigue fuera: son dos preguntas distintas (ADR-023).
+        expect(fila.estado).toBe('handoff_humano');
+    });
+
     test('responder dos veces no rompe nada', async () => {
         const c = await nuevaConversacion({ idNegocio: negocioA });
         const uno = { idUsuario: usuarioA, params: { id: c.id_conversacion }, body: { texto: 'una' } };
@@ -330,6 +351,81 @@ describe('responder', () => {
             { id: c.id_conversacion }
         );
         expect(salientes.length).toBe(2);
+    });
+});
+
+describe('marcar como atendida sin responder', () => {
+    test('la saca de lo que espera, y NO devuelve la conversación al bot', async () => {
+        // No todo se resuelve por el chat: se llama al cliente, o se le atiende en el local.
+        const c = await nuevaConversacion({ idNegocio: negocioA });
+        await sequelize.query(
+            `UPDATE intelligence.conversacion SET estado = 'handoff_humano' WHERE id_conversacion = :id;`,
+            { replacements: { id: c.id_conversacion }, logging: false }
+        );
+
+        const r = await llamar(Bandeja.atender, {
+            idUsuario: usuarioA,
+            params: { id: c.id_conversacion },
+        });
+        expect(r.cuerpo.success).toBe(true);
+
+        const fila = await unaFila(
+            `SELECT estado, atendida_en FROM intelligence.conversacion WHERE id_conversacion = :id;`,
+            { id: c.id_conversacion }
+        );
+        expect(fila.atendida_en).not.toBeNull();
+        // Lo que ADR-023 protege: marcarla atendida no hace volver al asistente.
+        expect(fila.estado).toBe('handoff_humano');
+
+        // Y no se envió nada a nadie.
+        const salientes = await consulta(
+            `SELECT 1 FROM intelligence.mensaje
+              WHERE id_conversacion = :id AND direccion = 'saliente';`,
+            { id: c.id_conversacion }
+        );
+        expect(salientes).toEqual([]);
+    });
+
+    test('si la persona vuelve a escribir, reaparece', async () => {
+        // Sin esto, atender una vez la escondería para siempre y el siguiente mensaje de esa
+        // persona no lo veria nadie. Es el fallo silencioso de cualquier bandeja.
+        const c = await nuevaConversacion({ idNegocio: negocioA });
+        await llamar(Bandeja.atender, { idUsuario: usuarioA, params: { id: c.id_conversacion } });
+
+        // La ingesta real: el mismo `asegurarConversacion` que corre al llegar un mensaje.
+        const t = await sequelize.transaction();
+        await repositorio.asegurarConversacion(
+            { idNegocio: negocioA, canal: CANAL, idExterno: c.id_externo },
+            { transaction: t }
+        );
+        await t.commit();
+
+        const fila = await unaFila(
+            `SELECT atendida_en FROM intelligence.conversacion WHERE id_conversacion = :id;`,
+            { id: c.id_conversacion }
+        );
+        expect(fila.atendida_en).toBeNull();
+    });
+
+    test('no se puede marcar la de otro negocio', async () => {
+        const ajena = await nuevaConversacion({ idNegocio: negocioB });
+        const r = await llamar(Bandeja.atender, {
+            idUsuario: usuarioA,
+            params: { id: ajena.id_conversacion },
+        });
+        expect(r.statusCode).toBe(404);
+    });
+});
+
+describe('las pastillas de negocio', () => {
+    test('salen de las conversaciones que existen, no de todos los negocios del usuario', async () => {
+        await nuevaConversacion({ idNegocio: negocioA });
+        const r = await llamar(Bandeja.listarConversaciones, { idUsuario: usuarioA });
+
+        const ids = r.cuerpo.data.negocios.map((n) => n.id_negocio);
+        expect(ids).toContain(negocioA);
+        // El del vecino no, aunque tenga conversaciones: el alcance manda tambien aqui.
+        expect(ids).not.toContain(negocioB);
     });
 });
 

@@ -45,6 +45,7 @@
     "migrate:intelligence-ledger": "node migrations/migrate_intelligence_ledger.js",
     "migrate:intelligence-canal": "node migrations/migrate_intelligence_canal.js",
     "migrate:intelligence-recordatorios": "node migrations/migrate_intelligence_recordatorios.js",
+    "migrate:intelligence-bandeja": "node migrations/migrate_intelligence_bandeja.js",
     "evaluar": "node scripts/evaluar.js"
   },
   "keywords": [],

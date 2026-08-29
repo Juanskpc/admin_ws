@@ -371,4 +371,11 @@ router.post('/intelligence/bandeja/conversaciones/:id/responder', [
         .withMessage('El texto es obligatorio (1 a 4096 caracteres)'),
 ], IntelligenceBandejaController.responder);
 
+// «Ya me ocupé de esto», sin escribir nada. No todo lo que el bot escala se resuelve por el
+// chat: se llama al cliente, o se le atiende en el local. NO devuelve la conversación al bot
+// (ADR-023): solo deja de contar como pendiente.
+router.post('/intelligence/bandeja/conversaciones/:id/atender', [
+    param('id').isUUID().withMessage('ID de conversación inválido'),
+], IntelligenceBandejaController.atender);
+
 module.exports = router;

@@ -191,7 +191,7 @@ async function listarConversaciones(req, res) {
                    n.nombre AS negocio,
                    pn.nombre_mostrado AS persona,
                    pn.telefono_e164,
-                   (c.estado = :handoff) AS escalada,
+                   (c.estado = :handoff AND c.atendida_en IS NULL) AS escalada,
                    (SELECT m.contenido
                       FROM intelligence.mensaje m
                      WHERE m.id_conversacion = c.id_conversacion
@@ -201,7 +201,7 @@ async function listarConversaciones(req, res) {
               LEFT JOIN general.gener_negocio n      ON n.id_negocio = c.id_negocio
               LEFT JOIN platform.persona_negocio pn  ON pn.id_persona_negocio = c.id_persona_negocio
              WHERE ${filtro.sql}
-               ${soloEscaladas ? 'AND c.estado = :handoff' : ''}
+               ${soloEscaladas ? 'AND c.estado = :handoff AND c.atendida_en IS NULL' : ''}
              ORDER BY COALESCE(c.ultimo_mensaje_en, c.creado_en) DESC
              LIMIT :limite;
             `,
@@ -211,9 +211,34 @@ async function listarConversaciones(req, res) {
             }
         );
 
+        // Los negocios que de verdad tienen conversaciones. NO se sacan de la sesión del
+        // usuario: ahí están TODOS sus negocios —parqueadero, gimnasio, tienda— y ninguno de
+        // esos va a tener nunca una conversación, así que eran filtros que no filtran nada.
+        //
+        // Tampoco se consulta el plan: eso vive en `intelligence/core/features.js` y este
+        // controlador no puede importar `intelligence/` (ADR-005). Derivarlo de lo que hay es
+        // además más honesto — un negocio con el plan pero sin una sola conversación no
+        // necesita una pastilla que no filtra nada, y le aparece sola en cuanto reciba la
+        // primera.
+        //
+        // Se calcula sin el filtro de negocio ni el de escaladas: si no, al pulsar una
+        // pastilla desaparecerían las demás.
+        const alcanceTodo = filtroDeNegocio(alcance, null);
+        const negocios = await Models.sequelize.query(
+            `
+            SELECT DISTINCT c.id_negocio, n.nombre
+              FROM intelligence.conversacion c
+              LEFT JOIN general.gener_negocio n ON n.id_negocio = c.id_negocio
+             WHERE ${alcanceTodo.sql}
+             ORDER BY n.nombre;
+            `,
+            { replacements: { ...alcanceTodo.repl }, ...SELECT }
+        );
+
         return Respuesta.success(res, 'Conversaciones', {
             disponible: true,
             conversaciones,
+            negocios,
         });
     } catch (err) {
         console.error('Error en bandeja.listarConversaciones:', err);
@@ -361,18 +386,22 @@ async function responder(req, res) {
             }
         );
 
-        // El bot se calla. Idempotente: si ya estaba escalada, esto no hace nada y está bien.
-        if (conversacion.estado !== ESTADO_HANDOFF) {
-            await Models.sequelize.query(
-                `UPDATE intelligence.conversacion
-                    SET estado = :handoff
-                  WHERE id_conversacion = :id;`,
-                {
-                    replacements: { id: conversacion.id_conversacion, handoff: ESTADO_HANDOFF },
-                    transaction: t,
-                }
-            );
-        }
+        // El bot se calla, y la conversación deja de estar esperando: contestar es exactamente
+        // ocuparse de ella.
+        //
+        // Las dos cosas van juntas y en el mismo UPDATE porque son la misma decisión humana.
+        // Sin `atendida_en`, responder dejaba la conversación marcada como pendiente PARA
+        // SIEMPRE —`handoff_humano` es lo que la marcaba, y responder es lo que lo pone—, así
+        // que la lista de lo que espera solo podía crecer.
+        await Models.sequelize.query(
+            `UPDATE intelligence.conversacion
+                SET estado = :handoff, atendida_en = now()
+              WHERE id_conversacion = :id;`,
+            {
+                replacements: { id: conversacion.id_conversacion, handoff: ESTADO_HANDOFF },
+                transaction: t,
+            }
+        );
 
         await Audit.registrarEvento({
             modulo: 'intelligence',
@@ -402,4 +431,55 @@ async function responder(req, res) {
     }
 }
 
-module.exports = { listarConversaciones, detalleConversacion, responder };
+/**
+ * POST /admin/intelligence/bandeja/conversaciones/:id/atender
+ *
+ * «Ya me ocupé de esto» — sin escribir nada.
+ *
+ * Hace falta porque no todo lo que el bot escala se resuelve por el chat: se llama al cliente,
+ * se le atiende en el local, o simplemente no había nada que contestar. Sin esto, la única
+ * forma de quitar algo de la lista era mandarle un mensaje a alguien que ya no lo necesitaba.
+ *
+ * ⚠️ **No devuelve la conversación al bot**, y eso es deliberado. `estado` sigue en
+ * `handoff_humano`: la decisión 3 de ADR-023 —«el bot no vuelve»— se tomó para no contradecir
+ * lo que ya se le prometió al cliente, y esto no la toca. Lo único que cambia es si a una
+ * persona le queda algo por hacer.
+ *
+ * Si el cliente vuelve a escribir, la ingesta pone `atendida_en` a NULL y reaparece.
+ */
+async function atender(req, res) {
+    try {
+        if (!revisar(req, res)) return;
+        if (!(await hayEsquemaIntelligence())) {
+            return Respuesta.error(res, 'El módulo de conversaciones no está instalado', 503);
+        }
+
+        const conversacion = await cargarConversacionPermitida(
+            req.params.id,
+            req.usuario.id_usuario
+        );
+        if (!conversacion) return Respuesta.error(res, 'Conversación no encontrada', 404);
+
+        await Models.sequelize.query(
+            `UPDATE intelligence.conversacion
+                SET atendida_en = now()
+              WHERE id_conversacion = :id AND atendida_en IS NULL;`,
+            { replacements: { id: conversacion.id_conversacion } }
+        );
+
+        await Audit.registrarEvento({
+            modulo: 'intelligence',
+            accion: 'conversacion_atendida',
+            idUsuario: req.usuario.id_usuario,
+            idNegocio: conversacion.id_negocio,
+            detalle: { id_conversacion: conversacion.id_conversacion, sin_responder: true },
+        });
+
+        return Respuesta.success(res, 'Marcada como atendida', { escalada: false });
+    } catch (err) {
+        console.error('Error en bandeja.atender:', err);
+        return Respuesta.error(res, 'Error al marcar la conversación');
+    }
+}
+
+module.exports = { listarConversaciones, detalleConversacion, responder, atender };
