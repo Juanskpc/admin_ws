@@ -417,6 +417,106 @@ describe('marcar como atendida sin responder', () => {
     });
 });
 
+describe('devolver la conversación al asistente (ADR-023, Enmienda 1)', () => {
+    // Lo que ADR-023 prohíbe es que el bot vuelva SOLO. Que una persona se lo devuelva a
+    // sabiendas es otro acto y otro actor. Estas pruebas son la frontera entre las dos cosas.
+
+    test('una persona se la devuelve y el estado vuelve a activa', async () => {
+        const c = await nuevaConversacion({ idNegocio: negocioA });
+        await sequelize.query(
+            `UPDATE intelligence.conversacion SET estado = 'handoff_humano' WHERE id_conversacion = :id;`,
+            { replacements: { id: c.id_conversacion }, logging: false }
+        );
+
+        const r = await llamar(Bandeja.devolverAlAsistente, {
+            idUsuario: usuarioA,
+            params: { id: c.id_conversacion },
+        });
+        expect(r.cuerpo.success).toBe(true);
+
+        const fila = await unaFila(
+            `SELECT estado, atendida_en FROM intelligence.conversacion WHERE id_conversacion = :id;`,
+            { id: c.id_conversacion }
+        );
+        expect(fila.estado).toBe('activa');
+        // Y deja de esperar a nadie: son las dos cosas en el mismo clic.
+        expect(fila.atendida_en).not.toBeNull();
+    });
+
+    test('pulsarlo dos veces no es un error', async () => {
+        const c = await nuevaConversacion({ idNegocio: negocioA });
+        const args = { idUsuario: usuarioA, params: { id: c.id_conversacion } };
+        await llamar(Bandeja.devolverAlAsistente, args);
+        const r = await llamar(Bandeja.devolverAlAsistente, args);
+        expect(r.cuerpo.success).toBe(true);
+    });
+
+    test('no se puede devolver la de otro negocio', async () => {
+        const ajena = await nuevaConversacion({ idNegocio: negocioB });
+        const r = await llamar(Bandeja.devolverAlAsistente, {
+            idUsuario: usuarioA,
+            params: { id: ajena.id_conversacion },
+        });
+        expect(r.statusCode).toBe(404);
+    });
+
+    test('marcar como ATENDIDA no la devuelve: eso sigue prohibido', async () => {
+        // La condición que separa la enmienda de revocar el ADR. Si esto empezara a devolver la
+        // conversación, «el bot no vuelve» dejaría de significar nada.
+        const c = await nuevaConversacion({ idNegocio: negocioA });
+        await sequelize.query(
+            `UPDATE intelligence.conversacion SET estado = 'handoff_humano' WHERE id_conversacion = :id;`,
+            { replacements: { id: c.id_conversacion }, logging: false }
+        );
+        await llamar(Bandeja.atender, { idUsuario: usuarioA, params: { id: c.id_conversacion } });
+
+        const fila = await unaFila(
+            `SELECT estado FROM intelligence.conversacion WHERE id_conversacion = :id;`,
+            { id: c.id_conversacion }
+        );
+        expect(fila.estado).toBe('handoff_humano');
+    });
+});
+
+describe('el asistente hereda el contexto sabiendo que era de otro', () => {
+    test('lo que escribió una persona le llega MARCADO, no como suyo', async () => {
+        // Sin la marca, el modelo lee lo que dijo un humano como si lo hubiera dicho él y puede
+        // sostener un compromiso que nunca hizo: el hueco 1 de ADR-023 por la puerta de atrás.
+        const c = await nuevaConversacion({ idNegocio: negocioA });
+        await llamar(Bandeja.responder, {
+            idUsuario: usuarioA,
+            params: { id: c.id_conversacion },
+            body: { texto: 'Te lo dejo en 30 mil, tranquilo' },
+        });
+
+        const historial = await repositorio.historialReciente(c.id_conversacion, { limite: 20 });
+        const suyo = historial.find((h) => h.texto.includes('30 mil'));
+
+        expect(suyo.rol).toBe('asistente');
+        expect(suyo.texto).toContain('compañero del negocio');
+    });
+
+    test('lo que dice el asistente NO lleva la marca', async () => {
+        const c = await nuevaConversacion({ idNegocio: negocioA });
+        const t = await sequelize.transaction();
+        await repositorio.insertarMensajeSaliente(
+            {
+                idConversacion: c.id_conversacion,
+                idNegocio: negocioA,
+                idTurno: null,
+                canal: CANAL,
+                contenido: 'Claro, te muestro la carta',
+            },
+            { transaction: t }
+        );
+        await t.commit();
+
+        const historial = await repositorio.historialReciente(c.id_conversacion, { limite: 20 });
+        const delBot = historial.find((h) => h.texto.includes('la carta'));
+        expect(delBot.texto).not.toContain('compañero del negocio');
+    });
+});
+
 describe('las pastillas de negocio', () => {
     test('salen de las conversaciones que existen, no de todos los negocios del usuario', async () => {
         await nuevaConversacion({ idNegocio: negocioA });

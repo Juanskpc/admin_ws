@@ -378,4 +378,11 @@ router.post('/intelligence/bandeja/conversaciones/:id/atender', [
     param('id').isUUID().withMessage('ID de conversación inválido'),
 ], IntelligenceBandejaController.atender);
 
+// «Ya terminé, que siga el asistente». Es el ÚNICO camino del sistema que devuelve una
+// conversación escalada al bot, y existe por la Enmienda 1 de ADR-023: lo prohibido es que el bot
+// vuelva SOLO, no que una persona se lo devuelva a sabiendas. Nada automático puede llamar aquí.
+router.post('/intelligence/bandeja/conversaciones/:id/devolver-al-asistente', [
+    param('id').isUUID().withMessage('ID de conversación inválido'),
+], IntelligenceBandejaController.devolverAlAsistente);
+
 module.exports = router;

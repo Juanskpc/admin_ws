@@ -10,7 +10,7 @@ Los dos mecanismos que quedaban por decidir están decididos y construidos:
 | Hueco | Mecanismo | Dónde |
 |---|---|---|
 | Promesas no respaldadas | Comparación de **cifras** contra lo que devolvieron las capacidades del turno; `PROMESAS_MODO=observacion` mientras se mide | `intelligence/engine/guardarrailPromesas.js` |
-| Handoff sin humano | Frase honesta con el horario si lo hay, la conversación pasa a `handoff_humano` y **el bot no vuelve** | `intelligence/engine/handoff.js` |
+| Handoff sin humano | Frase honesta con el horario si lo hay, la conversación pasa a `handoff_humano` y **el bot no vuelve solo** (ver Enmienda 1) | `intelligence/engine/handoff.js` |
 
 Y la regla de producto que los gobierna, del dueño (2026-08-18): *«debe existir una regla implícita
 y estricta para esto, solo debe limitarse a lo que existe»*. En F7 esa regla se extendió al terreno
@@ -82,6 +82,58 @@ convierte un riesgo conocido en un incidente con un cliente real.
   **Cerrado en F7.** Lo que queda no es exposición, son límites conocidos y anotados: el guardarraíl no
   ve promesas sin número («te lo dejamos gratis»), y el horario del handoff llega `null` mientras
   `platform.business_context` no exista (ADR-020).
+
+## Enmienda 1 (2026-08-29) — «el bot no vuelve» **solo** significa que no vuelve solo
+
+**Estado: Aceptada.** No revoca nada de lo anterior; acota qué prohibía.
+
+### Qué pasó
+
+La Bandeja (F8, `intelligenceBandejaController`) le dio por fin al negocio un sitio donde
+contestar. Y al usarla apareció el otro lado de esta decisión: **una conversación escalada se
+quedaba del humano para siempre.** El cliente vuelve tres días después a preguntar otra cosa —una
+cosa que el asistente sabe hacer, como pedir a domicilio— y no le contesta nadie hasta que una
+persona lo vea.
+
+Eso no es lo que este ADR quería proteger. Lo que quería proteger es la frase del §Contexto:
+*«sería contradecir lo que ya se le prometió al cliente»*. La promesa era **«le responde una
+persona»**, y esa promesa se cumple en cuanto una persona responde. Lo que pase después ya no la
+toca.
+
+### La distinción, que es la enmienda entera
+
+|  | ¿Permitido? |
+|---|---|
+| El bot **vuelve solo** pasadas unas horas | **NO.** Sigue prohibido, y es lo que decidió el ADR original. |
+| Una persona dice «ya terminé, que siga el asistente» | **SÍ.** Es una decisión humana, no una recuperación automática. |
+
+El acto es distinto y el actor también. Nada vuelve por un temporizador: alguien pulsa un botón
+sabiendo lo que hay en el hilo.
+
+### Las tres condiciones que la hacen segura
+
+Sin ellas, esto sí sería revocar el ADR:
+
+1. **Explícita y por persona.** No hay caducidad, ni «pasadas 24 h vuelve», ni nada que ocurra sin
+   que alguien lo decida. Si nadie pulsa, la conversación sigue siendo del humano para siempre —
+   el comportamiento de hoy.
+2. **El asistente hereda el contexto, y sabe que era de otro.** Los mensajes escritos a mano se
+   guardan con `crudo.origen = 'humano'` y `historialReciente()` se los presenta marcados. Sin esa
+   marca, el modelo leería lo que dijo una persona **como si lo hubiera dicho él**, y podría
+   sostener un compromiso que nunca hizo — que es justo el hueco 1 de este ADR entrando por la
+   puerta de atrás.
+3. **Si vuelve a no saber, vuelve a escalar.** El handoff no se desactiva al devolver la
+   conversación: el ciclo no se puede quedar atrapado, y el segundo escalado se comporta igual que
+   el primero.
+
+### Lo que NO cambia
+
+- `handoff_humano` sigue significando «el bot no habla aquí», y el motor lo sigue tratando como
+  pasivo.
+- Marcar una conversación como **atendida** (`atendida_en`) sigue sin devolvérsela al bot: son dos
+  preguntas distintas y siguen siendo dos columnas.
+- Ninguna ruta automática puede cambiar `estado` de `handoff_humano` a `activa`. La única que lo
+  hace es la que nace de un clic.
 
 ## Impacto futuro
 

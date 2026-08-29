@@ -344,13 +344,27 @@ async function mensajesPendientes(idConversacion, { ventanaDias, transaction }) 
  *
  * Los salientes sin entregar sí entran: el cliente aún no los ha visto, pero el asistente ya los
  * dijo, y omitirlos haría que se repitiera.
+ *
+ * ## Los que escribió una persona van marcados
+ *
+ * Desde la Bandeja (F8) un saliente puede haberlo escrito **un humano**, no el asistente. Los dos
+ * son `direccion = 'saliente'`, así que sin distinguirlos el modelo lee lo que dijo una persona
+ * como si fuera suyo: al devolverle la conversación (ADR-023, Enmienda 1) podría sostener un
+ * compromiso que nunca hizo. Eso es el hueco 1 de ese mismo ADR entrando por la puerta de atrás.
+ *
+ * Se marca con un prefijo en el texto y **no** con un rol nuevo. Un rol nuevo obligaría a tocar
+ * `puerto.ROLES_VALIDOS` y los dos adaptadores por un solo caso; el prefijo dice lo mismo, cabe
+ * en el contrato que ya existe, y se lee igual de bien en el propio Ledger.
  */
+const MARCA_HUMANO = '[Un compañero del negocio respondió a mano]';
+
 async function historialReciente(idConversacion, { idTurno = null, limite = 20, transaction = null }) {
     const filas = await sequelize.query(
         `
-        SELECT direccion, contenido
+        SELECT direccion, contenido, humano
           FROM (
-            SELECT direccion, contenido, COALESCE(enviado_en, creado_en) AS orden, creado_en, id_mensaje
+            SELECT direccion, contenido, COALESCE(enviado_en, creado_en) AS orden, creado_en, id_mensaje,
+                   (crudo ->> 'origen') = 'humano' AS humano
               FROM intelligence.mensaje
              WHERE id_conversacion = :idConversacion
                AND (:idTurno::uuid IS NULL OR id_turno IS DISTINCT FROM :idTurno::uuid)
@@ -364,7 +378,7 @@ async function historialReciente(idConversacion, { idTurno = null, limite = 20, 
 
     return filas.map((f) => ({
         rol: f.direccion === 'entrante' ? 'cliente' : 'asistente',
-        texto: f.contenido,
+        texto: f.humano ? `${MARCA_HUMANO} ${f.contenido}` : f.contenido,
     }));
 }
 

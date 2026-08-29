@@ -367,11 +367,17 @@ async function responder(req, res) {
 
         // Nace `pendiente` a propósito: quien lo entrega es el Channel Gateway, con sus
         // reintentos. Ver la cabecera de este archivo.
+        // `crudo.origen = 'humano'` no es telemetría: es lo que impide que el asistente lea lo
+        // que dijo una persona **como si lo hubiera dicho él**. Sin la marca, al devolverle la
+        // conversación sostendría compromisos que nunca hizo — el hueco 1 de ADR-023 entrando
+        // por la puerta de atrás. Ver la Enmienda 1, condición 2.
         const [fila] = await Models.sequelize.query(
             `
             INSERT INTO intelligence.mensaje
-                (id_conversacion, id_negocio, direccion, canal, contenido, opciones, estado_entrega)
-            VALUES (:idConversacion, :idNegocio, 'saliente', :canal, :texto, '[]'::jsonb, 'pendiente')
+                (id_conversacion, id_negocio, direccion, canal, contenido, opciones, estado_entrega,
+                 crudo)
+            VALUES (:idConversacion, :idNegocio, 'saliente', :canal, :texto, '[]'::jsonb, 'pendiente',
+                    CAST(:crudo AS jsonb))
             RETURNING id_mensaje, creado_en;
             `,
             {
@@ -380,6 +386,7 @@ async function responder(req, res) {
                     idNegocio: conversacion.id_negocio,
                     canal: conversacion.canal,
                     texto,
+                    crudo: JSON.stringify({ origen: 'humano', id_usuario: req.usuario.id_usuario }),
                 },
                 type: Models.sequelize.QueryTypes.INSERT,
                 transaction: t,
@@ -482,4 +489,85 @@ async function atender(req, res) {
     }
 }
 
-module.exports = { listarConversaciones, detalleConversacion, responder, atender };
+/**
+ * POST /admin/intelligence/bandeja/conversaciones/:id/devolver-al-asistente
+ *
+ * «Ya terminé de hablar con esta persona: que siga el asistente.»
+ *
+ * ## Esto toca un ADR, y por eso lleva tanto comentario
+ *
+ * [ADR-023](../../docs/adr/ADR-023-guardarrailes.md) decidió que **el bot no vuelve**. La
+ * **Enmienda 1 (2026-08-29)** acota qué prohibía esa frase: no que el bot vuelva nunca, sino que
+ * vuelva **solo**. La promesa que se le hizo al cliente era «le responde una persona», y esa
+ * promesa se cumple en cuanto una persona responde; lo que pase después ya no la contradice.
+ *
+ * Las tres condiciones que hacen que esto no sea revocar el ADR:
+ *
+ * 1. **Nace de un clic, nunca de un temporizador.** No hay caducidad. Si nadie pulsa, la
+ *    conversación sigue siendo del humano para siempre — el comportamiento anterior.
+ * 2. **El asistente hereda el contexto sabiendo que era de otro**: los mensajes escritos a mano
+ *    llevan `crudo.origen = 'humano'` y el historial se los da marcados.
+ * 3. **Si vuelve a no saber, vuelve a escalar.** Aquí no se desactiva nada del handoff; el
+ *    segundo escalado se comporta igual que el primero.
+ *
+ * Y `atendida_en` se deja puesta: la conversación vuelve al asistente **y** deja de esperar a
+ * nadie. Son las dos cosas a la vez y las dos las decide la misma persona en el mismo clic.
+ */
+async function devolverAlAsistente(req, res) {
+    try {
+        if (!revisar(req, res)) return;
+        if (!(await hayEsquemaIntelligence())) {
+            return Respuesta.error(res, 'El módulo de conversaciones no está instalado', 503);
+        }
+
+        const conversacion = await cargarConversacionPermitida(
+            req.params.id,
+            req.usuario.id_usuario
+        );
+        if (!conversacion) return Respuesta.error(res, 'Conversación no encontrada', 404);
+
+        if (conversacion.estado !== ESTADO_HANDOFF) {
+            // No es un error: el asistente ya la lleva. Contestar 200 evita que el panel enseñe
+            // un fallo por pulsar dos veces.
+            return Respuesta.success(res, 'El asistente ya lleva esta conversación', {
+                estado: conversacion.estado,
+            });
+        }
+
+        await Models.sequelize.query(
+            `UPDATE intelligence.conversacion
+                SET estado = 'activa', atendida_en = now()
+              WHERE id_conversacion = :id AND estado = :handoff;`,
+            {
+                replacements: { id: conversacion.id_conversacion, handoff: ESTADO_HANDOFF },
+            }
+        );
+
+        // Se audita con nombre propio y no como una edición cualquiera: es el único camino del
+        // sistema que devuelve una conversación al asistente, y si algún día el bot dice algo
+        // raro después de un handoff, esta fila es la que lo explica.
+        await Audit.registrarEvento({
+            modulo: 'intelligence',
+            accion: 'conversacion_devuelta_al_asistente',
+            idUsuario: req.usuario.id_usuario,
+            idNegocio: conversacion.id_negocio,
+            detalle: {
+                id_conversacion: conversacion.id_conversacion,
+                adr: 'ADR-023 Enmienda 1',
+            },
+        });
+
+        return Respuesta.success(res, 'El asistente retoma la conversación', { estado: 'activa' });
+    } catch (err) {
+        console.error('Error en bandeja.devolverAlAsistente:', err);
+        return Respuesta.error(res, 'Error al devolver la conversación al asistente');
+    }
+}
+
+module.exports = {
+    listarConversaciones,
+    detalleConversacion,
+    responder,
+    atender,
+    devolverAlAsistente,
+};
