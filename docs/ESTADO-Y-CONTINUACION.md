@@ -1,6 +1,6 @@
 # EscalApp Intelligence — estado y cómo continuar
 
-**Última actualización:** 2026-08-29, cierre de sesión (Bandeja + F8-C multi-número desplegados; **pendiente: que Meta apruebe la verificación**)
+**Última actualización:** 2026-08-29, cierre de sesión (Bandeja + F8-C desplegados, y **la verificación de negocio APROBADA** el mismo día)
 **Propósito:** que retomar el trabajo no cueste una sesión de arqueología. Si vuelves a este
 proyecto después de semanas, **lee este documento primero** y sigue por donde diga.
 
@@ -23,21 +23,28 @@ en verde.** El roadmap original está agotado: todo lo que se hace ahora sale de
 >
 > **Lo que bloquea hoy no es código. Es una persona en Meta.**
 >
-> ### 1. La verificación de negocio — ENVIADA, en revisión
+> ### 1. ✅ La verificación de negocio — **APROBADA el 2026-08-29**
 >
-> Enviada el 2026-08-29. Salió por la rama corta: **Meta encontró el establecimiento en el registro
-> mercantil y no pidió ningún documento.** Se contesta sin entrar al panel:
+> Enviada y aprobada **el mismo día**, en horas. Salió por la rama corta: Meta encontró el
+> establecimiento en el registro mercantil y **no pidió ningún documento**. Medido, no supuesto:
 >
-> ```bash
-> ssh escalapp@45.63.105.95 "cd /var/www/admin_ws && node scripts/whatsapp_salud.js"
-> # Mientras salga 141010 sobre BUSINESS, no ha pasado.
+> ```
+> Puede enviar (global): AVAILABLE
+>   ✓ WABA     4199925320246584: AVAILABLE
+>   ✓ BUSINESS 1115123864174893: AVAILABLE     ← por la mañana decía LIMITED / 141010
+>   ✓ APP      1552342763052863: AVAILABLE
 > ```
 >
-> **Mientras esté en revisión: no tocar el DNS ni los datos legales del portafolio.**
+> **Ya no queda nada bloqueado, y con F8-C el código tampoco estorba: el siguiente cliente se
+> puede conectar hoy.** El techo pasa de 2 a 20 números y los mensajes que inicia la empresa
+> (recordatorios) ya no tienen ningún freno.
 >
-> Cuando pase, el techo sube de 2 a 20 números y se puede conectar al tercer cliente. El recorrido
-> pantalla por pantalla, y las dos opciones que habrían costado un rechazo, en
+> El recorrido pantalla por pantalla, y las dos opciones que habrían costado un rechazo, en
 > [`canal-whatsapp.md`](canal-whatsapp.md) §«ENVIADA el 2026-08-29».
+>
+> **Higiene que quedó pendiente y ahora ya se puede hacer** (durante la revisión no se tocaba el
+> DNS): bajar el TTL del TXT de verificación a `300` y borrar el CNAME muerto de AWS
+> (`...acm-validations.aws`).
 >
 > ### 2. Dar de alta el número de un cliente — ya solo es procedimiento
 >

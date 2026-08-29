@@ -917,12 +917,18 @@ Dos detalles del formulario de facturación, que es otro sitio donde se pide lo 
   declararle a Meta —y de ahí a la DIAN— una condición que no se cumple.
 - El *«(EIN)»* de la casilla de identificación fiscal es un descuido de traducción: es el **NIT**.
 
-#### ENVIADA el 2026-08-29 — y no hizo falta subir un solo documento
+#### ✅ APROBADA el 2026-08-29 — enviada y aprobada el mismo día, sin un solo documento
 
 El trámite entero salió por la rama corta: **Meta cruzó los datos con el registro mercantil
 colombiano, encontró el establecimiento y lo dio por bueno sin pedir papeles.** La pantalla de
 documentos nunca apareció; en su lugar salió una lista de establecimientos coincidentes, se
-seleccionó el correcto y quedó **«En revisión»**.
+seleccionó el correcto y quedó «En revisión».
+
+**Y se aprobó en horas, el mismo día.** El runbook decía «de un par de días a dos semanas» — eso
+vale para la rama con documentos, donde lee una persona. Con coincidencia automática en el registro
+no hay nadie que leer: por la mañana `health_status` daba `141010` sobre `BUSINESS` y por la tarde
+las tres entidades estaban en `AVAILABLE`. **La lección práctica: cuando los nombres cuadran
+exactamente con el registro, esto no es un trámite de dos semanas.**
 
 Eso solo ocurre si lo escrito coincide con el registro. El certificado y el RUT hay que tenerlos
 a mano igual —si no hay coincidencia, el formulario los pide—, pero **no son el camino por
