@@ -1,6 +1,6 @@
 # EscalApp Intelligence — estado y cómo continuar
 
-**Última actualización:** 2026-08-29 (dominio verificado, **verificación de negocio ENVIADA y en revisión**, y segundo administrador dentro del portafolio)
+**Última actualización:** 2026-08-29, cierre de sesión (Bandeja + F8-C multi-número desplegados; **pendiente: que Meta apruebe la verificación**)
 **Propósito:** que retomar el trabajo no cueste una sesión de arqueología. Si vuelves a este
 proyecto después de semanas, **lee este documento primero** y sigue por donde diga.
 
@@ -9,125 +9,90 @@ proyecto después de semanas, **lee este documento primero** y sigue por donde d
 
 ---
 
-## 4-0. POR DÓNDE SE SIGUE (cierre del 2026-08-27)
+## 4-0. POR DÓNDE SE SIGUE (cierre del 2026-08-29)
 
 > Esta sección es lo primero que hay que leer al retomar. Las de más abajo son historia de fases
 > ya cerradas y se conservan porque explican **por qué** las cosas están como están.
 
-**Estado en una frase:** el asistente atiende **dos verticales** en producción —citas y
-restaurante— por WhatsApp, y desde el menú digital se puede armar un pedido y mandarlo al bot ya
-escrito. **661 pruebas de backend + 15 de frontend en verde.** El roadmap original está agotado:
-lo que se hace ahora sale del uso real.
+**Estado en una frase:** el asistente atiende dos verticales en producción por WhatsApp, el negocio
+**ya tiene dónde contestar cuando el bot no sabe**, y el código **ya soporta varios números** — lo
+único que falta para el tercer cliente es que Meta apruebe la verificación. **716 pruebas de backend
+en verde.** El roadmap original está agotado: todo lo que se hace ahora sale del uso real.
 
 > ## ⏭️ SI ESTÁS RETOMANDO, EMPIEZA AQUÍ
 >
-> El trabajo se paró el 2026-08-27 en un punto concreto: **abrir el servicio a los primeros
-> clientes**, y lo que bloquea **no es código**.
+> **Lo que bloquea hoy no es código. Es una persona en Meta.**
 >
-> **Lo que le toca al dueño, en Meta** (nada de esto se puede hacer ni consultar con el token que
-> hay — le falta `business_management`):
+> ### 1. La verificación de negocio — ENVIADA, en revisión
 >
-> 1. **Verificación de negocio.** *Iniciada como decisión, no como trámite: al cerrar la sesión
->    aún no se había enviado.* La revisa una persona y tarda de días a dos semanas. Antes de
->    enviarla hay que contestar una pregunta que **no es técnica y bloquea todo lo demás**:
->    ¿existe una persona jurídica registrada llamada Escalapp, con papeles? Meta verifica
->    **empresas**. El runbook y las causas reales de rechazo están en
->    [`canal-whatsapp.md`](canal-whatsapp.md) §«La verificación de negocio, paso a paso».
-> 2. **El método de pago** (`141006`). Es **otra cosa, en otro sitio** del panel — verificar el
->    negocio no lo arregla. Hoy no rompe nada porque el bot solo responde; morderá con el primer
->    recordatorio.
->
-> **Cómo se comprueba si ya pasó, sin entrar al panel:**
+> Enviada el 2026-08-29. Salió por la rama corta: **Meta encontró el establecimiento en el registro
+> mercantil y no pidió ningún documento.** Se contesta sin entrar al panel:
 >
 > ```bash
-> curl -s "https://graph.facebook.com/v21.0/4199925320246584?fields=health_status" \
->   -H "Authorization: Bearer $WHATSAPP_TOKEN"
-> # 141010 sobre BUSINESS = verificación pendiente
-> # 141006 sobre WABA     = método de pago pendiente
+> ssh escalapp@45.63.105.95 "cd /var/www/admin_ws && node scripts/whatsapp_salud.js"
+> # Mientras salga 141010 sobre BUSINESS, no ha pasado.
 > ```
 >
-> ---
+> **Mientras esté en revisión: no tocar el DNS ni los datos legales del portafolio.**
 >
-> ### ✅ Avance del 2026-08-28 (leer antes que lo de arriba)
+> Cuando pase, el techo sube de 2 a 20 números y se puede conectar al tercer cliente. El recorrido
+> pantalla por pantalla, y las dos opciones que habrían costado un rechazo, en
+> [`canal-whatsapp.md`](canal-whatsapp.md) §«ENVIADA el 2026-08-29».
 >
-> **La pregunta que bloqueaba todo está contestada: SÍ existe la empresa.** Matrícula mercantil de
-> ~2023 renovada ese día, razón social `ESCALAPP`, **a nombre del titular — persona natural, no
-> S.A.S.** Eso cambia qué se escribe en cada casilla; la tabla está en
-> [`canal-whatsapp.md`](canal-whatsapp.md) §«RESUELTA el 2026-08-28».
+> ### 2. Dar de alta el número de un cliente — ya solo es procedimiento
 >
-> **El método de pago (`141006`) quedó arreglado**, y se comprobó de la única forma que vale: un
-> recordatorio real que llegó a un teléfono. **Es el primer mensaje proactivo entregado en
-> producción.** El primer intento falló con `131042` mientras `health_status` decía `AVAILABLE` —
-> ver §«El primer recordatorio que llegó de verdad».
+> Con F8-C hecho, conectar un cliente son tres pasos y ninguno es código:
 >
-> **Lo que quedó hecho en el portafolio:** nombre legal `NICOLAS PANTOJA PAEZ`, dirección, teléfono
-> y correo `escalappsystem@gmail.com`; dominio `escalapp.cloud` añadido (**«No verificado»**).
+> 1. Añadir su número a la WABA en Meta y verificarlo con su PIN.
+> 2. `INSERT INTO platform.numero_canal (canal, id_externo, id_negocio, numero_e164)` — el
+>    `id_externo` es el **`phone_number_id`** de Meta, que **no** es el número de teléfono.
+> 3. Su negocio en **Plan Avanzado** (donde vive `asistente_ia`), capacidades habilitadas, carta si
+>    es restaurante, y `url_whatsapp` para el botón del menú digital.
 >
-> ### ⏭️ PENDIENTE PARA MAÑANA (2026-08-29), en este orden
+> El registro se refresca solo cada 60 s: no hace falta reiniciar nada.
 >
-> 1. ~~**Verificar el dominio.**~~ **HECHO el 2026-08-29.** El TXT propagó bien —con el prefijo
->    `facebook-domain-verification=`— en Google y en Cloudflare, y `escalapp.cloud` quedó
->    verificado.
-> 2. ~~**Enviar la verificación de negocio.**~~ **ENVIADA el 2026-08-29, estado «En revisión».**
->    Salió por la rama corta: **Meta encontró el establecimiento en el registro mercantil y no
->    pidió ningún documento.** El recorrido pantalla por pantalla —y las dos opciones que habrían
->    costado un rechazo— en [`canal-whatsapp.md`](canal-whatsapp.md) §«ENVIADA el 2026-08-29».
->    **Mientras esté en revisión, no tocar el DNS ni los datos legales del portafolio.**
-> 3. ~~**Segundo administrador del portafolio**~~ — **invitación enviada el 2026-08-29** al otro
->    dev, con control total del portafolio y de la cuenta de WhatsApp, y **ya aceptó** — el Centro de
->    seguridad lo confirma con «Se ha añadido un administrador alternativo». **No hay forma de
->    verlo desde la API** (falta `business_management`): se mira en el panel. La **app** queda sin
->    asignar hasta que él se registre en `developers.facebook.com` — Meta no deja asignarla a
->    quien no es desarrollador, y no hace falta para administrar el canal. Runbook completo y las
->    tres trampas del diálogo de activos: [`canal-whatsapp.md`](canal-whatsapp.md) §«Segundo
->    administrador del portafolio».
-> 4. **Higiene, después de que pase la verificación** (no tocar el DNS mientras Meta mira): bajar
->    el TTL del TXT a `300` y borrar el CNAME muerto de AWS (`...acm-validations.aws`).
+> ⚠️ **Aviso que hay que darle al cliente ANTES, no después:** el número que dé **no puede estar en
+> uso en WhatsApp**. Al conectarlo a la Cloud API deja de funcionar en la app del móvil, y con ella
+> se va el historial.
 >
-> ### ⏭️ Y en código, cuando se retome
+> ### 3. Lo que quedó pendiente de decidir, y es lo más caro
 >
-> 1. ~~**Arreglar `marcarAcuseDelCanal`**~~ **HECHO el 2026-08-29**, con prueba que falla sin el
->    arreglo. Suite completa 662/662.
-> 2. ~~**La Bandeja**~~ **HECHA el 2026-08-29** — el hueco que dejaba inútil al handoff: el bot
->    escalaba honestamente y **la persona no tenía dónde contestar** (el número está en la Cloud
->    API, así que no funciona en la app del móvil). Tres endpoints en
->    `/admin/intelligence/bandeja/*` sin `requireSuperAdmin` + pantalla en `/admin/bandeja`.
->    Responder **toma la conversación** y el bot no vuelve (ADR-023); fuera de la ventana de 24 h
->    se rechaza con 409 en vez de fingir un envío. No importa `intelligence/`: inserta el saliente
->    como `pendiente` y lo entrega el Channel Gateway (ADR-016), así que el apagón de ADR-005
->    sigue literal. 8 pruebas nuevas, casi todas sobre el aislamiento entre inquilinos. 670/670.
-> 3. ~~**F8-C multi-número**~~ **HECHO el 2026-08-29.** `platform.numero_canal` + `numeros.js`
->    (caché con respaldo al `.env`, para que el cambio no tenga corte), `resolverNegocio()` sigue
->    **síncrona** —si no, `interpretarWebhook()` dejaba de ser pura y de poder probarse sin base—,
->    `entregar()` manda desde el número del negocio dueño, y `estado()` lista los que hay.
->    **El token sigue global**: cubre la WABA entera, no un número. 716/716.
->    **Lo que falta ya no es código**: añadir cada número de cliente en Meta, y para eso hace falta
->    que pase la verificación (hoy el techo son 2).
-> 4. ~~Sin commitear: **`scripts/whatsapp_salud.js`**~~ **registrado el 2026-08-29.** ⚠️ En el VPS
->    existe como archivo **sin versionar**, y git se niega a hacer `pull` si va a sobrescribir uno
->    así — con un error que no dice eso. Antes del próximo despliegue del backend:
->    `rm /var/www/admin_ws/scripts/whatsapp_salud.js`.
-> 5. **Queda una cita de prueba** en el Salón Demo: `id_cita` 8, sábado 2026-08-29 18:00, a nombre
->    de «Nicolas Pantoja». Se creó y se movió a mano para forzar el recordatorio.
+> **Escalar más allá de 20 números.** El dueño quiere captar clientes con **Facebook Ads**, y eso
+> agota el techo antes de lo previsto y hace inviable el alta manual. La salida es **Embedded
+> Signup** (cada cliente con su propia WABA), que cuesta publicar la app + revisión de Meta + ser
+> Proveedor de Tecnología, y **cambia quién le paga a Meta**. Con el modelo de hoy el margen es
+> nuestro; con aquél, el cliente ve la factura de Meta.
 >
-> ---
+> **Es una decisión a tomar ANTES de gastar en anuncios, no después.**
 >
-> **Lo que se puede hacer sin esperar a Meta** — está detallado abajo, punto 1 de «Lo siguiente»:
-> los tres cambios de código del alta multi-número. Son de un día y no dependen de nadie.
+> ### 4. En código, lo siguiente que aporta
+>
+> - **El aviso cuando algo se escala.** La bandeja existe y se actualiza sola, pero **nadie te avisa**:
+>   hay que entrar a mirar. La infraestructura está (el outbox de F1); es enganchar el evento y
+>   decidir por dónde avisa — correo, o una campanita en el admin.
+> - **Los tests del frontend de `admin_app-v21` no compilan**, y ya fallaban antes de esta sesión:
+>   specs de `auth/` desfasadas del modelo (`LoginRequest` ya no tiene `email`). El build de
+>   producción sí pasa.
+> - **La base compartida del VPS (5433) no tiene las migraciones de reserva** del 2026-08-29
+>   (caja, informes, subniveles, usuarios). Se corrieron en local y en producción. Correrlas allí
+>   le cambia el esquema al otro dev a media sesión: coordinarlo antes.
 
 ### Qué hay vivo, y dónde apunta
 
 | Pieza | Estado |
 |---|---|
-| Número `+57 315 281 2484` | Atiende a **`id_negocio` 12, Restaurante pregonchos** |
+| Número `+57 315 281 2484` | Atiende a **`id_negocio` 12, Restaurante pregonchos** — desde `platform.numero_canal`, ya no desde el `.env` |
+| Multi-número | ✅ **el código lo soporta** (F8-C). El techo son 2 hasta que Meta verifique |
+| Bandeja del negocio | `/admin/bandeja` — ver, responder, marcar atendida, devolver al asistente. Se refresca sola cada 5 s. Ver [`bandeja.md`](bandeja.md) |
 | Verticales con flujo | `reserva` (citas) y `restaurante` |
 | Capacidades | 10: seis de reserva, cuatro de restaurante |
 | Menú digital con carrito | `escalapp.cloud/restaurante/carta/12`, desplegado el 2026-08-25 |
 | Escalera | Nivel 1 determinista + `openai/gpt-5.6-terra` |
 | WebChat | **apagado**, y sigue sin autenticar |
 
-⚠️ **Un número, un negocio.** Apuntarlo a otro deja de atender al anterior. El Salón Demo
-(`id_negocio` 10) quedó sin bot cuando el número pasó a pregonchos.
+⚠️ **Un número, un negocio** — pero desde F8-C eso es una fila, no una variable de entorno: caben
+varios pares a la vez. Lo que sigue siendo cierto es que **un mismo número no puede atender a dos
+negocios**, y que el Salón Demo (`id_negocio` 10) sigue sin bot porque no tiene número propio.
 
 ### Lo que se hizo el 2026-08-26: el trato con el cliente
 
