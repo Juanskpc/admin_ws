@@ -150,6 +150,9 @@ async function canjearCodigo(req, res) {
             if (negocioSeleccionado) {
                 acceso.negocio = negocioSeleccionado;
                 acceso.roles = negocioSeleccionado.roles;
+                // Sin esto se devolvían los permisos del negocio por defecto (`negocios[0]`)
+                // junto al negocio elegido: dos negocios distintos en la misma respuesta.
+                acceso.permisos_vista = negocioSeleccionado.permisos_vista;
             }
         }
 
