@@ -88,13 +88,22 @@ lo que se hace ahora sale del uso real.
 >
 > 1. ~~**Arreglar `marcarAcuseDelCanal`**~~ **HECHO el 2026-08-29**, con prueba que falla sin el
 >    arreglo. Suite completa 662/662.
-> 2. **F8-C multi-número** (los 3 cambios de abajo). El punto 6 —que `entregar()` mande desde el
+> 2. ~~**La Bandeja**~~ **HECHA el 2026-08-29** — el hueco que dejaba inútil al handoff: el bot
+>    escalaba honestamente y **la persona no tenía dónde contestar** (el número está en la Cloud
+>    API, así que no funciona en la app del móvil). Tres endpoints en
+>    `/admin/intelligence/bandeja/*` sin `requireSuperAdmin` + pantalla en `/admin/bandeja`.
+>    Responder **toma la conversación** y el bot no vuelve (ADR-023); fuera de la ventana de 24 h
+>    se rechaza con 409 en vez de fingir un envío. No importa `intelligence/`: inserta el saliente
+>    como `pendiente` y lo entrega el Channel Gateway (ADR-016), así que el apagón de ADR-005
+>    sigue literal. 8 pruebas nuevas, casi todas sobre el aislamiento entre inquilinos. 670/670.
+> 3. **F8-C multi-número** (los 3 cambios de abajo). El punto 6 —que `entregar()` mande desde el
 >    número del negocio dueño de la conversación— dejó de ser teórico: ver el cruce en vivo
 >    documentado al final de §«El primer recordatorio que llegó de verdad».
-> 3. Sin commitear en `admin_ws`: **`scripts/whatsapp_salud.js`** (creado el 2026-08-28; sustituye
->    al `curl` manual de más arriba y traduce los códigos `141006`/`141010`). Está también copiado
->    en el VPS como archivo sin registrar.
-> 4. **Queda una cita de prueba** en el Salón Demo: `id_cita` 8, sábado 2026-08-29 18:00, a nombre
+> 4. ~~Sin commitear: **`scripts/whatsapp_salud.js`**~~ **registrado el 2026-08-29.** ⚠️ En el VPS
+>    existe como archivo **sin versionar**, y git se niega a hacer `pull` si va a sobrescribir uno
+>    así — con un error que no dice eso. Antes del próximo despliegue del backend:
+>    `rm /var/www/admin_ws/scripts/whatsapp_salud.js`.
+> 5. **Queda una cita de prueba** en el Salón Demo: `id_cita` 8, sábado 2026-08-29 18:00, a nombre
 >    de «Nicolas Pantoja». Se creó y se movió a mano para forzar el recordatorio.
 >
 > ---
