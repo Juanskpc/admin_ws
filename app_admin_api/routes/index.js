@@ -345,4 +345,30 @@ router.post('/intelligence/conversaciones/:id/desbloquear', requireSuperAdmin, [
         .withMessage('El motivo es obligatorio (5 a 300 caracteres)'),
 ], IntelligenceConsolaController.desbloquearConversacion);
 
+// --- Bandeja del inquilino ---
+// Las mismas conversaciones, pero para el dueño del negocio y CON respuesta humana. No lleva
+// `requireSuperAdmin`: el alcance lo decide `alcanceDeNegocios()` dentro del controlador,
+// cruzando el usuario del token contra sus negocios. El `id_negocio` de la petición nunca se
+// cree — es la frontera entre dos clientes.
+const IntelligenceBandejaController = require('../controllers/intelligenceBandejaController');
+
+router.get('/intelligence/bandeja/conversaciones', [
+    query('id_negocio').optional().isInt({ min: 1 }).withMessage('ID de negocio inválido'),
+    query('solo_escaladas').optional().isIn(['true', 'false'])
+        .withMessage('solo_escaladas debe ser true o false'),
+    query('limite').optional().isInt({ min: 1, max: 100 }).withMessage('Límite inválido'),
+], IntelligenceBandejaController.listarConversaciones);
+
+router.get('/intelligence/bandeja/conversaciones/:id', [
+    param('id').isUUID().withMessage('ID de conversación inválido'),
+], IntelligenceBandejaController.detalleConversacion);
+
+// El texto se limita a 4096 porque es el máximo que acepta un mensaje de WhatsApp: cortarlo
+// aquí es decirlo a tiempo, en vez de que Meta lo rechace cuando ya nadie mira.
+router.post('/intelligence/bandeja/conversaciones/:id/responder', [
+    param('id').isUUID().withMessage('ID de conversación inválido'),
+    body('texto').isString().trim().isLength({ min: 1, max: 4096 })
+        .withMessage('El texto es obligatorio (1 a 4096 caracteres)'),
+], IntelligenceBandejaController.responder);
+
 module.exports = router;
