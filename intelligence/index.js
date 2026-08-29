@@ -201,12 +201,22 @@ function arrancarCanales({ iniciarEntrega = true } = {}) {
     // El de WhatsApp se registra siempre, pero solo **funciona** con sus cinco variables puestas.
     // Se dice al arrancar y no en el primer webhook: un canal a medio configurar recibe mensajes y
     // no contesta, y desde fuera eso es un negocio que ignora a sus clientes.
-    const whatsapp = require('./channels/whatsapp/config').estado();
-    console.log(
-        whatsapp.habilitado
-            ? `[whatsapp] canal listo: ${whatsapp.resumen}`
-            : `[whatsapp] canal APAGADO (${whatsapp.resumen}). El webhook rechazará todo.`
-    );
+    //
+    // Desde F8-C los números salen de `platform.numero_canal`, así que hay que leerla antes de
+    // poder decir qué hay. Se hace sin esperar —esta función es síncrona y volverla asíncrona
+    // arrastraría a `app.js`— y la línea se imprime cuando el registro está cargado: unos
+    // milisegundos después, que en un arranque no le importa a nadie.
+    require('./channels/whatsapp/numeros')
+        .asegurarCargado({ forzar: true })
+        .then(() => {
+            const whatsapp = require('./channels/whatsapp/config').estado();
+            console.log(
+                whatsapp.habilitado
+                    ? `[whatsapp] canal listo: ${whatsapp.resumen}`
+                    : `[whatsapp] canal APAGADO (${whatsapp.resumen}). El webhook rechazará todo.`
+            );
+        })
+        .catch((e) => console.error('[whatsapp] no se pudo leer el registro de números:', e.message));
 
     return CANALES.map((c) => c.nombre);
 }

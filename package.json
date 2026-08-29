@@ -50,6 +50,7 @@
     "migrate:intelligence-canal": "node migrations/migrate_intelligence_canal.js",
     "migrate:intelligence-recordatorios": "node migrations/migrate_intelligence_recordatorios.js",
     "migrate:intelligence-bandeja": "node migrations/migrate_intelligence_bandeja.js",
+    "migrate:platform-numeros-canal": "node migrations/migrate_platform_numeros_canal.js",
     "evaluar": "node scripts/evaluar.js"
   },
   "keywords": [],

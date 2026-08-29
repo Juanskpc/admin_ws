@@ -65,16 +65,42 @@ function esBsuid(destinatario) {
  * @param {Object} [opciones.config]
  * @returns {Promise<{wamid: string|null}>}
  */
-async function enviarMensaje({ para, payload, fetchImpl = globalThis.fetch, config = configReal }) {
+async function enviarMensaje({
+    para,
+    payload,
+    idNegocio = null,
+    fetchImpl = globalThis.fetch,
+    config = configReal,
+}) {
     const c = config.leer();
-    if (!c.token || !c.phoneNumberId) {
+
+    // ⚠️ El número sale del NEGOCIO DUEÑO de la conversación, no de la configuración global
+    // (F8-C, punto 6). Es «el cambio que más fácil se olvida y el que peor falla»: sin él, el
+    // bot de un cliente contesta desde el número de otro. Pasó de verdad el 2026-08-28 — un
+    // recordatorio de la peluquería salió por el número del restaurante y le contestó el
+    // asistente equivocado.
+    //
+    // El respaldo al global solo aplica cuando no se pasa negocio (llamadas antiguas y pruebas).
+    // Si se pasa un negocio y no tiene número, se falla: mandar «por el que haya» es el fallo.
+    let phoneNumberId = c.phoneNumberId;
+    if (idNegocio) {
+        phoneNumberId = config.numeroDeNegocio ? config.numeroDeNegocio(idNegocio) : null;
+        if (!phoneNumberId) {
+            throw fallo(
+                `El negocio ${idNegocio} no tiene un número de WhatsApp conectado.`,
+                { code: 'WHATSAPP_NEGOCIO_SIN_NUMERO', reintentable: false }
+            );
+        }
+    }
+
+    if (!c.token || !phoneNumberId) {
         throw fallo('El canal de WhatsApp no está configurado (falta token o número).', {
             code: 'WHATSAPP_SIN_CONFIGURAR',
             reintentable: false,
         });
     }
 
-    const url = `${c.baseUrl}/${c.versionApi}/${c.phoneNumberId}/messages`;
+    const url = `${c.baseUrl}/${c.versionApi}/${phoneNumberId}/messages`;
     const cuerpo = {
         messaging_product: 'whatsapp',
         recipient_type: 'individual',

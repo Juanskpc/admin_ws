@@ -788,20 +788,45 @@ razonable; para vender en serio, es cuando toca Embedded Signup.
    estar ya en WhatsApp** — si lo está, hay que borrarlo de la app de WhatsApp primero, y eso le
    borra el historial: **avísale antes, no después**.
 
-**En el código** (más pequeño de lo que parecía, porque la costura ya estaba puesta):
+**En el código** — ✅ **HECHO el 2026-08-29** (fue más pequeño de lo que parecía, porque la
+costura ya estaba puesta):
 
-4. **Una tabla de números**, `phone_number_id ↔ id_negocio`, en los dos sentidos. Hoy eso son dos
-   variables de entorno (`WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_NEGOCIO_ID`) leídas en
-   `channels/whatsapp/config.js`.
-5. **`resolverNegocio(phoneNumberId)`** pasa a consultarla. Es **el único punto de traducción** que
-   existe, y ya devuelve `null` para lo que no es nuestro — la propiedad que impide que un webhook
-   mal enrutado escriba en la conversación de otro inquilino (F2).
-6. **`entregar()` debe enviar DESDE el número del negocio dueño de la conversación**, no desde el
-   único global. Hoy `api.enviarMensaje` compone la URL con `config.leer().phoneNumberId`; pasa a
-   resolverse desde el `idNegocio` que ya viaja en el sobre del gateway. **Es el cambio que más
-   fácil se olvida y el que peor falla**: sin él, el bot de un cliente contestaría desde el número
-   de otro.
-7. `estado()` deja de decir «un solo número» y pasa a listar los que haya.
+> **Lo que costó pensar, y no escribir.** `interpretarWebhook()` es una **función pura** y sus
+> pruebas la ejercitan con cargas reales de Meta sin levantar base ni red. Si la traducción número
+> → negocio se hubiera vuelto una consulta, esa función pasaba a ser asíncrona y a tocar la base:
+> se perdía la mitad del canal que hoy se puede verificar de verdad. Por eso la tabla se lee
+> **antes**, en `recibirWebhook()` —que ya es asíncrono— y `resolverNegocio()` sigue siendo una
+> lectura de memoria. La caché de `numeros.js` no es una optimización: es lo que mantiene la
+> costura donde estaba.
+>
+> **Y la decisión que llevaba meses abierta en el log de arranque** —«dónde viven los secretos»—
+> está tomada: **el token sigue global**. Un token de usuario de sistema cubre **la WABA entera**,
+> no un número; mientras todos los números cuelguen de nuestra WABA, el mismo token sirve para
+> todos y lo único que cambia es el `phone_number_id`. Guardar un token por negocio sería guardar
+> el mismo secreto N veces, con N sitios desde los que filtrarse y N que rotar. Con *Embedded
+> Signup* eso cambia; hasta entonces, no.
+>
+> **Las variables de entorno no desaparecen**: son el respaldo cuando la tabla está vacía. Eso hace
+> que el cambio **no tenga corte** —un despliegue sin migrar sigue funcionando— y que un entorno de
+> desarrollo apunte un número sin tocar la base. Cuando hay filas, mandan las filas.
+>
+> **Un negocio, un número activo.** Lo impone un índice único parcial, y no es una limitación de la
+> tabla: es que `entregar()` tiene que poder responder **desde cuál**, y con dos la respuesta sería
+> ambigua. El día que un negocio necesite dos, la conversación tendrá que recordar por cuál entró —
+> otro cambio, y más grande.
+
+4. ~~Una tabla de números~~ ✅ **`platform.numero_canal`** (`npm run migrate:platform-numeros-canal`).
+   Siembra sola el par que haya en el `.env`, así que producción no tiene corte.
+5. ~~`resolverNegocio(phoneNumberId)` pasa a consultarla~~ ✅ Delega en
+   [`channels/whatsapp/numeros.js`](../intelligence/channels/whatsapp/numeros.js) y **sigue siendo
+   síncrona**. Sigue devolviendo `null` para lo que no es nuestro: la propiedad de F2 tiene su
+   propia prueba para que meter la tabla no la aflojara.
+6. ~~`entregar()` debe enviar DESDE el número del negocio dueño~~ ✅ Hecho, y con la prueba del
+   incidente del 2026-08-28. **Un negocio sin número no envía «por el que haya»**: falla con
+   `WHATSAPP_NEGOCIO_SIN_NUMERO` y no reintenta. Mandar desde el número equivocado es peor que no
+   mandar.
+7. ~~`estado()` deja de decir «un solo número»~~ ✅ Lista los que hay y **de dónde salieron**
+   (tabla o entorno), que es el dato que hace falta cuando algo no cuadra.
 
 **Por cada negocio que se conecte** — el runbook ya existe en
 [`asistente-restaurante.md`](asistente-restaurante.md): plan Avanzado (donde vive `asistente_ia`),

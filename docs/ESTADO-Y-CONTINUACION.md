@@ -96,9 +96,13 @@ lo que se hace ahora sale del uso real.
 >    se rechaza con 409 en vez de fingir un envío. No importa `intelligence/`: inserta el saliente
 >    como `pendiente` y lo entrega el Channel Gateway (ADR-016), así que el apagón de ADR-005
 >    sigue literal. 8 pruebas nuevas, casi todas sobre el aislamiento entre inquilinos. 670/670.
-> 3. **F8-C multi-número** (los 3 cambios de abajo). El punto 6 —que `entregar()` mande desde el
->    número del negocio dueño de la conversación— dejó de ser teórico: ver el cruce en vivo
->    documentado al final de §«El primer recordatorio que llegó de verdad».
+> 3. ~~**F8-C multi-número**~~ **HECHO el 2026-08-29.** `platform.numero_canal` + `numeros.js`
+>    (caché con respaldo al `.env`, para que el cambio no tenga corte), `resolverNegocio()` sigue
+>    **síncrona** —si no, `interpretarWebhook()` dejaba de ser pura y de poder probarse sin base—,
+>    `entregar()` manda desde el número del negocio dueño, y `estado()` lista los que hay.
+>    **El token sigue global**: cubre la WABA entera, no un número. 716/716.
+>    **Lo que falta ya no es código**: añadir cada número de cliente en Meta, y para eso hace falta
+>    que pase la verificación (hoy el techo son 2).
 > 4. ~~Sin commitear: **`scripts/whatsapp_salud.js`**~~ **registrado el 2026-08-29.** ⚠️ En el VPS
 >    existe como archivo **sin versionar**, y git se niega a hacer `pull` si va a sobrescribir uno
 >    así — con un error que no dice eso. Antes del próximo despliegue del backend:

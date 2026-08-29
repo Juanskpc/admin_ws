@@ -36,6 +36,7 @@
 'use strict';
 const motor = require('../../engine/motor');
 const configReal = require('./config');
+const numeros = require('./numeros');
 const apiReal = require('./api');
 const ventanaReal = require('./ventana');
 const repositorio = require('../../engine/repositorio');
@@ -236,6 +237,11 @@ function interpretarWebhook(cuerpo, { config = configReal } = {}) {
  * eso el aislamiento no es prolijidad, es lo que decide si un cliente recibe respuesta.
  */
 async function recibirWebhook(cuerpo, { config = configReal } = {}) {
+    // El mapa número → negocio se refresca AQUÍ y no dentro de `interpretarWebhook`, que es una
+    // función pura y tiene que seguir siéndolo: sus pruebas la ejercitan con cargas reales de
+    // Meta sin levantar base ni red. Este es el sitio donde ya se puede esperar (F8-C).
+    await numeros.asegurarCargado();
+
     const leido = interpretarWebhook(cuerpo, { config });
     const acuses = [];
     const fallos = [];
@@ -515,6 +521,7 @@ function renderizarPlantilla({ nombre, idioma, parametros = {} }) {
  */
 async function entregar({
     idConversacion,
+    idNegocio,
     idExterno,
     mensaje,
     api = apiReal,
@@ -538,7 +545,10 @@ async function entregar({
         }
     }
 
-    const { wamid } = await api.enviarMensaje({ para: idExterno, payload, config });
+    // ⚠️ `idNegocio` no es opcional (F8-C, punto 6): es lo que decide DESDE QUÉ NÚMERO sale.
+    // Sin él, `api.enviarMensaje` caería al único global y el bot de un cliente contestaría
+    // desde el número de otro — que ya pasó de verdad con un recordatorio el 2026-08-28.
+    const { wamid } = await api.enviarMensaje({ para: idExterno, payload, idNegocio, config });
     return { idExternoCanal: wamid };
 }
 
