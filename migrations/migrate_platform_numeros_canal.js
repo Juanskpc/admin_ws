@@ -102,7 +102,21 @@ async function migrate() {
         if (!idExterno || !idNegocio) {
             console.log('   No hay par en el .env — nada que sembrar (normal en desarrollo).');
         } else {
-            const [, meta] = await Models.sequelize.query(
+            // Se pregunta ANTES en vez de leer el `rowCount` del INSERT: en un
+            // `INSERT ... SELECT` Sequelize no lo devuelve de forma fiable, y la primera
+            // ejecución en producción imprimió «Ya estaba» justo después de insertar la fila.
+            // Un mensaje que miente en una migración es peor que no imprimir nada.
+            const yaEstaba = await Models.sequelize.query(
+                `SELECT 1 FROM platform.numero_canal
+                  WHERE canal = 'whatsapp' AND id_externo = :idExterno LIMIT 1;`,
+                {
+                    replacements: { idExterno },
+                    transaction: t,
+                    type: Models.sequelize.QueryTypes.SELECT,
+                }
+            );
+
+            await Models.sequelize.query(
                 `
                 INSERT INTO platform.numero_canal (canal, id_externo, id_negocio, numero_e164)
                 SELECT 'whatsapp', :idExterno, :idNegocio, :numero
@@ -121,9 +135,9 @@ async function migrate() {
                 }
             );
             console.log(
-                meta?.rowCount
-                    ? `   Sembrado: ${idExterno} → negocio ${idNegocio}`
-                    : '   Ya estaba.'
+                yaEstaba.length > 0
+                    ? '   Ya estaba.'
+                    : `   Sembrado: ${idExterno} → negocio ${idNegocio}`
             );
         }
 
