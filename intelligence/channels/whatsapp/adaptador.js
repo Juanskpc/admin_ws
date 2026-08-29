@@ -290,8 +290,9 @@ async function recibirWebhook(cuerpo, { config = configReal } = {}) {
         if (estado.estado !== 'failed') continue;
 
         await aparte('un acuse fallido', estado.wamid || 'sin wamid', async () => {
+            // Sin `idNegocio` a propósito: el de `estado` es el del número por el que entró el
+            // acuse, no el del mensaje. Ver el comentario de `marcarAcuseDelCanal`.
             const fila = await repositorio.marcarAcuseDelCanal({
-                idNegocio: estado.idNegocio,
                 idExternoCanal: estado.wamid,
                 estado: 'fallido',
                 detalle: { estado: estado.estado, error: estado.error },

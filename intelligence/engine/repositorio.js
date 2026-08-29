@@ -543,22 +543,33 @@ async function marcarEntrega(
  * la clave de partición: un acuse llega en segundos o minutos, así que dos días de margen sobran y
  * evitan barrer las quince particiones por una columna que no está indexada. Si algún día el
  * volumen lo pide, el índice va aquí y la consulta no cambia.
+ *
+ * ## Por qué NO se filtra por negocio (2026-08-29)
+ *
+ * Había un `AND id_negocio = :idNegocio`, y ese `idNegocio` no sale del mensaje: sale de
+ * `resolverNegocio(phone_number_id)`, o sea el negocio **atado al número por el que entró el
+ * acuse**. Un saliente de otro negocio —un recordatorio del 10 saliendo por el número del 12,
+ * que es lo que pasó de verdad el 2026-08-28— no casaba con ninguna fila, el UPDATE afectaba a
+ * cero y **el Ledger seguía diciendo `entregado` un mensaje que Meta había rechazado**. Fallaba
+ * en silencio, que es la peor forma de fallar en la tabla que existe justo para no mentir.
+ *
+ * El `wamid` ya es único global: filtrar además por negocio no acotaba nada, solo podía
+ * equivocarse. Y con F8-C —varios negocios compartiendo adaptador— esto habría dejado de ser el
+ * caso raro para ser el normal.
  */
-async function marcarAcuseDelCanal({ idNegocio, idExternoCanal, estado, detalle = null }, { transaction = null } = {}) {
+async function marcarAcuseDelCanal({ idExternoCanal, estado, detalle = null }, { transaction = null } = {}) {
     const filas = await sequelize.query(
         `
         UPDATE intelligence.mensaje
            SET estado_entrega = :estado,
                crudo = COALESCE(crudo, '{}'::jsonb) || jsonb_build_object('acuse', CAST(:detalle AS jsonb))
-         WHERE id_negocio = :idNegocio
-           AND direccion = 'saliente'
+         WHERE direccion = 'saliente'
            AND id_externo = :idExternoCanal
            AND creado_en > now() - interval '2 days'
         RETURNING id_mensaje, id_conversacion;
         `,
         {
             replacements: {
-                idNegocio,
                 idExternoCanal,
                 estado,
                 detalle: JSON.stringify(detalle ?? null),

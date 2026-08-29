@@ -86,9 +86,8 @@ lo que se hace ahora sale del uso real.
 >
 > ### ⏭️ Y en código, cuando se retome
 >
-> 1. **Arreglar `marcarAcuseDelCanal`** para que case por `wamid` y no por `id_negocio`. Es de una
->    línea y hoy deja el Ledger diciendo `entregado` un mensaje que Meta rechazó. Va **antes** de
->    F8-C.
+> 1. ~~**Arreglar `marcarAcuseDelCanal`**~~ **HECHO el 2026-08-29**, con prueba que falla sin el
+>    arreglo. Suite completa 662/662.
 > 2. **F8-C multi-número** (los 3 cambios de abajo). El punto 6 —que `entregar()` mande desde el
 >    número del negocio dueño de la conversación— dejó de ser teórico: ver el cruce en vivo
 >    documentado al final de §«El primer recordatorio que llegó de verdad».

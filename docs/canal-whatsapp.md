@@ -1078,7 +1078,7 @@ mirar el teléfono:
    propósito, para no escribir tres veces por mensaje—. O sea: *ausencia de acuse* es la señal de
    que fue bien.
 
-### ⚠️ Bug abierto: el acuse fallido no marca la fila si el saliente es de otro negocio
+### ~~⚠️ Bug abierto~~ ARREGLADO el 2026-08-29: el acuse fallido y el saliente de otro negocio
 
 `repositorio.marcarAcuseDelCanal()` busca la fila con `WHERE id_negocio = :idNegocio`, y ese
 `idNegocio` sale de `resolverNegocio(phone_number_id)` — el negocio **atado al número**. Si el
@@ -1089,6 +1089,12 @@ La auditoría sí lo registró —por eso se pudo diagnosticar—, pero el Ledge
 
 **El arreglo es quitar el filtro por negocio: el `wamid` ya es único global.** Es de una línea, y
 hace falta antes de F8-C, donde varios negocios comparten adaptador.
+
+**Hecho el 2026-08-29.** Se quitó el `AND id_negocio` de `marcarAcuseDelCanal()` y el parámetro
+sobrante en la llamada. Lo que costó más que el arreglo fue la prueba, y es la parte que importa:
+`ventana.test.js` ahora entrega un saliente y le manda el acuse **resuelto como otro negocio**.
+Comprobada rompiéndola —con el filtro puesto la prueba falla con `Expected: "fallido" / Received:
+"entregado"`, que es literalmente el Ledger mintiendo—. Suite completa: **662/662**.
 
 ### Y el cruce entre verticales, en vivo
 

@@ -297,6 +297,54 @@ describe('un acuse de Meta se ata a nuestra fila', () => {
         expect(despues.estado_entrega).toBe('fallido');
         expect(despues.crudo.acuse.error.code).toBe(131026);
     });
+
+    test('lo marca aunque el acuse entre por el número de OTRO negocio', async () => {
+        // El caso que rompía de verdad (2026-08-28): un recordatorio del negocio 10 sale por el
+        // número del 12, y el acuse entra resuelto como 12. Mientras se filtró por negocio, el
+        // UPDATE afectaba a cero filas EN SILENCIO y el Ledger seguía diciendo `entregado` un
+        // mensaje que Meta había rechazado. Con F8-C esto deja de ser el caso raro.
+        const c = await nuevaConversacion({ conEntranteHace: 1 });
+        const fila = await encolarSaliente(c.id_conversacion);
+        gateway.limpiar();
+        gateway.registrar({
+            nombre: CANAL,
+            entregar: async () => ({ idExternoCanal: 'wamid.OTRO_NEGOCIO' }),
+        });
+        await gateway.entregarUnaVez();
+        gateway.limpiar();
+
+        await adaptador.recibirWebhook(
+            {
+                object: 'whatsapp_business_account',
+                entry: [
+                    {
+                        changes: [
+                            {
+                                field: 'messages',
+                                value: {
+                                    metadata: { phone_number_id: 'NUM' },
+                                    statuses: [
+                                        {
+                                            id: 'wamid.OTRO_NEGOCIO',
+                                            status: 'failed',
+                                            recipient_id: c.id_externo,
+                                            errors: [{ code: 131047, title: 'Re-engagement message' }],
+                                        },
+                                    ],
+                                },
+                            },
+                        ],
+                    },
+                ],
+            },
+            // Un negocio que NO es el dueño del saliente: es justo lo que devolvía
+            // `resolverNegocio()` en producción.
+            { config: { resolverNegocio: () => idNegocio + 9999 } }
+        );
+
+        const despues = await filaMensaje(fila.id_mensaje);
+        expect(despues.estado_entrega).toBe('fallido');
+    });
 });
 
 describe('el entregador', () => {
