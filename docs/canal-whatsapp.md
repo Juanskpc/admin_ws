@@ -857,6 +857,79 @@ incoherencias aburridas, no por sospecha:
 > tocar el panel: enviar una solicitud incompleta cuesta el tiempo de revisión **y** el de volver
 > a enviarla.
 
+#### RESUELTA el 2026-08-28: la empresa existe, y es **persona natural**
+
+Sí hay empresa registrada. Una matrícula mercantil de ~2023 se renovó y se le cambió la razón
+social a **`ESCALAPP`** (en mayúsculas: así la inscribió la Cámara de Comercio). Está a nombre
+del titular, **no es una sociedad**.
+
+Eso desbloquea el trámite, pero **cambia qué va en cada casilla**, y el documento solo
+contemplaba el caso de sociedad. Las diferencias, que son la diferencia entre aprobado y
+rechazado:
+
+| | Sociedad (S.A.S.) | **Persona natural (nuestro caso)** |
+|---|---|---|
+| Documento a pedir | Certificado de **existencia y representación legal** | **Certificado de matrícula mercantil** — el otro no existe para persona natural |
+| Nombre legal | La razón social (`ESCALAPP S.A.S.`) | **El nombre del titular**, tal cual la cédula |
+| Nombre comercial | Suele coincidir | **`ESCALAPP`**, que es el *establecimiento de comercio* |
+| NIT | El de la sociedad | La **cédula + dígito de verificación** |
+
+⚠️ **El certificado que se sube tiene que mostrar el nombre `ESCALAPP`.** Con solo la matrícula
+personal, Meta ve un nombre propio y no tiene cómo saber por qué el WhatsApp se llama Escalapp.
+Hay que pedir el que incluye el **establecimiento de comercio**. Ese papel es el que ata la
+persona a la marca.
+
+En el portafolio hay **dos campos distintos** y se confunden: *«Nombre de la empresa»* (el
+visible, se queda en `Escalapp`) y *«Nombre legal de la empresa»* (el que se compara con el
+documento). La verificación lee el segundo.
+
+Dos detalles del formulario de facturación, que es otro sitio donde se pide lo mismo:
+
+- La casilla **«Estoy sujeto al Registro Único Tributario»** no pregunta si tienes RUT —todo el
+  que tiene NIT lo tiene—. Pregunta si eres **responsable de IVA**. Se decide mirando la
+  **casilla 53 del RUT**: código **49** = no responsable → **dejarla sin marcar** (Meta cobra el
+  19% y ya está); código **48** = responsable → marcarla y declararlo tú. Marcarla sin serlo es
+  declararle a Meta —y de ahí a la DIAN— una condición que no se cumple.
+- El *«(EIN)»* de la casilla de identificación fiscal es un descuido de traducción: es el **NIT**.
+
+#### ENVIADA el 2026-08-29 — y no hizo falta subir un solo documento
+
+El trámite entero salió por la rama corta: **Meta cruzó los datos con el registro mercantil
+colombiano, encontró el establecimiento y lo dio por bueno sin pedir papeles.** La pantalla de
+documentos nunca apareció; en su lugar salió una lista de establecimientos coincidentes, se
+seleccionó el correcto y quedó **«En revisión»**.
+
+Eso solo ocurre si lo escrito coincide con el registro. El certificado y el RUT hay que tenerlos
+a mano igual —si no hay coincidencia, el formulario los pide—, pero **no son el camino por
+defecto**.
+
+El recorrido real, pantalla por pantalla:
+
+| Pantalla | Qué se puso |
+|---|---|
+| Caso de uso | **WhatsApp Business** (había opción; la que venía por defecto era *«La aplicación requiere acceso a permisos en Meta for Developers»*) |
+| Tipo de empresa | **Sociedad unipersonal** — traducción de *sole proprietorship*. Es la que describe a la persona natural con establecimiento de comercio: *«propiedad de una persona… que utiliza un nombre diferente a efectos comerciales (DBA)»* |
+| Nombre de la empresa | `NICOLAS PANTOJA PAEZ` |
+| **Nombre alternativo** | `ESCALAPP` — dice *opcional* y **no lo es**: es el DBA, lo que ata la persona a la marca |
+| Teléfono | `3114682492` — el personal, **no** el del bot |
+| Sitio web | `https://escalapp.cloud/` |
+
+⚠️ **«Empresa privada» habría sido el error caro.** Suena a la opción correcta, pero es para
+sociedades (S.A.S., SRL) y lleva a un flujo que pide el **certificado de existencia y
+representación legal** — un papel que para persona natural no existe.
+
+Un detalle que ayudó y no estaba planeado: la landing publica el mismo teléfono que se escribió
+en el formulario, así que el revisor encuentra coherencia entre el papel, el portafolio y el
+sitio.
+
+```
+https://escalapp.cloud/  →  200  ·  "EscalApp — Centraliza y escala tu negocio"
+teléfono en la página:   3114682492   ← el mismo del formulario
+```
+
+**Mientras esté «En revisión»: no tocar el DNS ni los datos legales del portafolio.** Un cambio a
+media revisión reinicia la cola.
+
 #### Dónde se hace
 
 En **Meta Business Suite → Configuración del negocio → Centro de seguridad** (el nombre exacto del
@@ -887,6 +960,146 @@ curl -s "https://graph.facebook.com/v21.0/4199925320246584?fields=health_status"
 - **Publicar la app**: hace falta para pedir permisos **en nombre de otros negocios**, que es
   justamente Embedded Signup. Con la WABA propia y un token permanente, no.
 - **El número de prueba del sandbox**: se abandonó el 2026-08-21 y sigue sin hacer falta.
+
+### Segundo administrador del portafolio (2026-08-29)
+
+**Por qué se hace, y no es burocracia:** hasta hoy el único acceso al canal era **la cuenta
+personal de Facebook del titular**. Si esa cuenta se bloquea un fin de semana —y Facebook bloquea
+cuentas personales sin avisar y sin plazo—, el bot del cliente sigue contestando, pero **nadie
+puede tocar nada**: ni rotar el token, ni mirar el estado, ni conectar un número. No hay soporte
+al que llamar. Un segundo administrador es el único seguro que existe contra eso.
+
+**El acceso lo concede quien ya es admin.** El otro dev no puede pedir entrar ni registrarse por
+su cuenta: se le invita desde
+`business.facebook.com/settings/people?business_id=1115123864174893` → *Agregar personas*.
+Solo necesita **su Facebook personal de siempre** — no tiene que crear nada.
+
+⚠️ **Que NO cree un portafolio de negocio propio.** Meta se lo ofrece con un botón grande en
+cuanto entra. Si lo hace, quedan dos portafolios paralelos, el número sigue colgando del primero,
+y hay que deshacerlo a mano.
+
+**El orden importa:** primero él activa el **2FA** en su Facebook
+(`accountscenter.facebook.com/password_and_security`), luego se le invita, luego acepta. El
+portafolio puede exigir 2FA a los administradores, y entonces la invitación se le queda atascada
+al aceptar sin decirle por qué.
+
+#### Las tres cosas que sorprenden en el diálogo de activos
+
+1. **El rol del portafolio, por sí solo, no da acceso a nada.** Hay que asignar los activos uno
+   por uno en el paso *Asignar activos*. Si se olvida, él entra y ve el portafolio **vacío**:
+   parece que algo se rompió, y solo falta ese paso.
+2. **El número de teléfono NO es un activo aparte.** Los tipos que ofrece el diálogo son solo
+   *Aplicaciones*, *Píxeles* y *Cuentas de WhatsApp*. El `+57 315 281 2484` va **dentro** de la
+   cuenta de WhatsApp (`Escalapp`, `4199925320246584`): asignando esa, el número queda incluido.
+3. **La aplicación no se puede asignar todavía.** Sale *«Developer account needed — esta persona
+   se debe registrar como desarrollador de Facebook»*. Se arregla en dos minutos —él entra a
+   `developers.facebook.com`, *Empezar*, acepta condiciones y confirma correo o teléfono— y luego
+   se vuelve a esta pantalla. **No hace falta para administrar el canal**: la app
+   (`1552342763052863`) es para tocar tokens y configuración de la API.
+
+#### Esto NO se puede comprobar desde la API
+
+Comprobado el 2026-08-29 contra `GET /1115123864174893/business_users`:
+
+```
+{"error":{"message":"(#200) Requires business_management permission to manage the object", ...}}
+```
+
+Es el mismo muro que con `verification_status`: el token es de usuario de sistema y no tiene
+`business_management`. La única forma de saber si aceptó es la lista de *Personas* del panel —
+mientras no acepte aparece como **Pendiente**. Las invitaciones caducan a los pocos días y se
+reenvían desde ahí mismo.
+
+**Estado:** invitación enviada el 2026-08-29 con control total del portafolio y de la cuenta de
+WhatsApp. Pendiente de que acepte. La app queda sin asignar hasta que se registre como
+desarrollador.
+
+
+## El primer recordatorio que llegó de verdad (2026-08-28)
+
+Hasta esta noche `intelligence.recordatorio` estaba **vacía en producción**: la maquinaria de F8-B
+llevaba desde el 20 de agosto construida, probada y **sin haber entregado un solo mensaje**. Se
+ejercitó de punta a punta y funcionó, pero solo al segundo intento. Lo que costó llegar ahí es lo
+que vale la pena escribir.
+
+### Cómo se fuerza un recordatorio (y cómo NO)
+
+**No sirve adelantar `enviar_en`.** Es lo primero que uno intenta y el diseño lo rechaza: al
+vencer, el recordatorio **relee la cita**, recalcula `inicio − 24 h`, ve que lo correcto sigue
+siendo mañana y **reprograma la fila**:
+
+```
+estado=pendiente  intentos=1  motivo="reprogramado al releer"
+```
+
+Es la decisión de `recordatorios/index.js` haciendo exactamente lo que promete —el recordatorio no
+se fía de lo programado, se fía de la cita— y la razón por la que no hizo falta escuchar
+`cita.cancelada`. Verificada en producción, en contra de quien la quería saltar.
+
+**Lo que sí funciona:** mover la **cita** a menos de 24 h vista y vencer `enviar_en` en la misma
+transacción. Entonces el revisor calcula un `enviarEn` ya pasado y envía.
+
+### El fallo que solo se vio enviando: `131042`
+
+El primer envío devolvió `wamid` y el Ledger lo marcó `estado_entrega = entregado`. **No llegó
+nada.** El motivo estaba en `auditoria.audit_evento`:
+
+```
+accion: entrega_fallida
+error 131042 — "Business eligibility payment issue"
+"Message failed to send because there were one or more errors related to your payment method."
+```
+
+> ### ⚠️ `health_status` no sirve para saber si el pago funciona
+>
+> Minutos antes, `scripts/whatsapp_salud.js` daba la WABA **`AVAILABLE`**, sin rastro del
+> `141006`, y `account_review_status = APPROVED`. Y aun así el envío falló por método de pago.
+> **La única prueba fiable es enviar un mensaje real y leer la auditoría.** El panel tampoco
+> avisaba: decía que el método de pago estaba correcto.
+>
+> Corolario para el runbook: *«el pago está arreglado»* no es una observación del panel ni del
+> `health_status`. Es un envío que llegó.
+
+Arreglado el pago, el segundo envío entregó. La firma de un envío bueno frente a uno malo, sin
+mirar el teléfono:
+
+| | Envío fallido | Envío entregado |
+|---|---|---|
+| Webhooks de estado recibidos | **1** (el `failed`, en 9 s) | **4** (`sent`/`delivered`/`read`) |
+| Filas en `audit_evento` | 1 × `entrega_fallida` | ninguna |
+
+### Dos trampas de lectura del Ledger
+
+1. **`mensaje.id_externo` es el `wamid`, NO el teléfono.** El número va codificado en base64
+   dentro (`HBgM` + base64 del número). Comparar `id_externo` con un teléfono da siempre `false`,
+   y de ahí a concluir que un mensaje «no llegó» hay un paso. Pasó dos veces la misma noche.
+2. **`estado_entrega = 'entregado'` significa «Meta aceptó el envío», no «llegó al teléfono».** La
+   entrega real solo se sabe por el acuse posterior, y **solo se guardan los `failed`** —a
+   propósito, para no escribir tres veces por mensaje—. O sea: *ausencia de acuse* es la señal de
+   que fue bien.
+
+### ⚠️ Bug abierto: el acuse fallido no marca la fila si el saliente es de otro negocio
+
+`repositorio.marcarAcuseDelCanal()` busca la fila con `WHERE id_negocio = :idNegocio`, y ese
+`idNegocio` sale de `resolverNegocio(phone_number_id)` — el negocio **atado al número**. Si el
+mensaje saliente es de otro negocio (aquí: recordatorio del 10 saliendo por el número del 12), no
+casa y **el Ledger se queda diciendo `entregado` un mensaje que Meta rechazó**.
+
+La auditoría sí lo registró —por eso se pudo diagnosticar—, pero el Ledger miente.
+
+**El arreglo es quitar el filtro por negocio: el `wamid` ya es único global.** Es de una línea, y
+hace falta antes de F8-C, donde varios negocios comparten adaptador.
+
+### Y el cruce entre verticales, en vivo
+
+Con `WHATSAPP_NEGOCIO_ID=12`, un recordatorio del negocio 10 **sale igual** —la salida no consulta
+`resolverNegocio()`, solo la entrada—. Pero la respuesta del cliente entra como negocio 12. Ocurrió
+literalmente: al recordatorio de una cita de peluquería se contestó *«No puedo ir»* y respondió el
+asistente del **restaurante**: *«No pasa nada, podemos enviártelo a domicilio. ¿Qué te gustaría
+pedir?»*.
+
+No es un fallo: es el techo de **un número = un negocio**, y es el argumento concreto del punto 6
+de F8-C — que `entregar()` mande desde el número del negocio dueño de la conversación.
 
 ## Un mensaje sin remitente, y un lote entero perdido (2026-08-26)
 

@@ -1,6 +1,6 @@
 # EscalApp Intelligence — estado y cómo continuar
 
-**Última actualización:** 2026-08-27, cierre de sesión (todo en `master`; siguiente paso: la verificación de negocio en Meta)
+**Última actualización:** 2026-08-29 (dominio verificado, **verificación de negocio ENVIADA y en revisión**, y segundo administrador dentro del portafolio)
 **Propósito:** que retomar el trabajo no cueste una sesión de arqueología. Si vuelves a este
 proyecto después de semanas, **lee este documento primero** y sigue por donde diga.
 
@@ -45,6 +45,60 @@ lo que se hace ahora sale del uso real.
 > # 141010 sobre BUSINESS = verificación pendiente
 > # 141006 sobre WABA     = método de pago pendiente
 > ```
+>
+> ---
+>
+> ### ✅ Avance del 2026-08-28 (leer antes que lo de arriba)
+>
+> **La pregunta que bloqueaba todo está contestada: SÍ existe la empresa.** Matrícula mercantil de
+> ~2023 renovada ese día, razón social `ESCALAPP`, **a nombre del titular — persona natural, no
+> S.A.S.** Eso cambia qué se escribe en cada casilla; la tabla está en
+> [`canal-whatsapp.md`](canal-whatsapp.md) §«RESUELTA el 2026-08-28».
+>
+> **El método de pago (`141006`) quedó arreglado**, y se comprobó de la única forma que vale: un
+> recordatorio real que llegó a un teléfono. **Es el primer mensaje proactivo entregado en
+> producción.** El primer intento falló con `131042` mientras `health_status` decía `AVAILABLE` —
+> ver §«El primer recordatorio que llegó de verdad».
+>
+> **Lo que quedó hecho en el portafolio:** nombre legal `NICOLAS PANTOJA PAEZ`, dirección, teléfono
+> y correo `escalappsystem@gmail.com`; dominio `escalapp.cloud` añadido (**«No verificado»**).
+>
+> ### ⏭️ PENDIENTE PARA MAÑANA (2026-08-29), en este orden
+>
+> 1. ~~**Verificar el dominio.**~~ **HECHO el 2026-08-29.** El TXT propagó bien —con el prefijo
+>    `facebook-domain-verification=`— en Google y en Cloudflare, y `escalapp.cloud` quedó
+>    verificado.
+> 2. ~~**Enviar la verificación de negocio.**~~ **ENVIADA el 2026-08-29, estado «En revisión».**
+>    Salió por la rama corta: **Meta encontró el establecimiento en el registro mercantil y no
+>    pidió ningún documento.** El recorrido pantalla por pantalla —y las dos opciones que habrían
+>    costado un rechazo— en [`canal-whatsapp.md`](canal-whatsapp.md) §«ENVIADA el 2026-08-29».
+>    **Mientras esté en revisión, no tocar el DNS ni los datos legales del portafolio.**
+> 3. ~~**Segundo administrador del portafolio**~~ — **invitación enviada el 2026-08-29** al otro
+>    dev, con control total del portafolio y de la cuenta de WhatsApp, y **ya aceptó** — el Centro de
+>    seguridad lo confirma con «Se ha añadido un administrador alternativo». **No hay forma de
+>    verlo desde la API** (falta `business_management`): se mira en el panel. La **app** queda sin
+>    asignar hasta que él se registre en `developers.facebook.com` — Meta no deja asignarla a
+>    quien no es desarrollador, y no hace falta para administrar el canal. Runbook completo y las
+>    tres trampas del diálogo de activos: [`canal-whatsapp.md`](canal-whatsapp.md) §«Segundo
+>    administrador del portafolio».
+> 4. **Higiene, después de que pase la verificación** (no tocar el DNS mientras Meta mira): bajar
+>    el TTL del TXT a `300` y borrar el CNAME muerto de AWS (`...acm-validations.aws`).
+>
+> ### ⏭️ Y en código, cuando se retome
+>
+> 1. **Arreglar `marcarAcuseDelCanal`** para que case por `wamid` y no por `id_negocio`. Es de una
+>    línea y hoy deja el Ledger diciendo `entregado` un mensaje que Meta rechazó. Va **antes** de
+>    F8-C.
+> 2. **F8-C multi-número** (los 3 cambios de abajo). El punto 6 —que `entregar()` mande desde el
+>    número del negocio dueño de la conversación— dejó de ser teórico: ver el cruce en vivo
+>    documentado al final de §«El primer recordatorio que llegó de verdad».
+> 3. Sin commitear en `admin_ws`: **`scripts/whatsapp_salud.js`** (creado el 2026-08-28; sustituye
+>    al `curl` manual de más arriba y traduce los códigos `141006`/`141010`). Está también copiado
+>    en el VPS como archivo sin registrar.
+> 4. **Queda una cita de prueba** en el Salón Demo: `id_cita` 8, sábado 2026-08-29 18:00, a nombre
+>    de «Nicolas Pantoja». Se creó y se movió a mano para forzar el recordatorio.
+>
+> ---
 >
 > **Lo que se puede hacer sin esperar a Meta** — está detallado abajo, punto 1 de «Lo siguiente»:
 > los tres cambios de código del alta multi-número. Son de un día y no dependen de nadie.
