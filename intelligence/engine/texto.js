@@ -14,7 +14,27 @@
 
 /** Palabras que valen en cualquier paso. Son pocas a propósito: cada una hay que probarla. */
 const COMANDO = {
-    MENU: ['menu', 'menú', 'inicio', 'empezar', 'hola'],
+    /**
+     * Reabren la bienvenida.
+     *
+     * ⚠️ **Los saludos entraron el 2026-08-29, y su ausencia era un fallo visible.** Aquí solo
+     * estaba «hola», así que quien escribía «buenos días» —que es como saluda media Colombia—
+     * no casaba con nada y caía al modelo. El modelo contestaba un saludo perfectamente
+     * plausible **y sin el enlace del menú**, que es lo único que ese primer mensaje tiene que
+     * hacer. Parecía una versión vieja del bot; era la IA improvisando.
+     *
+     * No se vio antes porque en el primer mensaje de una conversación cualquier texto abre la
+     * bienvenida: solo falla con quien ya había hablado alguna vez.
+     *
+     * Van sueltos y no como expresión regular a propósito: «buenos días, ¿están abiertos?» NO
+     * debe reiniciar nada — eso es una pregunta, y la contesta el modelo con el hilo en la mano.
+     */
+    MENU: [
+        'menu', 'menú', 'inicio', 'empezar',
+        'hola', 'holi', 'hey', 'buenas',
+        'buenos dias', 'buenos días', 'buen dia', 'buen día',
+        'buenas tardes', 'buenas noches',
+    ],
     CANCELAR: ['cancelar', 'salir', 'olvidalo', 'olvídalo', 'nada'],
     SEGUIMOS: ['seguimos', 'continuar', 'sigamos', 'retomar'],
     SI: ['si', 'sí', 'confirmo', 'dale', 'ok', 'vale', 'listo'],
@@ -47,9 +67,17 @@ function ultimaLinea(texto) {
     return lineas[lineas.length - 1] ?? '';
 }
 
+/**
+ * Signos que rodean a un comando sin cambiarlo. Se quitan **solo aquí**, no en `normalizar()`:
+ * esa la usan también expresiones regulares de los flujos, y cambiarla movería cosas que hoy
+ * funcionan. «¡Hola!», «buenas.» y «ok!» son el mismo comando que sin adornos, y hasta hoy no
+ * casaban con ninguno.
+ */
+const ADORNOS = /^[¡¿!?.,;:\s]+|[!?.,;:\s]+$/g;
+
 function esComando(texto, lista) {
-    const t = normalizar(ultimaLinea(texto));
-    return lista.some((palabra) => t === normalizar(palabra));
+    const t = normalizar(ultimaLinea(texto)).replace(ADORNOS, '');
+    return lista.some((palabra) => t === normalizar(palabra).replace(ADORNOS, ''));
 }
 
 /**
