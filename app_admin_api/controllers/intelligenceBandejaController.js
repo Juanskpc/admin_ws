@@ -54,6 +54,31 @@ const VENTANA_HORAS = Number(process.env.WHATSAPP_VENTANA_HORAS || 24);
 /** Estado en el que el motor deja de contestar. Está en el CHECK de `intelligence.conversacion`. */
 const ESTADO_HANDOFF = 'handoff_humano';
 
+/**
+ * El negocio atado al único número configurado, o `null` si no hay canal configurado aquí.
+ *
+ * ## Por qué esto existe, y por qué es temporal
+ *
+ * Hasta F8-C el canal tiene **un solo número global** (`WHATSAPP_PHONE_NUMBER_ID`) y `entregar()`
+ * compone la URL con él sin mirar de quién es la conversación. Con dos inquilinos eso significa
+ * que una respuesta escrita para el cliente del negocio B **sale por el número del negocio A**, y
+ * al cliente le contesta una empresa que no es la suya. No es hipotético: el 2026-08-28 un
+ * recordatorio de la peluquería salió por el número del restaurante, la persona contestó «No
+ * puedo ir» y le respondió el asistente del restaurante ofreciéndole domicilio.
+ *
+ * La bandeja no puede arreglar eso —el arreglo es el punto 6 de F8-C— pero sí puede **negarse a
+ * causarlo**. Fail-closed: si el número configurado es de otro negocio, no se envía.
+ *
+ * Cuando no hay canal configurado (desarrollo), devuelve `null` y no estorba: sin número no hay
+ * envío equivocado posible.
+ */
+function negocioDelNumero() {
+    const valor = process.env.WHATSAPP_NEGOCIO_ID;
+    if (!valor || !process.env.WHATSAPP_PHONE_NUMBER_ID) return null;
+    const n = Number(valor);
+    return Number.isInteger(n) && n > 0 ? n : null;
+}
+
 const SELECT = { type: Models.sequelize.QueryTypes.SELECT };
 
 async function hayEsquemaIntelligence() {
@@ -286,6 +311,18 @@ async function responder(req, res) {
         if (!conversacion) {
             await t.rollback();
             return Respuesta.error(res, 'Conversación no encontrada', 404);
+        }
+
+        // Antes que nada, el cerrojo del número: o sale por el del negocio dueño, o no sale.
+        const numeroDe = negocioDelNumero();
+        if (numeroDe !== null && numeroDe !== Number(conversacion.id_negocio)) {
+            await t.rollback();
+            return Respuesta.error(
+                res,
+                'Este negocio todavía no tiene su propio número de WhatsApp conectado. Responder ahora enviaría el mensaje desde el número de otro negocio.',
+                409,
+                [{ codigo: 'NUMERO_DE_OTRO_NEGOCIO', id_negocio: conversacion.id_negocio }]
+            );
         }
 
         const ventana = await estadoVentana(req.params.id);

@@ -280,6 +280,43 @@ describe('responder', () => {
         expect(salientes).toEqual([]);
     });
 
+    test('no se envía si el número configurado es de OTRO negocio', async () => {
+        // Hasta F8-C hay un solo número global y `entregar()` no mira de quién es la
+        // conversación: responderle al cliente del negocio B saldría por el número del A. Ya
+        // pasó con un recordatorio el 2026-08-28. La bandeja no puede arreglarlo, pero sí
+        // negarse a causarlo.
+        const c = await nuevaConversacion({ idNegocio: negocioA });
+        const previo = {
+            negocio: process.env.WHATSAPP_NEGOCIO_ID,
+            numero: process.env.WHATSAPP_PHONE_NUMBER_ID,
+        };
+        process.env.WHATSAPP_NEGOCIO_ID = String(negocioB);
+        process.env.WHATSAPP_PHONE_NUMBER_ID = 'NUM_DE_OTRO';
+
+        try {
+            const r = await llamar(Bandeja.responder, {
+                idUsuario: usuarioA,
+                params: { id: c.id_conversacion },
+                body: { texto: 'esto no debe salir' },
+            });
+
+            expect(r.statusCode).toBe(409);
+            expect(r.cuerpo.errors[0].codigo).toBe('NUMERO_DE_OTRO_NEGOCIO');
+
+            const salientes = await consulta(
+                `SELECT 1 FROM intelligence.mensaje
+                  WHERE id_conversacion = :id AND direccion = 'saliente';`,
+                { id: c.id_conversacion }
+            );
+            expect(salientes).toEqual([]);
+        } finally {
+            if (previo.negocio === undefined) delete process.env.WHATSAPP_NEGOCIO_ID;
+            else process.env.WHATSAPP_NEGOCIO_ID = previo.negocio;
+            if (previo.numero === undefined) delete process.env.WHATSAPP_PHONE_NUMBER_ID;
+            else process.env.WHATSAPP_PHONE_NUMBER_ID = previo.numero;
+        }
+    });
+
     test('responder dos veces no rompe nada', async () => {
         const c = await nuevaConversacion({ idNegocio: negocioA });
         const uno = { idUsuario: usuarioA, params: { id: c.id_conversacion }, body: { texto: 'una' } };
