@@ -30,11 +30,18 @@ async function migrate() {
         // 2. Roles del salón
         console.log('2. Insertando roles...');
         await sequelize.query(`
-            INSERT INTO general.gener_rol (descripcion, id_tipo_negocio, estado) VALUES
-                ('ADMINISTRADOR',  :tipo, 'A'),
-                ('RECEPCIONISTA',  :tipo, 'A'),
-                ('PROFESIONAL',    :tipo, 'A')
-            ON CONFLICT DO NOTHING;
+            -- ⚠️ Aquí había un ON CONFLICT DO NOTHING, y no servía de nada: sin una
+            -- restricción única sobre (descripcion, id_tipo_negocio) no hay conflicto que
+            -- detectar, así que cada reejecución duplicaba los tres roles. Se descubrió
+            -- corriéndola dos veces sobre la base compartida (2026-08-29): salieron 33-35 y
+            -- 36-38, y los usuarios quedaron colgando de los primeros.
+            INSERT INTO general.gener_rol (descripcion, id_tipo_negocio, estado)
+            SELECT v.descripcion, :tipo, 'A'
+              FROM (VALUES ('ADMINISTRADOR'), ('RECEPCIONISTA'), ('PROFESIONAL')) AS v(descripcion)
+             WHERE NOT EXISTS (
+                 SELECT 1 FROM general.gener_rol r
+                  WHERE r.id_tipo_negocio = :tipo AND r.descripcion = v.descripcion
+             );
         `, { replacements: { tipo: idTipoReserva }, transaction: t });
 
         const rolesReserva = await sequelize.query(`
