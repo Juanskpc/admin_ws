@@ -239,7 +239,7 @@ async function verificarAccesoReserva(idUsuario) {
                 },
                 { model: Models.GenerPaletaColor, as: 'paletaColor', attributes: ['id_paleta', 'nombre', 'colores'] },
             ],
-            attributes: ['id_negocio', 'nombre', 'id_tipo_negocio', 'id_paleta'],
+            attributes: ['id_negocio', 'nombre', 'id_tipo_negocio', 'id_paleta', 'logo_url', 'colores'],
         }],
     });
 
@@ -291,6 +291,11 @@ async function verificarAccesoReserva(idUsuario) {
             nombre: neg.nombre,
             tipo_negocio: neg.tipoNegocio?.nombre || null,
             paleta: neg.paletaColor || null,
+            // Identidad visual. Viaja con la sesión para que el tema se aplique en el primer
+            // pintado: pedirla aparte haría que la app arrancara en índigo y cambiara de color
+            // a la vista del usuario.
+            logo_url: neg.logo_url || null,
+            colores: neg.colores || null,
             roles,
             permisos_vista,
             permisos_subnivel,

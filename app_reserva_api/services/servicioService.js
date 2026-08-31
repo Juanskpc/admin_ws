@@ -1,6 +1,6 @@
 'use strict';
 const Models = require('../../app_core/models/conection');
-const { Op } = Models.Sequelize;
+const ImagenService = require('./imagenService');
 
 async function listar({ idNegocio, soloActivos = true }) {
     const where = { id_negocio: idNegocio };
@@ -24,10 +24,21 @@ async function actualizar(idServicio, idNegocio, data) {
     return s.update(data);
 }
 
+/**
+ * Inactiva el servicio y **borra su imagen del disco**.
+ *
+ * El registro se conserva (las citas ya cobradas lo referencian y su histórico debe seguir
+ * leyéndose), pero el archivo no: un servicio retirado no se muestra en ninguna parte, así que
+ * su foto solo ocuparía espacio hasta que alguien la encontrara por casualidad. Si se reactiva,
+ * se vuelve a subir — es un clic frente a una carpeta que crece sola.
+ */
 async function inactivar(idServicio, idNegocio) {
     const s = await Models.ReservaServicio.findOne({ where: { id_servicio: idServicio, id_negocio: idNegocio } });
     if (!s) return null;
-    return s.update({ estado: 'I', fecha_actualizacion: new Date() });
+    if (s.imagen_url) {
+        ImagenService.eliminar({ tipo: 'servicio', idNegocio, idEntidad: idServicio });
+    }
+    return s.update({ estado: 'I', imagen_url: null, fecha_actualizacion: new Date() });
 }
 
 module.exports = { listar, getById, crear, actualizar, inactivar };

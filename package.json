@@ -28,6 +28,7 @@
     "migrate:reserva-caja": "node migrations/migrate_reserva_caja.js",
     "migrate:reserva-usuarios": "node migrations/migrate_reserva_usuarios.js",
     "migrate:reserva-subniveles": "node migrations/migrate_reserva_subniveles.js",
+    "migrate:reserva-marca": "node migrations/migrate_reserva_marca.js",
     "migrate:planes-base": "node migrations/migrate_planes_base.js",
     "migrate:restaurante-despacho-cancelar-no-pagado": "node migrations/migrate_restaurante_despacho_cancelar_no_pagado.js",
     "migrate:trial-registration": "node migrations/migrate_trial_registration.js",

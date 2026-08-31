@@ -161,6 +161,21 @@ app.use(
     })
 );
 
+// Logos de negocio y fotos de servicio del vertical `reserva`. Igual que el menú: se exponen
+// SOLO estas dos subcarpetas, nunca `/uploads/reserva` entero — ahí viven los comprobantes de
+// pago, que son privados. Cross-origin porque el catálogo público se sirve desde otro dominio.
+for (const carpeta of ['logos', 'servicios']) {
+    app.use(
+        `/uploads/reserva/${carpeta}`,
+        express.static(path.join(__dirname, 'uploads', 'reserva', carpeta), {
+            maxAge: '7d',
+            setHeaders(res) {
+                res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+            },
+        })
+    );
+}
+
 // ========================
 // Rutas
 // ========================

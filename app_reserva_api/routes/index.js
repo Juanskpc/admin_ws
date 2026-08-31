@@ -18,6 +18,7 @@ const Informes     = require('../controllers/informeController');
 const Caja         = require('../controllers/cajaController');
 const MetodosPago  = require('../controllers/metodoPagoController');
 const Usuarios     = require('../controllers/usuarioController');
+const Marca        = require('../controllers/marcaController');
 const Citas        = require('../controllers/citaController');
 const Config       = require('../controllers/configController');
 const { verificarToken } = require('../../app_core/middleware/auth');
@@ -44,6 +45,21 @@ const fileFilter = (_req, file, cb) => {
 const uploadComprobante = multer({
     storage, fileFilter,
     limits: { fileSize: 5 * 1024 * 1024 },  // 5 MB
+});
+
+// ───────── Multer: logos y fotos de servicio ─────────
+//
+// A memoria, no a disco: `imagenService` decide el nombre final a partir del id de la entidad,
+// y para eso necesita el buffer, no un archivo que multer ya haya escrito con un nombre suyo.
+// El límite es bajo a propósito — el recorte llega del navegador ya redimensionado y en WebP
+// (unos 40-120 KB); 3 MB solo cubre el caso raro de un PNG sin comprimir.
+const uploadImagen = multer({
+    storage: multer.memoryStorage(),
+    fileFilter(_req, file, cb) {
+        if (['image/webp', 'image/jpeg', 'image/png'].includes(file.mimetype)) cb(null, true);
+        else cb(Object.assign(new Error('Formato no admitido. Usa WEBP, JPG o PNG.'), { statusCode: 400 }));
+    },
+    limits: { fileSize: 3 * 1024 * 1024 },
 });
 
 // ═════════ RUTAS PÚBLICAS (sin token) ═════════
@@ -268,6 +284,42 @@ router.get('/citas/:id/comprobante', [
     param('id').isInt({ min: 1 }),
     query('id_negocio').isInt({ min: 1 }),
 ], Citas.descargarComprobante);
+
+// ── Identidad visual (logo y colores) ──
+router.get('/marca', [query('id_negocio').isInt({ min: 1 })], Marca.getMarca);
+router.put('/marca/colores', [
+    body('id_negocio').isInt({ min: 1 }),
+    body('primario').isString().isLength({ min: 6, max: 7 }),
+    body('acento').isString().isLength({ min: 6, max: 7 }),
+], exigirAccion('configuracion_cobros'), Marca.guardarColores);
+router.put('/marca/paleta', [
+    body('id_negocio').isInt({ min: 1 }),
+    body('id_paleta').isInt({ min: 1 }),
+], exigirAccion('configuracion_cobros'), Marca.aplicarPaleta);
+router.delete('/marca/colores', [
+    query('id_negocio').isInt({ min: 1 }),
+], exigirAccion('configuracion_cobros'), Marca.restablecerColores);
+// El `id_negocio` viaja en el cuerpo multipart, así que multer va antes del validador.
+router.post('/marca/logo',
+    uploadImagen.single('imagen'),
+    [body('id_negocio').isInt({ min: 1 })],
+    exigirAccion('configuracion_cobros'),
+    Marca.subirLogo,
+);
+router.delete('/marca/logo', [
+    query('id_negocio').isInt({ min: 1 }),
+], exigirAccion('configuracion_cobros'), Marca.eliminarLogo);
+
+// ── Imagen de un servicio ──
+router.post('/servicios/:id/imagen',
+    uploadImagen.single('imagen'),
+    [param('id').isInt({ min: 1 }), body('id_negocio').isInt({ min: 1 })],
+    Marca.subirImagenServicio,
+);
+router.delete('/servicios/:id/imagen', [
+    param('id').isInt({ min: 1 }),
+    query('id_negocio').isInt({ min: 1 }),
+], Marca.eliminarImagenServicio);
 
 // ── Usuarios y permisos del negocio ──
 // Cada handler verifica contra la BD que el llamante pueda administrar ese `id_negocio`; el
