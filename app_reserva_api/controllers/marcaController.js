@@ -146,8 +146,88 @@ async function eliminarImagenServicio(req, res) {
     }
 }
 
+/** POST /reserva/marca/banner (multipart) */
+async function subirBanner(req, res) {
+    if (!check(req, res)) return;
+    try {
+        if (!req.file) return Respuesta.error(res, 'No se recibió ninguna imagen.', 400);
+        const data = await MarcaService.guardarBanner({
+            idNegocio: Number(req.body.id_negocio),
+            buffer: req.file.buffer,
+            mimetype: req.file.mimetype,
+        });
+        return Respuesta.success(res, 'Banner actualizado', data, 201);
+    } catch (err) {
+        return fallo(res, err, 'subirBanner', 'Error al subir el banner.');
+    }
+}
+
+/** DELETE /reserva/marca/banner?id_negocio=N */
+async function eliminarBanner(req, res) {
+    if (!check(req, res)) return;
+    try {
+        await MarcaService.eliminarBanner(Number(req.query.id_negocio));
+        return Respuesta.success(res, 'Banner eliminado', { banner_url: null });
+    } catch (err) {
+        return fallo(res, err, 'eliminarBanner', 'Error al eliminar el banner.');
+    }
+}
+
+/**
+ * POST /reserva/profesionales/:id/foto (multipart)
+ *
+ * Misma mecánica que la imagen de servicio: el archivo se llama `profesional_00012.webp` por el
+ * id, así que reemplazar la foto pisa la anterior y no quedan huérfanos en el disco.
+ */
+async function subirFotoProfesional(req, res) {
+    if (!check(req, res)) return;
+    try {
+        if (!req.file) return Respuesta.error(res, 'No se recibió ninguna imagen.', 400);
+        const idNegocio = Number(req.body.id_negocio);
+        const idProfesional = Number(req.params.id);
+
+        const profesional = await Models.ReservaProfesional.findOne({
+            where: { id_profesional: idProfesional, id_negocio: idNegocio },
+        });
+        if (!profesional) return Respuesta.error(res, 'Profesional no encontrado', 404);
+
+        const { url, bytes } = ImagenService.guardar({
+            tipo: 'profesional', idNegocio, idEntidad: idProfesional,
+            buffer: req.file.buffer, mimetype: req.file.mimetype,
+        });
+        await profesional.update({ foto_url: url, fecha_actualizacion: new Date() });
+
+        return Respuesta.success(res, 'Foto actualizada', { foto_url: url, bytes }, 201);
+    } catch (err) {
+        return fallo(res, err, 'subirFotoProfesional', 'Error al subir la foto.');
+    }
+}
+
+/** DELETE /reserva/profesionales/:id/foto?id_negocio=N */
+async function eliminarFotoProfesional(req, res) {
+    if (!check(req, res)) return;
+    try {
+        const idNegocio = Number(req.query.id_negocio);
+        const idProfesional = Number(req.params.id);
+
+        const profesional = await Models.ReservaProfesional.findOne({
+            where: { id_profesional: idProfesional, id_negocio: idNegocio },
+        });
+        if (!profesional) return Respuesta.error(res, 'Profesional no encontrado', 404);
+
+        ImagenService.eliminar({ tipo: 'profesional', idNegocio, idEntidad: idProfesional });
+        await profesional.update({ foto_url: null, fecha_actualizacion: new Date() });
+
+        return Respuesta.success(res, 'Foto eliminada', { foto_url: null });
+    } catch (err) {
+        return fallo(res, err, 'eliminarFotoProfesional', 'Error al eliminar la foto.');
+    }
+}
+
 module.exports = {
     getMarca, guardarColores, aplicarPaleta, restablecerColores,
     subirLogo, eliminarLogo,
+    subirBanner, eliminarBanner,
     subirImagenServicio, eliminarImagenServicio,
+    subirFotoProfesional, eliminarFotoProfesional,
 };

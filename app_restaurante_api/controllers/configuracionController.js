@@ -46,6 +46,7 @@ async function updateConfiguracion(req, res) {
             url_facebook: req.body.url_facebook,
             url_instagram: req.body.url_instagram,
             permite_multipago: req.body.permite_multipago !== undefined ? req.body.permite_multipago : undefined,
+            permite_pago_domicilio: req.body.permite_pago_domicilio !== undefined ? req.body.permite_pago_domicilio : undefined,
             id_paleta: req.body.id_paleta !== undefined ? req.body.id_paleta : undefined,
         };
 

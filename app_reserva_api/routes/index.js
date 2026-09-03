@@ -21,6 +21,8 @@ const Usuarios     = require('../controllers/usuarioController');
 const Marca        = require('../controllers/marcaController');
 const Citas        = require('../controllers/citaController');
 const Config       = require('../controllers/configController');
+const Vitrina      = require('../controllers/vitrinaController');
+const Categorias   = require('../controllers/categoriaController');
 const { verificarToken } = require('../../app_core/middleware/auth');
 const { exigirAccion } = require('../middleware/exigirAccion');
 
@@ -77,6 +79,11 @@ router.post('/auth/canjear-codigo',
 router.get('/publico/:id_negocio/info',
     [param('id_negocio').isInt({ min: 1 })],
     Publico.getInfoNegocio);
+// Paquete completo de la portada: negocio + contacto + servicios + profesionales + horarios.
+// Existe para que la página del cliente se pinte con una sola petición y no a trozos.
+router.get('/publico/:id_negocio/vitrina',
+    [param('id_negocio').isInt({ min: 1 })],
+    Publico.getVitrina);
 router.get('/publico/:id_negocio/servicios',
     [param('id_negocio').isInt({ min: 1 })],
     Publico.listarServicios);
@@ -94,6 +101,29 @@ router.get('/publico/:id_negocio/disponibilidad', [
     query('id_servicios').optional().matches(/^\d+(,\d+)*$/).withMessage('id_servicios debe ser una lista de ids separada por comas'),
     query('id_profesional').isInt({ min: 1 }),
 ], Publico.getDisponibilidad);
+
+// Qué días atiende un profesional en un rango. El servicio limita el rango a 92 días.
+router.get('/publico/:id_negocio/dias', [
+    param('id_negocio').isInt({ min: 1 }),
+    query('id_profesional').optional().isInt({ min: 1 }),
+    query('desde').matches(/^\d{4}-\d{2}-\d{2}$/).withMessage('desde YYYY-MM-DD requerida'),
+    query('hasta').matches(/^\d{4}-\d{2}-\d{2}$/).withMessage('hasta YYYY-MM-DD requerida'),
+], Publico.getDiasDisponibles);
+
+// Agenda de un servicio concreto: días con alguien libre y huecos por profesional. Las dos
+// alimentan la página del servicio, que resuelve la reserva entera en una sola vista.
+router.get('/publico/:id_negocio/servicio/:id_servicio/dias', [
+    param('id_negocio').isInt({ min: 1 }),
+    param('id_servicio').isInt({ min: 1 }),
+    query('desde').matches(/^\d{4}-\d{2}-\d{2}$/).withMessage('desde YYYY-MM-DD requerida'),
+    query('hasta').matches(/^\d{4}-\d{2}-\d{2}$/).withMessage('hasta YYYY-MM-DD requerida'),
+], Publico.getDiasDeServicio);
+
+router.get('/publico/:id_negocio/servicio/:id_servicio/slots', [
+    param('id_negocio').isInt({ min: 1 }),
+    param('id_servicio').isInt({ min: 1 }),
+    query('fecha').matches(/^\d{4}-\d{2}-\d{2}$/).withMessage('fecha YYYY-MM-DD requerida'),
+], Publico.getSlotsDeServicio);
 
 // Crear cita: multipart si lleva comprobante; multer.single tolera ambos casos.
 router.post('/publico/:id_negocio/cita',
@@ -143,6 +173,7 @@ router.post('/servicios', [
     body('descripcion').optional({ nullable: true }).isString(),
     body('color_hex').optional({ nullable: true }).matches(/^#?[0-9a-fA-F]{6}$/),
     body('imagen_url').optional({ nullable: true }).isString().isLength({ max: 500 }),
+    body('id_categoria').optional({ nullable: true }).isInt({ min: 1 }),
 ], Servicios.crear);
 router.put('/servicios/:id', [
     param('id').isInt({ min: 1 }),
@@ -150,6 +181,7 @@ router.put('/servicios/:id', [
     body('nombre').optional().trim().notEmpty().isLength({ max: 150 }),
     body('duracion_min').optional().isInt({ min: 5, max: 600 }),
     body('precio').optional().isFloat({ min: 0 }),
+    body('id_categoria').optional({ nullable: true }).isInt({ min: 1 }),
 ], Servicios.actualizar);
 router.patch('/servicios/:id/inactivar', [
     param('id').isInt({ min: 1 }),
@@ -320,6 +352,66 @@ router.delete('/servicios/:id/imagen', [
     param('id').isInt({ min: 1 }),
     query('id_negocio').isInt({ min: 1 }),
 ], Marca.eliminarImagenServicio);
+
+// ── Categorías del catálogo ──
+//
+// `orden` va antes que `/:id` a propósito: con el orden inverso, Express haría coincidir
+// `/categorias/orden` con `/categorias/:id` y `id` valdría la cadena "orden".
+router.get('/categorias', [query('id_negocio').isInt({ min: 1 })], Categorias.listar);
+router.put('/categorias/orden', [
+    body('id_negocio').isInt({ min: 1 }),
+    body('id_categorias').isArray({ min: 1 }),
+], Categorias.reordenar);
+router.post('/categorias', [
+    body('id_negocio').isInt({ min: 1 }),
+    body('nombre').trim().notEmpty().isLength({ max: 120 }),
+    body('descripcion').optional({ nullable: true }).isString().isLength({ max: 500 }),
+], Categorias.crear);
+router.put('/categorias/:id', [
+    param('id').isInt({ min: 1 }),
+    body('id_negocio').isInt({ min: 1 }),
+    body('nombre').optional().trim().notEmpty().isLength({ max: 120 }),
+    body('descripcion').optional({ nullable: true }).isString().isLength({ max: 500 }),
+], Categorias.actualizar);
+router.patch('/categorias/:id/inactivar', [
+    param('id').isInt({ min: 1 }),
+    query('id_negocio').isInt({ min: 1 }),
+], Categorias.inactivar);
+
+// ── Banner del negocio ──
+router.post('/marca/banner',
+    uploadImagen.single('imagen'),
+    [body('id_negocio').isInt({ min: 1 })],
+    exigirAccion('configuracion_cobros'),
+    Marca.subirBanner,
+);
+router.delete('/marca/banner', [
+    query('id_negocio').isInt({ min: 1 }),
+], exigirAccion('configuracion_cobros'), Marca.eliminarBanner);
+
+// ── Foto de un profesional ──
+router.post('/profesionales/:id/foto',
+    uploadImagen.single('imagen'),
+    [param('id').isInt({ min: 1 }), body('id_negocio').isInt({ min: 1 })],
+    Marca.subirFotoProfesional,
+);
+router.delete('/profesionales/:id/foto', [
+    param('id').isInt({ min: 1 }),
+    query('id_negocio').isInt({ min: 1 }),
+], Marca.eliminarFotoProfesional);
+
+// ── Página pública del negocio (edición) ──
+router.get('/vitrina', [query('id_negocio').isInt({ min: 1 })], Vitrina.get);
+router.put('/vitrina', [
+    body('id_negocio').isInt({ min: 1 }),
+    body('telefono').optional({ nullable: true }).isString().isLength({ max: 30 }),
+    body('direccion').optional({ nullable: true }).isString().isLength({ max: 255 }),
+    body('url_whatsapp').optional({ nullable: true }).isString().isLength({ max: 300 }),
+    body('url_facebook').optional({ nullable: true }).isString().isLength({ max: 300 }),
+    body('url_instagram').optional({ nullable: true }).isString().isLength({ max: 300 }),
+    body('descripcion_publica').optional({ nullable: true }).isString().isLength({ max: 1200 }),
+    body('publico_activo').optional().isBoolean(),
+], exigirAccion('configuracion_vitrina'), Vitrina.actualizar);
 
 // ── Usuarios y permisos del negocio ──
 // Cada handler verifica contra la BD que el llamante pueda administrar ese `id_negocio`; el

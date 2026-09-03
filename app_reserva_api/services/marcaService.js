@@ -39,7 +39,7 @@ function normalizarHex(valor, campo) {
 
 async function getNegocio(idNegocio) {
     const negocio = await Models.GenerNegocio.findByPk(idNegocio, {
-        attributes: ['id_negocio', 'nombre', 'logo_url', 'colores', 'id_paleta'],
+        attributes: ['id_negocio', 'nombre', 'logo_url', 'banner_url', 'colores', 'id_paleta'],
     });
     if (!negocio) throw error('Negocio no encontrado.', 404);
     return negocio;
@@ -59,6 +59,7 @@ async function getMarca(idNegocio) {
         id_negocio: negocio.id_negocio,
         nombre: negocio.nombre,
         logo_url: negocio.logo_url,
+        banner_url: negocio.banner_url,
         colores: negocio.colores ?? null,
         id_paleta: negocio.id_paleta ?? null,
         paletas: paletas.map(p => ({
@@ -126,6 +127,29 @@ async function eliminarLogo(idNegocio) {
     return true;
 }
 
+/**
+ * Banner de la cabecera del portal público.
+ *
+ * Es la foto ancha del local o del equipo. Va aparte del logo porque cumple otra función: el
+ * logo identifica, el banner ambienta. Se recorta a 16:5 en el navegador —la proporción de la
+ * cabecera— para que ninguna suba deforme el encabezado ni obligue a recortarlo por CSS.
+ */
+async function guardarBanner({ idNegocio, buffer, mimetype }) {
+    const negocio = await getNegocio(idNegocio);
+    const { url, bytes } = ImagenService.guardar({
+        tipo: 'banner', idNegocio, idEntidad: idNegocio, buffer, mimetype,
+    });
+    await negocio.update({ banner_url: url });
+    return { banner_url: url, bytes };
+}
+
+async function eliminarBanner(idNegocio) {
+    const negocio = await getNegocio(idNegocio);
+    ImagenService.eliminar({ tipo: 'banner', idNegocio, idEntidad: idNegocio });
+    await negocio.update({ banner_url: null });
+    return true;
+}
+
 module.exports = {
     getMarca,
     guardarColores,
@@ -133,4 +157,6 @@ module.exports = {
     restablecerColores,
     guardarLogo,
     eliminarLogo,
+    guardarBanner,
+    eliminarBanner,
 };

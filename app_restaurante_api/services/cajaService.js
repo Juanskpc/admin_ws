@@ -235,7 +235,8 @@ async function transferirDomiciliarioACaja({ idNegocio, idDomiciliario, idUsuari
             SELECT 
                 id_orden, 
                 numero_orden, 
-                total
+                total,
+                valor_domicilio
             FROM restaurante.pedid_orden
             WHERE id_negocio = :idNegocio
               AND tipo_pedido = 'DOMICILIO'
@@ -264,6 +265,7 @@ async function transferirDomiciliarioACaja({ idNegocio, idDomiciliario, idUsuari
                 idUsuario,
                 monto: Number(orden.total || 0),
                 numeroOrden,
+                valorDomicilio: Number(orden.valor_domicilio || 0),
                 transaction: t,
             });
             totalMonto += Number(orden.total || 0);
@@ -437,8 +439,17 @@ async function registrarMovimiento({ idCaja, tipo, monto, concepto, idUsuario, i
 /**
  * Variante segura para registrar el INGRESO automático del cobro:
  * verifica que la caja siga abierta dentro de la transacción.
+ *
+ * Si la orden trae `valor_domicilio` (funcionalidad opt-in por negocio), registra
+ * además el EGRESO por el pago al domiciliario. El cliente pagó el domicilio dentro
+ * del total, así que ingreso y egreso se anulan y en caja solo queda la venta.
+ *
+ * Los dos movimientos van en la MISMA transacción que el cobro: o quedan ambos, o
+ * no queda ninguno. Y como este es el único punto donde una orden entra a caja
+ * (cobro en despacho, cierre de orden y transferencia del domiciliario pasan todos
+ * por aquí), el egreso no se puede duplicar ni quedar huérfano.
  */
-async function registrarIngresoOrden({ idNegocio, idOrden, idUsuario, monto, numeroOrden, transaction }) {
+async function registrarIngresoOrden({ idNegocio, idOrden, idUsuario, monto, numeroOrden, valorDomicilio = 0, transaction }) {
     const caja = await requireCajaAbierta(idNegocio, { transaction });
     await registrarMovimiento({
         idCaja: caja.id_caja,
@@ -449,6 +460,20 @@ async function registrarIngresoOrden({ idNegocio, idOrden, idUsuario, monto, num
         idOrden,
         transaction,
     });
+
+    const domicilio = Number(valorDomicilio ?? 0);
+    if (domicilio > 0) {
+        await registrarMovimiento({
+            idCaja: caja.id_caja,
+            tipo: 'EGRESO',
+            monto: domicilio,
+            concepto: `Pago domicilio orden ${numeroOrden}`,
+            idUsuario,
+            idOrden,
+            transaction,
+        });
+    }
+
     return caja;
 }
 

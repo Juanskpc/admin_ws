@@ -107,6 +107,7 @@ async function getConfiguracionNegocio(idUsuario, idNegocio = null) {
             'id_tipo_negocio',
             'id_paleta',
             'permite_multipago',
+            'permite_pago_domicilio',
             'fecha_registro',
         ],
         include: [
@@ -146,6 +147,7 @@ async function getConfiguracionNegocio(idUsuario, idNegocio = null) {
         id_paleta: negocio.id_paleta,
         paleta: negocio.paletaColor || null,
         permite_multipago: !!negocio.permite_multipago,
+        permite_pago_domicilio: !!negocio.permite_pago_domicilio,
         fecha_registro: negocio.fecha_registro,
         roles: acceso.roles,
         can_edit: acceso.canEdit,
@@ -210,6 +212,10 @@ async function updateConfiguracionNegocio(idUsuario, payload = {}) {
 
     if (payload.permite_multipago !== undefined) {
         patch.permite_multipago = payload.permite_multipago === true || payload.permite_multipago === 'true';
+    }
+
+    if (payload.permite_pago_domicilio !== undefined) {
+        patch.permite_pago_domicilio = payload.permite_pago_domicilio === true || payload.permite_pago_domicilio === 'true';
     }
 
     if (payload.id_paleta !== undefined) {

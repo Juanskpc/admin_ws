@@ -3,6 +3,8 @@ const { validationResult } = require('express-validator');
 const Models = require('../../app_core/models/conection');
 const DisponibilidadService = require('../services/disponibilidadService');
 const CitaService = require('../services/citaService');
+const VitrinaService = require('../services/vitrinaService');
+const AgendaServicio = require('../services/agendaServicioService');
 const Respuesta = require('../../app_core/helpers/respuesta');
 
 function check(req, res) {
@@ -17,7 +19,7 @@ async function getInfoNegocio(req, res) {
         const idNegocio = Number(req.params.id_negocio);
         const negocio = await Models.GenerNegocio.findOne({
             where: { id_negocio: idNegocio, estado: 'A' },
-            attributes: ['id_negocio', 'nombre', 'email_contacto', 'id_paleta'],
+            attributes: ['id_negocio', 'nombre', 'email_contacto', 'id_paleta', 'logo_url', 'colores'],
             include: [
                 { model: Models.GenerTipoNegocio, as: 'tipoNegocio',
                   attributes: ['nombre'], where: { nombre: 'RESERVA' }, required: true },
@@ -32,6 +34,10 @@ async function getInfoNegocio(req, res) {
             id_negocio: negocio.id_negocio,
             nombre: negocio.nombre,
             email_contacto: negocio.email_contacto,
+            logo_url: negocio.logo_url,
+            // `colores` manda sobre la paleta; ambos viajan para que el cliente no tenga que
+            // adivinar cuál aplicar cuando solo hay uno de los dos.
+            colores: negocio.colores ?? null,
             paleta: negocio.paletaColor || null,
             cobro_adelantado: cfg.cobro_adelantado,
             instrucciones_pago: cfg.cobro_adelantado ? cfg.instrucciones_pago : null,
@@ -130,6 +136,71 @@ async function getDisponibilidad(req, res) {
     }
 }
 
+/**
+ * GET /reserva/publico/:id_negocio/dias?id_profesional=&desde=&hasta=
+ *
+ * Qué días del rango atiende ese profesional. El calendario del asistente lo necesita para no
+ * ofrecer un martes que está bloqueado por vacaciones: el horario semanal que publica la
+ * vitrina no sabe de bloqueos, y esto sí —sale de `reglasAgenda`, la misma fuente que decide
+ * si una cita se acepta.
+ */
+async function getDiasDisponibles(req, res) {
+    if (!check(req, res)) return;
+    try {
+        const data = await DisponibilidadService.diasDisponibles({
+            idNegocio: Number(req.params.id_negocio),
+            idProfesional: req.query.id_profesional ? Number(req.query.id_profesional) : null,
+            desde: String(req.query.desde),
+            hasta: String(req.query.hasta),
+        });
+        return Respuesta.success(res, 'Días calculados', data);
+    } catch (err) {
+        if (err.statusCode) return Respuesta.error(res, err.message, err.statusCode);
+        console.error('[Reserva/Publico] dias:', err.message);
+        return Respuesta.error(res, 'Error al calcular los días disponibles.');
+    }
+}
+
+/**
+ * GET /reserva/publico/:id_negocio/servicio/:id_servicio/dias?desde=&hasta=
+ *
+ * Qué días atiende **alguien** que haga ese servicio. Es lo que pinta el calendario de la
+ * página del servicio con una sola petición en vez de una por profesional.
+ */
+async function getDiasDeServicio(req, res) {
+    if (!check(req, res)) return;
+    try {
+        const data = await AgendaServicio.diasDelServicio({
+            idNegocio: Number(req.params.id_negocio),
+            idServicio: Number(req.params.id_servicio),
+            desde: String(req.query.desde),
+            hasta: String(req.query.hasta),
+        });
+        return Respuesta.success(res, 'Días del servicio', data);
+    } catch (err) {
+        if (err.statusCode) return Respuesta.error(res, err.message, err.statusCode);
+        console.error('[Reserva/Publico] diasServicio:', err.message);
+        return Respuesta.error(res, 'Error al calcular los días disponibles.');
+    }
+}
+
+/** GET /reserva/publico/:id_negocio/servicio/:id_servicio/slots?fecha= */
+async function getSlotsDeServicio(req, res) {
+    if (!check(req, res)) return;
+    try {
+        const data = await AgendaServicio.slotsDelServicio({
+            idNegocio: Number(req.params.id_negocio),
+            idServicio: Number(req.params.id_servicio),
+            fechaISO: String(req.query.fecha),
+        });
+        return Respuesta.success(res, 'Horas disponibles', data);
+    } catch (err) {
+        if (err.statusCode) return Respuesta.error(res, err.message, err.statusCode);
+        console.error('[Reserva/Publico] slotsServicio:', err.message);
+        return Respuesta.error(res, 'Error al calcular las horas disponibles.');
+    }
+}
+
 /** POST /reserva/publico/:id_negocio/cita  (multipart si requiere comprobante) */
 async function crearCitaPublica(req, res) {
     if (!check(req, res)) return;
@@ -223,7 +294,26 @@ function formatearCitaPublica(cita) {
     };
 }
 
+
+/**
+ * GET /reserva/publico/:id_negocio/vitrina
+ *
+ * Todo lo que la página pública necesita para pintarse de una vez: negocio, contacto, redes,
+ * servicios, profesionales y el horario de atención de cada uno. Ver `vitrinaService`.
+ */
+async function getVitrina(req, res) {
+    if (!check(req, res)) return;
+    try {
+        const data = await VitrinaService.getVitrina(Number(req.params.id_negocio));
+        return Respuesta.success(res, 'Vitrina del negocio', data);
+    } catch (err) {
+        if (err.statusCode) return Respuesta.error(res, err.message, err.statusCode);
+        console.error('[Reserva/Publico] vitrina:', err.message);
+        return Respuesta.error(res, 'Error al cargar la página del negocio.');
+    }
+}
 module.exports = {
-    getInfoNegocio, listarServicios, listarProfesionales, getDisponibilidad,
+    getVitrina, getInfoNegocio, listarServicios, listarProfesionales,
+    getDisponibilidad, getDiasDisponibles, getDiasDeServicio, getSlotsDeServicio,
     crearCitaPublica, consultarCita, cancelarCitaPublica,
 };

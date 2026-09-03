@@ -33,8 +33,10 @@ const path = require('path');
 const BASE = path.resolve(path.join(__dirname, '..', '..', 'uploads', 'reserva'));
 
 const TIPOS = {
-    logo:     { carpeta: 'logos',     prefijo: 'logo' },
-    servicio: { carpeta: 'servicios', prefijo: 'servicio' },
+    logo:        { carpeta: 'logos',        prefijo: 'logo' },
+    servicio:    { carpeta: 'servicios',    prefijo: 'servicio' },
+    profesional: { carpeta: 'profesionales', prefijo: 'profesional' },
+    banner:      { carpeta: 'banners',       prefijo: 'banner' },
 };
 
 const EXTENSIONES = { 'image/webp': 'webp', 'image/jpeg': 'jpg', 'image/png': 'png' };

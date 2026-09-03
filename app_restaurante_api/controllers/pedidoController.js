@@ -26,6 +26,7 @@ const crearOrdenValidators = [
     body('direccion_domicilio').optional({ nullable: true }).isString().isLength({ max: 500 }),
     body('nota_domicilio').optional({ nullable: true }).isString(),
     body('id_domiciliario').optional({ nullable: true }).isInt({ min: 1 }),
+    body('valor_domicilio').optional({ nullable: true }).isFloat({ min: 0 }).withMessage('valor_domicilio inválido'),
 ];
 
 const agregarItemsOrdenValidators = [
@@ -39,6 +40,7 @@ const agregarItemsOrdenValidators = [
     body('items.*.precio_unitario').isFloat({ min: 0 }).withMessage('Precio inválido'),
     body('items.*.exclusiones').optional().isArray(),
     body('porcentaje_impuesto').optional().isFloat({ min: 0, max: 1 }),
+    body('valor_domicilio').optional({ nullable: true }).isFloat({ min: 0 }).withMessage('valor_domicilio inválido'),
 ];
 
 const marcarPagadoValidators = [
@@ -49,6 +51,11 @@ const marcarPagadoValidators = [
     body('pagos.*.valor').optional().isFloat({ gt: 0 }).withMessage('valor inválido en pagos'),
     body('origen_cobro').optional({ nullable: true }).isIn(['CAJA', 'DOMICILIARIO'])
         .withMessage('origen_cobro inválido'),
+];
+
+const actualizarValorDomicilioValidators = [
+    body('id_negocio').isInt({ min: 1 }).withMessage('id_negocio inválido'),
+    body('valor_domicilio').isFloat({ min: 0 }).withMessage('valor_domicilio inválido'),
 ];
 
 const cerrarOrdenValidators = [
@@ -68,6 +75,7 @@ async function crearOrden(req, res) {
         const {
             id_negocio, id_metodo_pago, id_mesa, nota, items, porcentaje_impuesto, permitir_stock_negativo,
             tipo_pedido, contacto_nombre, contacto_telefono, direccion_domicilio, nota_domicilio, id_domiciliario,
+            valor_domicilio,
         } = req.body;
         const orden = await PedidoService.crearOrden({
             idNegocio:  id_negocio,
@@ -84,6 +92,7 @@ async function crearOrden(req, res) {
             direccionDomicilio: direccion_domicilio || null,
             notaDomicilio:     nota_domicilio || null,
             idDomiciliario:    id_domiciliario ? Number(id_domiciliario) : null,
+            valorDomicilio:    valor_domicilio != null ? Number(valor_domicilio) : 0,
         });
         return Respuesta.success(res, 'Orden creada', orden, 201);
     } catch (err) {
@@ -110,7 +119,10 @@ async function agregarItemsOrden(req, res) {
 
     try {
         const idOrden = Number(req.params.id);
-        const { id_negocio, id_metodo_pago, nota, items, porcentaje_impuesto, permitir_stock_negativo } = req.body;
+        const {
+            id_negocio, id_metodo_pago, nota, items, porcentaje_impuesto, permitir_stock_negativo,
+            valor_domicilio,
+        } = req.body;
 
         const orden = await PedidoService.agregarItemsOrden({
             idOrden,
@@ -120,6 +132,8 @@ async function agregarItemsOrden(req, res) {
             items,
             porcentajeImpuesto: porcentaje_impuesto || 0,
             permitirStockNegativo: Boolean(permitir_stock_negativo),
+            // undefined = el body no lo trae, se conserva el valor guardado en la orden.
+            valorDomicilio: valor_domicilio === undefined ? undefined : Number(valor_domicilio ?? 0),
         });
 
         return Respuesta.success(res, 'Items agregados a la orden', orden);
@@ -250,6 +264,28 @@ async function marcarPagado(req, res) {
     }
 }
 
+/** PATCH /restaurante/pedidos/:id/valor-domicilio */
+async function actualizarValorDomicilio(req, res) {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+        return Respuesta.error(res, 'Datos inválidos', 422, errors.array());
+    }
+
+    try {
+        const orden = await PedidoService.actualizarValorDomicilio(Number(req.params.id), {
+            idNegocio: Number(req.body.id_negocio),
+            valorDomicilio: Number(req.body.valor_domicilio),
+        });
+        return Respuesta.success(res, 'Valor del domicilio actualizado', orden);
+    } catch (err) {
+        if (['ORDEN_NO_ENCONTRADA', 'ORDEN_NO_ABIERTA', 'ORDEN_PAGADA'].includes(err.code)) {
+            return Respuesta.error(res, err.message, err.statusCode || 409, { code: err.code });
+        }
+        console.error('[Pedidos] Error actualizarValorDomicilio:', err.message);
+        return Respuesta.error(res, 'Error al actualizar el valor del domicilio.');
+    }
+}
+
 /** PATCH /restaurante/pedidos/:id/cancelar */
 async function cancelarOrden(req, res) {
     try {
@@ -334,6 +370,7 @@ module.exports = {
     cambiarEstadoCocina,
     marcarDetalleCompleto,
     marcarPagado,
+    actualizarValorDomicilio, actualizarValorDomicilioValidators,
     cancelarOrden,
     cerrarOrden,
 };

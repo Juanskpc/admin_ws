@@ -52,7 +52,11 @@
     "migrate:intelligence-recordatorios": "node migrations/migrate_intelligence_recordatorios.js",
     "migrate:intelligence-bandeja": "node migrations/migrate_intelligence_bandeja.js",
     "migrate:platform-numeros-canal": "node migrations/migrate_platform_numeros_canal.js",
-    "evaluar": "node scripts/evaluar.js"
+    "evaluar": "node scripts/evaluar.js",
+    "migrate:reserva-vitrina": "node migrations/migrate_reserva_vitrina.js",
+    "migrate:reserva-categorias": "node migrations/migrate_reserva_categorias.js",
+    "migrate:restaurante-pago-domicilio": "node migrations/migrate_restaurante_pago_domicilio.js",
+    "migrate:restaurante-subniveles-tipo-pedido": "node migrations/migrate_restaurante_subniveles_tipo_pedido.js"
   },
   "keywords": [],
   "author": "",

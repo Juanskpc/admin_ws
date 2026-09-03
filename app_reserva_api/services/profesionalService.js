@@ -1,5 +1,6 @@
 'use strict';
 const Models = require('../../app_core/models/conection');
+const ImagenService = require('./imagenService');
 const { Op } = Models.Sequelize;
 
 /**
@@ -85,7 +86,12 @@ async function actualizar(idProfesional, idNegocio, data) {
 async function inactivar(idProfesional, idNegocio) {
     const p = await Models.ReservaProfesional.findOne({ where: { id_profesional: idProfesional, id_negocio: idNegocio } });
     if (!p) return null;
-    return p.update({ estado: 'I', fecha_actualizacion: new Date() });
+    // La foto se borra del disco al inactivar, igual que la imagen de un servicio: un registro
+    // que ya no se muestra en ningún sitio no debe dejar su archivo suelto en `uploads`.
+    if (p.foto_url) {
+        ImagenService.eliminar({ tipo: 'profesional', idNegocio, idEntidad: idProfesional });
+    }
+    return p.update({ estado: 'I', foto_url: null, fecha_actualizacion: new Date() });
 }
 
 async function setServicios(idProfesional, idNegocio, idServicios = []) {

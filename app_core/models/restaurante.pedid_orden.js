@@ -10,6 +10,9 @@ module.exports = (sequelize, DataTypes) => {
         subtotal:       { type: DataTypes.DECIMAL(12, 2), defaultValue: 0 },
         impuesto:       { type: DataTypes.DECIMAL(12, 2), defaultValue: 0 },
         total:          { type: DataTypes.DECIMAL(12, 2), defaultValue: 0 },
+        // Valor cobrado al cliente por el domicilio. Va incluido en 'total' y al cobrar
+        // la orden genera un EGRESO en caja (el pago al domiciliario). 0 = sin domicilio.
+        valor_domicilio: { type: DataTypes.DECIMAL(12, 2), allowNull: false, defaultValue: 0 },
         estado:         { type: DataTypes.STRING(20), defaultValue: 'ABIERTA' },
         estado_cocina:  { type: DataTypes.STRING(20), allowNull: true },
         fecha_creacion: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
