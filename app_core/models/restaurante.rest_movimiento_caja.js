@@ -7,6 +7,9 @@ module.exports = (sequelize, DataTypes) => {
     concepto:      DataTypes.STRING(255),
     id_orden:      DataTypes.INTEGER,
     id_usuario:    { type: DataTypes.INTEGER, allowNull: false },
+    // Movimiento que esta fila reversa. Non-null ⟹ la fila ES una anulación.
+    // Nada se borra: el original queda visible y el neto se corrige sumando.
+    id_movimiento_anula: { type: DataTypes.INTEGER, allowNull: true },
     fecha:         { type: DataTypes.DATE, allowNull: false, defaultValue: DataTypes.NOW },
   }, {
     tableName: 'rest_movimiento_caja', schema: 'restaurante', timestamps: false,

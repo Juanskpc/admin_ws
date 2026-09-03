@@ -155,6 +155,83 @@ async function transferirDomiciliario(req, res) {
     }
 }
 
+/**
+ * POST /restaurante/caja/ordenes/:id/anular
+ * Elimina de la caja un pedido ya cobrado, sin borrar su historial.
+ * El permiso `caja_eliminar_pedido` se vuelve a verificar en el servicio.
+ */
+async function anularPedido(req, res) {
+    if (!handleValidation(req, res)) return;
+    try {
+        const idOrden = Number(req.params.id);
+        const idNegocio = Number(req.body.id_negocio);
+        setAuditNegocio(idNegocio);
+
+        const result = await CajaService.anularOrdenCobrada({
+            idNegocio,
+            idOrden,
+            idUsuario: req.usuario?.id_usuario,
+        });
+
+        await Audit.registrarEvento({
+            modulo: 'caja', accion: 'pedido_anulado', idNegocio,
+            detalle: {
+                id_orden: idOrden,
+                numero_orden: result.numero_orden,
+                monto_revertido: result.monto_revertido,
+                movimientos_revertidos: result.movimientos_revertidos,
+            },
+        });
+
+        return Respuesta.success(res, 'Pedido eliminado de la caja', result);
+    } catch (err) {
+        if (['SIN_PERMISO_ANULAR', 'ORDEN_NO_ENCONTRADA', 'ORDEN_YA_ANULADA',
+             'SIN_MOVIMIENTOS_EN_CAJA', 'CAJA_CERRADA'].includes(err.code)) {
+            return Respuesta.error(res, err.message, err.statusCode || 409, { code: err.code });
+        }
+        console.error('[Caja] Error anularPedido:', err.message);
+        return Respuesta.error(res, 'Error al eliminar el pedido de la caja.');
+    }
+}
+
+/**
+ * POST /restaurante/caja/movimientos/:id/anular
+ * Devuelve a la caja un egreso (o un ingreso manual), dejándolo marcado.
+ */
+async function anularMovimiento(req, res) {
+    if (!handleValidation(req, res)) return;
+    try {
+        const idMovimiento = Number(req.params.id);
+        const idNegocio = Number(req.body.id_negocio);
+        setAuditNegocio(idNegocio);
+
+        const result = await CajaService.anularMovimientoCaja({
+            idNegocio,
+            idMovimiento,
+            idUsuario: req.usuario?.id_usuario,
+        });
+
+        await Audit.registrarEvento({
+            modulo: 'caja', accion: 'movimiento_anulado', idNegocio,
+            detalle: {
+                id_movimiento: idMovimiento,
+                tipo: result.tipo,
+                monto: result.monto,
+                concepto: result.concepto,
+            },
+        });
+
+        return Respuesta.success(res, 'Movimiento eliminado de la caja', result);
+    } catch (err) {
+        if (['SIN_PERMISO_ANULAR', 'MOVIMIENTO_NO_ENCONTRADO', 'MOVIMIENTO_ES_REVERSA',
+             'USAR_ANULAR_PEDIDO', 'MOVIMIENTO_YA_ANULADO', 'CAJA_CERRADA'].includes(err.code)) {
+            return Respuesta.error(res, err.message, err.statusCode || 409, { code: err.code });
+        }
+        console.error('[Caja] Error anularMovimiento:', err.message);
+        return Respuesta.error(res, 'Error al eliminar el movimiento de la caja.');
+    }
+}
+
 module.exports = {
     getCajaAbierta,
     abrirCaja,
@@ -163,4 +240,6 @@ module.exports = {
     getResumenDomiciliarios,
     registrarMovimiento,
     transferirDomiciliario,
+    anularPedido,
+    anularMovimiento,
 };

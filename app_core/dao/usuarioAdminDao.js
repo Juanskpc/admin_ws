@@ -19,6 +19,10 @@ function normalizePermissionCode(rawCode = '') {
 }
 
 function resolveDefaultSubnivelPermission({ codigo, rolDescripcion, modulePermission }) {
+    // Anular un pedido ya cobrado mueve dinero de un turno cerrado: nace denegado
+    // para todos, administradores incluidos, y se concede a mano en Roles y permisos.
+    if (codigo === 'caja_eliminar_pedido') return false;
+
     if (isAdminRoleName(rolDescripcion)) return true;
     if (!modulePermission) return false;
 

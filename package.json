@@ -56,7 +56,8 @@
     "migrate:reserva-vitrina": "node migrations/migrate_reserva_vitrina.js",
     "migrate:reserva-categorias": "node migrations/migrate_reserva_categorias.js",
     "migrate:restaurante-pago-domicilio": "node migrations/migrate_restaurante_pago_domicilio.js",
-    "migrate:restaurante-subniveles-tipo-pedido": "node migrations/migrate_restaurante_subniveles_tipo_pedido.js"
+    "migrate:restaurante-subniveles-tipo-pedido": "node migrations/migrate_restaurante_subniveles_tipo_pedido.js",
+    "migrate:restaurante-caja-anular-pedido": "node migrations/migrate_restaurante_caja_anular_pedido.js"
   },
   "keywords": [],
   "author": "",

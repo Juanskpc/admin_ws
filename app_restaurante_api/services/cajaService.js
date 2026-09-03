@@ -1,6 +1,9 @@
 'use strict';
 const { Op } = require('sequelize');
 const Models = require('../../app_core/models/conection');
+const { usuarioTieneSubnivel } = require('../../app_core/helpers/permisoSubnivel');
+
+const SUBNIVEL_ANULAR_PEDIDO = 'caja_eliminar_pedido';
 
 /**
  * cajaService — Gestión de turno de caja del restaurante.
@@ -66,6 +69,14 @@ async function getDesglosePorMetodo(idCaja) {
             SELECT m.id_orden, m.monto
             FROM restaurante.rest_movimiento_caja m
             WHERE m.id_caja = :idCaja AND m.tipo = 'INGRESO'
+              -- Un ingreso anulado ya no es plata en el cajón: se excluye del
+              -- desglose para que el cuadre por forma de pago sea el real.
+              AND NOT EXISTS (
+                  SELECT 1 FROM restaurante.rest_movimiento_caja a
+                  WHERE a.id_movimiento_anula = m.id_movimiento
+              )
+              -- Y las filas compensatorias tampoco son una venta: son la reversa.
+              AND m.id_movimiento_anula IS NULL
         ),
         multipago AS (
             SELECT pp.id_metodo_pago,
@@ -396,7 +407,7 @@ async function getCajaAbierta(idNegocio) {
 }
 
 async function getMovimientos(idCaja) {
-    return Models.RestMovimientoCaja.findAll({
+    const movimientos = await Models.RestMovimientoCaja.findAll({
         where: { id_caja: idCaja },
         include: [
             {
@@ -407,15 +418,37 @@ async function getMovimientos(idCaja) {
             {
                 model: Models.PedidOrden,
                 as: 'orden',
-                attributes: ['id_orden', 'numero_orden', 'tipo_pedido'],
+                attributes: ['id_orden', 'numero_orden', 'tipo_pedido', 'estado'],
                 required: false,
             },
         ],
         order: [['fecha', 'DESC']],
     });
+
+    // Marcas para el listado: el original anulado sigue ahí (no se oculta nada) y
+    // la fila compensatoria se distingue para pintarla como alerta.
+    const anulados = new Set(
+        movimientos
+            .map((m) => m.id_movimiento_anula)
+            .filter((id) => id != null)
+            .map(Number)
+    );
+
+    return movimientos.map((m) => {
+        const json = m.toJSON();
+        json.es_anulacion = m.id_movimiento_anula != null;
+        json.anulado = anulados.has(Number(m.id_movimiento));
+        // El único egreso que se ata a una orden es el pago al domiciliario
+        // (las reversas llevan id_movimiento_anula). Sirve para etiquetar la fila
+        // como "Domicilio" aunque el pedido sea Para llevar.
+        json.es_pago_domicilio = m.tipo === 'EGRESO'
+            && m.id_orden != null
+            && m.id_movimiento_anula == null;
+        return json;
+    });
 }
 
-async function registrarMovimiento({ idCaja, tipo, monto, concepto, idUsuario, idOrden, transaction }) {
+async function registrarMovimiento({ idCaja, tipo, monto, concepto, idUsuario, idOrden, idMovimientoAnula = null, transaction }) {
     if (!['INGRESO', 'EGRESO'].includes(tipo)) {
         const err = new Error('Tipo de movimiento inválido (INGRESO o EGRESO).');
         err.statusCode = 422;
@@ -433,6 +466,7 @@ async function registrarMovimiento({ idCaja, tipo, monto, concepto, idUsuario, i
         concepto: concepto || null,
         id_orden: idOrden || null,
         id_usuario: idUsuario,
+        id_movimiento_anula: idMovimientoAnula || null,
     }, { transaction });
 }
 
@@ -477,8 +511,206 @@ async function registrarIngresoOrden({ idNegocio, idOrden, idUsuario, monto, num
     return caja;
 }
 
+/**
+ * Anula un pedido ya cobrado desde Caja.
+ *
+ * NO borra nada. Por cada movimiento que el pedido dejó en la caja abierta crea
+ * uno compensatorio de signo contrario (`id_movimiento_anula` apunta al original):
+ *
+ *   INGRESO  Orden ORD-0029            +36.000
+ *   EGRESO   Pago domicilio ORD-0029    -4.000
+ *   EGRESO   Anulación ORD-0029        -36.000   ← nuevo
+ *   INGRESO  Anulación ORD-0029         +4.000   ← nuevo
+ *                                       ────────
+ *                                          0
+ *
+ * Así el original queda visible en el listado, el neto de caja vuelve a cero y el
+ * `id_usuario` del compensatorio deja constancia de quién anuló. La orden pasa a
+ * estado ANULADA, que los reportes (que filtran por CERRADA) ya excluyen solos.
+ *
+ * Solo se permite sobre la caja ABIERTA: reversar contra un turno ya cerrado
+ * movería plata de un día a otro y descuadraría el arqueo de ambos.
+ */
+async function anularOrdenCobrada({ idNegocio, idOrden, idUsuario }) {
+    const permitido = await usuarioTieneSubnivel({
+        idUsuario,
+        idNegocio,
+        codigo: SUBNIVEL_ANULAR_PEDIDO,
+        // Ni siquiera el administrador lo hereda: se concede uno por uno.
+        adminSiempre: false,
+    });
+    if (!permitido) {
+        const e = new Error('No tienes permiso para eliminar pedidos cobrados.');
+        e.code = 'SIN_PERMISO_ANULAR'; e.statusCode = 403;
+        throw e;
+    }
+
+    const t = await Models.sequelize.transaction();
+    try {
+        const caja = await requireCajaAbierta(idNegocio, { transaction: t });
+
+        const orden = await Models.PedidOrden.findOne({
+            where: { id_orden: idOrden, id_negocio: idNegocio },
+            transaction: t,
+            lock: t.LOCK.UPDATE,
+        });
+        if (!orden) {
+            const e = new Error('Pedido no encontrado.');
+            e.code = 'ORDEN_NO_ENCONTRADA'; e.statusCode = 404;
+            throw e;
+        }
+        if (orden.estado === 'ANULADA') {
+            const e = new Error('Este pedido ya fue eliminado.');
+            e.code = 'ORDEN_YA_ANULADA'; e.statusCode = 409;
+            throw e;
+        }
+
+        const candidatos = await Models.RestMovimientoCaja.findAll({
+            where: { id_caja: caja.id_caja, id_orden: idOrden, id_movimiento_anula: null },
+            transaction: t,
+            lock: t.LOCK.UPDATE,
+        });
+
+        if (candidatos.length === 0) {
+            const e = new Error('El pedido no tiene movimientos en la caja abierta. Solo se pueden eliminar pedidos cobrados en este turno.');
+            e.code = 'SIN_MOVIMIENTOS_EN_CAJA'; e.statusCode = 409;
+            throw e;
+        }
+
+        // Se saltan los que ya tienen reversa: un egreso del pedido pudo anularse
+        // por su cuenta antes, y eso no debe impedir anular el resto.
+        const yaReversados = await Models.RestMovimientoCaja.findAll({
+            where: { id_movimiento_anula: candidatos.map((m) => m.id_movimiento) },
+            attributes: ['id_movimiento_anula'],
+            transaction: t,
+        });
+        const reversados = new Set(yaReversados.map((m) => Number(m.id_movimiento_anula)));
+        const movimientos = candidatos.filter((m) => !reversados.has(Number(m.id_movimiento)));
+
+        if (movimientos.length === 0) {
+            const e = new Error('Este pedido ya fue eliminado.');
+            e.code = 'ORDEN_YA_ANULADA'; e.statusCode = 409;
+            throw e;
+        }
+
+        const numeroOrden = orden.numero_orden || `#${orden.id_orden}`;
+        let montoRevertido = 0;
+
+        for (const mov of movimientos) {
+            await registrarMovimiento({
+                idCaja: caja.id_caja,
+                tipo: mov.tipo === 'INGRESO' ? 'EGRESO' : 'INGRESO',
+                monto: mov.monto,
+                concepto: `Anulación ${numeroOrden}`,
+                idUsuario,
+                idOrden,
+                idMovimientoAnula: mov.id_movimiento,
+                transaction: t,
+            });
+            montoRevertido += mov.tipo === 'INGRESO' ? Number(mov.monto) : -Number(mov.monto);
+        }
+
+        await orden.update({ estado: 'ANULADA' }, { transaction: t });
+
+        await t.commit();
+        return {
+            id_orden: idOrden,
+            numero_orden: numeroOrden,
+            movimientos_revertidos: movimientos.length,
+            monto_revertido: montoRevertido,
+        };
+    } catch (err) {
+        if (!t.finished) await t.rollback();
+        throw err;
+    }
+}
+
+/**
+ * Anula UN movimiento suelto de la caja abierta (típicamente un egreso: el pago
+ * al domiciliario o un retiro manual). Mismo principio que `anularOrdenCobrada`:
+ * no borra, registra la reversa y deja el original marcado como eliminado.
+ *
+ * Un INGRESO atado a una orden NO entra por aquí: reversarlo solo dejaría
+ * huérfano el egreso del domicilio de esa misma orden. Ese caso va por
+ * `anularOrdenCobrada`, que reversa el pedido completo.
+ */
+async function anularMovimientoCaja({ idNegocio, idMovimiento, idUsuario }) {
+    const permitido = await usuarioTieneSubnivel({
+        idUsuario,
+        idNegocio,
+        codigo: SUBNIVEL_ANULAR_PEDIDO,
+        adminSiempre: false,
+    });
+    if (!permitido) {
+        const e = new Error('No tienes permiso para eliminar movimientos de caja.');
+        e.code = 'SIN_PERMISO_ANULAR'; e.statusCode = 403;
+        throw e;
+    }
+
+    const t = await Models.sequelize.transaction();
+    try {
+        const caja = await requireCajaAbierta(idNegocio, { transaction: t });
+
+        const mov = await Models.RestMovimientoCaja.findOne({
+            where: { id_movimiento: idMovimiento, id_caja: caja.id_caja },
+            transaction: t,
+            lock: t.LOCK.UPDATE,
+        });
+        if (!mov) {
+            const e = new Error('El movimiento no existe en la caja abierta.');
+            e.code = 'MOVIMIENTO_NO_ENCONTRADO'; e.statusCode = 404;
+            throw e;
+        }
+        if (mov.id_movimiento_anula != null) {
+            const e = new Error('No se puede eliminar una reversa.');
+            e.code = 'MOVIMIENTO_ES_REVERSA'; e.statusCode = 409;
+            throw e;
+        }
+        if (mov.tipo === 'INGRESO' && mov.id_orden != null) {
+            const e = new Error('Para eliminar el cobro de un pedido usa la fila del pedido, no la del egreso.');
+            e.code = 'USAR_ANULAR_PEDIDO'; e.statusCode = 409;
+            throw e;
+        }
+
+        const yaReversado = await Models.RestMovimientoCaja.count({
+            where: { id_movimiento_anula: mov.id_movimiento },
+            transaction: t,
+        });
+        if (yaReversado > 0) {
+            const e = new Error('Este movimiento ya fue eliminado.');
+            e.code = 'MOVIMIENTO_YA_ANULADO'; e.statusCode = 409;
+            throw e;
+        }
+
+        const referencia = mov.concepto || `movimiento #${mov.id_movimiento}`;
+        await registrarMovimiento({
+            idCaja: caja.id_caja,
+            tipo: mov.tipo === 'INGRESO' ? 'EGRESO' : 'INGRESO',
+            monto: mov.monto,
+            concepto: `Anulación ${referencia}`,
+            idUsuario,
+            idOrden: mov.id_orden || null,
+            idMovimientoAnula: mov.id_movimiento,
+            transaction: t,
+        });
+
+        await t.commit();
+        return {
+            id_movimiento: mov.id_movimiento,
+            tipo: mov.tipo,
+            concepto: mov.concepto,
+            monto: Number(mov.monto),
+        };
+    } catch (err) {
+        if (!t.finished) await t.rollback();
+        throw err;
+    }
+}
+
 module.exports = {
     requireCajaAbierta,
+    anularOrdenCobrada,
+    anularMovimientoCaja,
     abrirCaja,
     cerrarCaja,
     getCajaAbierta,

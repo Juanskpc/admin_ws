@@ -289,6 +289,16 @@ router.post('/caja/movimientos', [
 	body('concepto').optional({ nullable: true }).isString().isLength({ max: 255 }),
 ], CajaController.registrarMovimiento);
 
+router.post('/caja/movimientos/:id/anular', [
+	param('id').isInt({ min: 1 }),
+	body('id_negocio').isInt({ min: 1 }),
+], CajaController.anularMovimiento);
+
+router.post('/caja/ordenes/:id/anular', [
+	param('id').isInt({ min: 1 }),
+	body('id_negocio').isInt({ min: 1 }),
+], CajaController.anularPedido);
+
 router.post('/caja/domiciliarios/transferir', [
 	body('id_negocio').isInt({ min: 1 }),
 	body('id_domiciliario').isInt({ min: 1 }),
