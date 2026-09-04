@@ -46,6 +46,33 @@ en verde.** El roadmap original está agotado: todo lo que se hace ahora sale de
 > DNS): bajar el TTL del TXT de verificación a `300` y borrar el CNAME muerto de AWS
 > (`...acm-validations.aws`).
 >
+> ### 1-bis. DESPLEGADO el 2026-09-04 — lo que hoy corre en el VPS
+>
+> Se subió todo lo que estaba pendiente desde el 2026-08-30, de los dos devs a la vez.
+> Backend en `e865aaa`, y los tres frontends desplegados (`admin`, `restaurante`, `reserva`).
+>
+> **Seis migraciones en producción, con respaldo previo** (`db_2026-09-04_0044.dump`). Tres ya
+> estaban aplicadas y lo dijeron sin romper nada — la idempotencia hizo su trabajo. Las nuevas:
+> `reserva-vitrina`, `restaurante-subniveles-tipo-pedido` y `facturacion`.
+>
+> **FE-1 está en producción y no cambia nada para nadie todavía:** los 12 negocios tienen ficha
+> fiscal en modo `NINGUNO`. Los 8 que ya traían un NIT **no se migraron a la ficha** — ese campo es
+> texto libre y sin dígito de verificación, y adivinarlo es peor que pedirlo. Se captura contra el
+> RUT desde el panel.
+>
+> **El aviso de escalado ya está vivo:** el log de arranque dice `[outboxRelay] 2 consumidor(es)`
+> —recordatorios y avisos— y ése es el dato que prueba que `arrancarAvisos()` se ejecutó. Sin esa
+> línea en `app.js` habría sido código muerto con la suite en verde.
+>
+> **Las tres páginas legales existen ya de verdad**, que es lo que desbloquea el App Review:
+> `escalapp.cloud/admin/terminos`, `/privacidad` y `/eliminacion-datos`, vigentes en v1.0, sin un
+> solo corchete sin rellenar y sin el aviso de borrador. Antes devolvían el cascarón vacío de la
+> app porque el bundle en producción no contenía esas rutas.
+>
+> ⚠️ **El despliegue se hizo con un cliente usando el POS.** El reinicio cayó entre dos peticiones
+> reales y el pedido siguiente entró sin incidencia — pero eso es suerte, no diseño: no hay
+> despliegue sin corte, y a esta hora simplemente hay poca gente.
+
 > ### 2. Dar de alta el número de un cliente — ya solo es procedimiento
 >
 > Con F8-C hecho, conectar un cliente son tres pasos y ninguno es código:
