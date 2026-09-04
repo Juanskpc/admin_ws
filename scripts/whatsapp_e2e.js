@@ -242,6 +242,10 @@ function pintar(enviado) {
     const escalera = intelligence.montarEscalera();
     await intelligence.arrancarMotor(escalera.manejador, { recuperar: false });
     intelligence.arrancarCanales({ iniciarEntrega: false });
+    // Mismo montaje que `app.js`, y por el mismo motivo: si este guion compusiera menos que el
+    // servidor real, seguiría verde mientras allí falta una pieza. Aquí no arranca sondeos —el
+    // relay se drena a mano cuando hace falta—, solo registra el consumidor.
+    intelligence.arrancarAvisos();
     intelligence.arrancarRecordatorios({ iniciarSondeos: false });
 
     console.log(`\nNivel 4: ${escalera.nivel4 || 'ninguno (solo FSM)'} · cliente ${NUMERO_CLIENTE}`);

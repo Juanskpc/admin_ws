@@ -678,6 +678,30 @@ Paneles útiles (con `business_id=1115123864174893`):
 - Consumo y coste: <https://business.facebook.com/wa/manage/insights/>
 - Métodos de pago y facturas: <https://business.facebook.com/billing_hub/accounts>
 
+### ⚠️ El 1 de octubre de 2026 la categoría *Servicio* deja de ser gratis
+
+Detectado el **2026-09-02** al calcular los precios de los planes. Meta empieza a cobrar **los
+mensajes de servicio salientes**, o sea justo la categoría en la que cae casi todo lo que hace el
+asistente. La tabla de arriba sigue siendo correcta en su estructura; lo que cambia es que la fila
+«Servicio → Gratis» **tiene fecha de caducidad**.
+
+Tres consecuencias que conviene tener claras antes de que llegue:
+
+1. **El costo pasa de ~$0 a una cifra que hoy no sabemos.** Y no depende de cuántas conversaciones
+   hay, sino de **cuántos mensajes emite el bot en cada una**.
+2. **La verbosidad del asistente se vuelve una línea de costo.** Contestar en tres burbujas cortas
+   cuesta el triple que contestar en una. Hasta ahora eso era una decisión de estilo; desde octubre
+   es una decisión de dinero, y afecta a cómo se redactan las respuestas del motor.
+3. **Los recordatorios no cambian:** `recordatorio_cita` es *Utility* y ya se cobraba.
+
+**Lo que hay que hacer antes de la fecha, y no después:** medir cuántos mensajes salientes genera
+cada negocio al mes. El dato está en el panel de *Insights* de Meta y, con más detalle, en el Ledger
+de Intelligence. Sin esa medición, el costo del módulo de WhatsApp en
+[`precios-y-planes.md`](precios-y-planes.md) es una suposición.
+
+⚠️ **Confirmar en el propio panel de Meta antes de actuar.** Esto salió de fuentes de integradores
+de agosto de 2026, no del panel; y las cifras y fechas de Meta cambian.
+
 ---
 
 ## Dar de alta el número de un CLIENTE (pendiente, y no es un botón)

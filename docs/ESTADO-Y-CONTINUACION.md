@@ -1,6 +1,6 @@
 # EscalApp Intelligence — estado y cómo continuar
 
-**Última actualización:** 2026-08-29, cierre de sesión (Bandeja + F8-C desplegados, y **la verificación de negocio APROBADA** el mismo día)
+**Última actualización:** 2026-09-02 (sesión de **proveedor de facturación y precios**; el resumen está en §4-0.7, que es por donde hay que empezar. La sesión anterior —facturación electrónica + políticas + landing— está en §4-0.6)
 **Propósito:** que retomar el trabajo no cueste una sesión de arqueología. Si vuelves a este
 proyecto después de semanas, **lee este documento primero** y sigue por donde diga.
 
@@ -74,15 +74,281 @@ en verde.** El roadmap original está agotado: todo lo que se hace ahora sale de
 >
 > ### 4. En código, lo siguiente que aporta
 >
-> - **El aviso cuando algo se escala.** La bandeja existe y se actualiza sola, pero **nadie te avisa**:
->   hay que entrar a mirar. La infraestructura está (el outbox de F1); es enganchar el evento y
->   decidir por dónde avisa — correo, o una campanita en el admin.
+> - ~~**El aviso cuando algo se escala.**~~ **HECHO el 2026-08-30.** Cuando el bot se calla y
+>   promete una persona, el negocio se entera por dos vías: la **campanita del admin** (que ya
+>   existía, con su contador y su historial — reutilizarla evitó una segunda verdad sobre lo mismo)
+>   y un **correo**. Va por el outbox, no por una llamada desde el turno: así el aviso se deshace
+>   con el turno si el manejador revienta, y el correo no se le cobra al cliente que está esperando.
+>   Dos reglas lo mantienen útil: **se relee antes de avisar** (si ya la atendieron, no sale) y
+>   **como mucho un aviso por negocio cada cuarto de hora**, diciendo cuántas esperan — que es
+>   además lo que lo hace idempotente frente a la reentrega del outbox. Detalle en
+>   [`bandeja.md`](bandeja.md) §«El aviso»; el evento, en
+>   [`architecture/domain-events.md`](architecture/domain-events.md). **728 pruebas de backend**
+>   (12 nuevas en `__tests__/intelligence/aviso_escalado.test.js`). **Sin desplegar.**
+>   Falta la tercera vía, que es la buena: **avisar por WhatsApp al dueño**, ahora viable con la
+>   verificación aprobada, pero exige plantilla aprobada por Meta.
 > - **Los tests del frontend de `admin_app-v21` no compilan**, y ya fallaban antes de esta sesión:
 >   specs de `auth/` desfasadas del modelo (`LoginRequest` ya no tiene `email`). El build de
 >   producción sí pasa.
 > - **La base compartida del VPS (5433) no tiene las migraciones de reserva** del 2026-08-29
 >   (caja, informes, subniveles, usuarios). Se corrieron en local y en producción. Correrlas allí
 >   le cambia el esquema al otro dev a media sesión: coordinarlo antes.
+
+> ### 5. EL SIGUIENTE PASO: facturación electrónica (2026-09-01)
+>
+> **No sale del roadmap, sale de la venta.** Los restaurantes con flujo de caja mayor que el de las
+> comidas rápidas piden dos cosas antes de firmar: WhatsApp con pedidos automáticos (hecho) y
+> **facturación electrónica**. Es la mitad del requisito de entrada a un segmento que hoy no se
+> puede cerrar.
+>
+> Hay además una obligación legal **ya vencida**: desde mayo–julio de **2024**, según el tipo de
+> contribuyente, el tiquete POS tiene que ser **electrónico y transmitirse a la DIAN**
+> (Resoluciones 000165 de 2023 y 000008 de 2024). El POS que EscalApp imprime hoy no se transmite.
+>
+> **Decisión tomada:** integrar la API de un **proveedor tecnológico** ya habilitado, detrás de un
+> puerto con adaptadores — **no** construir el emisor. Ser proveedor tecnológico exige patrimonio
+> de 20.000 UVT ($1.047 millones): esa puerta está cerrada. El razonamiento completo, con las
+> alternativas descartadas, en **[ADR-026](adr/ADR-026-facturacion-electronica.md)** (estado
+> `Propuesto`, pendiente de confirmar).
+>
+> **Todo lo demás está en [`facturacion-electronica.md`](facturacion-electronica.md)**: qué
+> diferencia un tiquete POS de una factura electrónica explicado sin tecnicismos, el calendario de
+> la DIAN, el modelo de datos, el flujo de emisión, los proveedores candidatos con las ocho
+> preguntas que hay que hacerles, el plan por fases y las trampas conocidas.
+>
+> **Por dónde va:**
+>
+> - ✅ **FE-1 HECHO el 2026-09-01, en local.** El modelo de datos fiscal:
+>   `general.gener_negocio_fiscal` (con `modo_facturacion` en `NINGUNO` para todos),
+>   `general.gener_departamento` (33, completo), `facturacion.fe_impuesto`, el helper del NIT con
+>   dígito de verificación, `puedeEmitir()` —que contesta **qué falta**, no «no»— y las 4 columnas
+>   fiscales en las 6 tablas de producto de las 5 verticales. `npm run migrate:facturacion`,
+>   idempotente, comprobada dos veces. **22 pruebas nuevas en verde** (`__tests__/facturacion/`),
+>   y `__tests__/reportes/` sigue en 20/20.
+>   ✅ **Aplicada en la COMPARTIDA (5433)** el 2026-09-01, que desde ese día es la base de trabajo
+>   por defecto del equipo. En producción, todavía no.
+>   **Ampliación del mismo día — el negocio que no está registrado:** buena parte de los clientes
+>   son informales (sin matrícula ni RUT) y ayudarlos a crecer es parte del producto, así que
+>   `estado_registro` tiene **tres** valores: `NO_DECLARADO` ≠ `SIN_REGISTRO` ≠ `REGISTRADO`. Al
+>   primero hay que preguntarle; al segundo **no hay que volver a molestarlo**. El invariante está
+>   en un CHECK de la base (`chk_negfiscal_modo_requiere_registro`): sin registro, la facturación
+>   no se puede encender por ningún camino. Y **todo negocio nace ya con su ficha fiscal** — se
+>   enganchó `asegurarFicha()` en los tres puntos que crean negocios (`negocioDao` x2 y
+>   `registroTrialService`), que era un agujero real. **27 pruebas.**
+> - 🟡 **Las políticas de EscalApp: borradores escritos el 2026-09-01**, en
+>   [`legal/`](legal/) — términos y condiciones, política de tratamiento de datos y anexo de
+>   encargado. **No están vigentes:** faltan los datos de la sociedad, la revisión de un abogado,
+>   publicarlas en la landing y guardar la aceptación con versión y fecha. Siguen **bloqueando al
+>   primer cliente grande**.
+>   ⚠️ **Y al redactarlas salió un hallazgo que no estaba medido: el VPS está en Miami, y Estados
+>   Unidos NO figura en el listado de países con nivel adecuado de protección de la SIC**
+>   (Circular 5 de 2017). O sea que la transferencia internacional de datos personales **lleva
+>   ocurriendo desde la migración de agosto**, no es algo futuro del modelo de IA. Exige
+>   autorización expresa del titular (art. 26 de la Ley 1581), y para los clientes de nuestros
+>   clientes esa autorización **la tiene que pedir el negocio**. Detalle en
+>   [`obligaciones-escalapp.md`](obligaciones-escalapp.md) §4.
+>   ✅ De paso quedó descartado el **RNBD**: obliga a sociedades con activos > 100.000 UVT
+>   ($5.237 millones) y estamos muy por debajo.
+>   ✅ **Publicadas en la web el 2026-09-01**: `/terminos` y `/privacidad` en `admin_app-v21`,
+>   prerenderizadas (el build pasó de 18 a **20 rutas estáticas**), sin guardia, enlazadas desde
+>   el pie de la landing —donde los enlaces llevaban `href="#"`— y desde el modal de registro con
+>   la frase de aceptación pegada al botón. Muestran un aviso de **«versión preliminar, no
+>   vinculante»** mientras `BORRADOR = true` en `src/app/legal/legal-content.ts`.
+>   **Falta:** enlazarlo desde el **menú digital público** (otro repo, `restaurante_app`) que es
+>   el punto más expuesto, y **registrar la aceptación** con usuario, versión y fecha.
+>   ⚠️ **`unidad_medida_dian`, no `unidad_medida`:** `tienda.tienda_producto` ya tenía una
+>   `unidad_medida` legible (`'und'`, `'kg'`). Mismo nombre, dos significados — se cazó al aplicar
+>   la migración y se renombró antes de que se propagara.
+> - **FE-0 no es código y hay que arrancarlo ya:** el cliente necesita su **habilitación ante la
+>   DIAN** y su **resolución de numeración**. Es un trámite externo con plazos ajenos — el mismo
+>   patrón que la verificación de Meta, que ya costó semanas una vez.
+> - **Lo siguiente en código es FE-4 antes que FE-2**, probablemente: los datos de FE-1 no se
+>   pueden capturar todavía porque no hay endpoint ni pantalla. Y FE-2 necesita proveedor elegido.
+>
+> **Y una corrección que llegó del dueño el 2026-09-01: EscalApp es PERSONA JURÍDICA.** Eso cambia
+> la conclusión que estaba escrita: una persona jurídica **está obligada a facturar siempre**, sin
+> umbral, y **no cobrar IVA no exime** (son obligaciones independientes; la contadora confirmó que
+> por ahora no se declara IVA). Sacar nuestra habilitación y nuestra resolución dejó de ser
+> preparación y es obligación de hoy. Ojo con el orden si se va a constituir la **SAS con el
+> socio**: si el NIT cambia, hay que rehacer el trámite. Detalle en
+> [`obligaciones-escalapp.md`](obligaciones-escalapp.md) §1.
+> - **Lo que hay que resolver y no es técnico:** el costo del proveedor no cabe en el plan Básico.
+>   ~~a ~$20.000 COP/mes por inquilino se come el 71% del plan~~ — **esa cifra era engañosa y quedó
+>   corregida el 2026-09-02**: los $20.000 de Plemsi son 100 documentos al mes para un solo NIT.
+>   Lo que de verdad decide es **la forma del costo**, no el precio; ver §7 y
+>   [`precios-y-planes.md`](precios-y-planes.md).
+>
+> **Tres cosas que quedaron cerradas el 2026-09-01 y conviene no volver a discutir:**
+>
+> 1. **Nace apagada.** `modo_facturacion` = `NINGUNO` por defecto: el negocio pequeño que no la
+>    quiere no ve un solo campo y nada cambia para él. Es una feature más en la costura de ADR-021.
+>    Y **quién está obligado lo dice la ley, no nosotros**: el cliente declara, nosotros dejamos
+>    rastro de quién y cuándo (§4 del documento).
+> 2. **El mapa de campos ya está escrito** (§5): qué le falta a `gener_negocio` para poder facturar
+>    —empezando por el **dígito de verificación del NIT**, que no tenemos, y el **municipio en código
+>    DANE**, que tampoco— más lo que falta en los productos de las cinco verticales.
+> 3. **Lo legal que nos incumbe a nosotros** tiene documento propio:
+>    [`obligaciones-escalapp.md`](obligaciones-escalapp.md). Titular: **nosotros también tenemos que
+>    facturar las mensualidades**, y los campos que eso exige son los mismos de FE-1 — así que
+>    podemos ser **nuestro propio primer cliente** y probar la integración sin arriesgar la caja de
+>    nadie. Ahí está también la pregunta de si el SaaS lleva IVA (art. 476 ET), que hay que resolver
+>    **antes de tocar los precios de la landing**.
+
+> ### 6. CIERRE DE LA SESIÓN DEL 2026-09-01/02 — léelo primero
+>
+> Sesión larga. Esto es lo que quedó hecho, lo que quedó a medias y lo que bloquea.
+>
+> #### Facturación electrónica (lo principal)
+>
+> - **Decidido y documentado:** se integra un **proveedor tecnológico**, no se construye el
+>   emisor. [ADR-026](adr/ADR-026-facturacion-electronica.md) (estado `Propuesto` — **pendiente de
+>   que el dueño lo confirme para pasarlo a `Aceptado`**) y
+>   [`facturacion-electronica.md`](facturacion-electronica.md), que explica en llano la diferencia
+>   entre tiquete POS y factura de venta.
+> - ✅ **FE-1 hecho y aplicado en la compartida:** `general.gener_negocio_fiscal`,
+>   `general.gener_departamento`, `facturacion.fe_impuesto`, helper del NIT con DV,
+>   `puedeEmitir()`, `asegurarFicha()` enganchada en los 3 puntos que crean negocios, y 4 columnas
+>   fiscales en 6 tablas de producto. **39 pruebas.**
+> - ✅ **FE-4 parcial:** los 4 endpoints y la pantalla `/admin/facturacion`, con los tres caminos
+>   (registrado / sin registro / no declarado). Verificada de punta a punta contra el backend real.
+> - ⬜ **Lo siguiente es FE-0, y no es código:** elegir proveedor con las 8 preguntas de
+>   [`facturacion-electronica.md`](facturacion-electronica.md) §8.2 y arrancar **nuestra propia
+>   habilitación** ante la DIAN. Siendo EscalApp persona jurídica **ya es obligación, no
+>   preparación**. Ojo con el orden si se constituye la SAS con el socio: si el NIT cambia, hay
+>   que rehacer el trámite.
+>
+> #### Políticas legales
+>
+> - Borradores en [`legal/`](legal/) + páginas públicas `/admin/terminos` y `/admin/privacidad`
+>   (⚠️ **no** `escalapp.cloud/terminos`: el admin va bajo `baseHref = /admin/`), enlazadas desde
+>   el pie de la landing, el modal de registro y el **menú digital** del restaurante.
+> - Muestran «versión preliminar, no vinculante» mientras `BORRADOR = true` en
+>   `admin_app-v21/src/app/legal/legal-content.ts`.
+> - 🔴 **Bloquea al primer cliente grande:** falta abogado y faltan los datos de la sociedad.
+> - ⚠️ **Hallazgo:** el VPS está en Miami y EE. UU. **no** figura en la lista de países con nivel
+>   adecuado de la SIC — la transferencia internacional lleva ocurriendo desde agosto. Falta
+>   **registrar la aceptación** (usuario + versión + fecha): hoy la frase se muestra y no se guarda.
+>
+> #### Landing
+>
+> - El selector pasó de 10 chips a **4 disponibles** (Restaurante, Cafetería, Barbería, Salón) y
+>   7 en «Próximamente». **`BARBERIA`/`SALON_BELLEZA` se mapean al tipo RESERVA**, no al tipo
+>   `BARBERIA` de la base, que no tiene app detrás.
+> - ⚠️ **Un chip disponible obliga a tocar TRES sitios**: `TIPOS_NEGOCIO` en
+>   `landing.component.ts`, el `isIn([...])` de `registroVerificacionController.js` (si falta →
+>   **400**) y `TIPO_NEGOCIO_MAPA` en `registroTrialService.js` (si falta → negocio sin rol).
+> - Copy corregido: el banner anunciaba «Módulo de Tienda ya disponible» (tienda no está
+>   desplegada), el hero enumeraba verticales inexistentes y `ECOSISTEMA` listaba seis que no
+>   operamos. Marca de agua del pie subida y apartada del botón de WhatsApp.
+>
+> #### Base compartida: dos cosas que se arreglaron por el camino
+>
+> - **Ningún restaurante abría** («0 módulos»): `gener_rol_nivel` estaba vacío para el tipo 1 y el
+>   catálogo era el viejo de `/pos`. Secuencia de migraciones y detalle en
+>   `project-permisos-restaurante-compartida` (memoria). **La base LOCAL sigue igual de rota** si
+>   algún día se usa para restaurante.
+> - Carta de demostración en el negocio 17 con
+>   `node scripts/fixtures/dev_carta_chayane.js` (6 categorías, 20 productos, imágenes SVG
+>   guardadas **dentro de la fila** porque los archivos de `uploads/` no viajan a la base
+>   compartida).
+>
+> #### Nada de esto está desplegado
+>
+> Todo vive en la base compartida y en los repos locales. **Al desplegar el backend, la migración
+> va ANTES que el código**: `asegurarFicha()` se llama al crear un negocio y sin la tabla rompe la
+> creación de negocios y el registro de prueba.
+
+> ### 7. CIERRE DE LA SESIÓN DEL 2026-09-02 — proveedor de facturación y precios
+>
+> **Sesión sin código.** Todo lo de abajo es investigación y decisiones documentadas. No se tocó
+> ni un archivo de `app_*`, ni migraciones, ni tests. Sigue todo en 716 pruebas verdes.
+>
+> #### Lo que cambió la forma de decidir
+>
+> **El criterio no es el precio del proveedor, es la FORMA de su costo.** Cobramos mensualidad
+> fija; si el proveedor cobra **por documento**, el costo sube con lo que venda el cliente y el
+> ingreso no. Resultado: **el restaurante que más factura es el que menos margen deja**, y pasado
+> cierto volumen tenerlo cuesta dinero. Con el módulo a $45.000 y ~$25/documento, el cruce está en
+> **1.800 doc/mes ≈ 60 tiquetes al día** — nada raro en un restaurante ocupado.
+>
+> **Regla que queda:** nuestro ingreso es plano, así que el costo también tiene que serlo. Entre
+> dos proveedores gana el que cobre por empresa, aunque su lista parezca más cara. El detalle, con
+> la tabla de volúmenes, en [`facturacion-electronica.md`](facturacion-electronica.md) §8.1.
+>
+> #### ⚠️ Factus NO emite tiquete POS — verificado en su documentación
+>
+> Era el candidato con más papeletas (ya habían mandado credenciales de sandbox, ya rotadas). Su
+> web bloquea rastreadores, así que se sacó **el índice completo de rutas** de su API v2:
+>
+> - **Sí tiene:** facturas de venta muy completas (estándar, mandatos, transporte, salud,
+>   contingencia) con ejemplos de **consumidor final** y de **propina**; notas crédito/débito,
+>   documentos soporte, nómina, rangos de numeración, RADIAN.
+> - **No tiene:** ni una ruta de documento equivalente / POS.
+>
+> ⚠️ **La trampa que casi cuesta el error:** los `documentos-soporte` que sí aparecen **son otra
+> cosa** — son para cuando el cliente *compra* a alguien no obligado a facturar. El SDK de la
+> comunidad (`factus-js`) los traduce como «documentos equivalentes» y esa traducción está mal.
+>
+> Dos datos más: **`/v2/companies` devuelve «la empresa del usuario» en singular** (una cuenta por
+> NIT, no una integración para muchos) y hay **límite de 80 peticiones/minuto**.
+>
+> **Aun así no queda descartado:** el tiquete POS es una *simplificación* que la ley permite, no
+> una obligación. Un negocio puede emitir **factura de venta para todo**, incluido consumidor final
+> anónimo. Y lo que contestaron por correo —*«no tienen limitación por número de ventas»*— es
+> justo la forma de costo que conviene.
+>
+> #### El certificado digital: $100.000/año por cliente que casi se pasa por alto
+>
+> **MATIAS y Facturalatam operan como «software propio», no como PT autorizado.** Es legal y hasta
+> conviene (el cliente queda titular directo ante la DIAN y nosotros no quedamos en el medio), pero
+> **cada cliente necesita su propio certificado**. Con un PT de verdad ese costo puede desaparecer,
+> porque firma él. Es pregunta de cotización. Y ojo: **el certificado gratuito de la DIAN solo
+> sirve dentro del servicio gratuito de la DIAN**, no con un proveedor externo.
+>
+> ⚠️ El PDF de proveedores autorizados que publica la DIAN **es de septiembre de 2020**. Sirve para
+> confirmar antiguos, no para descartar a nadie: hay que mirar el Catálogo de Participantes vigente.
+>
+> #### Precios: documento nuevo
+>
+> **[`precios-y-planes.md`](precios-y-planes.md)** — la propuesta completa. Principio: **base fija,
+> módulos aparte**, porque el sistema no cuesta casi nada por inquilino y WhatsApp y facturación sí.
+> Resumen: Básico $27.999 · +WhatsApp $49.999 · +Facturación $69.999 · **Completo $89.999** ·
+> Avanzado $59.999 · Avanzado completo $119.999. Nada de esto está publicado todavía.
+>
+> #### ⚠️ Lo más urgente de la sesión, y no es de facturación
+>
+> **El 1 de octubre de 2026 Meta empieza a cobrar los mensajes de servicio de WhatsApp.** Hoy el
+> asistente sale casi gratis porque las conversaciones las inicia el cliente. Consecuencia que
+> importa: **la verbosidad del bot se vuelve una línea de costo** — contestar en tres burbujas
+> cuesta el triple que en una. Detalle en [`canal-whatsapp.md`](canal-whatsapp.md).
+>
+> #### POR DÓNDE SEGUIR — lo que más mueve la aguja, en orden
+>
+> 1. **Contar los tiquetes reales de Pregonchos** (`id_negocio` 12): órdenes pagadas al mes en
+>    `restaurante.pedid_orden`. Todo el análisis se apoya en «900 documentos al mes», que es una
+>    hipótesis. **Con la cifra real la elección de proveedor se cierra sola.** No depende de nadie.
+> 2. **Medir mensajes salientes de WhatsApp por negocio**, antes del 1 de octubre. Tampoco depende
+>    de nadie.
+> 3. **Cotizar Factus** (precio por cuenta, si es ilimitado de verdad, si hay programa de
+>    integrador, si el POS está en su hoja de ruta).
+> 4. **Cotizar Alegra, Dataico y The Factory HKA** — PT confirmados. Un correo puede eliminar el
+>    certificado por cliente.
+> 5. **Preguntar a todos si un documento POS consume el mismo cupo que una factura.** Ninguno lo
+>    dice en su web y para un restaurante cambia el costo entero.
+>
+> #### Material de apoyo generado
+>
+> Dos páginas publicadas, útiles para explicarle esto a alguien más:
+>
+> - **Cómo funciona la facturación electrónica, desde cero** (POS vs. factura, el recorrido de una
+>   venta, diccionario): <https://claude.ai/code/artifact/8b4ddb62-7fcf-44b2-9be6-442153eccc5a>
+> - **El costo de facturar** (veredicto de Factus, comparación de proveedores, tabla de precios):
+>   <https://claude.ai/code/artifact/ffe2d006-5d62-41e7-8529-9b84d5caa6f1>
+>
+> #### Nada commiteado
+>
+> Como en la sesión anterior: `admin_ws` y `admin_app-v21` siguen con todo el trabajo de FE-1/FE-4,
+> los borradores legales y ahora estos documentos **en el árbol de trabajo, sin commitear**.
 
 ### Qué hay vivo, y dónde apunta
 
