@@ -639,4 +639,144 @@ async function sendPlanExpiryWarningEmail(email, datos) {
     console.info(`✉️  Aviso de vencimiento enviado a ${email} — messageId: ${info.messageId}`);
 }
 
-module.exports = { sendPasswordResetEmail, sendRegistroVerificationEmail, sendWelcomeEmail, sendAdminNotificationEmail, sendPlanExpiryWarningEmail, verifyTransport };
+// ============================================================
+// Aviso: una conversación del asistente espera a una persona
+// ============================================================
+
+/**
+ * El correo que se le manda al negocio cuando el asistente escala una conversación.
+ *
+ * Deliberadamente **no lleva nada de lo que dijo el cliente**: ni su texto ni su número. Un correo
+ * se reenvía y se queda en buzones que nadie controla; el contenido se lee en la Bandeja, donde el
+ * acceso está acotado al negocio dueño de la conversación (ADR-024, Ley 1581).
+ *
+ * Quién decide *cuándo* sale —y que no salgan cinco seguidos— es
+ * `intelligence/avisos/escalado.js`. Aquí solo se escribe.
+ */
+function buildConversacionEscaladaHtml(nombreNegocio, esperando, bandejaUrl, logoUrl) {
+    const varias = esperando > 1;
+    const titular = varias ? `${esperando} conversaciones` : 'Una conversación';
+
+    return `<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1.0" />
+  <title>Una conversación te espera · EscalApp</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f0f2f5; margin: 0; padding: 0; }
+    .wrapper { padding: 40px 16px; }
+    .container { max-width: 480px; margin: 0 auto; background: #ffffff; border-radius: 12px; box-shadow: 0 4px 16px rgba(0,0,0,.08); overflow: hidden; }
+    .header { background: #0d1b2a; padding: 28px 32px; text-align: center; }
+    .header img { max-height: 52px; width: auto; display: inline-block; }
+    .header-title { color: #ffffff; font-size: 13px; letter-spacing: 1px; text-transform: uppercase; margin: 10px 0 0; opacity: .7; }
+    .body { padding: 36px 32px; }
+    .body p { color: #4a5568; font-size: 14px; line-height: 1.7; margin: 0 0 16px; }
+    .alert-box { background: #f0f7ff; border-left: 4px solid #4361ee; border-radius: 8px; padding: 20px 24px; margin: 24px 0; }
+    .alert-box .count { font-size: 36px; font-weight: 800; color: #4361ee; line-height: 1; }
+    .alert-box .count-label { font-size: 13px; color: #718096; margin-top: 4px; }
+    .alert-box .negocio { font-size: 15px; font-weight: 700; color: #1a202c; margin-top: 12px; }
+    .btn-wrap { text-align: center; margin: 24px 0; }
+    .btn { display: inline-block; background: #4361ee; color: #ffffff !important; text-decoration: none; padding: 14px 36px; border-radius: 8px; font-weight: 700; font-size: 15px; }
+    .divider { border: none; border-top: 1px solid #e8ecf0; margin: 24px 0; }
+    .footer { background: #f7f9ff; padding: 18px 32px; text-align: center; }
+    .footer p { font-size: 11px; color: #a0aec0; margin: 0; line-height: 1.6; }
+    .footer strong { color: #718096; }
+  </style>
+</head>
+<body>
+  <div class="wrapper">
+    <div class="container">
+      <div class="header">
+        ${logoUrl
+            ? `<img src="${logoUrl}" alt="EscalApp" />`
+            : `<span style="color:#ffffff;font-size:22px;font-weight:800;letter-spacing:1px;">EscalApp</span>`
+        }
+        <p class="header-title">El asistente necesita una persona</p>
+      </div>
+      <div class="body">
+        <p>Hola,</p>
+        <p>
+          El asistente de <strong>${nombreNegocio}</strong> no supo cómo seguir
+          ${varias ? 'en varias conversaciones' : 'en una conversación'} y ya le dijo al cliente que
+          le responde alguien del negocio. <strong>Esa promesa está hecha</strong>: hasta que alguien
+          conteste, el asistente no vuelve a escribir en ${varias ? 'esas conversaciones' : 'esa conversación'}.
+        </p>
+        <div class="alert-box">
+          <div class="count">${esperando}</div>
+          <div class="count-label">${varias ? 'conversaciones esperando' : 'conversación esperando'}</div>
+          <div class="negocio">${nombreNegocio}</div>
+        </div>
+        <div class="btn-wrap">
+          <a class="btn" href="${bandejaUrl}">Abrir Conversaciones &rarr;</a>
+        </div>
+        <hr class="divider" />
+        <p style="font-size:12px;color:#a0aec0;">
+          Por privacidad, este correo no incluye lo que escribió el cliente. Lo verás al abrir la
+          conversación.
+        </p>
+      </div>
+      <div class="footer">
+        <p>
+          &copy; ${new Date().getFullYear()} <strong>EscalApp</strong> &middot; Todos los derechos reservados<br />
+          Este correo fue generado automáticamente, por favor no respondas a este mensaje.
+        </p>
+      </div>
+    </div>
+  </div>
+</body>
+</html>`;
+}
+
+/**
+ * Envía el aviso de conversación escalada.
+ *
+ * @param {string} email - Destinatario
+ * @param {object} datos
+ * @param {string} datos.nombreNegocio
+ * @param {number} datos.esperando - Cuántas conversaciones esperan ahora mismo
+ */
+async function sendConversacionEscaladaEmail(email, datos) {
+    const from = process.env.MAIL_FROM || '"EscalApp" <escalappsystem@gmail.com>';
+    const bandejaUrl = `${process.env.FRONTEND_URL || 'https://escalapp.cloud'}/admin/bandeja`;
+    const esperando = Number(datos.esperando) || 1;
+    const varias = esperando > 1;
+
+    if (!process.env.MAIL_USER || !process.env.MAIL_PASS) {
+        if (process.env.NODE_ENV !== 'production') {
+            console.warn('⚠️  MAIL sin configurar. Aviso de conversacion escalada (dev):', datos);
+            return;
+        }
+        throw new Error('Configuración de correo incompleta');
+    }
+
+    const attachments = [];
+    let logoSrc = '';
+    if (fs.existsSync(LOGO_PATH)) {
+        attachments.push({ filename: 'escalapplogo.png', path: LOGO_PATH, cid: 'escalapplogo' });
+        logoSrc = 'cid:escalapplogo';
+    }
+
+    const info = await transporter.sendMail({
+        from,
+        to: email,
+        subject: varias
+            ? `${esperando} conversaciones esperan respuesta — ${datos.nombreNegocio}`
+            : `Una conversación espera respuesta — ${datos.nombreNegocio}`,
+        text:
+            `EscalApp — El asistente necesita una persona
+
+` +
+            `${varias ? `${esperando} conversaciones` : 'Una conversación'} de "${datos.nombreNegocio}" ` +
+            `${varias ? 'esperan' : 'espera'} que alguien del negocio responda. El asistente ya le ` +
+            `dijo al cliente que le contesta una persona.
+
+Ábrelas en: ${bandejaUrl}`,
+        html: buildConversacionEscaladaHtml(datos.nombreNegocio, esperando, bandejaUrl, logoSrc),
+        attachments,
+    });
+
+    console.info(`✉️  Aviso de conversacion escalada enviado a ${email} — messageId: ${info.messageId}`);
+}
+
+module.exports = { sendPasswordResetEmail, sendRegistroVerificationEmail, sendWelcomeEmail, sendAdminNotificationEmail, sendPlanExpiryWarningEmail, sendConversacionEscaladaEmail, verifyTransport };

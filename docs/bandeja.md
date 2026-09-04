@@ -186,8 +186,62 @@ esquina no tiene por qué acordarse de ese archivo.
 
 ---
 
+## El aviso (2026-08-30) — para no tener que estar mirando
+
+La bandeja se refresca sola cada cinco segundos, y eso sirve exactamente a quien ya la tiene
+abierta. El cliente que escribe un domingo por la noche se quedaba esperando con la promesa hecha
+—«te contesta una persona»— y el dueño sin enterarse. **Ese era el agujero, y no era de la
+bandeja: era de que nadie avisaba.**
+
+```
+  el bot se calla ──► motor.js emite  conversacion.escalada.v1   (dentro del savepoint del turno)
+                                            │
+                                       outboxRelay
+                                            ▼
+                              intelligence/avisos/escalado.js
+                                     │                  │
+                          campanita del admin        correo al negocio
+                     (general.gener_notificacion)     (contacto + admin principal)
+```
+
+**Por qué por el outbox y no llamando al correo desde el turno.** Dos razones, y las dos son del
+turno, no del aviso:
+
+1. **Atomicidad.** El evento se escribe dentro del savepoint del turno. Si el manejador revienta
+   después de decidir el handoff, el estado se deshace y el aviso con él: no se avisa de un
+   escalado que no ocurrió. Es exactamente lo que ADR-012 compra.
+2. **Latencia.** Buscar destinatarios y mandar un correo son cientos de milisegundos que este
+   turno no puede pagar — hay un cliente esperando al otro lado.
+
+**Las dos reglas que evitan que el aviso se vuelva ruido**, que es la forma en que un aviso deja
+de servir para siempre:
+
+- **Se relee antes de avisar.** El evento es delgado (ADR-013): trae el identificador, no el
+  estado. Si en los segundos que tarda el relay el negocio ya respondió —lo que marca la
+  conversación como atendida— o la devolvió al asistente, el aviso no sale.
+- **Como mucho uno cada cuarto de hora por negocio** (`AVISO_ESCALADO_MINUTOS`), y el aviso dice
+  **cuántas conversaciones están esperando**, contadas en ese momento con la misma definición que
+  la columna «escalada» de esta pantalla. Cinco clientes a la vez son un aviso, no cinco correos.
+
+Esa segunda regla es además lo que hace **idempotente** al consumidor, que el outbox exige porque
+entrega al menos una vez: una reentrega llega segundos después, dentro de la ventana, y no produce
+un segundo aviso. Por eso **la campanita se escribe antes que el correo** — es la marca de la que
+depende todo lo demás; al revés se mandaría un correo por cada reintento.
+
+**Lo que el aviso NO lleva:** ni el texto del cliente ni su teléfono. Un correo se reenvía y acaba
+en buzones que nadie controla; el contenido se lee aquí, donde el acceso ya está acotado al negocio
+dueño de la conversación (ADR-024, Ley 1581). En la campanita, pulsar el aviso abre esta pantalla.
+
+**Un correo que falla no tumba el aviso.** La campanita ya está puesta —es la vía que no depende
+de terceros— y hacer fallar el evento reintentaría la parte que salió bien, para acabar mandando a
+*dead letter* un escalado real. El fallo se registra en consola, que es donde se mira cuando
+alguien dice «no me llegó».
+
+---
+
 ## Lo que falta
 
-**El aviso.** La bandeja existe y se actualiza sola, pero **nadie te avisa cuando algo se escala**:
-hay que entrar a mirar. La infraestructura está —el outbox de F1—; es enganchar el evento y decidir
-por dónde avisa: correo, o una campanita en el admin.
+**Avisar por WhatsApp al dueño.** Es el canal donde de verdad vive, y desde que la verificación de
+negocio está aprobada (2026-08-29) es viable. Pero es un mensaje que **inicia la empresa**: exige
+plantilla aprobada por Meta. Cuando exista, es un destino más en `avisos/escalado.js` —ese archivo
+decide *cuándo* se avisa, no *cómo*— y no un rediseño.

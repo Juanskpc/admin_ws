@@ -65,6 +65,18 @@ Todo evento viaja con el mismo sobre; los campos de abajo son el `payload`.
 > del Contrato de Adopción de la vertical (ver [capability-language.md](capability-language.md) y
 > `revision-01.md`, punto 6).
 
+## `intelligence`
+
+| Evento | Estado | Payload | Notas |
+|---|---|---|---|
+| `conversacion.escalada.v1` | **Activo** (2026-08-30) | `{ id_conversacion, canal }` | Productor: `intelligence/engine/motor.js`, en el **savepoint del turno** — si el turno se deshace, el evento también, y no se avisa de un escalado que no ocurrió. Consumidor: `intelligence/avisos/escalado.js` (campanita del admin + correo al negocio). Se emite **solo en la transición** a `handoff_humano`. Sin `id_persona_negocio` ni nada del cliente: quien avisa relee, y lo que se le manda al negocio no lleva contenido de la conversación (ADR-024). |
+
+> Es el primer evento cuyo productor y consumidor viven **los dos** dentro de Intelligence, y eso
+> no lo hace un rodeo: el outbox aporta aquí las dos cosas que una llamada directa no puede dar —la
+> atomicidad con el turno (si el manejador revienta después de decidir el handoff, no se avisa) y
+> sacar del turno una búsqueda de destinatarios y un correo que el cliente estaría esperando al
+> otro lado.
+
 ## `restaurante`
 
 | Evento | Estado | Payload | Notas |

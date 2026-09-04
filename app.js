@@ -289,6 +289,18 @@ app.use(errorHandler);
                     .then(() => {
                         const canales = intelligence.arrancarCanales();
 
+                        // Los avisos que van al NEGOCIO y no a su cliente (2026-08-30). Hoy
+                        // solo el del escalado: cuando el bot se calla y promete una persona,
+                        // alguien tiene que enterarse — la Bandeja sola avisa únicamente a quien
+                        // ya la está mirando. Registra el consumidor de `conversacion.escalada.v1`;
+                        // sin esta línea es código muerto en el servidor real aunque la suite esté
+                        // verde, que es la misma trampa que la de abajo.
+                        //
+                        // El orden respecto a la línea siguiente da igual (el relay lee sus
+                        // consumidores en cada sondeo), pero va antes porque es antes en el tiempo:
+                        // un escalado ocurre durante un turno, no dentro de una semana.
+                        intelligence.arrancarAvisos();
+
                         // Recordatorios proactivos (F8-B). **Sin esta línea F8-B es código
                         // muerto en el servidor real:** aquí se registra el consumidor de
                         // `cita.creada.v1` en el relay del outbox, se enciende el relay —que

@@ -44,11 +44,24 @@
  */
 'use strict';
 const Models = require('../../app_core/models/conection');
+const outboxDao = require('../../app_core/dao/outboxDao');
 const repositorio = require('./repositorio');
 const mensajeCanonico = require('../core/mensajeCanonico');
 const { ColaParticionada, numeroDeEntorno } = require('./cola');
+// Solo la constante del estado. El texto y la decisión del handoff son producto y viven en
+// `handoff.js`; el motor únicamente necesita reconocer cuándo una conversación ACABA de pasar a
+// manos de una persona, para que alguien pueda enterarse.
+const { ESTADO_HANDOFF } = require('./handoff');
 
 const sequelize = Models.sequelize;
+
+/**
+ * El evento que se emite al escalar. El nombre es un contrato público
+ * ([ADR-013](../../docs/adr/ADR-013-catalogo-eventos.md)) y está en
+ * `docs/architecture/domain-events.md`; se escribe literal a los dos lados, igual que
+ * `cita.creada.v1`, para que el productor no dependa de quien lo consume.
+ */
+const EVENTO_ESCALADA = 'conversacion.escalada.v1';
 
 const CONFIG = {
     /** Días hacia atrás que se consideran «pendiente». Ver `repositorio.mensajesPendientes`. */
@@ -418,6 +431,55 @@ function sellarTarea(tarea) {
 }
 
 /**
+ * Avisa al negocio de que acaba de quedarse una conversación en sus manos.
+ *
+ * ## Por qué esto es un evento y no una llamada
+ *
+ * Escalar significa que el bot se calla y **una persona tiene que contestar**. Hasta hoy eso no
+ * lo sabía nadie: la Bandeja existe y se refresca sola, pero solo avisa a quien ya está mirándola.
+ * Un cliente podía quedarse esperando toda la noche con la conversación abierta y el negocio sin
+ * enterarse.
+ *
+ * Va por el outbox ([ADR-012](../../docs/adr/ADR-012-outbox.md)) por dos razones, y las dos son
+ * del turno, no del aviso:
+ *
+ *   1. **Atomicidad.** El evento se escribe DENTRO del savepoint del turno. Si el manejador
+ *      revienta después de decidir el handoff, el estado se deshace y el aviso con él: no se
+ *      avisa de un escalado que no ocurrió.
+ *   2. **Latencia.** Buscar destinatarios y mandar un correo son cientos de milisegundos que este
+ *      turno no puede pagar — hay un cliente esperando la respuesta al otro lado. El relay lo
+ *      recoge unos segundos después, cuando ya no le cuesta a nadie.
+ *
+ * ## Solo en la transición
+ *
+ * Un turno dentro de una conversación **ya** escalada no es una noticia. Hoy además ni siquiera
+ * puede darse —`handoff_humano` no está en `ESTADOS_PROCESABLES`, así que el motor ni abre turno—
+ * pero la condición se escribe igual: es lo que hace que el nombre en pasado del evento
+ * ([ADR-013](../../docs/adr/ADR-013-catalogo-eventos.md), regla 1) signifique de verdad «acaba de
+ * pasar», y lo que lo deja correcto el día que se reabra una conversación devuelta al asistente.
+ *
+ * El evento es **delgado** (regla 2): quien avisa relee la conversación al recogerlo, y así el
+ * aviso no sale si en esos segundos el negocio ya la atendió desde la Bandeja.
+ */
+async function avisarSiSeEscalo({ conversacion, estadoNuevo, transaction }) {
+    if (estadoNuevo !== ESTADO_HANDOFF) return false;
+    if (conversacion.estado === ESTADO_HANDOFF) return false;
+
+    await outboxDao.emitir(
+        {
+            tipo: EVENTO_ESCALADA,
+            idNegocio: conversacion.id_negocio,
+            payload: {
+                id_conversacion: conversacion.id_conversacion,
+                canal: conversacion.canal,
+            },
+        },
+        { transaction }
+    );
+    return true;
+}
+
+/**
  * Ejecuta el manejador y escribe lo que decidió: pasos, respuestas y estado conversacional.
  *
  * ## Por qué un SAVEPOINT y no un try/catch a secas
@@ -566,16 +628,20 @@ async function decidir({ conversacion, mensajes, turno, transaction }) {
                 ? { nombre: conversacion.tarea_actual, datos: conversacion.tarea_datos }
                 : decision.tarea;
 
+            const estadoNuevo = decision.estado || conversacion.estado;
+
             await repositorio.guardarEstado(
                 conversacion.id_conversacion,
                 {
                     variables: decision.variables ?? conversacion.variables,
                     tareaActual: tarea ? tarea.nombre : null,
                     tareaDatos: sellarTarea(tarea),
-                    estado: decision.estado || conversacion.estado,
+                    estado: estadoNuevo,
                 },
                 { transaction: savepoint }
             );
+
+            await avisarSiSeEscalo({ conversacion, estadoNuevo, transaction: savepoint });
 
             if (decision.nivel) salida.nivel = decision.nivel;
             // Compatibilidad: un manejador puede devolver sus costos en vez de empujarlos.
@@ -715,6 +781,7 @@ function _reiniciar() {
 module.exports = {
     CONFIG,
     OMITIDO,
+    EVENTO_ESCALADA,
     registrarManejador,
     registrarSenalDeActividad,
     recibir,

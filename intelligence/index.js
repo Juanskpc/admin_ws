@@ -249,11 +249,30 @@ function arrancarRecordatorios({ iniciarSondeos = true } = {}) {
     return { canal: recordatorios.CONFIG.canal };
 }
 
+/**
+ * Registra los avisos que van **al negocio**, no a su cliente.
+ *
+ * Hoy solo hay uno: el escalado (`intelligence/avisos/escalado.js`). Va aparte de los
+ * recordatorios porque no comparten nada más que el transporte — un recordatorio es una promesa de
+ * futuro para el cliente, y esto es una interrupción para el dueño ahora mismo.
+ *
+ * **El orden respecto a `arrancarRecordatorios()` da igual.** El relay lee su mapa de consumidores
+ * en cada sondeo, así que uno registrado después también recibe; lo único que mira `iniciar()` es
+ * que haya al menos uno, y de eso ya se encargan los recordatorios. Aun así se llama antes en
+ * `app.js`, que es donde se lee el arranque.
+ */
+function arrancarAvisos() {
+    const relay = require('../app_core/outbox/outboxRelay');
+    require('./avisos/escalado').registrar({ relay });
+    return { avisos: ['aviso-escalado'] };
+}
+
 module.exports = {
     arrancar,
     arrancarMotor,
     arrancarCanales,
     arrancarRecordatorios,
+    arrancarAvisos,
     recordatorios: require('./recordatorios'),
     plantillas: require('./core/plantillas'),
     montarEscalera,
