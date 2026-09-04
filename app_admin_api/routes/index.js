@@ -24,6 +24,7 @@ const NotificacionController = require('../controllers/notificacionController');
 const MetricasController = require('../controllers/metricasController');
 const FichaPersonaController = require('../controllers/fichaPersonaController');
 const AuditoriaController = require('../controllers/auditoriaController');
+const DatosFiscalesController = require('../controllers/datosFiscalesController');
 const { verificarToken, requireSuperAdmin } = require('../../app_core/middleware/auth');
 
 // ============================================================
@@ -188,6 +189,90 @@ router.patch('/negocios/:id/estado', requireSuperAdmin, [
     param('id').isInt({ min: 1 }).withMessage('ID de negocio inválido'),
     body('estado').isIn(['A', 'I']).withMessage('Estado inválido')
 ], NegocioController.setEstadoNegocio);
+// --- Datos fiscales del negocio (FE-1) ---
+//
+// El parámetro se llama `id_negocio` a propósito: `exigirPertenenciaNegocio` solo reconoce ese
+// nombre, y por aquí pasan el NIT y la dirección fiscal del inquilino. Con `:id` —como el resto
+// de rutas de negocio— quedarían fuera de esa comprobación. El controlador la repite a mano
+// porque el middleware todavía va en modo observación.
+router.get('/facturacion/catalogos', DatosFiscalesController.getCatalogos);
+
+const idNegocioValidator = [
+    param('id_negocio').isInt({ min: 1 }).withMessage('ID de negocio inválido'),
+];
+
+router.get(
+    '/negocios/:id_negocio/datos-fiscales',
+    idNegocioValidator,
+    DatosFiscalesController.getDatosFiscales
+);
+
+// Todos los campos son opcionales: la ficha se llena en varias tandas, no de una sentada.
+router.put(
+    '/negocios/:id_negocio/datos-fiscales',
+    [
+        ...idNegocioValidator,
+        body('tipo_persona').optional({ nullable: true })
+            .isIn(['1', '2']).withMessage('Tipo de persona inválido (1 jurídica, 2 natural)'),
+        body('tipo_documento').optional({ nullable: true })
+            .isLength({ min: 2, max: 2 }).withMessage('Tipo de documento inválido'),
+        body('numero_documento').optional({ nullable: true })
+            .trim().isLength({ min: 5, max: 20 }).withMessage('Número de documento inválido'),
+        body('dv').optional({ nullable: true })
+            .matches(/^[0-9]$/).withMessage('El dígito de verificación es un solo número'),
+        body('razon_social').optional({ nullable: true })
+            .trim().isLength({ max: 255 }).withMessage('Razón social demasiado larga'),
+        body('nombre_comercial').optional({ nullable: true }).trim().isLength({ max: 255 }),
+        body('primer_apellido').optional({ nullable: true }).trim().isLength({ max: 100 }),
+        body('segundo_apellido').optional({ nullable: true }).trim().isLength({ max: 100 }),
+        body('primer_nombre').optional({ nullable: true }).trim().isLength({ max: 100 }),
+        body('otros_nombres').optional({ nullable: true }).trim().isLength({ max: 100 }),
+        // La lista definitiva de códigos sale del RUT y la publica cada proveedor; validamos
+        // forma y tamaño, no un catálogo que no tenemos.
+        body('responsabilidades_fiscales').optional({ nullable: true })
+            .isArray({ max: 20 }).withMessage('Responsabilidades fiscales inválidas'),
+        body('tributos').optional({ nullable: true })
+            .isArray({ max: 10 }).withMessage('Tributos inválidos'),
+        body('responsable_iva').optional({ nullable: true }).isBoolean(),
+        body('responsable_inc').optional({ nullable: true }).isBoolean(),
+        body('regimen').optional({ nullable: true })
+            .isIn(['ORDINARIO', 'SIMPLE']).withMessage('Régimen inválido'),
+        body('tipo_contribuyente').optional({ nullable: true })
+            .isIn(['GRAN_CONTRIBUYENTE', 'DECLARANTE', 'NO_DECLARANTE'])
+            .withMessage('Tipo de contribuyente inválido'),
+        body('actividad_ciiu').optional({ nullable: true }).trim().isLength({ max: 10 }),
+        body('matricula_mercantil').optional({ nullable: true }).trim().isLength({ max: 50 }),
+        body('direccion_fiscal').optional({ nullable: true }).trim().isLength({ max: 255 }),
+        body('municipio_dane').optional({ nullable: true })
+            .matches(/^[0-9]{5}$/).withMessage('El municipio va en código DANE de 5 dígitos'),
+        body('departamento_dane').optional({ nullable: true })
+            .matches(/^[0-9]{2}$/).withMessage('El departamento va en código DANE de 2 dígitos'),
+        body('codigo_postal').optional({ nullable: true }).trim().isLength({ max: 10 }),
+        body('correo_facturacion').optional({ nullable: true })
+            .isEmail().withMessage('Correo de facturación inválido'),
+        body('telefono_facturacion').optional({ nullable: true }).trim().isLength({ max: 30 }),
+    ],
+    DatosFiscalesController.putDatosFiscales
+);
+
+// La declaración va aparte de los datos: no es lo mismo corregir una dirección que declarar la
+// situación legal del negocio. Esta deja firma —quién y cuándo— porque es lo único que nos
+// respalda si el cliente declara algo que no es.
+router.put(
+    '/negocios/:id_negocio/datos-fiscales/declaracion',
+    [
+        ...idNegocioValidator,
+        body('estado_registro').optional({ nullable: true })
+            .isIn(['NO_DECLARADO', 'SIN_REGISTRO', 'REGISTRADO'])
+            .withMessage('Estado de registro inválido'),
+        body('modo_facturacion').optional({ nullable: true })
+            .isIn(['NINGUNO', 'POS', 'COMPLETO']).withMessage('Modo de facturación inválido'),
+        body('obligado_a_facturar').optional({ nullable: true })
+            .isBoolean().withMessage('«Obligado a facturar» debe ser verdadero o falso'),
+    ],
+    DatosFiscalesController.putDeclaracion
+);
+
 router.post('/negocios/registrar-cliente', requireSuperAdmin, [
     body('negocio.nombre').trim().notEmpty().withMessage('El nombre del negocio es requerido'),
     body('negocio.id_tipo_negocio').isInt({ min: 1 }).withMessage('El tipo de negocio es requerido'),

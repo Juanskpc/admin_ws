@@ -2,6 +2,7 @@ const Models = require('../models/conection');
 const { initTransaction } = require('../helpers/funcionesAdicionales');
 const planHelper = require('../helpers/planHelper');
 const usuarioAdminDao = require('./usuarioAdminDao');
+const datosFiscales = require('../facturacion/datosFiscales');
 
 /**
  * Obtiene la lista de negocios activos.
@@ -30,9 +31,13 @@ function getNegocioById(idNegocio) {
  * @param {Object} negocio Datos del negocio
  * @param {Object} t Transacción (opcional)
  */
-function createNegocio(negocio, t) {
+async function createNegocio(negocio, t) {
     const options = t ? { transaction: t } : {};
-    return Models.GenerNegocio.create(negocio, options);
+    const creado = await Models.GenerNegocio.create(negocio, options);
+    // Todo negocio nace con su ficha fiscal, en modo NINGUNO: no le pide nada al cliente, pero
+    // evita que existan negocios sin ficha, que es un segundo estado posible para lo mismo.
+    await datosFiscales.asegurarFicha(creado.id_negocio, { transaction: t });
+    return creado;
 }
 
 /**
@@ -328,6 +333,9 @@ async function registrarCliente({ negocio, plan, admin, id_usuario_existente }) 
             estado: 'A',
         }, { transaction });
         const idNegocio = nuevo.id_negocio;
+
+        // 1b. Ficha fiscal (modo NINGUNO: no se le pide nada todavía)
+        await datosFiscales.asegurarFicha(idNegocio, { transaction });
 
         // 2. Plan (opcional)
         if (plan?.id_plan) {
