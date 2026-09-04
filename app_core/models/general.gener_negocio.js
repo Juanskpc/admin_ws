@@ -12,6 +12,19 @@ module.exports = (sequelize, DataTypes) => {
         id_tipo_negocio: { type: DataTypes.INTEGER },
         id_paleta: { type: DataTypes.INTEGER, allowNull: true },
         permite_multipago: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+        /** Opt-in: habilita cobrar el valor del domicilio y pagarlo al domiciliario desde caja. */
+        permite_pago_domicilio: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+        /** Logo del negocio. Ruta relativa servida desde /uploads. */
+        logo_url: DataTypes.STRING(500),
+        /** Imagen ancha de cabecera del portal público (16:5). */
+        banner_url: DataTypes.STRING(500),
+        /**
+         * Colores propios del negocio: `{ primario, acento }`.
+         *
+         * Manda sobre `id_paleta`. Al elegir una paleta predefinida se copian aquí sus valores,
+         * de modo que el resto del sistema lee siempre de un único sitio.
+         */
+        colores: DataTypes.JSONB,
         estado: { type: DataTypes.CHAR(1), defaultValue: 'A' },
         fecha_registro: { type: DataTypes.DATE, defaultValue: DataTypes.NOW }
     }, {

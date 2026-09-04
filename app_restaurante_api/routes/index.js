@@ -106,6 +106,7 @@ router.patch('/configuracion', [
 	body('url_facebook').optional({ nullable: true }).isURL({ require_protocol: true }),
 	body('url_instagram').optional({ nullable: true }).isURL({ require_protocol: true }),
 	body('permite_multipago').optional().isBoolean(),
+	body('permite_pago_domicilio').optional().isBoolean(),
 	body('id_paleta').optional({ nullable: true }).isInt({ min: 1 }),
 ], ConfiguracionController.updateConfiguracion);
 
@@ -202,6 +203,10 @@ router.patch('/pedidos/:id/marcar-pagado', [
 	param('id').isInt({ min: 1 }),
 	...PedidoController.marcarPagadoValidators,
 ], PedidoController.marcarPagado);
+router.patch('/pedidos/:id/valor-domicilio', [
+	param('id').isInt({ min: 1 }),
+	...PedidoController.actualizarValorDomicilioValidators,
+], PedidoController.actualizarValorDomicilio);
 router.patch('/pedidos/:id/cancelar',                     PedidoController.cancelarOrden);
 router.patch('/pedidos/:id/cerrar', [
 	param('id').isInt({ min: 1 }),
@@ -283,6 +288,16 @@ router.post('/caja/movimientos', [
 	body('monto').isFloat({ gt: 0 }),
 	body('concepto').optional({ nullable: true }).isString().isLength({ max: 255 }),
 ], CajaController.registrarMovimiento);
+
+router.post('/caja/movimientos/:id/anular', [
+	param('id').isInt({ min: 1 }),
+	body('id_negocio').isInt({ min: 1 }),
+], CajaController.anularMovimiento);
+
+router.post('/caja/ordenes/:id/anular', [
+	param('id').isInt({ min: 1 }),
+	body('id_negocio').isInt({ min: 1 }),
+], CajaController.anularPedido);
 
 router.post('/caja/domiciliarios/transferir', [
 	body('id_negocio').isInt({ min: 1 }),

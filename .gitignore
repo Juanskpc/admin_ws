@@ -21,3 +21,29 @@ Thumbs.db
 # IDE
 .vscode/
 .idea/
+# ─── Archivos subidos y generados en tiempo de ejecución ───
+#
+# Logos de negocio, fotos de servicio, comprobantes de pago y reportes exportados. Son datos
+# del cliente, no código: pesan, cambian a diario y algunos son privados (un comprobante de
+# pago lleva datos bancarios). El servidor crea estas carpetas solo con `mkdirSync`, así que
+# no hace falta versionarlas — pero se conservan los `.gitkeep` que ya existían para que la
+# estructura sobreviva a un clone.
+#
+# El patrón necesita las tres líneas: git no puede volver a incluir un archivo si su carpeta
+# padre está excluida, así que hay que reincluir los directorios (`!uploads/**/`) antes de
+# poder rescatar los `.gitkeep`.
+uploads/**
+!uploads/**/
+!uploads/**/.gitkeep
+
+# Copias de seguridad y volcados de base de datos
+*.dump
+*.sql.gz
+*.tgz
+*.tar.gz
+backups/
+
+# Salidas de build y cobertura
+dist/
+coverage/
+*.log

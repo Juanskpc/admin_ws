@@ -319,17 +319,51 @@ async function validarMetodoPagoParaNegocio({ idMetodoPago, idNegocio, transacti
     return mp;
 }
 
-async function recalcularTotalesOrden({ idOrden, porcentajeImpuesto = 0, transaction }) {
+/**
+ * Normaliza el valor del domicilio que se cobra al cliente.
+ *
+ * Devuelve 0 salvo que el negocio tenga `permite_pago_domicilio` activo y el pedido
+ * sea LLEVAR o DOMICILIO. Es una funcionalidad opt-in: para un negocio que no la
+ * activó, cualquier valor que llegue en el body se ignora y la orden se comporta
+ * exactamente como antes.
+ */
+async function resolverValorDomicilio({ idNegocio, tipoPedido, valorDomicilio, transaction }) {
+    const monto = Number(valorDomicilio);
+    if (!Number.isFinite(monto) || monto <= 0) return 0;
+    if (!['LLEVAR', 'DOMICILIO'].includes(tipoPedido)) return 0;
+
+    const negocio = await Models.GenerNegocio.findByPk(idNegocio, {
+        attributes: ['id_negocio', 'permite_pago_domicilio'],
+        transaction,
+    });
+    if (!negocio || !negocio.permite_pago_domicilio) return 0;
+
+    return Math.round(monto * 100) / 100;
+}
+
+async function recalcularTotalesOrden({ idOrden, porcentajeImpuesto = 0, valorDomicilio, transaction }) {
     const subtotalRaw = await Models.PedidDetalle.sum('subtotal', {
         where: { id_orden: idOrden },
         transaction,
     });
     const subtotal = Number(subtotalRaw ?? 0);
     const impuesto = Math.round(subtotal * porcentajeImpuesto * 100) / 100;
-    const total = subtotal + impuesto;
+
+    // El domicilio lo paga el cliente, así que viaja DENTRO de `total`: el multipago
+    // y el cierre de caja cuadran siempre contra un único número.
+    let domicilio = Number(valorDomicilio);
+    if (!Number.isFinite(domicilio) || domicilio < 0) {
+        const orden = await Models.PedidOrden.findByPk(idOrden, {
+            attributes: ['id_orden', 'valor_domicilio'],
+            transaction,
+        });
+        domicilio = Number(orden?.valor_domicilio ?? 0);
+    }
+
+    const total = subtotal + impuesto + domicilio;
 
     await Models.PedidOrden.update(
-        { subtotal, impuesto, total },
+        { subtotal, impuesto, total, valor_domicilio: domicilio },
         { where: { id_orden: idOrden }, transaction }
     );
 }
@@ -349,6 +383,7 @@ async function crearOrden({
     idNegocio, idMetodoPago = null, idUsuario, idMesa, nota, items, porcentajeImpuesto = 0, permitirStockNegativo = false,
     tipoPedido = 'MESA', contactoNombre = null, contactoTelefono = null,
     direccionDomicilio = null, notaDomicilio = null, idDomiciliario = null,
+    valorDomicilio = 0,
 }, { transaction = null } = {}) {
     // Si el llamante trae su propia transacción, esta función NO la confirma ni la deshace:
     // solo trabaja dentro. Quien la abre, la cierra.
@@ -386,7 +421,17 @@ async function crearOrden({
             subtotal += item.precio_unitario * item.cantidad;
         });
         const impuesto = Math.round(subtotal * porcentajeImpuesto * 100) / 100;
-        const total = subtotal + impuesto;
+
+        // Valor del domicilio (opt-in por negocio). Se cobra al cliente dentro del
+        // total y sale como EGRESO de caja cuando la orden se cobra.
+        const domicilio = await resolverValorDomicilio({
+            idNegocio,
+            tipoPedido,
+            valorDomicilio,
+            transaction: t,
+        });
+
+        const total = subtotal + impuesto + domicilio;
 
         // Resolver la identidad del cliente (platform.persona_negocio). Es best-effort a
         // propósito: si falla, la orden se crea igual con id_persona_negocio = NULL — una
@@ -413,6 +458,7 @@ async function crearOrden({
             estado: 'ABIERTA',
             id_metodo_pago: idMetodoPago || null,
             tipo_pedido: tipoPedido,
+            valor_domicilio: domicilio,
             id_persona_negocio:  idPersonaNegocio,
             contacto_nombre:     tipoPedido === 'DOMICILIO' ? contactoNombre     : null,
             contacto_telefono:   tipoPedido === 'DOMICILIO' ? contactoTelefono   : null,
@@ -449,6 +495,7 @@ async function agregarItemsOrden({
     items,
     porcentajeImpuesto = 0,
     permitirStockNegativo = false,
+    valorDomicilio,
 }) {
     const t = await Models.sequelize.transaction();
     try {
@@ -498,9 +545,20 @@ async function agregarItemsOrden({
             await orden.update(patchOrden, { transaction: t });
         }
 
+        // Sin `valor_domicilio` en el body se deja el que ya tenía la orden.
+        const domicilio = valorDomicilio === undefined
+            ? undefined
+            : await resolverValorDomicilio({
+                idNegocio,
+                tipoPedido: orden.tipo_pedido,
+                valorDomicilio,
+                transaction: t,
+            });
+
         await recalcularTotalesOrden({
             idOrden,
             porcentajeImpuesto,
+            valorDomicilio: domicilio,
             transaction: t,
         });
 
@@ -854,6 +912,7 @@ async function marcarPagado(idOrden, { idMetodoPago, pagos, origenCobro = 'CAJA'
                 idUsuario:   orden.id_usuario,
                 monto:       orden.total,
                 numeroOrden: orden.numero_orden,
+                valorDomicilio: orden.valor_domicilio,
                 transaction: t,
             })
             : null;
@@ -867,6 +926,62 @@ async function marcarPagado(idOrden, { idMetodoPago, pagos, origenCobro = 'CAJA'
 
         await t.commit();
         return orden;
+    } catch (err) {
+        if (!t.finished) await t.rollback();
+        throw err;
+    }
+}
+
+/**
+ * Actualiza SOLO el valor del domicilio de una orden abierta y recalcula su total.
+ *
+ * Existe aparte de `agregarItemsOrden` porque corregir el cobro del domicilio no
+ * implica tocar los productos, y esa ruta exige al menos un item nuevo.
+ *
+ * Se rechaza sobre órdenes ya pagadas: el INGRESO y el EGRESO de caja se calcularon
+ * con el total anterior, y moverlo ahora dejaría la caja descuadrada.
+ */
+async function actualizarValorDomicilio(idOrden, { idNegocio, valorDomicilio }) {
+    const t = await Models.sequelize.transaction();
+    try {
+        const orden = await Models.PedidOrden.findOne({
+            where: { id_orden: idOrden, id_negocio: idNegocio },
+            transaction: t,
+            lock: t.LOCK.UPDATE,
+        });
+
+        if (!orden) {
+            const e = new Error('Orden no encontrada.');
+            e.code = 'ORDEN_NO_ENCONTRADA'; e.statusCode = 404;
+            throw e;
+        }
+        if (orden.estado !== 'ABIERTA') {
+            const e = new Error('Solo se puede ajustar el domicilio de una orden abierta.');
+            e.code = 'ORDEN_NO_ABIERTA'; e.statusCode = 409;
+            throw e;
+        }
+        if (orden.estado_pago === 'pagado') {
+            const e = new Error('No se puede cambiar el valor del domicilio de un pedido ya cobrado.');
+            e.code = 'ORDEN_PAGADA'; e.statusCode = 409;
+            throw e;
+        }
+
+        const domicilio = await resolverValorDomicilio({
+            idNegocio,
+            tipoPedido: orden.tipo_pedido,
+            valorDomicilio,
+            transaction: t,
+        });
+
+        await recalcularTotalesOrden({
+            idOrden,
+            porcentajeImpuesto: 0,
+            valorDomicilio: domicilio,
+            transaction: t,
+        });
+
+        await t.commit();
+        return getOrdenById(idOrden);
     } catch (err) {
         if (!t.finished) await t.rollback();
         throw err;
@@ -979,6 +1094,7 @@ async function cerrarOrden(idOrden, { idUsuario, idMetodoPago, pagos } = {}) {
                 idUsuario:   idUsuario || orden.id_usuario,
                 monto:       orden.total,
                 numeroOrden: orden.numero_orden,
+                valorDomicilio: orden.valor_domicilio,
                 transaction: t,
             });
             idCaja = caja.id_caja;
@@ -1017,6 +1133,7 @@ module.exports = {
     cambiarEstadoCocina,
     marcarDetalleCompleto,
     marcarPagado,
+    actualizarValorDomicilio,
     cancelarOrden,
     cerrarOrden,
     usuarioPuedeVerTodosDespacho,

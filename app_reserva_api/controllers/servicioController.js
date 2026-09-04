@@ -41,6 +41,7 @@ async function crear(req, res) {
         const s = await ServicioService.crear(req.body);
         return Respuesta.success(res, 'Servicio creado', s, 201);
     } catch (err) {
+        if (err.statusCode) return Respuesta.error(res, err.message, err.statusCode);
         console.error('[Reserva/Servicios] crear:', err.message);
         return Respuesta.error(res, 'Error al crear el servicio.');
     }
@@ -53,6 +54,7 @@ async function actualizar(req, res) {
         if (!s) return Respuesta.error(res, 'Servicio no encontrado', 404);
         return Respuesta.success(res, 'Servicio actualizado', s);
     } catch (err) {
+        if (err.statusCode) return Respuesta.error(res, err.message, err.statusCode);
         console.error('[Reserva/Servicios] actualizar:', err.message);
         return Respuesta.error(res, 'Error al actualizar el servicio.');
     }

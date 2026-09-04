@@ -16,6 +16,10 @@ module.exports = (sequelize, DataTypes) => {
     permite_multipago:         { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
     /** Con esto activo, no se puede completar una cita sin un turno de caja abierto. */
     exige_caja_abierta:        { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+    /** Texto de presentación del negocio en su página pública. */
+    descripcion_publica:       DataTypes.TEXT,
+    /** Publica o esconde la página pública. Por defecto publicada. */
+    publico_activo:            { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
     fecha_creacion:            { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
     fecha_actualizacion:       { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
   }, {

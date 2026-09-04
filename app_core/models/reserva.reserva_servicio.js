@@ -8,6 +8,8 @@ module.exports = (sequelize, DataTypes) => {
     precio:              { type: DataTypes.DECIMAL(14, 2), allowNull: false, defaultValue: 0 },
     color_hex:           { type: DataTypes.CHAR(7), defaultValue: '#3b82f6' },
     imagen_url:          DataTypes.STRING(500),
+    /** Categoría del portal público. NULL = sin clasificar (se agrupa en «Otros»). */
+    id_categoria:        DataTypes.INTEGER,
     estado:              { type: DataTypes.CHAR(1), defaultValue: 'A' },
     fecha_creacion:      { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
     fecha_actualizacion: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
@@ -24,6 +26,7 @@ module.exports = (sequelize, DataTypes) => {
       as: 'profesionales',
     });
     ReservaServicio.hasMany(models.ReservaCitaServicio, { foreignKey: 'id_servicio', as: 'citasIncluyen' });
+    ReservaServicio.belongsTo(models.ReservaCategoria, { foreignKey: 'id_categoria', as: 'categoria' });
   };
 
   return ReservaServicio;
