@@ -30,7 +30,11 @@ const enviarCodigoValidators = [
     body('tipo_negocio')
         .optional()
         .trim()
-        .isIn(['RESTAURANTE', 'PARQUEADERO', 'GIMNASIO', 'TIENDA'])
+        // Solo los tipos que la landing ofrece como DISPONIBLES. Si se añade un chip nuevo hay
+        // que añadirlo aquí también, o el registro contesta 400 y el usuario no entiende por qué.
+        // Ver TIPO_NEGOCIO_MAPA en services/registroTrialService.js, que traduce estos valores
+        // al tipo real de la base.
+        .isIn(['RESTAURANTE', 'CAFETERIA', 'BARBERIA', 'SALON_BELLEZA'])
         .withMessage('Tipo de negocio inválido'),
     body('id_plan')
         .optional()

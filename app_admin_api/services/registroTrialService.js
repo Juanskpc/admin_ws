@@ -18,18 +18,35 @@ const Models         = require('../../app_core/models/conection');
 const CodigoVerifDao = require('../../app_core/dao/codigoVerificacionDao');
 const MailService    = require('./mailService');
 const { initTransaction } = require('../../app_core/helpers/funcionesAdicionales');
+const datosFiscales = require('../../app_core/facturacion/datosFiscales');
 const { syncUsuarioRolActivo, rebuildNivelesUsuario } = require('../../app_core/dao/usuarioAdminDao');
 
 const TIPO        = 'REGISTRO';
 const MAX_ATTEMPTS = parseInt(process.env.OTP_MAX_ATTEMPTS || '5', 10);
 const TRIAL_DAYS    = 7;
 
-// Mapa tipo_negocio → nombre en la DB (general.gener_tipo_negocio.nombre)
-const TIPO_NEGOCIO_LABELS = {
-    RESTAURANTE: 'Mi Restaurante',
-    PARQUEADERO: 'Mi Parqueadero',
-    GIMNASIO:    'Mi Gimnasio',
-    TIENDA:      'Mi Tienda',
+/**
+ * Traduce lo que elige el visitante en la landing al tipo de negocio REAL de la base.
+ *
+ * No son lo mismo, y confundirlos ya costó un negocio inservible: la landing habla el idioma del
+ * cliente («Barbería», «Cafetería») y la base habla el de los motores que existen. Hoy solo hay
+ * dos motores desplegados —restaurante y reserva— y varios oficios distintos caben en cada uno.
+ *
+ * ⚠️ **`BARBERIA` NO va al tipo `BARBERIA` de la base.** Esa fila (id 3) viene de la migración
+ * base y **no tiene aplicación detrás**: un negocio creado ahí se queda sin vertical a la que
+ * entrar. Las citas las atiende el vertical de **reserva**, que es lo que está en producción
+ * desde el 2026-08-24. El nombre coincide y el destino no, que es justo la clase de trampa que
+ * no se ve leyendo el código deprisa.
+ *
+ * `tipoDb` tiene que coincidir **exacto** con `general.gener_tipo_negocio.nombre`, porque la
+ * búsqueda es por nombre. Y la lista de claves debe coincidir con el validador de
+ * `registroVerificacionController.js` y con los chips `disponible: true` de la landing.
+ */
+const TIPO_NEGOCIO_MAPA = {
+    RESTAURANTE:   { tipoDb: 'RESTAURANTE', nombre: 'Mi Restaurante' },
+    CAFETERIA:     { tipoDb: 'RESTAURANTE', nombre: 'Mi Cafetería' },
+    BARBERIA:      { tipoDb: 'RESERVA',     nombre: 'Mi Barbería' },
+    SALON_BELLEZA: { tipoDb: 'RESERVA',     nombre: 'Mi Salón de belleza' },
 };
 
 /**
@@ -111,16 +128,26 @@ async function verificarYCrearCuentaTrial(email, code) {
         attributes: ['id_plan', 'nombre'],
     });
 
-    // 9. Buscar tipo de negocio en la DB
+    // 9. Buscar tipo de negocio en la DB, traduciendo primero lo que eligió el visitante.
+    const eleccion = TIPO_NEGOCIO_MAPA[String(tipoNegocioStr || '').toUpperCase()] || null;
     let idTipoNegocio = null;
     try {
         const tipoNegocio = await Models.GenerTipoNegocio.findOne({
-            where: { nombre: { [Op.iLike]: tipoNegocioStr }, estado: 'A' },
+            where: { nombre: { [Op.iLike]: eleccion?.tipoDb ?? tipoNegocioStr }, estado: 'A' },
             attributes: ['id_tipo_negocio'],
         });
         idTipoNegocio = tipoNegocio?.id_tipo_negocio ?? null;
     } catch {
         // GenerTipoNegocio no crítico — continuamos sin tipo
+    }
+
+    // Sin tipo no hay rol, y sin rol el usuario entra a una app sin un solo módulo visible. Es
+    // preferible verlo en el log del registro que descubrirlo cuando el cliente no puede entrar.
+    if (!idTipoNegocio) {
+        console.warn(
+            `[RegistroTrial] Sin tipo de negocio para «${tipoNegocioStr}» ` +
+                `(buscado como «${eleccion?.tipoDb ?? tipoNegocioStr}») — el negocio quedará sin rol.`
+        );
     }
 
     // 10. Transacción: crear usuario, sucursal y plan
@@ -142,7 +169,7 @@ async function verificarYCrearCuentaTrial(email, code) {
         idUsuario = nuevoUsuario.id_usuario;
 
         // Crear sucursal (negocio)
-        const nombreNegocio = TIPO_NEGOCIO_LABELS[tipoNegocioStr.toUpperCase()] || 'Mi Sucursal';
+        const nombreNegocio = eleccion?.nombre || 'Mi Sucursal';
         const nuevoNegocio  = await Models.GenerNegocio.create({
             nombre:          nombreNegocio,
             id_tipo_negocio: idTipoNegocio,
@@ -150,6 +177,12 @@ async function verificarYCrearCuentaTrial(email, code) {
             estado:          'A',
         }, { transaction });
         idNegocio = nuevoNegocio.id_negocio;
+
+        // Ficha fiscal en modo NINGUNO. En el registro de prueba NO se pregunta nada fiscal a
+        // propósito: cada campo extra aquí cuesta registros, y muchos de estos negocios ni
+        // siquiera están constituidos todavía. Se preguntará cuando el trial pase a pago, que
+        // es cuando hay que facturarle. Ver docs/facturacion-electronica.md §4.
+        await datosFiscales.asegurarFicha(idNegocio, { transaction });
 
         // Vincular usuario a negocio
         await Models.GenerNegocioUsuario.create({
