@@ -1,6 +1,7 @@
 'use strict';
 const Models = require('../../app_core/models/conection');
 const Reglas = require('./reglasAgenda');
+const Audit = require('../../app_core/helpers/auditHelper');
 const { Op } = Models.Sequelize;
 
 /**
@@ -403,6 +404,61 @@ async function registrarCobroCita({ idNegocio, cita, pagos, idUsuario, transacti
 }
 
 /**
+ * Borra un movimiento del turno **abierto**.
+ *
+ * Es la salida para el error de dedo: el egreso tecleado dos veces, el ingreso con un cero de
+ * más. Cuelga de su propio permiso (`caja_eliminar`) porque cambia el cuadre del turno, y por
+ * defecto solo lo tiene el administrador.
+ *
+ * ## Solo mientras el turno está abierto
+ *
+ * Un turno cerrado ya tiene `monto_cierre` y `diferencia` calculados y firmados por quien lo
+ * contó. Quitarle un movimiento después dejaría un cierre que no cuadra con sus propios
+ * movimientos y que nadie podría explicar. Si el error se descubre tarde, se corrige con un
+ * movimiento contrario en el turno actual, que es como se corrige una caja.
+ *
+ * El snapshot de la fila lo guarda `trg_audit`; aquí se añade el evento de aplicación con el
+ * actor y el importe, que es lo que se busca cuando un turno no cuadra.
+ */
+async function eliminarMovimiento({ idMovimiento, idNegocio, idUsuario = null }) {
+    return Models.sequelize.transaction(async (t) => {
+        const caja = await requireCajaAbierta(idNegocio, { transaction: t });
+
+        const mov = await Models.ReservaMovimientoCaja.findOne({
+            where: { id_movimiento: idMovimiento, id_caja: caja.id_caja },
+            transaction: t,
+            lock: t.LOCK.UPDATE,
+        });
+        if (!mov) return null;
+
+        const huella = {
+            id_movimiento: mov.id_movimiento,
+            id_caja: mov.id_caja,
+            tipo: mov.tipo,
+            monto: Number(mov.monto ?? 0),
+            concepto: mov.concepto,
+            id_cita: mov.id_cita,
+            id_profesional: mov.id_profesional,
+            id_metodo_pago: mov.id_metodo_pago,
+            fecha: mov.fecha,
+        };
+
+        await mov.destroy({ transaction: t });
+
+        await Audit.registrarEvento({
+            modulo: 'reserva',
+            accion: 'caja_movimiento_eliminado',
+            idUsuario,
+            idNegocio,
+            detalle: huella,
+            transaction: t,
+        });
+
+        return huella;
+    });
+}
+
+/**
  * Citas completadas hoy que no llegaron a ninguna caja.
  *
  * Es la advertencia previa al cierre: dinero que se cobró con la caja cerrada y que, por tanto,
@@ -445,6 +501,7 @@ module.exports = {
     getResumenPorProfesional,
     registrarMovimiento,
     registrarMovimientoManual,
+    eliminarMovimiento,
     registrarCobroCita,
     getCitasSinCaja,
 };

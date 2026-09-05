@@ -341,7 +341,30 @@ async function resolverValorDomicilio({ idNegocio, tipoPedido, valorDomicilio, t
     return Math.round(monto * 100) / 100;
 }
 
-async function recalcularTotalesOrden({ idOrden, porcentajeImpuesto = 0, valorDomicilio, transaction }) {
+/**
+ * Normaliza el descuento de una orden.
+ *  - 0 si el negocio no tiene `permite_descuento` (opt-in, ver Configuración).
+ *  - Nunca mayor que `baseCobrable`, cuando se conoce: un descuento no puede dejar el
+ *    total en negativo. Sin ella el recorte queda para `recalcularTotalesOrden`, que
+ *    conoce el subtotal definitivo.
+ * `undefined` significa "el body no lo trae": el llamante conserva lo que ya tuviera la orden.
+ */
+async function resolverDescuento({ idNegocio, descuento, baseCobrable = null, transaction }) {
+    const monto = Number(descuento);
+    if (!Number.isFinite(monto) || monto <= 0) return 0;
+
+    const negocio = await Models.GenerNegocio.findByPk(idNegocio, {
+        attributes: ['id_negocio', 'permite_descuento'],
+        transaction,
+    });
+    if (!negocio || !negocio.permite_descuento) return 0;
+
+    const base = Number(baseCobrable);
+    const acotado = Number.isFinite(base) ? Math.min(monto, Math.max(base, 0)) : monto;
+    return Math.round(acotado * 100) / 100;
+}
+
+async function recalcularTotalesOrden({ idOrden, porcentajeImpuesto = 0, valorDomicilio, descuento, transaction }) {
     const subtotalRaw = await Models.PedidDetalle.sum('subtotal', {
         where: { id_orden: idOrden },
         transaction,
@@ -349,21 +372,32 @@ async function recalcularTotalesOrden({ idOrden, porcentajeImpuesto = 0, valorDo
     const subtotal = Number(subtotalRaw ?? 0);
     const impuesto = Math.round(subtotal * porcentajeImpuesto * 100) / 100;
 
+    // Con `valorDomicilio`/`descuento` ausentes se relee lo que ya tenga la orden: quien
+    // solo agrega productos no debe perder el domicilio ni el descuento ya pactados.
+    const guardada = await Models.PedidOrden.findByPk(idOrden, {
+        attributes: ['id_orden', 'valor_domicilio', 'descuento'],
+        transaction,
+    });
+
     // El domicilio lo paga el cliente, así que viaja DENTRO de `total`: el multipago
     // y el cierre de caja cuadran siempre contra un único número.
     let domicilio = Number(valorDomicilio);
     if (!Number.isFinite(domicilio) || domicilio < 0) {
-        const orden = await Models.PedidOrden.findByPk(idOrden, {
-            attributes: ['id_orden', 'valor_domicilio'],
-            transaction,
-        });
-        domicilio = Number(orden?.valor_domicilio ?? 0);
+        domicilio = Number(guardada?.valor_domicilio ?? 0);
     }
 
-    const total = subtotal + impuesto + domicilio;
+    // El descuento viaja RESTADO dentro de `total`, por el mismo motivo.
+    let rebaja = Number(descuento);
+    if (!Number.isFinite(rebaja) || rebaja < 0) {
+        rebaja = Number(guardada?.descuento ?? 0);
+    }
+    // Al quitar productos la base baja: se recorta el descuento para no bajar de cero.
+    rebaja = Math.min(rebaja, subtotal + impuesto + domicilio);
+
+    const total = subtotal + impuesto + domicilio - rebaja;
 
     await Models.PedidOrden.update(
-        { subtotal, impuesto, total, valor_domicilio: domicilio },
+        { subtotal, impuesto, total, valor_domicilio: domicilio, descuento: rebaja },
         { where: { id_orden: idOrden }, transaction }
     );
 }
@@ -383,7 +417,7 @@ async function crearOrden({
     idNegocio, idMetodoPago = null, idUsuario, idMesa, nota, items, porcentajeImpuesto = 0, permitirStockNegativo = false,
     tipoPedido = 'MESA', contactoNombre = null, contactoTelefono = null,
     direccionDomicilio = null, notaDomicilio = null, idDomiciliario = null,
-    valorDomicilio = 0,
+    valorDomicilio = 0, descuento = 0,
 }, { transaction = null } = {}) {
     // Si el llamante trae su propia transacción, esta función NO la confirma ni la deshace:
     // solo trabaja dentro. Quien la abre, la cierra.
@@ -431,7 +465,14 @@ async function crearOrden({
             transaction: t,
         });
 
-        const total = subtotal + impuesto + domicilio;
+        const rebaja = await resolverDescuento({
+            idNegocio,
+            descuento,
+            baseCobrable: subtotal + impuesto + domicilio,
+            transaction: t,
+        });
+
+        const total = subtotal + impuesto + domicilio - rebaja;
 
         // Resolver la identidad del cliente (platform.persona_negocio). Es best-effort a
         // propósito: si falla, la orden se crea igual con id_persona_negocio = NULL — una
@@ -459,6 +500,7 @@ async function crearOrden({
             id_metodo_pago: idMetodoPago || null,
             tipo_pedido: tipoPedido,
             valor_domicilio: domicilio,
+            descuento: rebaja,
             id_persona_negocio:  idPersonaNegocio,
             contacto_nombre:     tipoPedido === 'DOMICILIO' ? contactoNombre     : null,
             contacto_telefono:   tipoPedido === 'DOMICILIO' ? contactoTelefono   : null,
@@ -496,6 +538,7 @@ async function agregarItemsOrden({
     porcentajeImpuesto = 0,
     permitirStockNegativo = false,
     valorDomicilio,
+    descuento,
 }) {
     const t = await Models.sequelize.transaction();
     try {
@@ -555,10 +598,18 @@ async function agregarItemsOrden({
                 transaction: t,
             });
 
+        // Ídem con el descuento. Aquí solo se valida contra el flag del negocio: el
+        // recorte contra el total lo hace `recalcularTotalesOrden`, que ya conoce el
+        // subtotal con los productos recién agregados.
+        const rebaja = descuento === undefined
+            ? undefined
+            : await resolverDescuento({ idNegocio, descuento, transaction: t });
+
         await recalcularTotalesOrden({
             idOrden,
             porcentajeImpuesto,
             valorDomicilio: domicilio,
+            descuento: rebaja,
             transaction: t,
         });
 
@@ -989,6 +1040,58 @@ async function actualizarValorDomicilio(idOrden, { idNegocio, valorDomicilio }) 
 }
 
 /**
+ * Actualiza SOLO el descuento de una orden abierta y recalcula su total.
+ *
+ * Existe aparte de `agregarItemsOrden` por el mismo motivo que el del domicilio:
+ * corregir la rebaja no implica tocar los productos, y esa ruta exige al menos
+ * un item nuevo.
+ *
+ * Se rechaza sobre órdenes ya pagadas: el INGRESO de caja se calculó con el total
+ * anterior, y moverlo ahora dejaría la caja descuadrada.
+ */
+async function actualizarDescuento(idOrden, { idNegocio, descuento }) {
+    const t = await Models.sequelize.transaction();
+    try {
+        const orden = await Models.PedidOrden.findOne({
+            where: { id_orden: idOrden, id_negocio: idNegocio },
+            transaction: t,
+            lock: t.LOCK.UPDATE,
+        });
+
+        if (!orden) {
+            const e = new Error('Orden no encontrada.');
+            e.code = 'ORDEN_NO_ENCONTRADA'; e.statusCode = 404;
+            throw e;
+        }
+        if (orden.estado !== 'ABIERTA') {
+            const e = new Error('Solo se puede ajustar el descuento de una orden abierta.');
+            e.code = 'ORDEN_NO_ABIERTA'; e.statusCode = 409;
+            throw e;
+        }
+        if (orden.estado_pago === 'pagado') {
+            const e = new Error('No se puede cambiar el descuento de un pedido ya cobrado.');
+            e.code = 'ORDEN_PAGADA'; e.statusCode = 409;
+            throw e;
+        }
+
+        const rebaja = await resolverDescuento({ idNegocio, descuento, transaction: t });
+
+        await recalcularTotalesOrden({
+            idOrden,
+            porcentajeImpuesto: 0,
+            descuento: rebaja,
+            transaction: t,
+        });
+
+        await t.commit();
+        return getOrdenById(idOrden);
+    } catch (err) {
+        if (!t.finished) await t.rollback();
+        throw err;
+    }
+}
+
+/**
  * Cancela una orden (solo si NO ha sido pagada).
  * Se usa desde el módulo de Despacho para eliminar pedidos pendientes de pago.
  * No registra nada en caja. El stock consumido NO se restaura automáticamente
@@ -1134,6 +1237,7 @@ module.exports = {
     marcarDetalleCompleto,
     marcarPagado,
     actualizarValorDomicilio,
+    actualizarDescuento,
     cancelarOrden,
     cerrarOrden,
     usuarioPuedeVerTodosDespacho,

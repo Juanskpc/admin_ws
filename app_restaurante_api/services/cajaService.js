@@ -406,6 +406,175 @@ async function getCajaAbierta(idNegocio) {
     return json;
 }
 
+/**
+ * Negocio dueño de un turno de caja.
+ *
+ * Las rutas de movimientos solo reciben el id de la caja, pero los permisos se
+ * evalúan siempre dentro de un negocio; esto cierra ese hueco sin cambiar la API.
+ */
+async function getIdNegocioDeCaja(idCaja) {
+    const caja = await Models.RestCaja.findByPk(idCaja, { attributes: ['id_negocio'] });
+    return caja ? Number(caja.id_negocio) : null;
+}
+
+/**
+ * ¿El usuario opera en este negocio?
+ *
+ * El historial deja pedir cajas por id, así que hace falta comprobar la pertenencia
+ * antes de devolver nada: sin esto, iterar ids expondría los turnos de otro
+ * inquilino. Un rol global (id_negocio NULL, como Super Admin) pasa siempre.
+ */
+async function usuarioPerteneceANegocio({ idUsuario, idNegocio }) {
+    if (!idUsuario || !idNegocio) return false;
+
+    const vinculo = await Models.GenerUsuarioRol.findOne({
+        where: {
+            id_usuario: idUsuario,
+            estado: 'A',
+            [Op.or]: [{ id_negocio: idNegocio }, { id_negocio: null }],
+        },
+        attributes: ['id_usuario_rol'],
+    });
+
+    return Boolean(vinculo);
+}
+
+/** Ingresos, egresos, esperado y desglose por forma de pago de un turno cualquiera. */
+async function calcularTotalesCaja(caja) {
+    const movimientos = await Models.RestMovimientoCaja.findAll({
+        where: { id_caja: caja.id_caja },
+        attributes: ['tipo', 'monto'],
+    });
+
+    const ingresos = movimientos
+        .filter((m) => m.tipo === 'INGRESO')
+        .reduce((sum, m) => sum + Number(m.monto), 0);
+    const egresos = movimientos
+        .filter((m) => m.tipo === 'EGRESO')
+        .reduce((sum, m) => sum + Number(m.monto), 0);
+
+    const json = caja.toJSON();
+    json.ingresos            = ingresos;
+    json.egresos             = egresos;
+    json.monto_esperado      = Number(caja.monto_apertura) + ingresos - egresos;
+    json.ingresos_por_metodo = await getDesglosePorMetodo(caja.id_caja);
+    delete json.movimientos;
+    return json;
+}
+
+/**
+ * Un turno concreto —abierto o cerrado— con sus totales.
+ *
+ * Va acotado por negocio a propósito: el id de caja viaja en la URL y no puede ser
+ * lo único que decida qué se devuelve.
+ */
+async function getCajaDetalle({ idCaja, idNegocio }) {
+    const caja = await Models.RestCaja.findOne({
+        where: { id_caja: idCaja, id_negocio: idNegocio },
+        include: [{
+            model: Models.GenerUsuario,
+            as: 'usuario',
+            attributes: ['id_usuario', 'primer_nombre', 'primer_apellido'],
+        }],
+    });
+    if (!caja) return null;
+
+    return calcularTotalesCaja(caja);
+}
+
+/**
+ * Historial de turnos cerrados, del más reciente al más antiguo.
+ *
+ * Los totales salen de una sola consulta agregada en vez de recorrer las cajas una
+ * por una: con un año de turnos, la versión ingenua son cientos de consultas.
+ *
+ * `desde`/`hasta` son fechas de pared de Bogotá (YYYY-MM-DD) y el rango es
+ * inclusivo en ambos extremos: `hasta` se compara contra el día siguiente a las
+ * 00:00, para no dejar fuera los turnos de esa misma tarde.
+ */
+async function listarHistorialCajas({ idNegocio, desde = null, hasta = null, limite = 20, offset = 0 }) {
+    const replacements = {
+        idNegocio,
+        desde: desde || null,
+        hasta: hasta || null,
+        limite,
+        offset,
+    };
+
+    const filtroFechas = `
+        AND (CAST(:desde AS date) IS NULL OR c.fecha_apertura >= CAST(:desde AS date))
+        AND (CAST(:hasta AS date) IS NULL OR c.fecha_apertura < CAST(:hasta AS date) + INTERVAL '1 day')
+    `;
+
+    const [filas] = await Models.sequelize.query(`
+        SELECT
+            c.id_caja,
+            c.monto_apertura,
+            c.monto_cierre,
+            c.monto_reportado,
+            c.diferencia,
+            c.fecha_apertura,
+            c.fecha_cierre,
+            c.observaciones,
+            c.estado,
+            u.id_usuario,
+            u.primer_nombre,
+            u.primer_apellido,
+            COALESCE(mv.ingresos, 0)          AS ingresos,
+            COALESCE(mv.egresos, 0)           AS egresos,
+            COALESCE(mv.total_movimientos, 0) AS total_movimientos
+        FROM restaurante.rest_caja c
+        JOIN general.gener_usuario u ON u.id_usuario = c.id_usuario
+        LEFT JOIN (
+            SELECT
+                id_caja,
+                SUM(CASE WHEN tipo = 'INGRESO' THEN monto ELSE 0 END) AS ingresos,
+                SUM(CASE WHEN tipo = 'EGRESO'  THEN monto ELSE 0 END) AS egresos,
+                COUNT(*) AS total_movimientos
+            FROM restaurante.rest_movimiento_caja
+            GROUP BY id_caja
+        ) mv ON mv.id_caja = c.id_caja
+        WHERE c.id_negocio = :idNegocio
+          AND c.estado = 'C'
+          ${filtroFechas}
+        ORDER BY c.fecha_cierre DESC NULLS LAST, c.id_caja DESC
+        LIMIT :limite OFFSET :offset;
+    `, { replacements });
+
+    const [[conteo]] = await Models.sequelize.query(`
+        SELECT COUNT(*)::int AS total
+        FROM restaurante.rest_caja c
+        WHERE c.id_negocio = :idNegocio
+          AND c.estado = 'C'
+          ${filtroFechas};
+    `, { replacements });
+
+    return {
+        total: Number(conteo?.total ?? 0),
+        rows: filas.map((f) => ({
+            id_caja: Number(f.id_caja),
+            fecha_apertura: f.fecha_apertura,
+            fecha_cierre: f.fecha_cierre,
+            estado: f.estado,
+            observaciones: f.observaciones,
+            usuario: {
+                id_usuario: Number(f.id_usuario),
+                primer_nombre: f.primer_nombre,
+                primer_apellido: f.primer_apellido,
+            },
+            monto_apertura: Number(f.monto_apertura ?? 0),
+            ingresos: Number(f.ingresos ?? 0),
+            egresos: Number(f.egresos ?? 0),
+            // `monto_cierre` es el esperado que se congeló al cerrar. Se prefiere al
+            // recálculo para que el historial muestre lo mismo que se vio ese día.
+            monto_esperado: f.monto_cierre != null ? Number(f.monto_cierre) : null,
+            monto_reportado: f.monto_reportado != null ? Number(f.monto_reportado) : null,
+            diferencia: f.diferencia != null ? Number(f.diferencia) : null,
+            total_movimientos: Number(f.total_movimientos ?? 0),
+        })),
+    };
+}
+
 async function getMovimientos(idCaja) {
     const movimientos = await Models.RestMovimientoCaja.findAll({
         where: { id_caja: idCaja },
@@ -714,6 +883,10 @@ module.exports = {
     abrirCaja,
     cerrarCaja,
     getCajaAbierta,
+    getCajaDetalle,
+    getIdNegocioDeCaja,
+    listarHistorialCajas,
+    usuarioPerteneceANegocio,
     getMovimientos,
     getResumenDomiciliarios,
     transferirDomiciliarioACaja,

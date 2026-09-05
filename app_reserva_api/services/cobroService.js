@@ -21,13 +21,23 @@ const MetodoPagoService = require('./metodoPagoService');
  * 3. **El cuadre**: en multipago la suma debe ser exactamente el total. Se compara en
  *    centavos enteros, nunca `a === b` sobre flotantes — `0.1 + 0.2` no vale `0.3` y un cuadre
  *    correcto se rechazaría.
- * 4. **La caja**, solo si el negocio la exige o si de verdad hay dinero que asentar.
+ * 4. **La caja abierta**, siempre que haya dinero que asentar.
+ *
+ * ## Sin caja abierta no se cobra. Nunca.
+ *
+ * Esto no depende de la configuración del negocio. Antes `exige_caja_abierta` permitía cobrar
+ * con el turno cerrado: la cita se completaba, el dinero no entraba en ninguna caja y quedaba
+ * en `getCitasSinCaja` como aviso. En la práctica ese aviso se leía al cerrar —horas después—,
+ * cuando ya nadie sabía si ese efectivo estaba en el cajón o en el bolsillo de alguien. Un
+ * cobro que no cae en un turno no se puede cuadrar, así que se rechaza con `CAJA_CERRADA` y se
+ * abre la caja, que cuesta diez segundos. El flag se conserva en la tabla por compatibilidad,
+ * pero ya no decide nada.
  *
  * ## Cuándo NO se toca la caja
  *
  * Una cita de importe cero (cortesía, o un negocio que no cobra por aquí) se completa sin
- * movimiento: un ingreso de 0 ensucia el turno y no cuadra nada. Y si el negocio no exige caja
- * abierta, se completa igual y queda registrada en `getCitasSinCaja` para que el cierre lo avise.
+ * movimiento: un ingreso de 0 ensucia el turno y no cuadra nada. Ese caso —y solo ese— sigue
+ * pudiendo completarse con la caja cerrada, porque no hay dinero que asentar.
  */
 
 function errorValidacion(mensaje, code) {
@@ -97,7 +107,6 @@ function normalizarPagos({ idMetodoPago, pagos, total }) {
  */
 async function completarYCobrar({ idCita, idNegocio, idUsuario, idMetodoPago, pagos }) {
     const cfg = await Models.ReservaConfig.findByPk(idNegocio);
-    const exigeCaja = !!cfg?.exige_caja_abierta;
     const permiteMultipago = !!cfg?.permite_multipago;
 
     return Models.sequelize.transaction(async (t) => {
@@ -130,16 +139,11 @@ async function completarYCobrar({ idCita, idNegocio, idUsuario, idMetodoPago, pa
 
         let idCaja = null;
         if (total > 0 && lista.length > 0) {
-            const caja = exigeCaja
-                ? await CajaService.requireCajaAbierta(idNegocio, { transaction: t })
-                : await CajaService.getCajaAbiertaRaw(idNegocio, { transaction: t, bloquear: true });
-
-            if (caja) {
-                await CajaService.registrarCobroCita({
-                    idNegocio, cita, pagos: lista, idUsuario, transaction: t,
-                });
-                idCaja = caja.id_caja;
-            }
+            const caja = await CajaService.requireCajaAbierta(idNegocio, { transaction: t });
+            await CajaService.registrarCobroCita({
+                idNegocio, cita, pagos: lista, idUsuario, transaction: t,
+            });
+            idCaja = caja.id_caja;
         }
 
         // El desglose solo se guarda en multipago; en pago simple `id_metodo_pago` ya lo dice

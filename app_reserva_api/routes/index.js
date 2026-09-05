@@ -316,6 +316,13 @@ router.get('/citas/:id/comprobante', [
     param('id').isInt({ min: 1 }),
     query('id_negocio').isInt({ min: 1 }),
 ], Citas.descargarComprobante);
+// Borrado definitivo. No sustituye a `cancelar`: esto es para el registro que no debería
+// existir. `agenda_eliminar` es la acción que lo gobierna y de fábrica solo la tiene el
+// administrador; el servicio deja evento en auditoría.
+router.delete('/citas/:id', [
+    param('id').isInt({ min: 1 }),
+    query('id_negocio').isInt({ min: 1 }),
+], exigirAccion('agenda_eliminar'), Citas.eliminar);
 
 // ── Identidad visual (logo y colores) ──
 router.get('/marca', [query('id_negocio').isInt({ min: 1 })], Marca.getMarca);
@@ -507,6 +514,12 @@ router.post('/caja/movimiento', [
     body('concepto').optional({ nullable: true }).isString().isLength({ max: 255 }),
     body('id_metodo_pago').optional({ nullable: true, checkFalsy: true }).isInt({ min: 1 }),
 ], exigirAccion('caja_movimiento'), Caja.registrarMovimiento);
+// Borrar un movimiento del turno abierto: el error de dedo que descuadra la caja. Va antes de
+// `/caja/:id` para que Express no lea «movimiento» como un id.
+router.delete('/caja/movimiento/:id', [
+    param('id').isInt({ min: 1 }),
+    query('id_negocio').isInt({ min: 1 }),
+], exigirAccion('caja_eliminar'), Caja.eliminarMovimiento);
 router.post('/caja/:id/cerrar', [
     param('id').isInt({ min: 1 }),
     body('id_negocio').isInt({ min: 1 }),
@@ -538,7 +551,6 @@ router.put('/config', [
     body('instrucciones_pago').optional({ nullable: true }).isString(),
     body('permite_cobro_profesional').optional().isBoolean(),
     body('permite_multipago').optional().isBoolean(),
-    body('exige_caja_abierta').optional().isBoolean(),
 ], Config.actualizar);
 
 module.exports = router;

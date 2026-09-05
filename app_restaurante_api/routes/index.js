@@ -107,6 +107,8 @@ router.patch('/configuracion', [
 	body('url_instagram').optional({ nullable: true }).isURL({ require_protocol: true }),
 	body('permite_multipago').optional().isBoolean(),
 	body('permite_pago_domicilio').optional().isBoolean(),
+	body('permite_descuento').optional().isBoolean(),
+	body('pregunta_cobro_envio').optional().isBoolean(),
 	body('id_paleta').optional({ nullable: true }).isInt({ min: 1 }),
 ], ConfiguracionController.updateConfiguracion);
 
@@ -207,6 +209,10 @@ router.patch('/pedidos/:id/valor-domicilio', [
 	param('id').isInt({ min: 1 }),
 	...PedidoController.actualizarValorDomicilioValidators,
 ], PedidoController.actualizarValorDomicilio);
+router.patch('/pedidos/:id/descuento', [
+	param('id').isInt({ min: 1 }),
+	...PedidoController.actualizarDescuentoValidators,
+], PedidoController.actualizarDescuento);
 router.patch('/pedidos/:id/cancelar',                     PedidoController.cancelarOrden);
 router.patch('/pedidos/:id/cerrar', [
 	param('id').isInt({ min: 1 }),
@@ -264,6 +270,21 @@ router.get('/caja/abierta', [
 router.get('/caja/domiciliarios', [
 	query('id_negocio').isInt({ min: 1 }),
 ], CajaController.getResumenDomiciliarios);
+
+// Va antes de '/caja/:id/...' por claridad; 'historial' nunca choca con :id
+// porque son rutas de distinta profundidad.
+router.get('/caja/historial', [
+	query('id_negocio').isInt({ min: 1 }),
+	query('desde').optional({ nullable: true, checkFalsy: true }).isISO8601(),
+	query('hasta').optional({ nullable: true, checkFalsy: true }).isISO8601(),
+	query('limite').optional().isInt({ min: 1, max: 100 }),
+	query('offset').optional().isInt({ min: 0 }),
+], CajaController.getHistorial);
+
+router.get('/caja/:id/detalle', [
+	param('id').isInt({ min: 1 }),
+	query('id_negocio').isInt({ min: 1 }),
+], CajaController.getDetalleCaja);
 
 router.post('/caja/abrir', [
 	body('id_negocio').isInt({ min: 1 }),

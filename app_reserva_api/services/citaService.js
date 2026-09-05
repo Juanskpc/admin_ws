@@ -6,6 +6,7 @@ const Disponibilidad = require('./disponibilidadService');
 const Notificacion = require('./notificacionService');
 const Reglas = require('./reglasAgenda');
 const EstadoCita = require('./estadoCita');
+const Audit = require('../../app_core/helpers/auditHelper');
 
 /**
  * Crea una cita aplicando todas las reglas de negocio:
@@ -430,7 +431,64 @@ async function rechazarPago(idCita, idNegocio, idUsuario, motivo) {
     return cita;
 }
 
+/**
+ * Borra una cita **definitivamente**. No es cancelar.
+ *
+ * Cancelar deja la cita en el histórico con su motivo, que es lo que hay que hacer el 99% de
+ * las veces. Esto es para el 1% restante: la cita de prueba, la que se creó dos veces, la que
+ * no debería existir. Por eso cuelga de su propio permiso (`agenda_eliminar`) y por defecto
+ * solo lo tiene el administrador.
+ *
+ * ## Qué se lleva por delante
+ *
+ * Las FK ya lo deciden: `reserva_cita_servicio` y `reserva_pago_cita` van en CASCADE (son
+ * detalle de la cita y sin ella no significan nada) y `reserva_hold`/`reserva_movimiento_caja`
+ * quedan con `id_cita = NULL`. Eso último es deliberado: **el dinero no se borra**. Un
+ * movimiento de caja ya asentado forma parte del cuadre de un turno; si se fuera con la cita,
+ * la caja dejaría de cuadrar sola y nadie sabría por qué. Se queda, huérfano y con su concepto,
+ * y para quitarlo hay que borrarlo aparte con `caja_eliminar`.
+ *
+ * ## Auditoría
+ *
+ * El trigger `trg_audit` de `reserva_cita` guarda el snapshot completo de la fila borrada. Aquí
+ * se añade el evento de aplicación —quién, cuándo, cuánto— porque el snapshot dice *qué* fila
+ * desapareció pero no que fue una decisión deliberada de una persona.
+ */
+async function eliminarCita(idCita, idNegocio, { idUsuario = null } = {}) {
+    return Models.sequelize.transaction(async (t) => {
+        const cita = await Models.ReservaCita.findOne({
+            where: { id_cita: idCita, id_negocio: idNegocio },
+            transaction: t,
+            lock: t.LOCK.UPDATE,
+        });
+        if (!cita) return null;
+
+        const huella = {
+            id_cita: cita.id_cita,
+            cliente_nombre: cita.cliente_nombre,
+            estado: cita.estado,
+            monto_total: Number(cita.monto_total ?? 0),
+            fecha_hora_inicio: cita.fecha_hora_inicio,
+            id_profesional: cita.id_profesional,
+            id_caja: cita.id_caja,
+        };
+
+        await cita.destroy({ transaction: t });
+
+        await Audit.registrarEvento({
+            modulo: 'reserva',
+            accion: 'cita_eliminada',
+            idUsuario,
+            idNegocio,
+            detalle: huella,
+            transaction: t,
+        });
+
+        return huella;
+    });
+}
+
 module.exports = {
     crearCita, reagendarCita, getCitaConDetalle, getCitaPorCodigo, cancelarPorCliente,
-    aprobarPago, rechazarPago,
+    aprobarPago, rechazarPago, eliminarCita,
 };

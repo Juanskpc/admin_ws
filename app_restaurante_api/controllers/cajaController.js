@@ -4,6 +4,9 @@ const CajaService = require('../services/cajaService');
 const Respuesta = require('../../app_core/helpers/respuesta');
 const Audit = require('../../app_core/helpers/auditHelper');
 const { setAuditNegocio } = require('../../app_core/middleware/auditContext');
+const { usuarioTieneSubnivel } = require('../../app_core/helpers/permisoSubnivel');
+
+const SUBNIVEL_VER_INGRESOS = 'caja_ver_ingresos';
 
 function handleValidation(req, res) {
     const errors = validationResult(req);
@@ -14,6 +17,53 @@ function handleValidation(req, res) {
     return true;
 }
 
+/**
+ * ¿Este usuario puede ver el dinero del turno?
+ *
+ * El frontend ya esconde las cifras, pero eso solo tapa la pantalla: si el rol no
+ * tiene el permiso, los importes tampoco deben viajar en la respuesta. Es la misma
+ * regla que sigue `caja_eliminar_pedido`, que se revalida en el servicio.
+ */
+function puedeVerIngresos(req, idNegocio) {
+    return usuarioTieneSubnivel({
+        idUsuario: req.usuario?.id_usuario,
+        idNegocio,
+        codigo: SUBNIVEL_VER_INGRESOS,
+        // El administrador tampoco lo hereda por ser administrador: `canAccessSubnivel`
+        // en el frontend lee la sesión tal cual, sin excepción para admins, y si el
+        // servidor la hiciera, apagar el permiso al rol Administrador escondería las
+        // cifras en pantalla mientras seguirían viajando en la respuesta.
+        // La migración siembra TRUE para todos, así que nadie pierde nada hoy.
+        adminSiempre: false,
+    });
+}
+
+/** Deja la caja sin cifras, conservando lo que identifica el turno. */
+function ocultarImportesCaja(caja) {
+    if (!caja) return caja;
+    return {
+        ...caja,
+        monto_apertura: null,
+        monto_cierre: null,
+        monto_reportado: null,
+        diferencia: null,
+        ingresos: null,
+        egresos: null,
+        monto_esperado: null,
+        ingresos_por_metodo: [],
+        importes_ocultos: true,
+    };
+}
+
+/** Deja los movimientos listables (fecha, tipo, concepto, usuario) pero sin monto. */
+function ocultarImportesMovimientos(movimientos) {
+    return (movimientos || []).map((m) => ({
+        ...(typeof m.toJSON === 'function' ? m.toJSON() : m),
+        monto: null,
+        importes_ocultos: true,
+    }));
+}
+
 /** GET /restaurante/caja/abierta?id_negocio=N */
 async function getCajaAbierta(req, res) {
     try {
@@ -21,7 +71,13 @@ async function getCajaAbierta(req, res) {
         if (!idNegocio) return Respuesta.error(res, 'id_negocio requerido', 400);
 
         const caja = await CajaService.getCajaAbierta(idNegocio);
-        return Respuesta.success(res, caja ? 'Caja abierta encontrada' : 'No hay caja abierta', caja);
+        const visible = caja ? await puedeVerIngresos(req, idNegocio) : true;
+
+        return Respuesta.success(
+            res,
+            caja ? 'Caja abierta encontrada' : 'No hay caja abierta',
+            visible ? caja : ocultarImportesCaja(caja),
+        );
     } catch (err) {
         console.error('[Caja] Error getCajaAbierta:', err.message);
         return Respuesta.error(res, 'Error al consultar la caja.');
@@ -90,11 +146,102 @@ async function cerrarCaja(req, res) {
 async function getMovimientos(req, res) {
     try {
         const idCaja = Number(req.params.id);
+
+        // El negocio sale de la propia caja: la ruta solo recibe el id del turno, y
+        // tanto la pertenencia como el permiso se evalúan dentro de un negocio.
+        const idNegocio = await CajaService.getIdNegocioDeCaja(idCaja);
+        if (!idNegocio) return Respuesta.error(res, 'Caja no encontrada.', 404);
+
+        const pertenece = await CajaService.usuarioPerteneceANegocio({
+            idUsuario: req.usuario?.id_usuario,
+            idNegocio,
+        });
+        if (!pertenece) return Respuesta.error(res, 'No tienes acceso a esta caja.', 403);
+
         const movimientos = await CajaService.getMovimientos(idCaja);
-        return Respuesta.success(res, 'Movimientos obtenidos', movimientos);
+        const visible = await puedeVerIngresos(req, idNegocio);
+
+        return Respuesta.success(
+            res,
+            'Movimientos obtenidos',
+            visible ? movimientos : ocultarImportesMovimientos(movimientos),
+        );
     } catch (err) {
         console.error('[Caja] Error getMovimientos:', err.message);
         return Respuesta.error(res, 'Error al obtener movimientos.');
+    }
+}
+
+/** GET /restaurante/caja/historial?id_negocio=N&desde=&hasta=&limite=&offset= */
+async function getHistorial(req, res) {
+    if (!handleValidation(req, res)) return;
+    try {
+        const idNegocio = Number(req.query.id_negocio);
+
+        const pertenece = await CajaService.usuarioPerteneceANegocio({
+            idUsuario: req.usuario?.id_usuario,
+            idNegocio,
+        });
+        if (!pertenece) return Respuesta.error(res, 'No tienes acceso a este negocio.', 403);
+
+        const historial = await CajaService.listarHistorialCajas({
+            idNegocio,
+            desde: req.query.desde || null,
+            hasta: req.query.hasta || null,
+            limite: Math.min(Number(req.query.limite) || 20, 100),
+            offset: Number(req.query.offset) || 0,
+        });
+
+        if (await puedeVerIngresos(req, idNegocio)) {
+            return Respuesta.success(res, 'Historial de cajas obtenido', historial);
+        }
+
+        // Sin permiso quedan los turnos y quién los abrió —que es lo que permite
+        // elegir uno— y se van todas las cifras.
+        return Respuesta.success(res, 'Historial de cajas obtenido', {
+            ...historial,
+            rows: historial.rows.map((c) => ({
+                ...c,
+                monto_apertura: null,
+                ingresos: null,
+                egresos: null,
+                monto_esperado: null,
+                monto_reportado: null,
+                diferencia: null,
+                importes_ocultos: true,
+            })),
+        });
+    } catch (err) {
+        console.error('[Caja] Error getHistorial:', err.message);
+        return Respuesta.error(res, 'Error al obtener el historial de cajas.');
+    }
+}
+
+/** GET /restaurante/caja/:id/detalle?id_negocio=N */
+async function getDetalleCaja(req, res) {
+    if (!handleValidation(req, res)) return;
+    try {
+        const idCaja = Number(req.params.id);
+        const idNegocio = Number(req.query.id_negocio);
+
+        const pertenece = await CajaService.usuarioPerteneceANegocio({
+            idUsuario: req.usuario?.id_usuario,
+            idNegocio,
+        });
+        if (!pertenece) return Respuesta.error(res, 'No tienes acceso a este negocio.', 403);
+
+        const caja = await CajaService.getCajaDetalle({ idCaja, idNegocio });
+        if (!caja) return Respuesta.error(res, 'Caja no encontrada.', 404);
+
+        const visible = await puedeVerIngresos(req, idNegocio);
+        return Respuesta.success(
+            res,
+            'Detalle de caja obtenido',
+            visible ? caja : ocultarImportesCaja(caja),
+        );
+    } catch (err) {
+        console.error('[Caja] Error getDetalleCaja:', err.message);
+        return Respuesta.error(res, 'Error al obtener el detalle de la caja.');
     }
 }
 
@@ -103,10 +250,26 @@ async function getResumenDomiciliarios(req, res) {
     try {
         const idNegocio = Number(req.query.id_negocio);
         if (!idNegocio) return Respuesta.error(res, 'id_negocio requerido', 400);
-        console.log('idNegocio domiciliarios ----->', idNegocio);
-        
         const resumen = await CajaService.getResumenDomiciliarios(idNegocio);
-        return Respuesta.success(res, 'Resumen de domiciliarios obtenido', resumen);
+        if (await puedeVerIngresos(req, idNegocio)) {
+            return Respuesta.success(res, 'Resumen de domiciliarios obtenido', resumen);
+        }
+
+        // Sin permiso quedan los conteos (cuántos pedidos lleva cada uno), que es
+        // información operativa, y se van los montos.
+        const sinMontos = (fila) => ({
+            ...fila,
+            monto_adelantado: null,
+            monto_cobrado: null,
+            monto_en_posesion: null,
+            importes_ocultos: true,
+        });
+
+        return Respuesta.success(res, 'Resumen de domiciliarios obtenido', {
+            ...resumen,
+            resumen: resumen?.resumen ? sinMontos(resumen.resumen) : resumen?.resumen,
+            rows: (resumen?.rows || []).map(sinMontos),
+        });
     } catch (err) {
         console.error('[Caja] Error getResumenDomiciliarios:', err.message);
         return Respuesta.error(res, 'Error al obtener el resumen de domiciliarios.');
@@ -234,6 +397,8 @@ async function anularMovimiento(req, res) {
 
 module.exports = {
     getCajaAbierta,
+    getHistorial,
+    getDetalleCaja,
     abrirCaja,
     cerrarCaja,
     getMovimientos,

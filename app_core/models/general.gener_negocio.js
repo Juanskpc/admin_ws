@@ -14,6 +14,10 @@ module.exports = (sequelize, DataTypes) => {
         permite_multipago: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
         /** Opt-in: habilita cobrar el valor del domicilio y pagarlo al domiciliario desde caja. */
         permite_pago_domicilio: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+        /** Opt-in: habilita registrar un descuento sobre el pedido en el POS. */
+        permite_descuento: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+        /** Opt-in: al enviar un pedido, pregunta si se cobra ahora o se envía sin cobrar. */
+        pregunta_cobro_envio: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
         /** Logo del negocio. Ruta relativa servida desde /uploads. */
         logo_url: DataTypes.STRING(500),
         /** Imagen ancha de cabecera del portal público (16:5). */

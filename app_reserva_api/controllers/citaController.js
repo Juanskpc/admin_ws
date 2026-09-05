@@ -212,8 +212,28 @@ async function descargarComprobante(req, res) {
     }
 }
 
+/**
+ * DELETE /reserva/citas/:id?id_negocio= — borrado definitivo.
+ *
+ * Protegida por `exigirAccion('agenda_eliminar')` en la ruta: quien no tenga la acción concedida
+ * no llega hasta aquí. El servicio deja el rastro en auditoría.
+ */
+async function eliminar(req, res) {
+    if (!check(req, res)) return;
+    try {
+        const borrada = await CitaService.eliminarCita(
+            Number(req.params.id), Number(req.query.id_negocio),
+            { idUsuario: req.usuario?.id_usuario },
+        );
+        if (!borrada) return Respuesta.error(res, 'Cita no encontrada', 404);
+        return Respuesta.success(res, 'Cita eliminada', borrada);
+    } catch (err) {
+        return fallo(res, err, 'eliminar', 'Error al eliminar la cita.');
+    }
+}
+
 module.exports = {
     listar, listarPendientesPago, getById, crearManual,
     confirmar, completar, noShow, cancelarPorNegocio,
-    aprobarPago, rechazarPago, descargarComprobante,
+    aprobarPago, rechazarPago, descargarComprobante, eliminar,
 };
