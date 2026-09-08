@@ -342,11 +342,12 @@ function registrarCapacidades() {
     registry.registrar({
         nombre: 'tomar_pedido',
         descripcion:
-            'Crea un pedido a domicilio con los productos que el cliente eligió. Úsala solo ' +
-            'cuando tengas los id_producto (de consultar_carta o buscar_producto), las ' +
-            'cantidades, el nombre y la dirección. **El pedido entra a la cocina AHORA y sale ' +
-            'para el domicilio de inmediato: no existe programarlo para más tarde ni para otro ' +
-            'día.** Devuelve el número de pedido, que hace falta ' +
+            'Crea un pedido con los productos que el cliente eligió, para llevárselo a domicilio ' +
+            'o para que pase a recogerlo. Úsala solo cuando tengas los id_producto (de ' +
+            'consultar_carta o buscar_producto), las cantidades, el nombre, y si es domicilio o ' +
+            'para recoger — pregúntaselo, no lo supongas. La dirección hace falta SOLO si es ' +
+            'domicilio. **El pedido entra a la cocina AHORA: no existe programarlo para más ' +
+            'tarde ni para otro día.** Devuelve el número de pedido, que hace falta ' +
             'para consultar su estado después. Al pedirla, el negocio le enseña al cliente una ' +
             'pregunta de confirmación y no se ejecuta hasta que diga sí: no le digas que ya está hecho.',
         vertical: VERTICAL,
@@ -372,9 +373,16 @@ function registrarCapacidades() {
                     (n, i) => n + Number(i?.cantidad || 0),
                     0
                 );
+                // Cómo lo recibe va en la pregunta, y no de adorno: es lo que deja que el
+                // cliente cace aquí —antes de que salga nada de la cocina— que le entendimos
+                // al revés. Es el único punto del flujo donde todavía sale gratis.
+                const donde =
+                    args.tipo_entrega === 'LLEVAR'
+                        ? 'para recogerlo en el local'
+                        : `para llevártelo a ${args.direccion}`;
                 return (
                     `¿Confirmo tu pedido de ${unidades} ${unidades === 1 ? 'producto' : 'productos'} ` +
-                    `a nombre de ${args.cliente_nombre}, para ${args.direccion}?`
+                    `a nombre de ${args.cliente_nombre}, ${donde}?`
                 );
             },
             hecho: ({ resultado }) =>
@@ -397,7 +405,31 @@ function registrarCapacidades() {
                 },
             },
             cliente_nombre: { tipo: 'string', requerido: true, min_longitud: 2, max_longitud: 150 },
-            direccion: { tipo: 'string', requerido: true, min_longitud: 5, max_longitud: 300 },
+            /**
+             * Cómo recibe el cliente su pedido. **Obligatorio y sin valor por defecto**, que es
+             * la decisión que importa de este parámetro.
+             *
+             * La tentación es que ausente signifique domicilio, porque hasta hoy todo lo era y
+             * así ninguna llamada vieja se rompe. Pero un valor por defecto aquí es un
+             * domiciliario saliendo a una dirección que nadie dio cada vez que el modelo se
+             * olvide de preguntar — y los fallos por omisión son justo los que nadie ve venir.
+             * Prefiero que el Gate lo rechace y el modelo pregunte: cuesta un turno.
+             *
+             * Los valores son los del dominio (`pedid_orden.tipo_pedido`), no una traducción.
+             */
+            tipo_entrega: {
+                tipo: 'enum',
+                requerido: true,
+                valores: ['DOMICILIO', 'LLEVAR'],
+                descripcion:
+                    'DOMICILIO si se lo llevamos a su dirección, LLEVAR si el cliente pasa a ' +
+                    'recogerlo por el local. Pregúntaselo antes: no lo supongas.',
+            },
+            // Obligatoria **solo si es domicilio**, y eso no lo sabe expresar el validador: la
+            // comprueba `ejecutar`, que es quien ve los dos argumentos a la vez. Declararla
+            // obligatoria aquí impediría el pedido para recoger; declararla y no comprobarla
+            // dejaría crear domicilios sin dirección, que es peor.
+            direccion: { tipo: 'string', requerido: false, min_longitud: 5, max_longitud: 300 },
             // ⚠️ Un teléfono de CONTACTO, no una identidad.
             //
             // Solo se usa cuando el canal no probó ninguno — desde el cambio de identidad de
@@ -489,6 +521,20 @@ function registrarCapacidades() {
                 contexto.principal?.telefono_verificado ||
                 (args.cliente_telefono ? String(args.cliente_telefono).trim() : null);
 
+            // ── La dirección, obligatoria solo para el domicilio ─────────────────────────
+            //
+            // Se comprueba aquí y no en el validador porque es una regla entre DOS argumentos,
+            // y `argumentos.js` mira uno cada vez. El error es tipado y habla el idioma del
+            // cliente: quien lo va a leer es alguien pidiendo un almuerzo, no un programador.
+            const esDomicilio = args.tipo_entrega === 'DOMICILIO';
+            const direccion = args.direccion ? String(args.direccion).trim() : null;
+            if (esDomicilio && !direccion) {
+                const e = new Error('Para llevártelo necesito la dirección.');
+                e.code = 'DIRECCION_REQUERIDA';
+                e.statusCode = 400;
+                throw e;
+            }
+
             // ── El método de pago ────────────────────────────────────────────────────────
             //
             // **No se valida aquí a propósito.** `pedidoService.validarMetodoPagoParaNegocio` ya
@@ -505,10 +551,15 @@ function registrarCapacidades() {
                     idNegocio,
                     idUsuario,
                     idMesa: null,
-                    tipoPedido: 'DOMICILIO',
+                    tipoPedido: args.tipo_entrega,
                     contactoNombre: args.cliente_nombre,
                     contactoTelefono: telefono,
-                    direccionDomicilio: args.direccion,
+                    // Nula en un pedido para recoger: no hay a dónde llevarlo.
+                    direccionDomicilio: esDomicilio ? direccion : null,
+                    // La nota SÍ va en los dos casos, aunque la columna se llame «de
+                    // domicilio»: es el campo que la pantalla de despacho pinta como «Nota»
+                    // para cualquier tipo de pedido. Mandarla al `nota` de la orden sería más
+                    // limpio de nombre y dejaría la nota del cliente sin que nadie la vea.
                     notaDomicilio: args.nota || null,
                     // Siempre nulo desde el 2026-08-27: el asistente dejó de preguntar cómo
                     // se paga (ver `docs/asistente-restaurante.md`). La caja lo pone al

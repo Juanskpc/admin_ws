@@ -133,6 +133,163 @@ el resto al modelo. Es literalmente para lo que existe la escalera de ADR-018.
 
 ---
 
+## Domicilio o recoger, y el filtro del despacho (2026-09-07)
+
+Del dueño, ese día: «en mi municipio, o al menos nuestra familia, suele hacer pedidos para ir a
+recoger, para no gastar el valor del domicilio».
+
+Hasta entonces el asistente **daba por hecho que todo pedido era un domicilio**. No es que lo
+prefiriera: `tipoPedido: 'DOMICILIO'` estaba escrito a fuego dentro de `tomar_pedido`, y el flujo
+pedía la dirección siempre. Un cliente que iba a pasar por el local tenía que dar su casa para
+que nadie fuera a ella.
+
+### El paso nuevo, y por qué va donde va
+
+Entre el nombre y todo lo demás:
+
+```
+nombre → ENTREGA → (teléfono + dirección | teléfono)
+```
+
+Va **antes** que la dirección porque es la respuesta que decide si la dirección hace falta, y no
+puede ir dentro de la pregunta combinada por lo mismo: preguntarla junto a la dirección obligaría
+a pedir la dirección sin saber todavía si sobra.
+
+El teléfono se sigue pidiendo a quien llegó sin número, pero **el motivo cambia y el texto
+también**: en un domicilio es para que el domiciliario llame desde la puerta; para recoger es
+para poder avisarle cuando esté listo. Es un `MOTIVO_DEL_TELEFONO` de dos entradas, no una frase
+genérica que valga para las dos y no signifique nada en ninguna.
+
+### La palabra que significa las dos cosas
+
+`leerEntrega` es la única lectura de todo el flujo donde equivocarse **cuesta comida**: leerlo al
+revés manda una moto a una dirección que nadie dio, o deja a alguien esperando en el mostrador un
+pedido que salió hace veinte minutos. Los demás pasos, mal leídos, dejan un dato feo; éste, no.
+
+Y tiene una trampa idiomática de verdad: **«llevar» significa las dos cosas**. «Para llevar» es
+como se pide en el mostrador y quiere decir que pasa por él; «me lo llevan» quiere decir justo lo
+contrario. Así que:
+
+- la **frase** «para llevar» se acepta y vale por *recoger*;
+- la **palabra suelta** «llevar» **no decide**: se repregunta;
+- si aparecen las dos familias de palabras a la vez, o ninguna, tampoco: se repregunta.
+
+**No hay valor por defecto en ninguna capa.** Ni en el flujo ni en la capacidad, donde
+`tipo_entrega` es un `enum` **obligatorio**. La tentación era que ausente significara domicilio
+—hasta hoy todo lo era, y así ninguna llamada vieja se rompe—, pero un valor por defecto ahí es
+un domiciliario saliendo a una dirección que nadie dio cada vez que el modelo olvide preguntar.
+Que lo rechace el Gate y el modelo pregunte cuesta un turno.
+
+`direccion` pasó a `requerido: false`, y la regla «obligatoria solo si es domicilio» la comprueba
+`ejecutar`, que es quien ve los dos argumentos a la vez: `argumentos.js` mira uno cada vez y no
+sabe expresar una condición entre dos.
+
+> El nombre interno de la tarea **sigue siendo `pedido_domicilio`** aunque ya no sea solo eso.
+> Ese valor está guardado en `tarea_actual` de las conversaciones abiertas: renombrarlo dejaría a
+> quien esté a mitad de un pedido con una tarea que ningún manejador reclama. Un nombre impreciso
+> cuesta menos.
+
+### El filtro de WhatsApp en el despacho
+
+Un chip más al lado de «Todos / Para llevar / Domicilio», con su contador. **No es una pestaña
+aparte**: LLEVAR y DOMICILIO filtran por el *tipo* de pedido y WhatsApp por su *origen*, así que
+se cruzan — un pedido del bot es además de uno de los dos tipos y aparece en los dos sitios.
+
+`getOrdenesDespacho` devuelve ahora `de_whatsapp` por orden, y **no hay columna nueva**: se deduce
+de `id_usuario`, porque los pedidos del bot ya nacen a nombre del usuario «Asistente» del negocio
+(`usuarioAsistenteDao`, que existe desde el 2026-08-24 para que el informe de ventas por usuario
+diga la verdad). Una columna `origen` sería una segunda verdad sobre lo mismo, que hay que
+rellenar en cada sitio que cree una orden y que se queda callada el día que alguien lo olvide. El
+día que haga falta separar el chat del menú digital —hoy los dos entran por el bot— sí hará falta
+el dato aparte; ese día se añade, con un motivo.
+
+Dos detalles de la pantalla que no son adorno:
+
+- El chip **solo aparece si hay alguno**. Un «(0)» permanente en un restaurante que no usa el
+  asistente es ruido en la única barra que se mira con prisa.
+- Y si se despacha el último, el chip desaparece **y el filtro vuelve a «Todos»**: sin eso la
+  pantalla se queda vacía con un filtro puesto en algo que ya no se ve, o sea sin manera de
+  volver.
+
+### El botón «avisar que está listo»
+
+`POST /restaurante/despacho/:id/avisar-listo`. Lo aprieta quien vigila el despacho y al cliente le
+llega, literalmente:
+
+> Hola Nicolás, tu pedido ORD-0042 de Pregonchos ya está listo y puedes pasar a recogerlo.
+> Si necesitas algo, respóndenos a este mensaje.
+
+**Lo que NO necesita es la pantalla de cocina**, y ahí está lo bueno del diseño. Un pedido del bot
+nunca entra al KDS (`crearOrden` no toca `estado_cocina`, ver «Lo que queda pendiente»), así que no
+existe ningún momento automático de «está listo» del que colgar un aviso. Como aquí lo dispara una
+persona que está mirando, el problema abierto deja de estorbar en vez de haber que resolverlo
+antes.
+
+#### Por qué es una plantilla
+
+Entre que alguien pide y el pedido está listo pasan treinta o cuarenta minutos; en un restaurante
+lleno, dos horas. La ventana de 24 h **suele** seguir abierta, pero *suele* no es una garantía
+sobre la que construir un botón. Con plantilla, el mensaje sale igual el día que se cierre.
+
+La plantilla es `pedido_listo` [es] `UTILITY`, y hay dos detalles del contrato con Meta metidos en
+su texto: **no termina en variable** (una plantilla cuyo último carácter es un hueco se rechaza) y
+la frase de cierre invita a responder, porque esa respuesta reabre la ventana de 24 h y deja que el
+bot siga atendiendo.
+
+> ⚠️ **Antes de que esto sirva en producción hay que crearla en WhatsApp Manager**, con el nombre,
+> el idioma y el texto **idénticos** a los de `intelligence/core/plantillas.js`. Una plantilla no se
+> puede enviar ni una vez antes de que Meta apruebe su texto. Mientras no exista, el botón deja el
+> saliente en `pendiente` y la entrega falla — que es, de paso, el **video 2 del App Review**: hay
+> que grabar la creación de una plantilla, y ésta hace falta de todos modos
+> ([`meta-app-review.md`](meta-app-review.md) §3).
+
+#### Solo para recoger, y solo con conversación
+
+Tres condiciones, y ninguna es cosmética:
+
+- **`de_whatsapp`** — hace falta una conversación a la que escribir.
+- **`LLEVAR`** — a un domicilio lo que le llega es el domiciliario, no un aviso. El «va en camino»
+  será **otra plantilla** el día que alguien la pida, no ésta con otro texto.
+- **sin avisar todavía**.
+
+Y dos negativas que son de política, no de programa: si no existe conversación se rechaza —escribir
+a un número que apareció en una casilla no es lo mismo que contestarle a quien nos escribió, y
+estrenar un hilo desde un botón es justo lo que no se hace—, y a quien pidió la baja no se le
+escribe **ni siquiera algo que le interesa**.
+
+#### El candado, que es la mitad del trabajo
+
+Cada envío de plantilla **se le cobra al negocio**: dos clics son dos cobros y dos mensajes al
+cliente, y en una pantalla que se mira con la cocina llena el doble clic no es teórico. Hacen falta
+las tres cosas:
+
+1. **`SELECT … FOR UPDATE`** sobre la orden, desde la primera lectura. Entre un `SELECT` normal y
+   su `UPDATE` cabe entera la segunda petición, y las dos verían `aviso_listo_en` nulo.
+2. **`aviso_listo_en` se escribe en la misma transacción** que crea el saliente. Si falla una, no
+   queda ni mensaje ni marca, y se puede reintentar sin miedo.
+3. El botón se apaga en el despacho — pero eso es comodidad, no garantía: el frontend siempre puede
+   venir de otra pestaña.
+
+Se guarda el **instante** y no un booleano porque «sí» no dice cuándo, y la primera pregunta de
+quien mira un pedido que nadie recogió es a qué hora le avisaron.
+
+#### Dónde vive cada cosa
+
+| Pieza | Dónde | Por qué ahí |
+|---|---|---|
+| La plantilla | `intelligence/core/plantillas.js` | El texto aprobado es parte del programa, no configuración de un inquilino |
+| El aviso | `intelligence/adapters/restaurante/avisoPedido.js` | Saber qué es una orden es dominio de la vertical (ADR-005, ADR-009). Hermano de `adapters/reserva/recordatorios.js` |
+| La marca | `restaurante.pedid_orden.aviso_listo_en` | `npm run migrate:restaurante-aviso-listo` |
+| El endpoint | `app_restaurante_api` | Donde vive el despacho |
+
+`avisoPedido.js` lee la orden con **SQL en crudo** en vez de llamar a `pedidoService`, y no es
+pereza: ese servicio ya depende de este adaptador para crear pedidos, y hacerlo al revés cerraría
+un ciclo. La consulta son cinco columnas; el ciclo, para siempre. El controlador, por lo mismo,
+hace el `require` **dentro** de la función: así un despliegue sin el esquema `intelligence` falla en
+esa ruta y solo en ella, en vez de tumbar el arranque de toda la vertical.
+
+---
+
 ## Pedir desde el menú digital
 
 **La idea es del dueño (2026-08-24), y es mejor que la alternativa que se había propuesto.**

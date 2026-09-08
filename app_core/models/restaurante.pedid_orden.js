@@ -33,6 +33,10 @@ module.exports = (sequelize, DataTypes) => {
         // FK a platform.persona_negocio. SIEMPRE nullable (ADR-006): la orden existe
         // aunque no se haya podido identificar al cliente.
         id_persona_negocio:  { type: DataTypes.UUID, allowNull: true },
+        // Cuándo se le avisó por WhatsApp que el pedido estaba listo. NULL = no se le ha
+        // avisado. Es lo que impide que el botón del despacho se apriete dos veces, y por eso
+        // se escribe en la misma transacción que crea el mensaje saliente.
+        aviso_listo_en:      { type: DataTypes.DATE, allowNull: true },
     }, {
         tableName: 'pedid_orden',
         schema: 'restaurante',

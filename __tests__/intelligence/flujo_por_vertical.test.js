@@ -537,22 +537,25 @@ describe('el flujo lleva el pedido del menú hasta el final, sin modelo', () => 
     it('con todo lo que hace falta PREGUNTA, y no ha creado nada todavía', async () => {
         // ADR-010: el modelo —y aquí el guion— puede proponer; solo el cliente dispara. Sin el
         // sí no se ha tocado el Gate ni una vez.
-        const [, , , cuarto] = await conversar(
+        const [, , , , quinto] = await conversar(
             DEL_MENU,
             'Nicolás Pantoja',
+            'domicilio',
             'Carrera 3e 19 a',
             'Efectivo'
         );
 
-        expect(texto(cuarto)).toMatch(/¿Confirmo tu pedido de 3 productos a nombre de Nicolás Pantoja/);
+        expect(texto(quinto)).toMatch(/¿Confirmo tu pedido de 3 productos a nombre de Nicolás Pantoja/);
         expect(gate.llamadas).toHaveLength(0);
     });
 
-    it('el camino entero: carrito → nombre → dirección → confirmación → pedido', async () => {
+    it('el camino entero: carrito → nombre → entrega → dirección → confirmación → pedido', async () => {
         // Sin paso de pago desde el 2026-08-27: se retiró. Ver `docs/asistente-restaurante.md`.
-        const [, , , cuarto] = await conversar(
+        // Con paso de entrega desde el 2026-09-07: domicilio o recoger.
+        const [, , , , quinto] = await conversar(
             DEL_MENU,
             'Nicolás Pantoja',
+            'domicilio',
             'Carrera 3e 19 a',
             'sí'
         );
@@ -560,14 +563,15 @@ describe('el flujo lleva el pedido del menú hasta el final, sin modelo', () => 
         // El «sí» —que lee el Nivel 1, gratis— es lo que lo crea.
         expect(gate.llamadas).toHaveLength(1);
         expect(gate.llamadas[0].confirmadoPor).toBeTruthy();
-        expect(texto(cuarto)).toContain('ORD-77');
-        expect(cuarto.tarea).toBeNull();
+        expect(texto(quinto)).toContain('ORD-77');
+        expect(quinto.tarea).toBeNull();
     });
 
     it('el pedido se crea con los ids del carrito, no con lo que nadie recuerde', async () => {
-        const [, , , cuarto] = await conversar(
+        const [, , , , quinto] = await conversar(
             DEL_MENU,
             'Nicolás Pantoja',
+            'domicilio',
             'Carrera 3e 19 a',
             'sí'
         );
@@ -578,26 +582,29 @@ describe('el flujo lleva el pedido del menú hasta el final, sin modelo', () => 
             { id_producto: 111, cantidad: 2 },
         ]);
         expect(creada.args.cliente_nombre).toBe('Nicolás Pantoja');
+        expect(creada.args.tipo_entrega).toBe('DOMICILIO');
         expect(creada.args.direccion).toBe('Carrera 3e 19 a');
         // El canal probó su número, así que NO se pide ni se manda: el que vale es el probado.
         expect(creada.args.cliente_telefono).toBeUndefined();
-        expect(cuarto.resultado).toBe('resuelto');
+        expect(quinto.resultado).toBe('resuelto');
     });
 
     it('a quien tiene número probado NO se le pide el teléfono', async () => {
         // Preguntar dos veces lo que ya tienes es lo que hace que un bot parezca un formulario.
-        const salidas = await conversar(DEL_MENU, 'Nicolás Pantoja');
-        expect(texto(salidas[1])).toMatch(/dirección/i);
-        expect(texto(salidas[1])).not.toMatch(/número de contacto/i);
+        const salidas = await conversar(DEL_MENU, 'Nicolás Pantoja', 'domicilio');
+        expect(texto(salidas[2])).toMatch(/dirección/i);
+        expect(texto(salidas[2])).not.toMatch(/número de contacto/i);
     });
 
     it('el «sí» del cliente NO se queda sin respuesta', async () => {
         // El agujero que había justo detrás: con una confirmación abierta, la política manda el
         // turno al Nivel 1 — y desde el 24 eso significa el flujo de ESTA vertical, que no sabía
         // resolverla. El cliente decía «sí» y recibía silencio.
-        const [, , , cuarto] = await conversar(DEL_MENU, 'Nicolás Pantoja', 'Carrera 3e 19 a', 'sí');
-        expect(cuarto.respuestas.length).toBeGreaterThan(0);
-        expect(cuarto.resultado).not.toBe('sin_respuesta');
+        const [, , , , quinto] = await conversar(
+            DEL_MENU, 'Nicolás Pantoja', 'domicilio', 'Carrera 3e 19 a', 'sí'
+        );
+        expect(quinto.respuestas.length).toBeGreaterThan(0);
+        expect(quinto.resultado).not.toBe('sin_respuesta');
     });
 
     it('si ya sabe su nombre no lo vuelve a preguntar', async () => {
@@ -608,10 +615,10 @@ describe('el flujo lleva el pedido del menú hasta el final, sin modelo', () => 
         const d = await flujo({ conversacion, texto: DEL_MENU, turno: { id_turno: 't-1' } });
 
         expect(texto(d)).toMatch(/a nombre de Ana/i);
-        expect(texto(d)).toMatch(/dirección/i);
-        // Con el nombre ya sabido y el teléfono probado por el canal, el único hueco es la
-        // dirección: se pregunta sola, no como lista de uno.
-        expect(d.tarea.datos.paso).toBe('direccion');
+        // Con el nombre ya sabido, lo primero que falta es cómo lo recibe: de esa respuesta
+        // depende si la dirección hace falta siquiera.
+        expect(texto(d)).toMatch(/recogerlo/i);
+        expect(d.tarea.datos.paso).toBe('entrega');
     });
 
     it('una pregunta en vez del nombre no se apunta como nombre', async () => {
@@ -651,7 +658,7 @@ describe('el flujo lleva el pedido del menú hasta el final, sin modelo', () => 
             variables: { turnos: 1 }, tarea_actual: null, tarea_datos: {},
         };
         const salidas = [];
-        for (const t of [DEL_MENU, 'Ana Ruiz', '3150528532', 'Calle 5 # 4-3', 'sí']) {
+        for (const t of [DEL_MENU, 'Ana Ruiz', 'domicilio', '3150528532', 'Calle 5 # 4-3', 'sí']) {
             const d = await sinTelefono({ conversacion, texto: t, turno: { id_turno: 't-1' } });
             salidas.push(d);
             conversacion = {
@@ -665,9 +672,9 @@ describe('el flujo lleva el pedido del menú hasta el final, sin modelo', () => 
         // Se pide DESPUÉS del nombre, y diciendo el motivo: un bot que pide un teléfono sin
         // explicarse parece que está recogiendo datos. Va junto a la dirección, en el mismo
         // mensaje, desde el 2026-08-27.
-        expect(texto(salidas[1])).toMatch(/número de contacto/i);
-        expect(texto(salidas[1])).toMatch(/domiciliario/i);
-        expect(texto(salidas[1])).toMatch(/dirección/i);
+        expect(texto(salidas[2])).toMatch(/número de contacto/i);
+        expect(texto(salidas[2])).toMatch(/domiciliario/i);
+        expect(texto(salidas[2])).toMatch(/dirección/i);
 
         const creada = gate.llamadas.find((l) => l.capacidad === 'tomar_pedido' && l.confirmadoPor);
         expect(creada.args.cliente_telefono).toBe('3150528532');
@@ -688,7 +695,7 @@ describe('el flujo lleva el pedido del menú hasta el final, sin modelo', () => 
             id_conversacion: 'c-bsuid-2', id_negocio: 12, canal: 'whatsapp',
             variables: { turnos: 1 }, tarea_actual: null, tarea_datos: {},
         };
-        for (const t of [DEL_MENU, 'Ana Ruiz', '3150528532', 'Calle 5 # 4-3', 'sí']) {
+        for (const t of [DEL_MENU, 'Ana Ruiz', 'domicilio', '3150528532', 'Calle 5 # 4-3', 'sí']) {
             const d = await sinTelefono({ conversacion, texto: t, turno: { id_turno: 't-1' } });
             conversacion = {
                 ...conversacion,

@@ -311,6 +311,7 @@ describe('tomar_pedido — la mutación', () => {
             args: {
                 items,
                 cliente_nombre: 'BOT Cliente',
+                tipo_entrega: 'DOMICILIO',
                 direccion: 'Calle 10 # 5-30, apto 201',
                 ...extra,
             },
@@ -369,6 +370,7 @@ describe('tomar_pedido — la mutación', () => {
                 // (no está declarado en `elemento`), y aunque pasara, el adaptador lo ignora.
                 items: [{ id_producto: prod.id_producto, cantidad: 2, precio_unitario: 1 }],
                 cliente_nombre: 'BOT Precio',
+                tipo_entrega: 'DOMICILIO',
                 direccion: 'Calle 10 # 5-30',
             },
             confirmadoPor: { origen: 'test', texto: 'sí' },
@@ -435,6 +437,7 @@ describe('tomar_pedido — la mutación', () => {
                 args: {
                     items: [{ id_producto: prod.id_producto, cantidad: 1 }],
                     cliente_nombre: 'BOT SinConfirmar',
+                    tipo_entrega: 'DOMICILIO',
                     direccion: 'Calle 10 # 5-30',
                 },
             })

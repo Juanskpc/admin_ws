@@ -128,4 +128,27 @@ async function asegurarMembresia(idUsuario, idNegocio, transaction) {
     );
 }
 
-module.exports = { resolverOCrear, NOMBRE, APELLIDO, identificacionDe, emailDe };
+/**
+ * El `id_usuario` del asistente de este negocio, o `null` si todavía no ha tomado ningún pedido.
+ *
+ * Es `resolverOCrear` **sin el crear**, y esa mitad importa: quien solo quiere *saber* si una
+ * orden la tomó el bot —la pantalla de despacho, un informe— no tiene por qué provocar la
+ * creación de un usuario como efecto de mirar. Un negocio que jamás ha usado el asistente debe
+ * poder abrir el despacho sin que le aparezca de la nada un empleado llamado «Asistente».
+ */
+async function buscar(idNegocio, { transaction = null } = {}) {
+    const id = Number(idNegocio);
+    if (!Number.isInteger(id) || id <= 0) return null;
+
+    const [fila] = await sequelize.query(
+        `SELECT id_usuario FROM general.gener_usuario WHERE num_identificacion = :identificacion LIMIT 1;`,
+        {
+            replacements: { identificacion: identificacionDe(id) },
+            type: sequelize.QueryTypes.SELECT,
+            transaction,
+        }
+    );
+    return fila ? fila.id_usuario : null;
+}
+
+module.exports = { resolverOCrear, buscar, NOMBRE, APELLIDO, identificacionDe, emailDe };

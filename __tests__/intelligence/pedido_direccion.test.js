@@ -70,6 +70,10 @@ function enPaso(paso, extra = {}) {
         tarea_datos: {
             items: [{ id_producto: 106, cantidad: 1 }],
             nombre: 'Nicolás',
+            // Desde el 2026-09-07 la dirección solo se pide cuando es domicilio, así que llegar
+            // al paso de la dirección exige haberlo dicho antes. Este fichero prueba la
+            // dirección; el paso que la precede tiene el suyo.
+            entrega: 'DOMICILIO',
             paso,
             ...extra,
         },

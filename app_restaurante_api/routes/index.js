@@ -226,6 +226,10 @@ router.get('/cocina', PedidoController.getOrdenesCocina);
 router.get('/despacho', [
 	query('id_negocio').isInt({ min: 1 }),
 ], PedidoController.getOrdenesDespacho);
+router.post('/despacho/:id/avisar-listo', [
+	param('id').isInt({ min: 1 }),
+	...PedidoController.avisarPedidoListoValidators,
+], PedidoController.avisarPedidoListo);
 router.get('/domiciliarios', [
 	query('id_negocio').isInt({ min: 1 }),
 ], PedidoController.getDomiciliarios);

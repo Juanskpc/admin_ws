@@ -1,6 +1,10 @@
 const Models = require('../../app_core/models/conection');
 const cajaService = require('./cajaService');
 const personaNegocioDao = require('../../app_core/dao/personaNegocioDao');
+const usuarioAsistenteDao = require('../../app_core/dao/usuarioAsistenteDao');
+// La costura de entitlements (ADR-021). Es lo único que este servicio sabe de lo comercial, y
+// pregunta por la FEATURE, nunca por el nombre del plan.
+const features = require('../../intelligence/core/features');
 const { Op } = require('sequelize');
 
 const SUBNIVEL_CANCELAR_NO_PAGADO = 'despacho_cancelar_no_pagado';
@@ -690,6 +694,35 @@ async function getOrdenById(idOrden, { transaction = null } = {}) {
 /**
  * Lista pedidos LLEVAR/DOMICILIO para el módulo Despacho.
  * Si verTodos=false, filtra por id_domiciliario = idUsuario.
+ *
+ * ## `de_whatsapp`, y por qué no hay una columna nueva
+ *
+ * Cada orden sale con una bandera que dice si la tomó el asistente. **No se guarda en ninguna
+ * parte**: se deduce de `id_usuario`, porque los pedidos del bot ya nacen a nombre del usuario
+ * «Asistente» de ese negocio (ver `usuarioAsistenteDao`, que existe desde el 2026-08-24 para que
+ * el informe de ventas por usuario diga la verdad).
+ *
+ * Una columna `origen` habría sido más explícita, y se descartó por eso mismo: sería una segunda
+ * verdad sobre lo mismo, que hay que rellenar en cada sitio que cree una orden y que el día que
+ * alguien olvide se queda callada. El autor de la orden ya lo sabe, y no puede desincronizarse
+ * de sí mismo. El día que haga falta distinguir el chat del menú digital —hoy los dos entran por
+ * el bot— sí hará falta el dato aparte; ese día se añade, con un motivo.
+ *
+ * ## Y por qué las dos banderas dependen del PLAN
+ *
+ * El asistente es una feature de pago (`asistente_ia`, que hoy solo incluye «Plan Avanzado»), y
+ * para un negocio que no la tiene esta parte de la pantalla **no debe existir**: ni el filtro, ni
+ * la etiqueta, ni el botón. Por eso las dos banderas se apagan enteras sin la feature, en vez de
+ * apagar solo el botón y dejar la mitad del módulo asomando.
+ *
+ * Se pregunta por la **feature** y no por el nombre del plan (ADR-021): sembrar
+ * `if (plan === 'avanzado')` por el código ata la lógica al catálogo comercial, y el día que
+ * ventas mueva la feature de plan hay que tocar veinte sitios.
+ *
+ * Consecuencia que conviene saber: un negocio que se dé de baja de Avanzado deja de ver **qué
+ * pedidos viejos le habían entrado por WhatsApp**. Es el precio de que el módulo desaparezca
+ * entero, y es el lado correcto por el que equivocarse: enseñar media función de pago es peor
+ * que esconder un dato histórico.
  */
 async function getOrdenesDespacho({ idNegocio, idUsuario }) {
     const { Op } = Models.Sequelize;
@@ -701,16 +734,36 @@ async function getOrdenesDespacho({ idNegocio, idUsuario }) {
     };
     if (!verTodos) where.id_domiciliario = idUsuario;
 
-    return Models.PedidOrden.findAll({
-        where,
-        include: [
-            { model: Models.GenerUsuario, as: 'usuario', attributes: ['id_usuario', 'primer_nombre', 'primer_apellido'] },
-            { model: Models.GenerUsuario, as: 'domiciliario', attributes: ['id_usuario', 'primer_nombre', 'primer_apellido'], required: false },
-                        { model: Models.PedidDetalle, as: 'detalles',
-                            attributes: ['id_detalle', 'cantidad', 'precio_unitario', 'nota'],
-                            include: [{ model: Models.CartaProducto, as: 'producto', attributes: ['id_producto', 'nombre'] }] },
-        ],
-        order: [['fecha_creacion', 'DESC']],
+    const [ordenes, idAsistente, asistenteHabilitado] = await Promise.all([
+        Models.PedidOrden.findAll({
+            where,
+            include: [
+                { model: Models.GenerUsuario, as: 'usuario', attributes: ['id_usuario', 'primer_nombre', 'primer_apellido'] },
+                { model: Models.GenerUsuario, as: 'domiciliario', attributes: ['id_usuario', 'primer_nombre', 'primer_apellido'], required: false },
+                            { model: Models.PedidDetalle, as: 'detalles',
+                                attributes: ['id_detalle', 'cantidad', 'precio_unitario', 'nota'],
+                                include: [{ model: Models.CartaProducto, as: 'producto', attributes: ['id_producto', 'nombre'] }] },
+            ],
+            order: [['fecha_creacion', 'DESC']],
+        }),
+        // `buscar` y no `resolverOCrear`: mirar el despacho no debe crear nada. Un negocio que
+        // nunca ha usado el asistente devuelve `null`, y entonces ninguna orden es suya.
+        usuarioAsistenteDao.buscar(idNegocio),
+        features.estaHabilitado(idNegocio, features.FEATURE.ASISTENTE_IA),
+    ]);
+
+    return ordenes.map((o) => {
+        const plano = typeof o.toJSON === 'function' ? o.toJSON() : { ...o };
+        plano.de_whatsapp =
+            asistenteHabilitado && idAsistente != null && plano.id_usuario === idAsistente;
+        // El botón de «ya está listo». Se decide aquí y no en la pantalla porque son cuatro
+        // condiciones y una de ellas es comercial: repetirlas en el frontend garantiza que un
+        // día discrepen, y el lado que discrepe será el que ofrece un botón que el backend
+        // rechaza. Allí se vuelven a comprobar de todos modos — esto decide qué se ENSEÑA, no
+        // qué se permite.
+        plano.puede_avisar_listo =
+            plano.de_whatsapp && plano.tipo_pedido === 'LLEVAR' && !plano.aviso_listo_en;
+        return plano;
     });
 }
 

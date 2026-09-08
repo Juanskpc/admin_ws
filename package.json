@@ -43,6 +43,7 @@
     "migrate:auditoria-verticales": "node migrations/migrate_auditoria_verticales.js",
     "migrate:restaurante-multipago": "node migrations/migrate_restaurante_multipago.js",
     "migrate:restaurante-descuento": "node migrations/migrate_restaurante_descuento.js",
+    "migrate:restaurante-aviso-listo": "node migrations/migrate_restaurante_aviso_listo.js",
     "migrate:restaurante-caja-ver-ingresos": "node migrations/migrate_restaurante_caja_ver_ingresos.js",
     "migrate:platform-persona": "node migrations/migrate_platform_persona.js",
     "migrate:platform-backfill-restaurante": "node migrations/migrate_platform_backfill_restaurante.js",

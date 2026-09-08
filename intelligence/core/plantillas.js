@@ -73,6 +73,41 @@ const CATALOGO = {
             'Hola {{1}}, te escribimos de {{2}}. Te recordamos tu cita de {{3}} {{4}}. ' +
             'Si no puedes venir, respóndenos a este mensaje y la movemos.',
     },
+
+    /**
+     * «Tu pedido ya está listo, puedes pasar a recogerlo» (2026-09-07).
+     *
+     * ## Por qué es una plantilla y no un mensaje normal
+     *
+     * Porque llega tarde. Entre que alguien pide y el pedido está listo pasan treinta o cuarenta
+     * minutos, y en un restaurante lleno pueden ser dos horas — la ventana de 24 h suele seguir
+     * abierta, pero *suele* no es una garantía sobre la que se pueda construir un botón. El día
+     * que se cierre, el mensaje sale igual porque lleva plantilla.
+     *
+     * ## Por qué esta y no la de «va en camino»
+     *
+     * El pedido para recoger es el que **necesita** el aviso: el cliente está esperando a que le
+     * digan cuándo salir de casa. Un domicilio no lo necesita —lo que llega es el domiciliario—,
+     * así que su plantilla se escribirá el día que alguien la pida, y no antes.
+     *
+     * ## Dos detalles del contrato con Meta que se ven aquí
+     *
+     * `UTILITY` y no `MARKETING`: es una transacción que el cliente pidió. El mismo texto
+     * presentado como marketing cuesta más y se rechaza más.
+     *
+     * Y **no termina en variable**, que es una regla explícita de Meta: una plantilla cuyo último
+     * carácter es un hueco se rechaza. La frase de cierre no es relleno — además invita a
+     * responder, y esa respuesta reabre la ventana de 24 h y deja que el bot siga atendiendo.
+     */
+    pedido_listo: {
+        nombre: 'pedido_listo',
+        idioma: 'es',
+        categoria: 'UTILITY',
+        parametros: ['cliente', 'orden', 'negocio'],
+        texto:
+            'Hola {{1}}, tu pedido {{2}} de {{3}} ya está listo y puedes pasar a recogerlo. ' +
+            'Si necesitas algo, respóndenos a este mensaje.',
+    },
 };
 
 /** La plantilla, o `null` si no está en el catálogo. Nunca lanza: quien decide es el que envía. */

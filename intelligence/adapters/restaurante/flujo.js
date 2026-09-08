@@ -283,6 +283,13 @@ async function abrirPedidoPorChat(ctx, leerCarta) {
  * modelo (`engine/confirmacion.js`), y es el Policy Gate quien se niega a ejecutar sin la prueba
  * (ADR-010). Este flujo no tiene una puerta trasera a `tomar_pedido`.
  */
+/**
+ * ⚠️ Se llama `pedido_domicilio` desde antes de que existiera el pedido para recoger, y **se
+ * queda así a propósito**. Este valor está guardado en `tarea_actual` de las conversaciones que
+ * hay abiertas ahora mismo: renombrarlo dejaría a quien esté a mitad de un pedido con una tarea
+ * que ningún manejador reclama, o sea con el carrito hecho y el bot sin saber de qué le hablan.
+ * Un nombre interno impreciso cuesta menos que eso.
+ */
 const TAREA_PEDIDO = 'pedido_domicilio';
 
 /**
@@ -295,8 +302,27 @@ const TAREA_PEDIDO = 'pedido_domicilio';
  * teléfono ya lo probó el canal y preguntarlo sería pedir dos veces lo que ya tienes.
  *
  */
+/**
+ * Cómo recibe el cliente su pedido. Son **los valores del dominio** (`pedid_orden.tipo_pedido`),
+ * no una traducción: lo que se elige aquí viaja hasta la columna sin que nadie lo convierta, y
+ * una tabla de equivalencias en medio es un sitio más donde equivocarse.
+ */
+const ENTREGA = {
+    DOMICILIO: 'DOMICILIO',
+    RECOGER: 'LLEVAR',
+};
+
 const PASO_PEDIDO = {
     NOMBRE: 'nombre',
+    /**
+     * ¿Se lo llevamos o pasa a recogerlo?
+     *
+     * Va **antes** que la dirección y no junto a ella, porque es la respuesta que decide si la
+     * dirección hace falta. Meterla en la pregunta combinada obligaría a preguntar la dirección
+     * sin saber todavía si sobra — y pedirle la casa a quien va a pasar por el local es el tipo
+     * de detalle por el que se nota que al otro lado no hay nadie.
+     */
+    ENTREGA: 'entrega',
     /**
      * Todo lo demás en una sola pregunta: teléfono (a quien haga falta) y dirección.
      *
@@ -347,13 +373,23 @@ function unidades(items) {
 function huecosDelCliente(datos, { telefonoProbado }) {
     const faltan = [];
     // Solo a quien llegó sin número. Ver la cabecera de `PASO_PEDIDO`.
+    //
+    // El teléfono se pide en los dos casos, pero **no por lo mismo**: en un domicilio es para
+    // que el domiciliario llame desde la puerta; en un pedido para recoger es para poder
+    // avisarle cuando esté listo. Como el motivo cambia, el texto de la pregunta también.
     if (!datos.telefono && !telefonoProbado) faltan.push(PASO_PEDIDO.TELEFONO);
-    if (!datos.direccion) faltan.push(PASO_PEDIDO.DIRECCION);
+    // La dirección **solo** si se lo llevamos. Quien pasa a recoger no tiene que dar su casa,
+    // y pedírsela sería recoger un dato que no se va a usar.
+    if (datos.entrega === ENTREGA.DOMICILIO && !datos.direccion) {
+        faltan.push(PASO_PEDIDO.DIRECCION);
+    }
     return faltan;
 }
 
 function loQueFalta(datos, ctx) {
     if (!datos.nombre) return PASO_PEDIDO.NOMBRE;
+    // Antes que nada de lo demás: de esta respuesta depende qué más se pregunta.
+    if (!datos.entrega) return PASO_PEDIDO.ENTREGA;
     const faltan = huecosDelCliente(datos, ctx);
     if (faltan.length === 0) return null;
     // Uno solo se pregunta por su nombre; varios, todos juntos. Preguntar «necesito una cosita»
@@ -376,7 +412,7 @@ function preguntaCombinada(datos, ctx) {
     const faltan = huecosDelCliente(datos, ctx || {});
     const lineas = faltan.map((hueco) =>
         hueco === PASO_PEDIDO.TELEFONO
-            ? '📱 Un número de contacto, para que el domiciliario te llame al llegar'
+            ? `📱 Un número de contacto, ${motivoDelTelefono(datos.entrega)}`
             : '📍 La dirección, con el barrio o alguna indicación para llegar'
     );
 
@@ -387,19 +423,40 @@ function preguntaCombinada(datos, ctx) {
     };
 }
 
+/**
+ * Para qué se pide el teléfono, que **no es lo mismo en los dos casos**.
+ *
+ * En un domicilio es para que el domiciliario llame desde la puerta; en un pedido para recoger
+ * es para poder avisarle cuando esté listo. Se dice el motivo de verdad y no uno genérico: un
+ * bot que pide un teléfono sin explicarse parece que está recogiendo datos, y el motivo es
+ * justamente lo que hace que la gente lo dé.
+ */
+const MOTIVO_DEL_TELEFONO = {
+    [ENTREGA.DOMICILIO]: 'para que el domiciliario te llame al llegar',
+    [ENTREGA.RECOGER]: 'para avisarte en cuanto esté listo',
+};
+
+function motivoDelTelefono(entrega) {
+    return MOTIVO_DEL_TELEFONO[entrega] || MOTIVO_DEL_TELEFONO[ENTREGA.DOMICILIO];
+}
+
 /** Qué se le dice al cliente en cada paso. */
 function pregunta(paso, datos, ctx) {
     switch (paso) {
         case PASO_PEDIDO.NOMBRE:
             return { texto: '¿A nombre de quién lo dejo? 📝' };
-        case PASO_PEDIDO.TELEFONO:
-            // Se dice PARA QUÉ. Un bot que pide un teléfono sin explicarse parece que está
-            // recogiendo datos; el motivo —que el domiciliario pueda llamar— es real y además
-            // es el que hace que la gente lo dé.
+        case PASO_PEDIDO.ENTREGA:
+            // Las dos palabras que valen van en el mensaje, y en negrita, porque son las que se
+            // reconocen. Escribirlas es lo que hace que la respuesta llegue en una palabra y no
+            // en una frase que haya que interpretar — y esto es Nivel 1, donde no se interpreta.
             return {
                 texto:
-                    '¿Me das un número de contacto? 📱 Es para que el domiciliario pueda ' +
-                    'llamarte cuando esté cerca.',
+                    '¿Te lo llevamos a domicilio o pasas a recogerlo? 🛵\n\n' +
+                    'Respóndeme *domicilio* o *recoger*.',
+            };
+        case PASO_PEDIDO.TELEFONO:
+            return {
+                texto: `¿Me das un número de contacto? 📱 Es ${motivoDelTelefono(datos.entrega)}.`,
             };
         case PASO_PEDIDO.DIRECCION:
             return {
@@ -443,7 +500,10 @@ function seguirOConfirmar(ctx, datos, pasos, { apertura = '', solicitarConfirmac
         args: {
             items: datos.items,
             cliente_nombre: datos.nombre,
-            direccion: datos.direccion,
+            tipo_entrega: datos.entrega,
+            // Solo va si existe. Un pedido para recoger no tiene dirección, y mandar la clave
+            // en `undefined` la convierte en un `null` que el validador tendría que perdonar.
+            ...(datos.direccion ? { direccion: datos.direccion } : {}),
             ...(datos.telefono ? { cliente_telefono: datos.telefono } : {}),
         },
         conversacion: {
@@ -627,6 +687,33 @@ function seguirPedido(ctx, { solicitarConfirmacion }) {
             // Dos palabras de cortesía: la diferencia entre un formulario y alguien atendiendo.
             apertura = `Gracias, ${dicho.split(/\s+/)[0]}. `;
             break;
+        case PASO_PEDIDO.ENTREGA: {
+            const entrega = leerEntrega(dicho);
+            // Se repregunta las veces que haga falta, y **no se elige por defecto**: un
+            // domicilio supuesto es una moto saliendo a una dirección que nadie dio.
+            if (!entrega) {
+                const q = pregunta(PASO_PEDIDO.ENTREGA, datos, ctx);
+                return {
+                    pasos: [paso('pedido_entrega_no_entendida', { dijo: dicho.slice(0, 40) })],
+                    respuestas: [
+                        {
+                            ...q,
+                            texto:
+                                'Perdona, no me quedó claro 🙈 ' +
+                                `${q.texto}\n\nSi prefieres dejarlo, escríbeme *cancelar*.`,
+                        },
+                    ],
+                    variables: conMemoria(ctx.conversacion),
+                    tarea: tareaPedido(datos),
+                    resultado: 'resuelto',
+                    nivel: 'determinista',
+                };
+            }
+            conLoDicho.entrega = entrega;
+            apertura =
+                entrega === ENTREGA.RECOGER ? '¡Listo, te lo dejamos preparado! ' : '¡De una! ';
+            break;
+        }
         case PASO_PEDIDO.TELEFONO:
             conLoDicho.telefono = dicho;
             break;
@@ -689,6 +776,36 @@ function leerTelefono(texto) {
     const m = CELULAR_CO.exec(String(texto || ''));
     if (!m) return null;
     return `${m[1]}${m[2]}${m[3]}`;
+}
+
+/**
+ * Domicilio o recoger, o `null` si lo que llegó no lo dice claro.
+ *
+ * ## La trampa está en la palabra «llevar»
+ *
+ * Es la única de todo el flujo que significa **las dos cosas a la vez**. «Para llevar» es como
+ * se pide en el mostrador y quiere decir que pasa por él; «me lo llevan» quiere decir justo lo
+ * contrario. Así que la frase de dos palabras se acepta y la palabra suelta **no**: se
+ * repregunta, que cuesta un mensaje.
+ *
+ * Equivocarse aquí no es un error cosmético. Leerlo al revés manda un domiciliario a una
+ * dirección que nadie dio, o deja a alguien esperando en el local un pedido que salió en moto.
+ * Cuando las dos familias de palabras aparecen —o ninguna— se devuelve `null` a propósito: en
+ * este nivel no se adivina (ADR-018), se pregunta otra vez.
+ */
+const DICE_RECOGER = /\b(recoger|recogerlo|recogerla|recojo|recogemos|retiro|retirar|paso|pasar|voy)\b/;
+const DICE_DOMICILIO =
+    /\b(domicilio|domis?|delivery|envio|enviar|envien|mandan|manden|mandar|mandalo|lleven|llevenlo|llevan)\b/;
+
+function leerEntrega(texto) {
+    const t = normalizar(ultimaLinea(texto)).replace(/[¡¿!?.,;:]/g, ' ');
+    if (/\bpara llevar\b/.test(t)) return ENTREGA.RECOGER;
+
+    const recoger = DICE_RECOGER.test(t);
+    const domicilio = DICE_DOMICILIO.test(t);
+    // Las dos, o ninguna: no se elige por mayoría ni por orden. Se repregunta.
+    if (recoger === domicilio) return null;
+    return recoger ? ENTREGA.RECOGER : ENTREGA.DOMICILIO;
 }
 
 /**
@@ -992,12 +1109,14 @@ module.exports = {
     VERTICAL,
     TIPOS_NEGOCIO,
     OPCION,
+    ENTREGA,
     TAREA_PEDIDO,
     PASO_PEDIDO,
     reclama,
     huecosDelCliente,
     interpretarDatos,
     leerTelefono,
+    leerEntrega,
     // Expuestos para las pruebas, como `tareaCaducada` en la escalera: son las dos piezas de
     // producto que conviene poder ejercitar sin montar una conversación entera.
     pareceDireccion,

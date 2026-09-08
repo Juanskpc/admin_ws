@@ -65,6 +65,18 @@ const actualizarDescuentoValidators = [
     body('descuento').isFloat({ min: 0 }).withMessage('descuento inválido'),
 ];
 
+/**
+ * El aviso de «tu pedido está listo» no lleva más datos que el negocio.
+ *
+ * El texto **no** viaja desde el navegador: es una plantilla aprobada por Meta palabra por
+ * palabra, y lo único que varía son sus huecos, que salen de la orden. Aceptar aquí un texto
+ * libre sería ofrecer un campo que la Cloud API rechazaría con la ventana cerrada — justo el
+ * caso para el que existe este botón.
+ */
+const avisarPedidoListoValidators = [
+    body('id_negocio').isInt({ min: 1 }).withMessage('id_negocio inválido'),
+];
+
 const cerrarOrdenValidators = [
     body('id_metodo_pago').optional({ nullable: true }).isInt({ min: 1 }).withMessage('id_metodo_pago inválido'),
     body('pagos').optional({ nullable: true }).isArray({ min: 2 }).withMessage('pagos debe tener al menos 2 formas de pago'),
@@ -374,6 +386,44 @@ async function getOrdenesDespacho(req, res) {
     }
 }
 
+/**
+ * POST /restaurante/despacho/:id/avisar-listo
+ *
+ * Le avisa al cliente por WhatsApp que su pedido está listo para recoger.
+ *
+ * El trabajo lo hace el adaptador de Intelligence, no este controlador ni `pedidoService`: saber
+ * componer una plantilla, encontrar la conversación y respetar el opt-out no es asunto de la
+ * vertical, y `pedidoService` no puede requerir Intelligence sin cerrar un ciclo (el adaptador
+ * ya lo requiere a él para crear pedidos).
+ *
+ * `require` **dentro** de la función a propósito: así un despliegue sin el esquema `intelligence`
+ * —o sin la migración del aviso— falla en esta ruta y solo en ella, en vez de tumbar el arranque
+ * de toda la vertical de restaurante al cargar las rutas.
+ */
+async function avisarPedidoListo(req, res) {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+        return Respuesta.error(res, 'Datos inválidos', 422, errors.array());
+    }
+
+    try {
+        const avisoPedido = require('../../intelligence/adapters/restaurante/avisoPedido');
+        const resultado = await avisoPedido.avisarListo({
+            idNegocio: Number(req.body.id_negocio),
+            idOrden: Number(req.params.id),
+        });
+        return Respuesta.success(res, 'Le avisamos al cliente que su pedido está listo', resultado);
+    } catch (err) {
+        // Los errores del adaptador ya vienen escritos para que los lea quien apretó el botón:
+        // se reenvían tal cual en vez de traducirlos otra vez aquí.
+        if (err.code && err.statusCode) {
+            return Respuesta.error(res, err.message, err.statusCode, { code: err.code });
+        }
+        console.error('[Despacho] Error avisarPedidoListo:', err.message);
+        return Respuesta.error(res, 'No se pudo avisar al cliente.');
+    }
+}
+
 /** GET /restaurante/domiciliarios?id_negocio=N */
 async function getDomiciliarios(req, res) {
     try {
@@ -396,6 +446,7 @@ module.exports = {
     getOrdenById,
     getOrdenesCocina,
     getOrdenesDespacho,
+    avisarPedidoListo, avisarPedidoListoValidators,
     getDomiciliarios,
     enviarACocina,
     cambiarEstadoCocina,

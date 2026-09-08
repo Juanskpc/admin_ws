@@ -33,6 +33,7 @@ const {
     huecosDelCliente,
     TAREA_PEDIDO,
     PASO_PEDIDO,
+    ENTREGA,
 } = flujo;
 
 const TODO = [PASO_PEDIDO.TELEFONO, PASO_PEDIDO.DIRECCION];
@@ -119,18 +120,33 @@ describe('interpretarDatos', () => {
 // ── Qué se pregunta, y cuándo ───────────────────────────────────────────────────────────────
 
 describe('huecosDelCliente', () => {
+    const domicilio = (datos = {}) => ({ entrega: ENTREGA.DOMICILIO, ...datos });
+
     test('con teléfono probado por el canal, ese hueco no existe', () => {
-        expect(huecosDelCliente({}, { telefonoProbado: '573000000000' })).toEqual([
+        expect(huecosDelCliente(domicilio(), { telefonoProbado: '573000000000' })).toEqual([
             PASO_PEDIDO.DIRECCION,
         ]);
     });
 
     test('sin teléfono probado se piden los dos', () => {
-        expect(huecosDelCliente({}, { telefonoProbado: null })).toEqual(TODO);
+        expect(huecosDelCliente(domicilio(), { telefonoProbado: null })).toEqual(TODO);
     });
 
     test('con todo puesto no queda ninguno', () => {
-        expect(huecosDelCliente({ direccion: 'Calle 1' }, { telefonoProbado: '57300' })).toEqual([]);
+        expect(
+            huecosDelCliente(domicilio({ direccion: 'Calle 1' }), { telefonoProbado: '57300' })
+        ).toEqual([]);
+    });
+
+    test('para recoger NUNCA se pide la dirección', () => {
+        // Es la mitad de todo el cambio: quien pasa por el local no tiene que dar su casa.
+        expect(
+            huecosDelCliente({ entrega: ENTREGA.RECOGER }, { telefonoProbado: '57300' })
+        ).toEqual([]);
+        // El teléfono sí sigue haciendo falta a quien llegó sin número — ahora para avisarle.
+        expect(huecosDelCliente({ entrega: ENTREGA.RECOGER }, { telefonoProbado: null })).toEqual([
+            PASO_PEDIDO.TELEFONO,
+        ]);
     });
 });
 
@@ -164,6 +180,10 @@ function enPaso(paso, extra = {}) {
         tarea_datos: {
             items: [{ id_producto: 106, cantidad: 1 }],
             nombre: 'Nicolás',
+            // Un domicilio, que es lo que prueba este fichero. Desde el 2026-09-07 hay un paso
+            // antes —domicilio o recoger— y sin esto ninguno de estos casos llegaría siquiera a
+            // preguntar la dirección. Ese paso se prueba en `pedido_entrega.test.js`.
+            entrega: ENTREGA.DOMICILIO,
             paso,
             ...extra,
         },
@@ -178,6 +198,8 @@ const textos = (d) => (d.respuestas || []).map((r) => (typeof r === 'string' ? r
 
 describe('el flujo pregunta una vez y lee lo que llegue', () => {
     test('a quien llegó sin número, tras el nombre le pide teléfono y dirección JUNTOS', async () => {
+        // `enPaso` ya trae la entrega resuelta (domicilio): aquí se prueba la pregunta
+        // combinada, no el paso que la precede.
         const conversacion = enPaso(PASO_PEDIDO.NOMBRE);
         delete conversacion.tarea_datos.nombre;
 
