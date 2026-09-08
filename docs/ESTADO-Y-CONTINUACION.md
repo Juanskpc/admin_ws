@@ -107,6 +107,66 @@ en verde.** El roadmap original está agotado: todo lo que se hace ahora sale de
 > faltaban `descuento`, `caja-ver-ingresos` y `reserva-eliminar`; a la compartida, la de la Bandeja
 > (`atendida_en`). Las cuatro aplicadas.
 
+> ### 1-quater. DESPLEGADO el 2026-09-08 — seis correcciones, todas de usarlo
+>
+> Backend en `d08261b`, frontend de restaurante en `df3db3f`. Sin migración nueva: la de ayer se
+> amplió y su idempotencia hizo el resto.
+>
+> El dueño probó lo del día anterior con sus dos números y salieron seis cosas. Cinco eran de
+> producto; la sexta la había metido yo el día antes.
+>
+> 1. **EL FALLO CARO — `crearOrden` descartaba nombre y teléfono en todo lo que no fuera
+>    DOMICILIO.** Venía de cuando un «para llevar» solo podía ser alguien en el mostrador. Desde
+>    que el asistente toma pedidos para recoger hay una persona detrás con su número, y de ese
+>    número depende el botón de «ya está listo» — que fallaba con *«ese pedido no tiene un número
+>    al que escribirle»*. Se vio en los datos: los `LLEVAR` del bot nacían con las dos columnas en
+>    `NULL` mientras el Ledger mostraba que sí se habían mandado. Ahora LLEVAR guarda cliente,
+>    teléfono, nota y persona igual que DOMICILIO; MESA sigue sin ellos, que ahí hay una mesa.
+> 2. **Domicilio o recoger, con botones.** Un toque no se escribe mal, y era justo donde vivía la
+>    ambigüedad de «llevar». Las palabras siguen valiendo: el botón no viaja si reenvían el
+>    mensaje o responden citándolo.
+> 3. **El saludo no siempre saludaba, y la causa era el enrutado.** La tabla comparaba el texto
+>    crudo y el flujo usaba `esComando`: «buenas» iba al Nivel 1 y «Buenas!» al modelo, que
+>    contestaba un saludo creíble **sin el enlace del menú**. Ahora `esSaludo` tolera signos,
+>    vocales repetidas y faltas, y exige que el mensaje **entero** sea saludo. De paso,
+>    `variables.turnos` contaba solo los turnos deterministas pese a llamarse turnos: ahora lo
+>    lleva la escalera, en un sitio.
+> 4. **La confirmación enumera los productos**, con cantidad, precio y total, releídos del
+>    catálogo. `confirmacion.pregunta` pasó a poder ser asíncrona por esto, y se blindó: si algo
+>    falla se degrada al recuento — se pierde el detalle, nunca la confirmación (ADR-010).
+> 5. **El total avisa de que es aproximado**, y de por qué: desechables siempre, domicilio solo
+>    cuando lo hay. En la carta digital se nombran los dos, porque allí aún no se ha elegido.
+> 6. **«Se intentó» no es «llegó».** El primer aviso real quedó marcado como hecho y su mensaje
+>    murió en dead letter —`(#132001) Template name does not exist`—, así que el negocio creyó
+>    haber avisado a alguien que no recibió nada. La orden guarda ahora **cuál** fue el mensaje y
+>    la pantalla lee su entrega real: *Avisado*, *Enviando…* o **«No salió — reintentar»** en
+>    rojo. El candado del doble clic sigue (uno en cola no se reintenta); solo uno muerto deja
+>    volver. Y `marcarEntrega` guarda el motivo del fallo en `crudo`, que antes solo iba al log.
+>
+> **814 pruebas de backend.** Detalle en [`asistente-restaurante.md`](asistente-restaurante.md)
+> §«Domicilio o recoger» y §«El saludo que a veces no saludaba», y la trampa de Meta en
+> [`canal-whatsapp.md`](canal-whatsapp.md) §«Una plantilla que no existe falla al ENVIAR».
+>
+> ### 1-quinquies. LO ÚNICO PENDIENTE, y no es código
+>
+> **Crear la plantilla `pedido_listo` en WhatsApp Manager.** Mientras no exista, el botón del
+> despacho deja el mensaje en dead letter y la pantalla enseña «No salió — reintentar» (que es lo
+> correcto, pero no es lo que se quiere). Tiene que coincidir **palabra por palabra** con
+> `intelligence/core/plantillas.js`:
+>
+> ```
+> Nombre:    pedido_listo      Idioma: Español (es)      Categoría: Utility
+> Hola {{1}}, tu pedido {{2}} de {{3}} ya está listo y puedes pasar a recogerlo.
+> Si necesitas algo, respóndenos a este mensaje.
+> ```
+>
+> Ejemplos para los huecos: `Nicolás`, `ORD-0042`, `Pregonchos`.
+>
+> **Conviene grabar la pantalla mientras se crea**: es exactamente el **video 2 del App Review**
+> ([`meta-app-review.md`](meta-app-review.md) §3), y un nombre de plantilla solo se puede estrenar
+> una vez — creándola en silencio habría que crear otra distinta para el video. Empezar la
+> grabación desde el login, que arrancar con la sesión abierta es causa de rechazo listada.
+>
 > ### 2. Dar de alta el número de un cliente — ya solo es procedimiento
 >
 > Con F8-C hecho, conectar un cliente son tres pasos y ninguno es código:

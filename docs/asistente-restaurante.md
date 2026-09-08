@@ -160,6 +160,19 @@ también**: en un domicilio es para que el domiciliario llame desde la puerta; p
 para poder avisarle cuando esté listo. Es un `MOTIVO_DEL_TELEFONO` de dos entradas, no una frase
 genérica que valga para las dos y no signifique nada en ninguna.
 
+### Se pregunta con BOTONES (2026-09-08)
+
+La primera versión pedía escribir *domicilio* o *recoger*. Funciona, pero es pedirle a alguien
+que teclee lo único de esta conversación donde equivocarse cuesta comida. Ahora van **dos
+botones** —*A domicilio 🛵* / *Paso a recogerlo 🛍️*—, sin `detalle` para que el canal los pinte
+como botones y no como una lista que hay que desplegar.
+
+Lo que llega de vuelta por el webhook es el **id**, no la etiqueta, así que `leerEntrega`
+reconoce las dos cosas: el id de quien pulsa y las palabras de quien escribe. **Los dos caminos
+siguen abiertos a propósito**, y no por prudencia genérica: el botón no viaja si alguien reenvía
+el mensaje o responde citándolo, y un canal sin botones solo recibe texto. Por eso las dos
+palabras siguen escritas en el mensaje aunque haya botones.
+
 ### La palabra que significa las dos cosas
 
 `leerEntrega` es la única lectura de todo el flujo donde equivocarse **cuesta comida**: leerlo al
@@ -188,6 +201,44 @@ sabe expresar una condición entre dos.
 > Ese valor está guardado en `tarea_actual` de las conversaciones abiertas: renombrarlo dejaría a
 > quien esté a mitad de un pedido con una tarea que ningún manejador reclama. Un nombre impreciso
 > cuesta menos.
+
+### La confirmación enumera lo que se pidió (2026-09-08)
+
+«¿Confirmo tu pedido de 2 productos?» es abstracto: el cliente **no puede comprobar que sea el
+suyo**, que es lo único que esa frase tiene que dejarle hacer. Ahora dice:
+
+```
+¿Confirmo tu pedido a nombre de Ana, para recogerlo en el local?
+
+• 2 × Hamburguesa clásica — $36.000
+• 1 × Limonada de coco — $9.000
+
+Total: $45.000
+El total es aproximado: puede variar por desechables.
+```
+
+**Los productos y el total se releen del catálogo**, por lo mismo que los relee `ejecutar`: si la
+frase en la que el cliente se compromete dijera un precio que no es el que se le va a cobrar,
+la confirmación estaría certificando una cifra falsa — peor que no enseñar ninguna.
+
+Eso obligó a que **`confirmacion.pregunta` pueda ser asíncrona**: la redacción de la pregunta
+ahora hace E/S. Y por eso mismo se blindó: cualquier fallo —la consulta caída, un `id_producto`
+que llega como cadena, un producto que ya no está en la carta— cae al `catch` y se contesta con
+la frase de siempre, la del recuento. Se degrada **el detalle, nunca la confirmación**, que es lo
+que ADR-010 no negocia. Ya costó un turno mudo en producción el 2026-08-27 por no tener ese
+blindaje.
+
+Si un producto del pedido ya no aparece en la carta se cae al recuento **entero**, no se enumeran
+los que sí están: un pedido de tres líneas confirmado con dos es peor que uno sin detalle.
+
+#### El aviso de que el total es aproximado
+
+Pedido por el dueño el 2026-09-08, y no es un formalismo: quien ve «$45.000» y paga $48.000 en la
+puerta siente que le cobraron de más, aunque los desechables siempre se hayan cobrado.
+
+El domicilio **solo se nombra cuando lo hay** — avisar de un recargo imposible a quien va a pasar
+por el local es ruido que le resta credibilidad al resto del mensaje. En la **carta digital** se
+nombran los dos, porque allí todavía no se ha elegido cómo se recibe el pedido.
 
 ### El filtro de WhatsApp en el despacho
 
@@ -308,6 +359,58 @@ pereza: ese servicio ya depende de este adaptador para crear pedidos, y hacerlo 
 un ciclo. La consulta son cinco columnas; el ciclo, para siempre. El controlador, por lo mismo,
 hace el `require` **dentro** de la función: así un despliegue sin el esquema `intelligence` falla en
 esa ruta y solo en ella, en vez de tumbar el arranque de toda la vertical.
+
+---
+
+## El saludo que a veces no saludaba (2026-09-08)
+
+Señalado por el dueño usándolo: *«cuando escribo "buenas" no me muestra el mensaje completo»*. Y
+lo raro era que **a veces sí**.
+
+### La causa estaba en el enrutado, no en el flujo
+
+Había **dos lecturas del mismo texto**, y no coincidían:
+
+| Dónde | Cómo leía |
+|---|---|
+| `flujo.js` | `esComando`, que se queda con la última línea y **quita los signos** |
+| La tabla de enrutado (`orquestador.js`) | `TODOS_LOS_COMANDOS.has(normalizar(texto))` — el texto crudo, **con signos** |
+
+Con la misma lista de palabras en los dos sitios, «buenas» llegaba al Nivel 1 y **«Buenas!» se
+iba al modelo**. El modelo contestaba un saludo perfectamente plausible **y sin el enlace del
+menú**, que es lo único que ese primer mensaje tiene que hacer. Parecía una versión vieja del
+bot; era la IA improvisando. Dos lecturas del mismo texto siempre acaban así.
+
+### `esSaludo`, y por qué exige que el mensaje ENTERO sea saludo
+
+La lista exacta no daba para más: la gente escribe «holaa», «buens», «hola buenas», «que más». El
+lector nuevo tolera signos, vocales repetidas y faltas.
+
+Lo que **no** hace es buscar un saludo dentro de la frase, que es la trampa: *«buenos días,
+¿están abiertos?»* empieza igual y **no** es un saludo, es una pregunta. Se parten las palabras y
+se exige que **todas** sean de saludar; en cuanto aparece una que no lo es, el turno sigue su
+camino hacia quien pueda contestarla. Medido después del cambio:
+
+```
+determinista  ← "buenas"  "Buenas!"  "holaa"  "buens"  "hola buenas"  "buenos dias"  "que mas"
+llm           ← "buenos dias, estan abiertos?"   "tienen hamburguesa"
+```
+
+### El contador de turnos mentía, y de paso se arregló
+
+`variables.turnos` lo incrementaba `conMemoria`, que solo corre en el Nivel 1. O sea que contaba
+**los turnos deterministas**, no los turnos: para quien caía al modelo se quedaba en cero para
+siempre. Ahora lo lleva la escalera, en un solo sitio y para todos los niveles.
+
+Importa porque la regla «el primer mensaje ve la bienvenida» lee justamente ese contador.
+
+> **Lo que se intentó y se retiró:** una fila de enrutado que mandara al Nivel 1 **cualquier**
+> primer mensaje, para que la bienvenida saliera con cualquier palabra. Se quitó porque el
+> contador no es de fiar hacia atrás —las conversaciones anteriores a este cambio tienen
+> `variables: {}` aunque lleven meses hablando—, y la regla disparaba con ellas: alguien con un
+> pedido a medias de anteayer preguntaba algo y recibía el saludo inicial. Con los saludos ya
+> arreglados, casi todo primer contacto real ve la bienvenida igual. Si se quiere forzar de
+> verdad, hace falta una señal nueva en la base, no este contador.
 
 ---
 

@@ -704,6 +704,34 @@ de agosto de 2026, no del panel; y las cifras y fechas de Meta cambian.
 
 ---
 
+## Una plantilla que no existe falla al ENVIAR, no al programar (2026-09-08)
+
+La cuarta trampa de Meta, y comparte forma con las tres de arriba: nada avisa hasta que es tarde.
+
+El botón de «tu pedido ya está listo» del despacho manda la plantilla `pedido_listo`, que está
+escrita en `intelligence/core/plantillas.js` con sus pruebas… y **no estaba creada en WhatsApp
+Manager**. Nada lo impidió: el catálogo es código nuestro, el mensaje se creó, la orden se marcó,
+y el fallo apareció una vuelta del entregador más tarde:
+
+```
+[canalGateway] Entrega falló y no es reintentable → dead letter:
+La Cloud API rechazó el envío (404):
+(#132001) Template name does not exist in the translation
+```
+
+**Es correcto que no sea reintentable** —insistir no va a crear la plantilla— y por eso fue al
+*dead letter* al primer intento. Lo que no era correcto es lo que pasaba mientras tanto: el
+despacho decía «Avisado» y el cliente no había recibido nada. Ver
+[`asistente-restaurante.md`](asistente-restaurante.md) §«Se intentó no es llegó».
+
+Dos cosas que conviene saber la próxima vez que se añada una plantilla:
+
+1. **El catálogo de `plantillas.js` no crea nada en Meta.** Son dos registros separados que
+   tienen que coincidir palabra por palabra, y solo se descubre que no coinciden al enviar.
+2. **El motivo del fallo ya se guarda** en `mensaje.crudo.entrega_error` (desde este mismo día).
+   Antes solo iba al log, y averiguar el `(#132001)` costó entrar por SSH a `journalctl` sabiendo
+   a qué minuto mirar.
+
 ## Dar de alta el número de un CLIENTE (pendiente, y no es un botón)
 
 > **2026-09-04 — el trámite de Meta que esto describe está desmenuzado aparte**, con lo que se
