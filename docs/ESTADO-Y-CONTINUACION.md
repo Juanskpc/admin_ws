@@ -73,6 +73,40 @@ en verde.** El roadmap original está agotado: todo lo que se hace ahora sale de
 > reales y el pedido siguiente entró sin incidencia — pero eso es suerte, no diseño: no hay
 > despliegue sin corte, y a esta hora simplemente hay poca gente.
 
+> ### 1-ter. DESPLEGADO el 2026-09-07 — pedidos para recoger y el aviso de «ya está listo»
+>
+> Backend en `f7984ad`, frontend de restaurante en `040bd19`. Respaldo previo
+> `db_2026-09-07_2339.dump`. Una migración: `restaurante-aviso-listo`.
+>
+> Tres cosas, del dueño usándolo: «en mi municipio suele hacerse pedidos para ir a recoger, para no
+> gastar el valor del domicilio».
+>
+> 1. **El asistente pregunta domicilio o recoger.** Hasta hoy `tipoPedido: 'DOMICILIO'` estaba
+>    escrito a fuego y la dirección se pedía siempre — a quien iba a pasar por el local también.
+> 2. **Filtro de WhatsApp en el despacho**, sin columna nueva: el origen se deduce del autor de la
+>    orden, que ya era el usuario «Asistente» del negocio.
+> 3. **Botón «avisar que está listo»**, que manda la plantilla `pedido_listo`.
+>
+> **Todo el módulo va detrás de `asistente_ia`, que hoy solo incluye «Plan Avanzado».** Comprobado
+> en producción tras desplegar: los negocios 10 y 12 lo tienen; 3, 6 y 13 (Básico) no, y para ellos
+> no hay filtro, ni etiqueta, ni botón, y el endpoint responde 403. Se pregunta por la **feature**,
+> nunca por el nombre del plan (ADR-021).
+>
+> ⚠️ **El botón todavía no puede entregar nada: falta crear `pedido_listo` en WhatsApp Manager**,
+> con nombre, idioma y texto idénticos a `intelligence/core/plantillas.js`. Meta no deja enviar una
+> plantilla ni una vez antes de aprobar su texto; hasta entonces el saliente se queda `pendiente`.
+> Crearla **es a la vez el video 2 del App Review** ([`meta-app-review.md`](meta-app-review.md)),
+> así que conviene grabar mientras se crea: un nombre solo se puede estrenar una vez.
+>
+> Lo bueno del diseño es que **esquiva solo** el problema abierto de que un pedido del bot nunca
+> entra al KDS: como el aviso lo dispara una persona mirando el despacho, no hace falta un estado
+> de cocina del que colgarlo. Detalle en
+> [`asistente-restaurante.md`](asistente-restaurante.md) §«Domicilio o recoger».
+>
+> **808 pruebas de backend** (39 nuevas). Deriva de entorno pagada por el camino: a la base local le
+> faltaban `descuento`, `caja-ver-ingresos` y `reserva-eliminar`; a la compartida, la de la Bandeja
+> (`atendida_en`). Las cuatro aplicadas.
+
 > ### 2. Dar de alta el número de un cliente — ya solo es procedimiento
 >
 > Con F8-C hecho, conectar un cliente son tres pasos y ninguno es código:
