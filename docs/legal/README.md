@@ -147,11 +147,18 @@ Rellenar estos documentos era **el primero de tres** requisitos de contenido. Si
 1. ~~Una URL de instrucciones de eliminación de datos.~~ ✅ **Hecho el 2026-09-04**:
    [`eliminacion-de-datos.md`](eliminacion-de-datos.md), publicado en
    **`escalapp.cloud/admin/eliminacion-datos`**. Es la URL que va en la ficha de la app.
-2. **Desplegar.** El bundle que hay hoy en producción **no contiene las rutas legales** —se
-   escribieron el 2026-09-01 y nunca se subieron—, así que `escalapp.cloud/admin/privacidad`
-   devuelve el cascarón vacío de la app. Un revisor que abra esa URL no ve nada.
+2. ~~**Desplegar.**~~ ✅ **Hecho el 2026-09-04.** Las tres URLs responden `200` con el documento
+   prerenderizado (38 KB, 34 KB y 31 KB), con los datos del titular y sin el aviso de borrador.
+   Antes devolvían el cascarón vacío de la app.
 3. **La URL corta.** Sigue siendo `/admin/privacidad`. Para un formulario legal conviene la regla
-   en el `Caddyfile`, que es trabajo por SSH.
+   en el `Caddyfile`, que es trabajo por SSH. **No bloquea:** la URL larga funciona y es la que se
+   pega en la ficha de la app.
+
+**Con esto, el contenido legal ya no es lo que frena el App Review.** Lo que falta del trámite —las
+ocho casillas del panel, los dos videos y las descripciones— está en
+[`../meta-app-review.md`](../meta-app-review.md). Ojo a un campo que se olvida: la URL de
+eliminación de datos va en *User Data Deletion*, que es **una casilla distinta** de la de la
+política de privacidad.
 
 ## Lo que falta
 

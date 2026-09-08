@@ -99,6 +99,17 @@ en verde.** El roadmap original está agotado: todo lo que se hace ahora sale de
 >
 > **Es una decisión a tomar ANTES de gastar en anuncios, no después.**
 >
+> **2026-09-04 — el trámite ya está estudiado y no bloquea la decisión.** El App Review está
+> desmenuzado en [`meta-app-review.md`](meta-app-review.md): qué mira Meta en cada uno de los tres
+> trámites (verificación de negocio ✅, App Review, Access Verification), las **ocho casillas del
+> panel** que faltan, el guion de los **dos videos** —grabables hoy, sin escribir código, porque el
+> permiso de gestión se demuestra en WhatsApp Manager— y los textos en inglés listos para pegar.
+> Dos hallazgos que cambian el cálculo: **pasar la revisión no obliga a usar Embedded Signup**
+> (o sea que el trámite se puede adelantar sin tomar la decisión del margen), y **la v2 de Embedded
+> Signup se apaga el 15 de octubre de 2026**, así que cuando toque implementar es la v4.
+> Y una tranquilidad medida: hoy producción va con **acceso estándar** sobre nuestra propia WABA,
+> así que enviar la app a revisión —o que la rechacen— **no puede romper lo que está corriendo**.
+>
 > ### 4. En código, lo siguiente que aporta
 >
 > - ~~**El aviso cuando algo se escala.**~~ **HECHO el 2026-08-30.** Cuando el bot se calla y
@@ -2627,6 +2638,7 @@ estado por consumidor y la Ficha 360 no agrega verticales vacías.
 | `desarrollo-local.md` | Montar el entorno local desde cero. |
 | `nivel-4.md` | Qué modelo sirve el Nivel 4, por qué diverge del id que nombra ADR-018 y qué señales hay que vigilar. |
 | `canal-whatsapp.md` | El canal de WhatsApp de punta a punta: F8-A/B/C, los límites de Meta confirmados en la fuente, **las tres trampas silenciosas del alta (2026-08-24)**, cómo cobra Meta, y qué haría falta para dar de alta el número de un cliente. |
+| `meta-app-review.md` | **El trámite del App Review de Meta**: qué revisa de verdad (los tres trámites que se confunden en uno), la comparación entre lo que ya tenemos y lo que falta, el guion de los dos videos y los textos en inglés listos para pegar. |
 | `mejoras-flujo-agenda.md` | Las mejoras del flujo de agendamiento pedidas tras la primera prueba real, y el prerrequisito de seguridad que esconde el cambio del código de cita. |
 | `asistente-restaurante.md` | La vertical de restaurante: sus cuatro capacidades, los tres obstáculos de `tomar_pedido` y cómo se resolvieron, y el pedido armado desde el menú digital con su contrato entre repos. |
 | `env-produccion-f8c.txt` | El bloque de `.env` del canal en producción, con qué significa cada variable. |

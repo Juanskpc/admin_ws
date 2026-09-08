@@ -706,6 +706,13 @@ de agosto de 2026, no del panel; y las cifras y fechas de Meta cambian.
 
 ## Dar de alta el número de un CLIENTE (pendiente, y no es un botón)
 
+> **2026-09-04 — el trámite de Meta que esto describe está desmenuzado aparte**, con lo que se
+> revisa de verdad y la comparación contra lo que ya tenemos:
+> [`meta-app-review.md`](meta-app-review.md). Dos correcciones a lo de abajo: el punto **2 «decidir
+> dónde viven los tokens» ya no merece un ADR mientras los números cuelguen de nuestra WABA** (se
+> resolvió en F8-C), y **la v2 de Embedded Signup se apaga el 15 de octubre de 2026** — si se
+> implementa, se implementa la v4.
+
 El alta que se hizo hoy fue la del **dueño**: crear la app, conectar un número propio, registrarlo
 con PIN. Para que un inquilino traiga *su* número desde la app de EscalApp, Meta tiene otro camino
 —**Embedded Signup**—, y son tres frentes, no uno:
