@@ -149,8 +149,10 @@ describe('el manifiesto declara quién exige confirmación', () => {
         expect(registry.describir('proponer_turno').requiere_confirmacion).toBe(false);
     });
 
-    test('el texto de la pregunta lo escribe el adaptador, no el modelo', () => {
-        const texto = confirmacion.textoDePregunta('cancelar_cita', { codigo_cita: 'CITA-42' });
+    test('el texto de la pregunta lo escribe el adaptador, no el modelo', async () => {
+        // Se espera desde el 2026-09-08: la de `tomar_pedido` lee el catálogo para enumerar los
+        // productos, así que la redacción de una pregunta puede hacer E/S.
+        const texto = await confirmacion.textoDePregunta('cancelar_cita', { codigo_cita: 'CITA-42' });
         expect(texto).toContain('CITA-42');
         expect(texto).toMatch(/confirmo/i);
     });

@@ -92,7 +92,31 @@ function crearManejadorEscalera({
     // necesitar una base de datos para comprobar a qué peldaño va un mensaje.
     resolverNegocio = (id) => contextoNegocio.obtener(id),
 } = {}) {
+    /**
+     * El contador de turnos de la conversación, puesto en UN solo sitio.
+     *
+     * ## Por qué vive aquí y no en cada manejador
+     *
+     * `variables.turnos` lo incrementaba `conMemoria`, que solo corre en el Nivel 1. O sea que su
+     * nombre mentía: contaba **los turnos deterministas**, no los turnos. Para quien caía al
+     * modelo se quedaba en cero para siempre, y la regla «el primer mensaje ve la bienvenida»
+     * —que lee justamente este contador— habría vuelto a saludar una y otra vez.
+     *
+     * Se escribe **después** de la decisión y pisando lo que traiga: el valor que calcula
+     * `conMemoria` es el mismo `previas + 1`, así que para el Nivel 1 no cambia nada y para el
+     * Nivel 4 arregla el contador. Un contador con dos dueños es un contador roto.
+     */
+    function conTurnoContado(ctx, decision) {
+        if (!decision) return decision;
+        const previos = Number(ctx.conversacion?.variables?.turnos || 0);
+        return { ...decision, variables: { ...(decision.variables || {}), turnos: previos + 1 } };
+    }
+
     return async function manejarEscalera(ctx) {
+        return conTurnoContado(ctx, await decidir(ctx));
+    };
+
+    async function decidir(ctx) {
         // Antes de enrutar, antes de leer la tarea, antes de todo. Un turno que pide la baja no se
         // enruta a ningún peldaño: se bloquea y se calla (F8-A, master-plan §Fase 8).
         if (optout.pedida(ctx.texto)) {

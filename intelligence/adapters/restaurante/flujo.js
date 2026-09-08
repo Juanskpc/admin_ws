@@ -32,7 +32,14 @@
 'use strict';
 
 const contextoNegocio = require('../../core/contextoNegocio');
-const { COMANDO, normalizar, ultimaLinea, esComando, saludoPorLaHora } = require('../../engine/texto');
+const {
+    COMANDO,
+    normalizar,
+    ultimaLinea,
+    esComando,
+    esSaludo,
+    saludoPorLaHora,
+} = require('../../engine/texto');
 const codigoPedido = require('./codigoPedido');
 const confirmacion = require('../../engine/confirmacion');
 const policyGate = require('../../core/policyGate');
@@ -46,6 +53,20 @@ const TIPOS_NEGOCIO = ['RESTAURANTE'];
 const OPCION = {
     MENU: 'ver_menu',
     CHAT: 'pedir_chat',
+    /**
+     * Domicilio o recoger, como botones.
+     *
+     * Aquí sí compensa un botón, al revés que en el enlace del menú: no hay ninguna URL que
+     * abrir, la elección es binaria, y escribirla a mano es justo donde aparecía la ambigüedad
+     * de «llevar». Un toque no se escribe mal.
+     *
+     * Lo que llega de vuelta por el webhook es el **id**, no la etiqueta, así que `leerEntrega`
+     * reconoce los dos: el id de quien pulsa y las palabras de quien escribe. Los dos caminos
+     * siguen abiertos porque el botón no puede ser el único — un mensaje reenviado, una
+     * respuesta citando el anterior o un canal sin botones traen texto y nada más.
+     */
+    ENTREGA_DOMICILIO: 'entrega_domicilio',
+    ENTREGA_RECOGER: 'entrega_recoger',
 };
 
 /**
@@ -446,13 +467,20 @@ function pregunta(paso, datos, ctx) {
         case PASO_PEDIDO.NOMBRE:
             return { texto: '¿A nombre de quién lo dejo? 📝' };
         case PASO_PEDIDO.ENTREGA:
-            // Las dos palabras que valen van en el mensaje, y en negrita, porque son las que se
-            // reconocen. Escribirlas es lo que hace que la respuesta llegue en una palabra y no
-            // en una frase que haya que interpretar — y esto es Nivel 1, donde no se interpreta.
+            // Dos botones, y sin `detalle`: con detalle el canal lo pinta como una LISTA que hay
+            // que desplegar, y una elección entre dos merece un toque, no un menú.
+            //
+            // Las palabras siguen en el texto aunque haya botones, y no es redundancia: el botón
+            // no viaja si alguien reenvía el mensaje o responde citándolo, y un canal sin
+            // botones solo recibe texto. Decir las dos que valen deja abierto ese camino.
             return {
                 texto:
                     '¿Te lo llevamos a domicilio o pasas a recogerlo? 🛵\n\n' +
-                    'Respóndeme *domicilio* o *recoger*.',
+                    'Toca una opción, o escríbeme *domicilio* o *recoger*.',
+                opciones: [
+                    { id: OPCION.ENTREGA_DOMICILIO, etiqueta: 'A domicilio 🛵' },
+                    { id: OPCION.ENTREGA_RECOGER, etiqueta: 'Paso a recogerlo 🛍️' },
+                ],
             };
         case PASO_PEDIDO.TELEFONO:
             return {
@@ -798,7 +826,12 @@ const DICE_DOMICILIO =
     /\b(domicilio|domis?|delivery|envio|enviar|envien|mandan|manden|mandar|mandalo|lleven|llevenlo|llevan)\b/;
 
 function leerEntrega(texto) {
-    const t = normalizar(ultimaLinea(texto)).replace(/[¡¿!?.,;:]/g, ' ');
+    const t = normalizar(ultimaLinea(texto)).replace(/[¡¿!?.,;:]/g, ' ').trim();
+
+    // El botón, primero y sin ambigüedad posible: lo que llega es el id que mandamos nosotros.
+    if (t === OPCION.ENTREGA_DOMICILIO) return ENTREGA.DOMICILIO;
+    if (t === OPCION.ENTREGA_RECOGER) return ENTREGA.RECOGER;
+
     if (/\bpara llevar\b/.test(t)) return ENTREGA.RECOGER;
 
     const recoger = DICE_RECOGER.test(t);
@@ -1098,7 +1131,11 @@ function crearFlujoRestaurante({
         // el 2026-08-24.
         //
         // Ahora, lo que no reconoce se lo pasa al modelo, que es quien tiene el hilo.
-        if (esComando(texto, COMANDO.MENU) || !conversacion.variables?.turnos) {
+        // `esSaludo` además de la lista, y no en su lugar: la lista trae «menu», «inicio» y
+        // «empezar», que no son saludos pero sí piden la bienvenida. El saludo suelto lo lee
+        // `esSaludo`, que tolera signos, vocales repetidas y faltas —«Buenas!», «holaa»,
+        // «buens»—, que era por donde se escapaba al modelo.
+        if (esSaludo(texto) || esComando(texto, COMANDO.MENU) || !conversacion.variables?.turnos) {
             return bienvenida(ctx, [paso('inicio_conversacion')]);
         }
         return delegar(ctx);
@@ -1120,6 +1157,9 @@ module.exports = {
     // Expuestos para las pruebas, como `tareaCaducada` en la escalera: son las dos piezas de
     // producto que conviene poder ejercitar sin montar una conversación entera.
     pareceDireccion,
+    // Lo usa también la pregunta de confirmación (`index.js`). Va desde aquí y no copiado allá
+    // porque «cómo se le escribe un precio a un cliente» es una decisión, y dos copias divergen.
+    enPesos,
     crearFlujoRestaurante,
     manejarRestaurante: crearFlujoRestaurante(),
     enlaceDelMenu,

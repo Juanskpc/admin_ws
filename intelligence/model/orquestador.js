@@ -41,7 +41,7 @@
  */
 'use strict';
 
-const { COMANDO } = require('../engine/texto');
+const { COMANDO, esAlgunComando, esSaludo } = require('../engine/texto');
 
 /** Los peldaños. Se nombran por lo que son, no por el modelo que los sirve hoy. */
 const NIVEL = {
@@ -133,7 +133,12 @@ const POLITICA = [
         regla: 'comando_conocido',
         motivo: 'Saludo, menú, cancelar, sí/no: el Nivel 1 lo resuelve sin gastar un token.',
         nivel: NIVEL.DETERMINISTA,
-        cuando: (ctx) => TODOS_LOS_COMANDOS.has(normalizar(ctx.texto)),
+        // ⚠️ `esAlgunComando` y no un `Set.has(normalizar(texto))`, que es lo que había hasta el
+        // 2026-09-08 y **divergía del flujo**: esta tabla comparaba el texto crudo normalizado y
+        // el flujo usaba `esComando`, que se queda con la última línea y quita los signos. O sea
+        // que «cancelar» llegaba al Nivel 1 y «cancelar!» se iba al modelo, con la lista de
+        // comandos idéntica en los dos sitios. Dos lecturas del mismo texto siempre acaban así.
+        cuando: (ctx) => esAlgunComando(ctx.texto),
     },
     {
         regla: 'flujo_reclama',
@@ -145,6 +150,18 @@ const POLITICA = [
         // Quién decide es el adaptador (`flujos.registrar({ reclama })`); esta tabla solo lo
         // pregunta. El núcleo no sabe —ni debe— qué es un código de carrito (ADR-009).
         cuando: (ctx) => Boolean(ctx.flujoReclama),
+    },
+    {
+        regla: 'saludo',
+        motivo:
+            'Saludar tiene una respuesta fija y buena —la bienvenida con el enlace del menú— y ' +
+            'el modelo no la sabe: contesta un saludo plausible SIN el enlace, que es lo único ' +
+            'que ese mensaje tiene que hacer.',
+        nivel: NIVEL.DETERMINISTA,
+        // Va aparte de `comando_conocido` aunque el efecto sea el mismo, porque en el Ledger
+        // interesa distinguir «casó una palabra exacta» de «se leyó como saludo»: son dos
+        // lecturas con precisiones distintas y conviene poder medirlas por separado.
+        cuando: (ctx) => esSaludo(ctx.texto),
     },
     {
         regla: 'intencion_mutacion',

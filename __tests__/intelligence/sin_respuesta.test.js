@@ -68,8 +68,8 @@ describe('textoDePregunta', () => {
         }),
     };
 
-    test('una pregunta que revienta NO propaga: se degrada la redacción, no la garantía', () => {
-        const texto = confirmacion.textoDePregunta(
+    test('una pregunta que revienta NO propaga: se degrada la redacción, no la garantía', async () => {
+        const texto = await confirmacion.textoDePregunta(
             'tomar_pedido',
             { items: '[{"id_producto":106,"cantidad":1}]' },
             { registry: registryQueLanza }
@@ -78,16 +78,19 @@ describe('textoDePregunta', () => {
         expect(texto).toBe('¿Confirmo que lo hago?');
     });
 
-    test('la de tomar_pedido ya no revienta con la lista serializada', () => {
+    test('la de tomar_pedido ya no revienta con la lista serializada', async () => {
         // El manifiesto real, no un doble: es la línea exacta que falló en producción.
         require('../../intelligence/adapters/restaurante').registrarCapacidades();
         const registry = require('../../intelligence/core/registry');
 
-        const texto = confirmacion.textoDePregunta(
+        // Sin `idNegocio`: el detalle con los productos no se puede leer y la redacción cae al
+        // recuento. Es exactamente la degradación que se quiere — la pregunta sale igual.
+        const texto = await confirmacion.textoDePregunta(
             'tomar_pedido',
             {
                 items: '[{"id_producto":106,"cantidad":2},{"id_producto":109,"cantidad":1}]',
                 cliente_nombre: 'Nicolás',
+                tipo_entrega: 'DOMICILIO',
                 direccion: 'Calle 45 #12-30',
             },
             { registry }

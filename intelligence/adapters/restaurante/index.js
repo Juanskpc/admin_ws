@@ -58,6 +58,7 @@ const pedidoService = require('../../../app_restaurante_api/services/pedidoServi
 const cajaService = require('../../../app_restaurante_api/services/cajaService');
 const usuarioAsistenteDao = require('../../../app_core/dao/usuarioAsistenteDao');
 const Models = require('../../../app_core/models/conection');
+const { enPesos } = require('./flujo');
 
 const VERTICAL = 'restaurante';
 
@@ -364,26 +365,95 @@ function registrarCapacidades() {
             // Se dice CUÁNTO se pide, no solo a nombre de quién. Quien confirma un domicilio
             // está aceptando que salga de la cocina: el mensaje tiene que dejarle comprobar de
             // un vistazo que es su pedido y no el de otra conversación.
-            pregunta: ({ args }) => {
+            pregunta: async ({ args, idNegocio }) => {
                 // `comoLista` porque esto corre sobre los argumentos CRUDOS: el modelo manda
                 // `items` serializado de vez en cuando, y aquí todavía no ha pasado por el
                 // validador. Ver `core/argumentos.js#comoLista`.
-                const items = comoLista(args.items);
-                const unidades = (Array.isArray(items) ? items : []).reduce(
-                    (n, i) => n + Number(i?.cantidad || 0),
-                    0
-                );
+                const items = Array.isArray(comoLista(args.items)) ? comoLista(args.items) : [];
+                const unidades = items.reduce((n, i) => n + Number(i?.cantidad || 0), 0);
+
                 // Cómo lo recibe va en la pregunta, y no de adorno: es lo que deja que el
                 // cliente cace aquí —antes de que salga nada de la cocina— que le entendimos
                 // al revés. Es el único punto del flujo donde todavía sale gratis.
-                const donde =
-                    args.tipo_entrega === 'LLEVAR'
-                        ? 'para recogerlo en el local'
-                        : `para llevártelo a ${args.direccion}`;
-                return (
-                    `¿Confirmo tu pedido de ${unidades} ${unidades === 1 ? 'producto' : 'productos'} ` +
-                    `a nombre de ${args.cliente_nombre}, ${donde}?`
-                );
+                const recoge = args.tipo_entrega === 'LLEVAR';
+                const donde = recoge
+                    ? 'para recogerlo en el local'
+                    : `para llevártelo a ${args.direccion}`;
+                const cabecera = `¿Confirmo tu pedido a nombre de ${args.cliente_nombre}, ${donde}?`;
+
+                /**
+                 * El aviso de que el total no es la cuenta final.
+                 *
+                 * Pedido por el dueño el 2026-09-08, y no es un formalismo: el cliente que ve
+                 * «$45.000» y paga $48.000 en la puerta siente que le cobraron de más, aunque
+                 * los desechables siempre se hayan cobrado. Decirlo antes cuesta una línea;
+                 * no decirlo cuesta la discusión con el domiciliario delante.
+                 *
+                 * El domicilio solo se nombra cuando lo hay: avisar de un recargo imposible a
+                 * quien va a pasar por el local es ruido que resta credibilidad al resto.
+                 */
+                const aviso = recoge
+                    ? '_El total es aproximado: puede variar por desechables._'
+                    : '_El total es aproximado: no incluye el domicilio y puede variar por desechables._';
+
+                /**
+                 * La lista de productos, con su precio y el total.
+                 *
+                 * ## Por qué se releen del catálogo
+                 *
+                 * Por lo mismo que los relee `ejecutar`: los precios que trae la conversación
+                 * pueden ser de hace veinte turnos o inventados por el modelo. Si la frase en la
+                 * que el cliente se compromete dijera un precio que no es el que se le va a
+                 * cobrar, la confirmación estaría certificando una cifra falsa — peor que no
+                 * enseñar ninguna.
+                 *
+                 * ## Y por qué esto no puede tumbar el turno
+                 *
+                 * Porque es la primera pieza que toca datos en los que no se puede confiar, y ya
+                 * costó un turno mudo en producción el 2026-08-27. Cualquier fallo —una consulta
+                 * caída, un `id_producto` que es una cadena— cae al `catch` y se contesta con la
+                 * frase de siempre, la del recuento. Lo que se degrada es el detalle; **la
+                 * confirmación se pide igual**, que es lo que ADR-010 no negocia.
+                 */
+                try {
+                    const ids = items
+                        .map((i) => Number(i?.id_producto))
+                        .filter((n) => Number.isInteger(n) && n > 0);
+                    if (ids.length === 0) throw new Error('sin ids utilizables');
+
+                    const productos = await Models.CartaProducto.findAll({
+                        where: { id_negocio: idNegocio, id_producto: ids },
+                        attributes: ['id_producto', 'nombre', 'precio'],
+                    });
+                    const porId = new Map(productos.map((p) => [p.id_producto, p]));
+
+                    let total = 0;
+                    const lineas = items.map((i) => {
+                        const p = porId.get(Number(i?.id_producto));
+                        const cantidad = Number(i?.cantidad) || 1;
+                        if (!p) throw new Error('un producto del pedido ya no está en la carta');
+                        const subtotal = Number(p.precio) * cantidad;
+                        total += subtotal;
+                        return `• ${cantidad} × ${p.nombre} — ${enPesos(subtotal)}`;
+                    });
+
+                    return [
+                        cabecera,
+                        '',
+                        ...lineas,
+                        '',
+                        `*Total: ${enPesos(total)}*`,
+                        aviso,
+                    ].join('\n');
+                } catch (error) {
+                    console.warn(
+                        `[tomar_pedido] no se pudo detallar el pedido en la confirmación: ${error.message}`
+                    );
+                    return (
+                        `¿Confirmo tu pedido de ${unidades} ${unidades === 1 ? 'producto' : 'productos'} ` +
+                        `a nombre de ${args.cliente_nombre}, ${donde}?`
+                    );
+                }
             },
             hecho: ({ resultado }) =>
                 `¡Listo! Tu pedido quedó tomado. El número es ${resultado.numero_orden} — ` +

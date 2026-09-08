@@ -482,8 +482,13 @@ async function crearOrden({
         // propósito: si falla, la orden se crea igual con id_persona_negocio = NULL — una
         // vertical funciona sin persona (ADR-006). Devuelve null también cuando el teléfono
         // no es utilizable, que es el caso del ~5% de lo que se captura.
+        //
+        // ⚠️ **No solo el domicilio.** Hasta el 2026-09-08 esto era `=== 'DOMICILIO'`, de cuando
+        // un «para llevar» solo podía ser alguien de pie en el mostrador. Desde que el asistente
+        // toma pedidos para recoger, un LLEVAR también tiene una persona detrás con su número.
+        const conCliente = tipoPedido === 'DOMICILIO' || tipoPedido === 'LLEVAR';
         const idPersonaNegocio =
-            tipoPedido === 'DOMICILIO' && contactoTelefono
+            conCliente && contactoTelefono
                 ? await personaNegocioDao.resolverOCrearBestEffort(
                       { idNegocio, telefono: contactoTelefono, nombre: contactoNombre },
                       { transaction: t }
@@ -506,10 +511,18 @@ async function crearOrden({
             valor_domicilio: domicilio,
             descuento: rebaja,
             id_persona_negocio:  idPersonaNegocio,
-            contacto_nombre:     tipoPedido === 'DOMICILIO' ? contactoNombre     : null,
-            contacto_telefono:   tipoPedido === 'DOMICILIO' ? contactoTelefono   : null,
+            // Quién es el cliente y su nota valen para LLEVAR igual que para DOMICILIO: los dos
+            // son pedidos de despacho con una persona esperando. Descartarlos en LLEVAR fue un
+            // fallo real: los pedidos que el asistente tomaba para recoger nacían sin nombre ni
+            // teléfono, y el botón de «ya está listo» no tenía a quién escribirle. Un MESA sí
+            // los deja nulos: ahí lo que hay es una mesa, no una persona a la que avisar.
+            contacto_nombre:     conCliente ? contactoNombre   : null,
+            contacto_telefono:   conCliente ? contactoTelefono : null,
+            // Éstas sí son solo del domicilio: no hay a dónde llevar un pedido que se recoge.
             direccion_domicilio: tipoPedido === 'DOMICILIO' ? direccionDomicilio : null,
-            nota_domicilio:      tipoPedido === 'DOMICILIO' ? notaDomicilio      : null,
+            // La nota la pinta el despacho como «Nota» para cualquier tipo, así que se guarda
+            // también en LLEVAR — «sin cebolla» importa lo mismo se recoja o se lleve.
+            nota_domicilio:      conCliente ? notaDomicilio    : null,
             id_domiciliario:     tipoPedido === 'DOMICILIO' ? (idDomiciliario || null) : null,
         }, { transaction: t });
 

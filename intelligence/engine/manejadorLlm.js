@@ -314,7 +314,7 @@ function crearManejadorLlm({
                 // escribió el adaptador de la vertical, y otra vuelta serían más tokens para
                 // decir lo mismo — con el riesgo añadido de que el modelo dijera «ya está hecho».
                 if (salida.pendiente) {
-                    return confirmacion.solicitar({
+                    return await confirmacion.solicitar({
                         capacidad: salida.pendiente.capacidad,
                         args: salida.pendiente.args,
                         conversacion,

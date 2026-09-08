@@ -21,6 +21,10 @@
  *
  * Correr con:  npx jest __tests__/intelligence/pedido_entrega.test.js
  */
+// Hace falta desde que el bloque del final toca la base: el detalle de la confirmación relee
+// los productos del catálogo.
+require('dotenv').config();
+
 const flujo = require('../../intelligence/adapters/restaurante/flujo');
 
 const {
@@ -210,19 +214,22 @@ describe('la confirmación de tomar_pedido', () => {
     beforeAll(() => adaptador.registrarCapacidades());
     afterAll(() => registry._limpiar());
 
+    // Sin `idNegocio` a propósito en estos tres: no se puede leer el catálogo, así que la
+    // redacción cae al recuento. Lo que se prueba aquí es la cabecera, que es común a las dos
+    // redacciones; el detalle con productos y total tiene su propio bloque más abajo.
     const preguntar = (args) =>
         registry.obtener('tomar_pedido').confirmacion.pregunta({
             args: { items: [{ id_producto: 106, cantidad: 2 }], cliente_nombre: 'Ana', ...args },
         });
 
-    test('para recoger dice que es en el local, y NO habla de ninguna dirección', () => {
-        const q = preguntar({ tipo_entrega: 'LLEVAR' });
+    test('para recoger dice que es en el local, y NO habla de ninguna dirección', async () => {
+        const q = await preguntar({ tipo_entrega: 'LLEVAR' });
         expect(q).toMatch(/recogerlo en el local/i);
         expect(q).not.toMatch(/undefined/);
     });
 
-    test('a domicilio dice a dónde va', () => {
-        const q = preguntar({ tipo_entrega: 'DOMICILIO', direccion: 'Carrera 3e 19 a' });
+    test('a domicilio dice a dónde va', async () => {
+        const q = await preguntar({ tipo_entrega: 'DOMICILIO', direccion: 'Carrera 3e 19 a' });
         expect(q).toMatch(/llevártelo a Carrera 3e 19 a/i);
     });
 
@@ -235,5 +242,135 @@ describe('la confirmación de tomar_pedido', () => {
         // un domicilio que nadie pidió.
         expect(parametros.tipo_entrega.requerido).toBe(true);
         expect(parametros.tipo_entrega.valores).toEqual(['DOMICILIO', 'LLEVAR']);
+    });
+});
+
+// ── La confirmación enumera lo que se pidió ─────────────────────────────────────────────────
+//
+// «¿Confirmo tu pedido de 2 productos?» es abstracto: el cliente no puede comprobar que sea SU
+// pedido, que es lo único que esa frase tiene que dejarle hacer. Señalado por el dueño el
+// 2026-09-08, con el bot ya en producción.
+//
+// Corre contra la base porque los productos se releen del catálogo, y esa relectura es la mitad
+// del asunto: la cifra que se le enseña al cliente tiene que ser la que se le va a cobrar.
+
+describe('la confirmación enumera los productos', () => {
+    const Models = require('../../app_core/models/conection');
+    const registry = require('../../intelligence/core/registry');
+    const adaptador = require('../../intelligence/adapters/restaurante');
+    const sequelize = Models.sequelize;
+
+    let idNegocio;
+    let hamburguesa;
+    let limonada;
+
+    beforeAll(async () => {
+        adaptador.registrarCapacidades();
+        const [[negocio]] = await sequelize.query(
+            `INSERT INTO general.gener_negocio (nombre, estado) VALUES ('QA Confirmacion', 'A')
+             RETURNING id_negocio;`,
+            { logging: false }
+        );
+        idNegocio = negocio.id_negocio;
+
+        // `carta_producto.id_categoria` es NOT NULL y sin defecto: un producto siempre cuelga de
+        // una categoría de la carta.
+        const [[categoria]] = await sequelize.query(
+            `INSERT INTO restaurante.carta_categoria (id_negocio, nombre, estado)
+             VALUES (:n, 'QA', 'A') RETURNING id_categoria;`,
+            { replacements: { n: idNegocio }, logging: false }
+        );
+
+        const nuevo = async (nombre, precio) => {
+            const [[fila]] = await sequelize.query(
+                `INSERT INTO restaurante.carta_producto
+                    (id_negocio, id_categoria, nombre, precio, estado, disponible, visible)
+                 VALUES (:n, :cat, :nombre, :precio, 'A', true, true) RETURNING id_producto;`,
+                {
+                    replacements: { n: idNegocio, cat: categoria.id_categoria, nombre, precio },
+                    logging: false,
+                }
+            );
+            return fila.id_producto;
+        };
+        hamburguesa = await nuevo('Hamburguesa clásica', 18000);
+        limonada = await nuevo('Limonada de coco', 9000);
+    });
+
+    afterAll(async () => {
+        registry._limpiar();
+        await sequelize.query(`DELETE FROM restaurante.carta_producto WHERE id_negocio = :n;`, {
+            replacements: { n: idNegocio },
+            logging: false,
+        });
+        await sequelize.query(`DELETE FROM restaurante.carta_categoria WHERE id_negocio = :n;`, {
+            replacements: { n: idNegocio },
+            logging: false,
+        });
+        await sequelize.query(`DELETE FROM general.gener_negocio WHERE id_negocio = :n;`, {
+            replacements: { n: idNegocio },
+            logging: false,
+        });
+        // Sin esto jest se queda esperando al pool y la suite no termina nunca. Este fichero era
+        // de funciones puras hasta hoy: la conexión llegó con el bloque de arriba.
+        await sequelize.close();
+    });
+
+    const preguntar = (args) =>
+        registry.obtener('tomar_pedido').confirmacion.pregunta({
+            idNegocio,
+            args: {
+                items: [
+                    { id_producto: hamburguesa, cantidad: 2 },
+                    { id_producto: limonada, cantidad: 1 },
+                ],
+                cliente_nombre: 'Ana',
+                ...args,
+            },
+        });
+
+    test('los nombra, con su cantidad y su precio, y suma el total', async () => {
+        const q = await preguntar({ tipo_entrega: 'LLEVAR' });
+
+        expect(q).toContain('2 × Hamburguesa clásica');
+        expect(q).toContain('1 × Limonada de coco');
+        // 2×18.000 + 9.000. El total sale del catálogo, no de lo que dijera la conversación:
+        // certificar en la frase del compromiso una cifra que no es la que se cobra sería peor
+        // que no enseñar ninguna.
+        expect(q).toContain('$45.000');
+        expect(q).toContain('Ana');
+    });
+
+    test('avisa de que el total es aproximado, y nombra el domicilio SOLO si lo hay', async () => {
+        // Pedido por el dueño: quien ve «$45.000» y paga $48.000 en la puerta siente que le
+        // cobraron de más, aunque los desechables siempre se hayan cobrado.
+        const recoger = await preguntar({ tipo_entrega: 'LLEVAR' });
+        expect(recoger).toMatch(/aproximado/i);
+        expect(recoger).toMatch(/desechables/i);
+        // Avisar de un recargo imposible a quien va a pasar por el local resta credibilidad.
+        expect(recoger).not.toMatch(/domicilio/i);
+
+        const domicilio = await preguntar({
+            tipo_entrega: 'DOMICILIO',
+            direccion: 'Carrera 3e 19 a',
+        });
+        expect(domicilio).toMatch(/aproximado/i);
+        expect(domicilio).toMatch(/no incluye el domicilio/i);
+    });
+
+    test('si un producto ya no está en la carta, se degrada al recuento y NO miente', async () => {
+        // La alternativa mala sería enumerar los que sí encuentra: un pedido de tres líneas
+        // confirmado con dos es peor que uno confirmado sin detalle.
+        const q = await registry.obtener('tomar_pedido').confirmacion.pregunta({
+            idNegocio,
+            args: {
+                items: [{ id_producto: hamburguesa, cantidad: 1 }, { id_producto: 999999, cantidad: 1 }],
+                cliente_nombre: 'Ana',
+                tipo_entrega: 'LLEVAR',
+            },
+        });
+
+        expect(q).toContain('2 productos');
+        expect(q).not.toContain('Hamburguesa');
     });
 });

@@ -75,7 +75,7 @@ function caducado(datos, ahora = new Date()) {
  * Es la frase en la que el cliente se compromete: que fuera prosa generada la convertiría en algo
  * que cambia de turno en turno y que nadie ha revisado.
  */
-function textoDePregunta(capacidad, args, { registry = registryReal } = {}) {
+async function textoDePregunta(capacidad, args, { registry = registryReal, idNegocio = null } = {}) {
     const declarada = registry.obtener(capacidad)?.confirmacion;
     if (!declarada || typeof declarada.pregunta !== 'function') {
         // Inalcanzable si el manifiesto se validó al registrar. Se contesta algo antes que
@@ -83,7 +83,15 @@ function textoDePregunta(capacidad, args, { registry = registryReal } = {}) {
         return '¿Confirmo que lo hago?';
     }
     try {
-        return declarada.pregunta({ args });
+        // ## Por qué esto se espera desde el 2026-09-08
+        //
+        // «¿Confirmo tu pedido de 2 productos?» es abstracto: el cliente no puede comprobar que
+        // sea SU pedido, que es lo único que esta frase tiene que dejarle hacer. Enumerar los
+        // productos obliga a leerlos del catálogo, y leer es E/S.
+        //
+        // El `idNegocio` va aparte de `args` a propósito: los argumentos son lo que dijo el
+        // modelo, y de quién es el pedido no se le pregunta a él.
+        return await declarada.pregunta({ args, idNegocio });
     } catch (error) {
         // ⚠️ Esto corre sobre los argumentos **crudos del modelo**, antes de que nadie los
         // valide. O sea: la redacción de la pregunta es la primera pieza que toca datos en los
@@ -117,7 +125,7 @@ function opcionesSiNo() {
  * **El turno termina aquí**: no se le devuelve el control al modelo para que redacte la pregunta,
  * porque la pregunta ya está escrita y porque otra vuelta serían más tokens para decir lo mismo.
  */
-function solicitar({
+async function solicitar({
     capacidad,
     args,
     conversacion,
@@ -131,7 +139,13 @@ function solicitar({
         pasos: [...pasos, paso('confirmacion_solicitada', { capacidad, argumentos: args })],
         invocaciones,
         respuestas: [
-            { texto: textoDePregunta(capacidad, args, { registry }), opciones: opcionesSiNo() },
+            {
+                texto: await textoDePregunta(capacidad, args, {
+                    registry,
+                    idNegocio: conversacion?.id_negocio ?? null,
+                }),
+                opciones: opcionesSiNo(),
+            },
         ],
         variables: conversacion.variables || {},
         tarea: {
@@ -192,7 +206,10 @@ async function resolver(ctx, { gate, registry = registryReal, ahora = () => new 
             pasos: [paso('confirmacion_repreguntada', { capacidad: datos.capacidad })],
             respuestas: [
                 {
-                    texto: `${textoDePregunta(datos.capacidad, datos.args, { registry })} Respóndeme sí o no.`,
+                    texto: `${await textoDePregunta(datos.capacidad, datos.args, {
+                        registry,
+                        idNegocio: ctx.conversacion?.id_negocio ?? null,
+                    })} Respóndeme sí o no.`,
                     opciones: opcionesSiNo(),
                 },
             ],

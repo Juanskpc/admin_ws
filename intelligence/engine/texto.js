@@ -80,6 +80,48 @@ function esComando(texto, lista) {
     return lista.some((palabra) => t === normalizar(palabra).replace(ADORNOS, ''));
 }
 
+/** ¿Es alguno de los comandos conocidos, cualquiera que sea? */
+function esAlgunComando(texto) {
+    return Object.values(COMANDO).some((lista) => esComando(texto, lista));
+}
+
+/**
+ * Un saludo, escrito como lo escribe la gente.
+ *
+ * ## Por qué no basta con la lista de `COMANDO.MENU`
+ *
+ * Porque esa lista se compara **exacta**, y en la vida real un saludo llega con un signo detrás,
+ * una vocal de más o dos palabras juntas: «Buenas!», «holaa», «hola buenas», «buens». Cada una
+ * de ésas caía fuera de la lista, se iba al modelo, y el cliente recibía una respuesta
+ * plausible **sin el enlace del menú** — que es lo único que ese primer mensaje tiene que hacer.
+ * Parecía una versión vieja del bot; era la IA improvisando. Visto en producción el 2026-09-07.
+ *
+ * ## La regla: el mensaje ENTERO tiene que ser saludo
+ *
+ * No «contiene un saludo», que es la trampa. «Buenos días, ¿están abiertos?» empieza igual y
+ * **no** es un saludo: es una pregunta, y contestarla con la bienvenida sería ignorarla. Así que
+ * se parten las palabras y se exige que **todas** sean de saludar. En cuanto aparece una que no
+ * lo es, esto devuelve `false` y el turno sigue su camino hacia quien pueda contestarla.
+ *
+ * Las repeticiones de letra se admiten a propósito (`h+o+l+a+`): «holaaa» y «buenaas» son la
+ * forma normal de escribir en un chat, no una falta que haya que castigar con un menú equivocado.
+ */
+const PALABRA_DE_SALUDO =
+    /^(?:h+o+l+a*s?|o+l+a+s?|h+o+l+i+s?|b+u+e+n+[oa]*s?|d+i+a+s?|t+a+r+d+e+s?|n+o+c+h+e+s?|h+e+y+|e+y+|epa|ola|alo+|hi|hello|saludo?s?|que|q|k|mas|tal|buenass?)$/;
+
+function esSaludo(texto) {
+    const palabras = normalizar(ultimaLinea(texto))
+        // Se quitan signos y emoji: un «hola 👋» es un saludo, y el emoji no es una palabra.
+        .replace(/[^a-zñ\s]/g, ' ')
+        .split(/\s+/)
+        .filter(Boolean);
+
+    // Un saludo es corto. El tope no es estético: sin él, una frase larga hecha solo de
+    // muletillas reconocidas acabaría abriendo la bienvenida en medio de una conversación.
+    if (palabras.length === 0 || palabras.length > 4) return false;
+    return palabras.every((p) => PALABRA_DE_SALUDO.test(p));
+}
+
 /**
  * «¡Buenos días!» / «¡Buenas tardes!» / «¡Buenas noches!», en la hora del NEGOCIO.
  *
@@ -103,4 +145,12 @@ function saludoPorLaHora(ahora = new Date(), zona = 'America/Bogota') {
     return '¡Buenas noches!';
 }
 
-module.exports = { COMANDO, normalizar, ultimaLinea, esComando, saludoPorLaHora };
+module.exports = {
+    COMANDO,
+    normalizar,
+    ultimaLinea,
+    esComando,
+    esAlgunComando,
+    esSaludo,
+    saludoPorLaHora,
+};
