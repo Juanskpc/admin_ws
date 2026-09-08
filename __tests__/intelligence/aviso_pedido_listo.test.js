@@ -256,6 +256,59 @@ describe('avisarListo', () => {
         await expect(avisar(orden)).rejects.toMatchObject({ code: 'PEDIDO_SIN_TELEFONO' });
     });
 
+    test('un aviso que MURIÓ por el camino se puede reintentar', async () => {
+        // El caso real del 2026-09-08: el primer aviso de producción quedó marcado y su mensaje
+        // murió en dead letter porque la plantilla no existía todavía en Meta. Con la marca
+        // bloqueando sin mirar la entrega, el negocio se quedaba creyendo que había avisado a
+        // alguien que nunca recibió nada — y sin manera de volver a intentarlo.
+        const conv = await crearConversacion({ idExterno: idExternoDe(6) });
+        const orden = await crearOrden({ telefono: tel(6) });
+
+        const primero = await avisar(orden);
+        // Lo que hace el Channel Gateway cuando la Cloud API rechaza y no es reintentable.
+        await sequelize.query(
+            `UPDATE intelligence.mensaje SET estado_entrega = 'fallido' WHERE id_mensaje = :id;`,
+            { replacements: { id: primero.id_mensaje }, logging: false }
+        );
+
+        // Y ahora sí deja: el cliente no recibió nada.
+        const segundo = await avisar(orden);
+        expect(segundo.id_mensaje).not.toBe(primero.id_mensaje);
+        expect(await salientesDe(conv.id_conversacion)).toHaveLength(2);
+    });
+
+    test('pero uno que sigue en cola NO se reintenta', async () => {
+        // `pendiente` es un mensaje aceptado que todavía no ha salido. Reintentarlo sería
+        // mandar dos y cobrar dos por no saber esperar.
+        const conv = await crearConversacion({ idExterno: idExternoDe(7) });
+        const orden = await crearOrden({ telefono: tel(7) });
+
+        await avisar(orden);
+        await expect(avisar(orden)).rejects.toMatchObject({ code: 'PEDIDO_YA_AVISADO' });
+        expect(await salientesDe(conv.id_conversacion)).toHaveLength(1);
+    });
+
+    test('el estado del aviso se puede consultar, y es el del mensaje', async () => {
+        // Es lo que el despacho pinta: «Avisado», «Enviando…» o el botón de reintentar.
+        await crearConversacion({ idExterno: idExternoDe(8) });
+        const orden = await crearOrden({ telefono: tel(8) });
+        const r = await avisar(orden);
+
+        const conMarca = await unaFila(
+            `SELECT aviso_listo_en, aviso_listo_mensaje FROM restaurante.pedid_orden
+              WHERE id_orden = :id;`,
+            { id: orden.id_orden }
+        );
+        expect(conMarca.aviso_listo_mensaje).toBe(r.id_mensaje);
+        expect(await avisoPedido.estadoDelAviso(conMarca)).toBe('pendiente');
+
+        await sequelize.query(
+            `UPDATE intelligence.mensaje SET estado_entrega = 'entregado' WHERE id_mensaje = :id;`,
+            { replacements: { id: r.id_mensaje }, logging: false }
+        );
+        expect(await avisoPedido.estadoDelAviso(conMarca)).toBe('entregado');
+    });
+
     test('EL PLAN: sin el asistente contratado no se manda nada', async () => {
         // El aviso es una función de pago. Que la pantalla esconda el botón no basta: quien
         // llega por `curl`, con una pestaña vieja abierta o después de una baja de plan, llega

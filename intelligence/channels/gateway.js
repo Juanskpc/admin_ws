@@ -201,6 +201,9 @@ async function entregarUnaVez() {
                     reintentable,
                     backoffMaxSegundos: CONFIG.backoffMaxSegundos,
                     idExternoCanal,
+                    // Ya se tenía y solo se imprimía. Guardarlo evita el viaje por SSH al
+                    // `journalctl` que costó averiguar el primer fallo real.
+                    motivo,
                 },
                 { transaction: t }
             );

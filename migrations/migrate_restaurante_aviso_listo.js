@@ -2,8 +2,17 @@
  * Migración: el aviso de «tu pedido ya está listo».
  *
  *  - restaurante.pedid_orden.aviso_listo_en  (TIMESTAMP NULL)
- *      Cuándo se le avisó al cliente por WhatsApp que su pedido estaba listo.
- *      NULL = todavía no se le ha avisado.
+ *      Cuándo se INTENTÓ avisarle al cliente. NULL = todavía no se ha intentado.
+ *  - restaurante.pedid_orden.aviso_listo_mensaje  (UUID NULL)
+ *      Qué mensaje fue ese aviso, para poder mirar si de verdad salió.
+ *
+ * ## Por qué son dos columnas y no una
+ *
+ * Añadida el 2026-09-08, tras verlo fallar en producción: la marca dice «se intentó», y eso NO
+ * es lo mismo que «llegó». El primer aviso real quedó marcado, el botón se apagó, y el mensaje
+ * murió en dead letter porque la plantilla todavía no existía en Meta — así que el negocio creyó
+ * haber avisado a alguien que nunca recibió nada. Guardando cuál fue el mensaje, la pantalla
+ * puede leer su estado de entrega y decir la verdad: avisado, en camino, o no se pudo.
  *
  * ## Por qué una columna y no un contador en otro sitio
  *
@@ -54,6 +63,10 @@ async function migrate() {
         await agregarColumna({
             esquema: 'restaurante', tabla: 'pedid_orden', columna: 'aviso_listo_en',
             definicion: 'TIMESTAMP NULL', transaction: t,
+        });
+        await agregarColumna({
+            esquema: 'restaurante', tabla: 'pedid_orden', columna: 'aviso_listo_mensaje',
+            definicion: 'UUID NULL', transaction: t,
         });
 
         // pedid_orden ya lleva su trigger trg_audit desde migrate_auditoria_*: una columna

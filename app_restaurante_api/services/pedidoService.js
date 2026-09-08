@@ -5,6 +5,11 @@ const usuarioAsistenteDao = require('../../app_core/dao/usuarioAsistenteDao');
 // La costura de entitlements (ADR-021). Es lo único que este servicio sabe de lo comercial, y
 // pregunta por la FEATURE, nunca por el nombre del plan.
 const features = require('../../intelligence/core/features');
+// El estado de entrega de un aviso vive en el Ledger, y leerlo desde aquí sería que la vertical
+// supiera de `intelligence.mensaje`. Se pregunta al adaptador, que es la frontera (ADR-009). No
+// cierra ciclo: `avisoPedido` lee la orden con SQL en crudo justamente para no depender de este
+// servicio.
+const avisoPedido = require('../../intelligence/adapters/restaurante/avisoPedido');
 const { Op } = require('sequelize');
 
 const SUBNIVEL_CANCELAR_NO_PAGADO = 'despacho_cancelar_no_pagado';
@@ -765,17 +770,37 @@ async function getOrdenesDespacho({ idNegocio, idUsuario }) {
         features.estaHabilitado(idNegocio, features.FEATURE.ASISTENTE_IA),
     ]);
 
-    return ordenes.map((o) => {
+    const planos = ordenes.map((o) => {
         const plano = typeof o.toJSON === 'function' ? o.toJSON() : { ...o };
         plano.de_whatsapp =
             asistenteHabilitado && idAsistente != null && plano.id_usuario === idAsistente;
-        // El botón de «ya está listo». Se decide aquí y no en la pantalla porque son cuatro
-        // condiciones y una de ellas es comercial: repetirlas en el frontend garantiza que un
-        // día discrepen, y el lado que discrepe será el que ofrece un botón que el backend
-        // rechaza. Allí se vuelven a comprobar de todos modos — esto decide qué se ENSEÑA, no
-        // qué se permite.
+        return plano;
+    });
+
+    // ── El estado real de cada aviso ──────────────────────────────────────────────────────
+    //
+    // Se consulta **solo** para los que tienen marca, que son pocos: no hay una consulta por
+    // pedido, hay una por pedido ya avisado.
+    //
+    // Y se consulta porque `aviso_listo_en` dice «se intentó», que no es «llegó». El primer
+    // aviso real de producción quedó marcado y murió en dead letter —la plantilla no existía
+    // todavía en Meta—, así que el negocio creyó haber avisado a alguien que no recibió nada.
+    await Promise.all(
+        planos
+            .filter((p) => p.aviso_listo_en)
+            .map(async (p) => {
+                p.aviso_listo_estado = await avisoPedido.estadoDelAviso(p);
+            })
+    );
+
+    return planos.map((plano) => {
+        // El botón se decide aquí y no en la pantalla porque son cuatro condiciones y una es
+        // comercial: repetirlas en el frontend garantiza que un día discrepen, y el lado que
+        // discrepe sería el que ofrece un botón que el backend rechaza. Allí se vuelven a
+        // comprobar de todos modos — esto decide qué se ENSEÑA, no qué se permite.
+        const avisoVivo = plano.aviso_listo_en && plano.aviso_listo_estado !== 'fallido';
         plano.puede_avisar_listo =
-            plano.de_whatsapp && plano.tipo_pedido === 'LLEVAR' && !plano.aviso_listo_en;
+            plano.de_whatsapp && plano.tipo_pedido === 'LLEVAR' && !avisoVivo;
         return plano;
     });
 }

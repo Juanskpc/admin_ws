@@ -37,6 +37,10 @@ module.exports = (sequelize, DataTypes) => {
         // avisado. Es lo que impide que el botón del despacho se apriete dos veces, y por eso
         // se escribe en la misma transacción que crea el mensaje saliente.
         aviso_listo_en:      { type: DataTypes.DATE, allowNull: true },
+        // Qué mensaje fue ese aviso. Con él, la pantalla puede leer su estado de entrega y
+        // distinguir «se intentó» de «llegó» — que no es lo mismo, y verlo costó un aviso
+        // marcado cuyo mensaje murió en dead letter.
+        aviso_listo_mensaje: { type: DataTypes.UUID, allowNull: true },
     }, {
         tableName: 'pedid_orden',
         schema: 'restaurante',

@@ -63,6 +63,42 @@ function comoLoEscribeElCanal(telefono) {
     return e164 ? e164.replace(/^\+/, '') : null;
 }
 
+/**
+ * El estado de entrega de un aviso ya mandado: `entregado`, `pendiente`, `fallido` o `null`.
+ *
+ * `null` cuando no hay aviso, o cuando el mensaje ya no está (las particiones del Ledger se
+ * podan). Un aviso viejo que ya nadie puede consultar se trata como hecho: reintentarlo
+ * volvería a cobrarle al negocio por algo que probablemente sí llegó.
+ *
+ * ⚠️ La ventana sobre `creado_en` no es cosmética: `intelligence.mensaje` está **particionada**
+ * por esa columna, y sin ella la consulta recorre todas las particiones. El mensaje y la marca
+ * nacen en la misma transacción, así que un minuto de margen sobra y de lejos.
+ */
+async function estadoDelAviso(orden, { transaction = null } = {}) {
+    if (!orden?.aviso_listo_mensaje || !orden?.aviso_listo_en) return null;
+    const [fila] = await Models.sequelize.query(
+        `SELECT estado_entrega FROM intelligence.mensaje
+          WHERE id_mensaje = :idMensaje
+            AND creado_en BETWEEN CAST(:desde AS timestamptz) - interval '1 minute'
+                              AND CAST(:desde AS timestamptz) + interval '1 minute'
+          LIMIT 1;`,
+        {
+            replacements: { idMensaje: orden.aviso_listo_mensaje, desde: orden.aviso_listo_en },
+            type: Models.sequelize.QueryTypes.SELECT,
+            transaction,
+        }
+    );
+    return fila ? fila.estado_entrega : null;
+}
+
+/** ¿El aviso anterior sigue valiendo? Solo un `fallido` da derecho a volver a intentarlo. */
+async function avisoSigueEnPie(orden, opciones) {
+    // Un aviso anterior SIN id de mensaje es de antes de que se guardara (o de una poda): se
+    // respeta. Ante la duda, no se vuelve a cobrar.
+    if (!orden.aviso_listo_mensaje) return true;
+    return (await estadoDelAviso(orden, opciones)) !== 'fallido';
+}
+
 /** Un error que el despacho puede enseñar tal cual. */
 function rechazar(mensaje, code, statusCode = 409) {
     const e = new Error(mensaje);
@@ -110,7 +146,7 @@ async function avisarListo({ idNegocio, idOrden }, { transaction = null } = {}) 
         const [orden] = await Models.sequelize.query(
             `
             SELECT id_orden, id_negocio, numero_orden, tipo_pedido, estado,
-                   contacto_nombre, contacto_telefono, aviso_listo_en
+                   contacto_nombre, contacto_telefono, aviso_listo_en, aviso_listo_mensaje
               FROM restaurante.pedid_orden
              WHERE id_orden = :idOrden AND id_negocio = :idNegocio
              FOR UPDATE;
@@ -123,7 +159,10 @@ async function avisarListo({ idNegocio, idOrden }, { transaction = null } = {}) 
         );
 
         if (!orden) rechazar('Ese pedido no existe en este negocio.', 'PEDIDO_NO_ENCONTRADO', 404);
-        if (orden.aviso_listo_en) {
+        // Ya se intentó… pero «se intentó» no es «llegó». Si aquel mensaje murió en dead letter
+        // el cliente no recibió nada, y negarse a reintentar dejaría al negocio creyendo que
+        // avisó. Solo bloquea el que sigue vivo: entregado, o todavía en cola.
+        if (orden.aviso_listo_en && (await avisoSigueEnPie(orden, { transaction: t }))) {
             rechazar('A este cliente ya se le avisó.', 'PEDIDO_YA_AVISADO');
         }
         if (orden.estado !== 'ABIERTA') {
@@ -203,12 +242,14 @@ async function avisarListo({ idNegocio, idOrden }, { transaction = null } = {}) 
         );
 
         // ── 4. La marca, en esta misma transacción ───────────────────────────────────────
+        // Las dos columnas a la vez: la marca cierra el candado y el id del mensaje es lo que
+        // después deja comprobar si aquello llegó de verdad o murió en dead letter.
         const [[marcada]] = await Models.sequelize.query(
             `UPDATE restaurante.pedid_orden
-                SET aviso_listo_en = now()
+                SET aviso_listo_en = now(), aviso_listo_mensaje = :idMensaje
               WHERE id_orden = :idOrden
               RETURNING aviso_listo_en;`,
-            { replacements: { idOrden }, transaction: t }
+            { replacements: { idOrden, idMensaje: fila.id_mensaje }, transaction: t }
         );
 
         if (propia) await t.commit();
@@ -219,4 +260,11 @@ async function avisarListo({ idNegocio, idOrden }, { transaction = null } = {}) 
     }
 }
 
-module.exports = { PLANTILLA, CANAL, TIPO_RECOGER, avisarListo, comoLoEscribeElCanal };
+module.exports = {
+    PLANTILLA,
+    CANAL,
+    TIPO_RECOGER,
+    avisarListo,
+    estadoDelAviso,
+    comoLoEscribeElCanal,
+};

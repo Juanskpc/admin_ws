@@ -509,9 +509,30 @@ async function reclamarSalientesPendientes({ lote, ventanaHoras, transaction }) 
  * entregar porque es la única forma de atar un acuse posterior (`status: failed`) a esta fila: el
  * webhook trae el id del canal y nada más.
  */
+/**
+ * Cierra un intento de entrega: lo cuenta, decide si habrá otro, y **guarda por qué falló**.
+ *
+ * ## El motivo, que hasta el 2026-09-08 solo iba al log
+ *
+ * Un mensaje `fallido` en la base no decía nada. Averiguar que Meta había contestado
+ * «(#132001) Template name does not exist in the translation» —o sea, que la plantilla no estaba
+ * registrada— exigió entrar por SSH a mirar `journalctl`, y eso solo funciona mientras el log
+ * siga ahí y alguien sepa a qué minuto mirar.
+ *
+ * Se fusiona en `crudo` en vez de añadir una columna: es diagnóstico, su forma depende del canal,
+ * y ese campo existe justamente para eso. Solo se escribe cuando NO se entregó: en el camino
+ * bueno no hay nada que explicar.
+ */
 async function marcarEntrega(
     mensaje,
-    { entregado, maxIntentos, reintentable = true, backoffMaxSegundos = 300, idExternoCanal = null },
+    {
+        entregado,
+        maxIntentos,
+        reintentable = true,
+        backoffMaxSegundos = 300,
+        idExternoCanal = null,
+        motivo = null,
+    },
     { transaction }
 ) {
     const intentos = (mensaje.intentos_entrega || 0) + 1;
@@ -531,7 +552,14 @@ async function marcarEntrega(
                    WHEN :espera::numeric IS NULL THEN NULL
                    ELSE now() + (:espera || ' seconds')::interval
                END,
-               id_externo = COALESCE(:idExternoCanal, id_externo)
+               id_externo = COALESCE(:idExternoCanal, id_externo),
+               -- POR QUE fallo, guardado donde se pueda leer. Ver la cabecera de la funcion.
+               crudo = CASE
+                   WHEN :motivo::text IS NULL THEN crudo
+                   ELSE COALESCE(crudo, '{}'::jsonb)
+                        || jsonb_build_object('entrega_error', :motivo::text,
+                                              'entrega_intento', :intentos::int)
+               END
          WHERE id_mensaje = :idMensaje AND creado_en = CAST(:creadoEn AS timestamptz);
         `,
         {
@@ -539,6 +567,7 @@ async function marcarEntrega(
                 estado,
                 intentos,
                 espera: esperaSegundos === null ? null : String(esperaSegundos),
+                motivo: entregado ? null : motivo,
                 idExternoCanal,
                 idMensaje: mensaje.id_mensaje,
                 // El texto, no el Date: ver el comentario de `abrirTurno`.
