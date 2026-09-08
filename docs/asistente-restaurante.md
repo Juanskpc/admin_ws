@@ -257,6 +257,27 @@ a un número que apareció en una casilla no es lo mismo que contestarle a quien
 estrenar un hilo desde un botón es justo lo que no se hace—, y a quien pidió la baja no se le
 escribe **ni siquiera algo que le interesa**.
 
+#### «Se intentó» no es «llegó» (2026-09-08)
+
+El primer aviso real de producción **quedó marcado como hecho y nunca llegó**. La Cloud API
+contestó `(#132001) Template name does not exist in the translation` —la plantilla todavía no
+está creada en Meta—, el mensaje murió en *dead letter*, y el despacho siguió diciendo «Avisado».
+El negocio creyendo que avisó y el cliente esperando: el fallo silencioso que este sistema trata
+como el caro.
+
+Dos cosas lo arreglan, y ninguna es la plantilla:
+
+- **La orden guarda cuál fue el mensaje** (`aviso_listo_mensaje`). Con eso el despacho lee su
+  estado de entrega real y dice la verdad: *Avisado*, *Enviando…*, o un botón rojo de
+  **«No salió — reintentar»**. La marca sigue cerrando el candado del doble clic —un aviso **en
+  cola** no se reintenta, que serían dos cobros—, pero uno que murió sí deja volver a intentarlo.
+- **`marcarEntrega` guarda el motivo del fallo** en `crudo`. Ya se tenía y solo se imprimía:
+  averiguar lo de arriba costó entrar por SSH a mirar `journalctl`, y eso solo funciona mientras
+  el log siga ahí y alguien sepa a qué minuto mirar.
+
+Un aviso anterior **sin** id de mensaje —los de antes de este cambio, o uno cuya partición del
+Ledger ya se podó— se respeta y no se reintenta: ante la duda, no se le vuelve a cobrar al negocio.
+
 #### El candado, que es la mitad del trabajo
 
 Cada envío de plantilla **se le cobra al negocio**: dos clics son dos cobros y dos mensajes al
