@@ -12,6 +12,43 @@
 
 ---
 
+## 0. ENVIADO el 2026-09-10 — «Revisión en curso»
+
+La solicitud está enviada, con los dos permisos y `public_profile`. Meta dice **hasta 20 días**;
+si piden información o correcciones, se alarga.
+
+Lo que se envió: los dos vídeos (uno por permiso), las descripciones de §4, el cuestionario de
+*Gestión de datos* —encargados **Vultr Holdings, LLC** y **OpenAI, L.L.C.**, ambos en EE. UU.;
+responsable Nicolás Pantoja Páez, Colombia; ninguna solicitud de autoridades en 12 meses; y las
+cuatro políticas de [`legal/solicitudes-de-autoridades.md`](legal/solicitudes-de-autoridades.md),
+escritas ese mismo día justo para no declarar lo que no existía— y las instrucciones para el
+revisor con el usuario `90000001`.
+
+También ese día: plataforma **Sitio web** añadida (`https://escalapp.cloud/admin/`), `escalapp.cloud`
+en *Dominios de la aplicación*, 2FA obligatorio en el portafolio, onboarding de **Independent Tech
+Provider** aceptado y la app **publicada** (modo Live). El bloque del RGPD —delegado de protección
+de datos— se dejó **vacío a propósito**: el Reglamento no nos aplica (art. 3) y, aunque aplicara,
+no estaríamos obligados a designarlo (art. 37.1).
+
+Diagnóstico tras publicar, para descartar que el cambio de modo tocara algo: token válido con los
+dos permisos, número `CONNECTED`/`GREEN`, app suscrita a la WABA, las dos plantillas `APPROVED`, el
+login del revisor entrando y viendo solo su negocio, y las tres páginas legales en 200.
+
+### Mientras dure la revisión
+
+- **No tocar** los vídeos, las descripciones ni la configuración básica de la app. Editar durante
+  la revisión puede reiniciarla.
+- **No despublicar** la app ni desactivar al usuario `90000001` hasta que haya veredicto.
+- Que no se caigan las tres URLs legales ni el login: es lo que el revisor abre.
+
+### Si aprueban
+
+Falta **Access Verification** (~5 días hábiles) y después el código de Embedded Signup: §5 de este
+documento tiene la lista, incluida la trampa de que **el `code` caduca en 30 segundos** y que hay
+que implementar la **v4** porque la v2 se apaga el 15 de octubre de 2026.
+
+---
+
 ## 1. Lo que Meta revisa de verdad (según sus propios documentos)
 
 Hay **tres** trámites distintos que la gente confunde en uno solo. Van en este orden y cada uno
