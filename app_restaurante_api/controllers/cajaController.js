@@ -1,6 +1,7 @@
 'use strict';
 const { validationResult } = require('express-validator');
 const CajaService = require('../services/cajaService');
+const CajaExportService = require('../services/cajaExportService');
 const Respuesta = require('../../app_core/helpers/respuesta');
 const Audit = require('../../app_core/helpers/auditHelper');
 const { setAuditNegocio } = require('../../app_core/middleware/auditContext');
@@ -395,10 +396,61 @@ async function anularMovimiento(req, res) {
     }
 }
 
+/**
+ * GET /restaurante/caja/:id/exportar?id_negocio=N
+ *
+ * El turno en un Excel: formas de pago con su valor, el total y el listado de pedidos.
+ *
+ * Exige `caja_ver_ingresos` y no solo pertenecer al negocio: el archivo ES las cifras,
+ * así que aquí no cabe la versión "sin importes" que devuelve el detalle en pantalla —
+ * un reporte de caja sin montos no es un reporte, y dejarlo pasar sería la puerta de
+ * atrás al permiso que la pantalla respeta.
+ */
+async function exportarCaja(req, res) {
+    if (!handleValidation(req, res)) return;
+    try {
+        const idCaja = Number(req.params.id);
+        const idNegocio = Number(req.query.id_negocio);
+
+        const pertenece = await CajaService.usuarioPerteneceANegocio({
+            idUsuario: req.usuario?.id_usuario,
+            idNegocio,
+        });
+        if (!pertenece) return Respuesta.error(res, 'No tienes acceso a este negocio.', 403);
+
+        if (!(await puedeVerIngresos(req, idNegocio))) {
+            return Respuesta.error(res, 'Tu rol no puede exportar los valores de la caja.', 403);
+        }
+
+        const caja = await CajaService.getCajaDetalle({ idCaja, idNegocio });
+        if (!caja) return Respuesta.error(res, 'Caja no encontrada.', 404);
+
+        const movimientos = await CajaService.getMovimientos(idCaja);
+        const nombreNegocio = await CajaExportService.getNombreNegocio(idNegocio);
+        const { buffer, filename } = await CajaExportService.generarXLSXCaja(
+            caja, movimientos, nombreNegocio,
+        );
+
+        res.setHeader(
+            'Content-Type',
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        );
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+        // Sin esto el navegador no ve la cabecera y el archivo se descarga con el
+        // nombre de la ruta ("exportar") y sin extensión.
+        res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
+        return res.send(buffer);
+    } catch (err) {
+        console.error('[Caja] Error exportarCaja:', err.message);
+        return Respuesta.error(res, 'No se pudo exportar el reporte de caja.');
+    }
+}
+
 module.exports = {
     getCajaAbierta,
     getHistorial,
     getDetalleCaja,
+    exportarCaja,
     abrirCaja,
     cerrarCaja,
     getMovimientos,

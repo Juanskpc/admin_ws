@@ -579,4 +579,9 @@ async function ocupacionDelDia(idNegocio, fechaISO, desde, hasta) {
     };
 }
 
-module.exports = { verificarAccesoReserva, getResumenDashboard, getPermisosSubnivelNegocio };
+module.exports = {
+    verificarAccesoReserva,
+    getResumenDashboard,
+    getPermisosSubnivelNegocio,
+    getPermisosVistaNegocio,
+};

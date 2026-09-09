@@ -290,6 +290,11 @@ router.get('/caja/:id/detalle', [
 	query('id_negocio').isInt({ min: 1 }),
 ], CajaController.getDetalleCaja);
 
+router.get('/caja/:id/exportar', [
+	param('id').isInt({ min: 1 }),
+	query('id_negocio').isInt({ min: 1 }),
+], CajaController.exportarCaja);
+
 router.post('/caja/abrir', [
 	body('id_negocio').isInt({ min: 1 }),
 	body('monto_apertura').optional().isFloat({ min: 0 }),

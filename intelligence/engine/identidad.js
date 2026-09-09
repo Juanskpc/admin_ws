@@ -42,15 +42,17 @@
  *
  * ## Lo que este resolver sigue SIN hacer (F5-D, decisión consciente)
  *
- * No enlaza la cita con la persona. `reserva.reservar_turno` recibe `cliente_nombre` y
- * `cliente_telefono` como texto suelto, no un `id_persona_negocio`: `reserva` no ha adoptado
- * `persona` todavía. Así que la persona sirve para **no volver a preguntar** lo que ya
- * sabemos, no para relacionar la cita con nadie. Mientras esa costura siga abierta:
+ * Este resolver no pasa `id_persona_negocio`: `reserva.reservar_turno` sigue recibiendo
+ * `cliente_nombre` y `cliente_telefono` como texto suelto. Lo que cambió el 2026-09-09 es que
+ * eso **ya no deja la cita huérfana**: `citaService.crearCita` resuelve el teléfono contra
+ * `platform.persona_negocio` por su cuenta (el mismo `personaNegocioDao` que usa `restaurante`)
+ * y guarda el enlace. La costura de datos está cerrada; venga la cita del asistente, del portal
+ * público o del mostrador, queda atada a la misma persona.
  *
- *   - no existe `consultar_mis_citas`, y la FSM tiene que guardarse el código de la cita;
- *   - la confirmación proactiva por outbox no tiene destino que resolver.
- *
- * Está documentado en `docs/ESTADO-Y-CONTINUACION.md`; no es un olvido.
+ * Lo que sigue sin existir es la **capacidad**: no hay `consultar_mis_citas`, así que la FSM
+ * tiene que seguir guardándose el código de la cita, y la confirmación proactiva por outbox
+ * sigue sin destino que resolver. Añadirla es declararla en el Registry, decidir su política
+ * y escribir su adaptador — ver la cabecera de `intelligence/adapters/reserva/index.js`.
  */
 'use strict';
 

@@ -2,6 +2,7 @@
 const Models = require('../../app_core/models/conection');
 const { Op } = Models.Sequelize;
 const outboxDao = require('../../app_core/dao/outboxDao');
+const personaNegocioDao = require('../../app_core/dao/personaNegocioDao');
 const Disponibilidad = require('./disponibilidadService');
 const Notificacion = require('./notificacionService');
 const Reglas = require('./reglasAgenda');
@@ -132,9 +133,25 @@ async function crearCita(params, { transaction: transaccionExterna = null } = {}
             { transaction: t, excluirHold: consumirHoldId }
         );
 
+        // El cliente del negocio (platform.persona_negocio), resuelto por teléfono. Este es
+        // el único sitio donde hay que engancharlo: el portal público y la agenda del admin
+        // pasan los dos por aquí, y la diferencia entre ellos es solo `creadoPorIdUsuario`.
+        //
+        // Best-effort a propósito (ADR-006): si la identidad falla, la cita se agenda igual
+        // con `id_persona_negocio = NULL`. Nadie se queda sin cita porque el módulo de
+        // clientes tenga un problema — y devuelve null también, sin ser un error, cuando el
+        // teléfono no es un móvil colombiano utilizable.
+        const idPersonaNegocio = clienteTelefono
+            ? await personaNegocioDao.resolverOCrearBestEffort(
+                  { idNegocio, telefono: clienteTelefono, nombre: clienteNombre },
+                  { transaction: t }
+              )
+            : null;
+
         const cita = await Models.ReservaCita.create({
             id_negocio: idNegocio,
             id_profesional: idProfesional,
+            id_persona_negocio: idPersonaNegocio,
             fecha_hora_inicio: fechaInicio,
             fecha_hora_fin: fechaFin,
             estado: 'pendiente',

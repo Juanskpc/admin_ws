@@ -23,8 +23,10 @@ const Citas        = require('../controllers/citaController');
 const Config       = require('../controllers/configController');
 const Vitrina      = require('../controllers/vitrinaController');
 const Categorias   = require('../controllers/categoriaController');
+const Clientes     = require('../controllers/clienteController');
 const { verificarToken } = require('../../app_core/middleware/auth');
 const { exigirAccion } = require('../middleware/exigirAccion');
+const { exigirVista } = require('../middleware/exigirVista');
 
 // ───────── Multer: comprobantes de pago ─────────
 const COMPROBANTES_BASE = path.resolve(path.join(__dirname, '..', '..', 'uploads', 'reserva', 'comprobantes'));
@@ -261,6 +263,36 @@ router.delete('/bloqueos/:id', [
     param('id').isInt({ min: 1 }),
     query('id_negocio').isInt({ min: 1 }),
 ], Bloqueos.eliminar);
+
+// ───────── Clientes ─────────
+//
+// La cartera del negocio: `platform.persona_negocio` (ADR-006/ADR-025), la misma entidad que
+// resuelven las citas por teléfono. Todas pasan por `exigirVista('/clientes')` porque lo que
+// devuelven son datos personales de terceros, no el estado del negocio: esconder la entrada
+// del menú no cierra la ruta.
+router.get('/clientes/buscar', [
+    query('id_negocio').isInt({ min: 1 }),
+    query('telefono').trim().notEmpty().isLength({ max: 30 }),
+], exigirVista('/clientes'), Clientes.buscarPorTelefono);
+
+router.get('/clientes', [
+    query('id_negocio').isInt({ min: 1 }),
+    query('buscar').optional({ nullable: true, checkFalsy: true }).isString().isLength({ max: 100 }),
+    query('limite').optional().isInt({ min: 1, max: 200 }),
+    query('offset').optional().isInt({ min: 0 }),
+], exigirVista('/clientes'), Clientes.listar);
+
+router.get('/clientes/:id', [
+    param('id').isUUID(),
+    query('id_negocio').isInt({ min: 1 }),
+], exigirVista('/clientes'), Clientes.detalle);
+
+router.put('/clientes/:id', [
+    param('id').isUUID(),
+    body('id_negocio').isInt({ min: 1 }),
+    body('nombre').optional({ nullable: true }).trim().isLength({ min: 1, max: 150 }),
+    body('notas').optional({ nullable: true }).isString().isLength({ max: 2000 }),
+], exigirVista('/clientes'), Clientes.actualizar);
 
 // Citas (vista negocio)
 router.get('/citas', [query('id_negocio').isInt({ min: 1 })], Citas.listar);

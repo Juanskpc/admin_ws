@@ -10,6 +10,10 @@ module.exports = (sequelize, DataTypes) => {
     cliente_telefono:              DataTypes.STRING(30),
     cliente_email:                 DataTypes.STRING(120),
     notas:                         DataTypes.TEXT,
+    // FK a platform.persona_negocio — el cliente del negocio, resuelto por teléfono.
+    // SIEMPRE nullable (ADR-006): la cita existe aunque no se pueda identificar a nadie,
+    // que es lo que pasa cuando el teléfono no es un móvil colombiano utilizable.
+    id_persona_negocio:            { type: DataTypes.UUID, allowNull: true },
     codigo_publico:                { type: DataTypes.UUID, allowNull: false, defaultValue: DataTypes.UUIDV4 },
     creado_por_id_usuario:         DataTypes.INTEGER,
     cancelado_por:                 DataTypes.STRING(20),  // 'cliente' | 'negocio'

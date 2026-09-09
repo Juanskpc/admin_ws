@@ -15,15 +15,20 @@
  * ## Alcance: seis capacidades, y una que sigue bloqueada
  *
  * F4-A trajo las dos consultas; F4-B las cuatro mutaciones, una vez F3 puso las invariantes
- * y el *hold* en el dominio. Falta `consultar_mis_citas` del manifiesto en papel, y no es un
- * olvido: necesita `reserva_cita.id_persona_negocio`, que no existe. F0 solo adoptó
- * `platform.persona` en `restaurante`; es el punto 1 del Contrato de Adopción
- * (`capability-language.md` §5) y sigue sin cumplirse en esta vertical.
+ * y el *hold* en el dominio. Falta `consultar_mis_citas` del manifiesto en papel.
  *
- * **Consecuencia práctica, y es la segura:** el asistente solo puede reagendar o cancelar
- * citas cuyo código ya conoce —las que él mismo creó en esta conversación—. No puede
- * enumerar las citas de un cliente. Hasta que `reserva` adopte `persona`, eso no es una
- * carencia que haya que tapar: es el límite correcto.
+ * **Lo que la bloqueaba ya no la bloquea.** Estaba parada porque `reserva_cita.id_persona_negocio`
+ * no existía —F0 solo adoptó `platform.persona` en `restaurante`—, y esa columna se añadió el
+ * 2026-09-09 con `migrate:reserva-clientes`, junto con el enganche en `citaService.crearCita`
+ * y el backfill histórico. El punto 1 del Contrato de Adopción (`capability-language.md` §5)
+ * queda cumplido en esta vertical.
+ *
+ * Lo que sigue faltando es la capacidad en sí: declararla en el Registry, decidir su política
+ * en el Policy Gate y escribir su adaptador. Es trabajo deliberado, no un enganche suelto.
+ *
+ * **Hasta entonces, la consecuencia práctica es la de siempre y es la segura:** el asistente
+ * solo puede reagendar o cancelar citas cuyo código ya conoce —las que él mismo creó en esta
+ * conversación—. No puede enumerar las citas de un cliente.
  *
  * ## Handles públicos, y desde 2026-08-24 también pertenencia
  *
