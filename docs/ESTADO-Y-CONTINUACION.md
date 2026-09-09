@@ -147,9 +147,19 @@ en verde.** El roadmap original está agotado: todo lo que se hace ahora sale de
 > §«Domicilio o recoger» y §«El saludo que a veces no saludaba», y la trampa de Meta en
 > [`canal-whatsapp.md`](canal-whatsapp.md) §«Una plantilla que no existe falla al ENVIAR».
 >
-> ### 1-quinquies. LO ÚNICO PENDIENTE, y no es código
+> ### 1-quinquies. ✅ HECHO el 2026-09-10 — `pedido_listo` creada, y el idioma mordió
 >
-> **Crear la plantilla `pedido_listo` en WhatsApp Manager.** Mientras no exista, el botón del
+> La plantilla está **APPROVED** en Meta, comprobado con `scripts/whatsapp_diagnostico.js`. Pero
+> quedó como **`es_CO`** —«Español (Col)» es lo que ofrece el desplegable— y el catálogo la
+> declaraba `es`. Meta busca por **nombre + idioma**, así que el envío habría vuelto a fallar con
+> el mismo `(#132001)` de dos días antes, esta vez con la plantilla aprobada y a la vista en el
+> panel. Corregido en `intelligence/core/plantillas.js`; **falta desplegar el backend** para que
+> el botón del despacho funcione de verdad.
+>
+> Lo que sigue debajo es el texto de la plantilla, que no cambia — el catálogo tiene que seguir
+> coincidiendo con Meta palabra por palabra.
+>
+> **Lo que era el pendiente:** Mientras no exista, el botón del
 > despacho deja el mensaje en dead letter y la pantalla enseña «No salió — reintentar» (que es lo
 > correcto, pero no es lo que se quiere). Tiene que coincidir **palabra por palabra** con
 > `intelligence/core/plantillas.js`:

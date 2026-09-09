@@ -731,6 +731,17 @@ Dos cosas que conviene saber la próxima vez que se añada una plantilla:
 2. **El motivo del fallo ya se guarda** en `mensaje.crudo.entrega_error` (desde este mismo día).
    Antes solo iba al log, y averiguar el `(#132001)` costó entrar por SSH a `journalctl` sabiendo
    a qué minuto mirar.
+3. **El idioma es parte del nombre.** *(añadido el 2026-09-10)* Meta busca la plantilla por
+   **nombre + idioma**, y lo dice en el propio error: *«does not exist in the translation»*.
+   `pedido_listo` se creó como **`es_CO`** —«Español (Col)» es lo que ofrece el desplegable— y el
+   catálogo decía `es`: el mismo `132001` otra vez, con la plantilla ya aprobada y a la vista en
+   el panel. Corregido en `plantillas.js`. `recordatorio_cita` sigue en `es` porque así está
+   aprobada ella; **el catálogo copia lo que hay en Meta, no al revés**, y por eso el idioma se
+   declara por plantilla y no una vez para todas.
+
+> **Cómo comprobarlo sin enviar nada:** `node scripts/whatsapp_diagnostico.js` en el VPS imprime
+> en su bloque 4 el nombre, el **idioma** y el estado de cada plantilla, leídos de la API de Meta.
+> Es solo lectura mientras no se le pase `--enviar=`.
 
 ## Dar de alta el número de un CLIENTE (pendiente, y no es un botón)
 

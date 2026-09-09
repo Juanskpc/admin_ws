@@ -115,7 +115,7 @@ Ninguna es código. Están en *App Dashboard → Settings → Basic* salvo donde
 | Qué | Estado | Nota |
 |---|---|---|
 | **Video 1** — messaging | ⬜ | Grabar. El material real ya existe |
-| **Video 2** — management | ⬜ | Crear una plantilla en WhatsApp Manager, grabando. **Crea `pedido_listo`**: hace falta de todos modos (ver abajo) |
+| **Video 2** — management | ✅ 2026-09-10 | Crear una plantilla en WhatsApp Manager, grabando. **Crea `pedido_listo`**: hace falta de todos modos (ver abajo) |
 | **Descripción 1 y 2** en inglés | ⬜ | Borradores listos abajo, §4 |
 | **Usuario de prueba** para el revisor | ⬜ | Un login de la Consola de producción, con datos de demostración |
 | **Notas para el revisor** | ⬜ | Una frase, §4 |
@@ -179,7 +179,7 @@ hace más difícil de rechazar, no un requisito.
 | 1 | Empezar con la sesión de Meta **cerrada**; entrar a `business.facebook.com` | *Signing in to our Meta Business account* |
 | 2 | **WhatsApp Manager → Account tools → Message templates** | *WhatsApp Manager: the message templates of the WhatsApp Business Account* |
 | 3 | Enseñar `recordatorio_cita` en **APPROVED** | *We already manage message templates for the businesses on our platform* |
-| 4 | **Create template** → nombre `pedido_listo`, categoría **Utility**, idioma **Español (es)** | *Creating a new UTILITY template: an order-ready notification* |
+| 4 | **Create template** → nombre `pedido_listo`, categoría **Utility**, idioma **Español** | *Creating a new UTILITY template: an order-ready notification* |
 | 5 | Pegar el cuerpo palabra por palabra y rellenar los tres ejemplos | *The template body, with three variables* |
 | 6 | **Submit**, y enseñar que queda *In review* / *Pending* | *The template is submitted for review through the WhatsApp Business Management API* |
 
@@ -192,6 +192,12 @@ Si necesitas algo, respóndenos a este mensaje.
 ```
 
 Ejemplos para los huecos: `Nicolás` · `ORD-0042` · `Pregonchos`.
+
+> ✅ **Grabado el 2026-09-10.** La plantilla quedó **APPROVED**… como `es_CO`, no como `es`, y el
+> catálogo del código decía `es`. Meta busca por **nombre + idioma**: apunta el idioma exacto que
+> elijas en el desplegable y compáralo con `intelligence/core/plantillas.js` antes de dar por
+> cerrado el paso. Ver [`canal-whatsapp.md`](canal-whatsapp.md) §«Una plantilla que no existe
+> falla al ENVIAR».
 
 ### Video 1 — `whatsapp_business_messaging`
 

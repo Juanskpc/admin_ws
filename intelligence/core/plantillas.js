@@ -101,7 +101,12 @@ const CATALOGO = {
      */
     pedido_listo: {
         nombre: 'pedido_listo',
-        idioma: 'es',
+        // `es_CO`, no `es`, porque así quedó APROBADA en Meta el 2026-09-10 — y Meta busca la
+        // plantilla por nombre **más idioma**. Un `es` aquí contra un `es_CO` allí no es un
+        // detalle de traducción: es `(#132001) Template name does not exist` al ENVIAR, con el
+        // mensaje muriendo en dead letter y el negocio creyendo que avisó. `recordatorio_cita`
+        // sigue en `es` porque es como está aprobada ella. El catálogo copia a Meta, no al revés.
+        idioma: 'es_CO',
         categoria: 'UTILITY',
         parametros: ['cliente', 'orden', 'negocio'],
         texto:
