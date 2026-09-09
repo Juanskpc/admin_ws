@@ -1,5 +1,11 @@
 # Políticas de EscalApp
 
+> **Índice rápido:** [Tratamiento de datos](politica-tratamiento-datos.md) ·
+> [Términos y condiciones](terminos-y-condiciones.md) ·
+> [Eliminación de datos](eliminacion-de-datos.md) ·
+> [Anexo de Encargado](anexo-encargado-tratamiento.md) ·
+> [Solicitudes de autoridades](solicitudes-de-autoridades.md) *(interna, 2026-09-10)*
+
 **Estado: VIGENTES desde el 2026-09-03, versión 1.0.** · Redactados el 2026-09-01, publicados
 con los datos del titular el 2026-09-03. · **Sin revisión de abogado todavía.**
 
