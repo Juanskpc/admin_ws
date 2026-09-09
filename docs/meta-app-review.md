@@ -124,41 +124,103 @@ Ninguna es código. Están en *App Dashboard → Settings → Basic* salvo donde
 
 ## 3. Los dos videos, con guion
 
-Ambos se pueden grabar **hoy**, con lo que ya está en producción. **Sin escribir una línea de
-código**: el permiso `whatsapp_business_management` se puede demostrar en **WhatsApp Manager**, así
-que no hace falta construir una pantalla de plantillas en la Consola.
+Ambos se graban con lo que ya está en producción y **sin escribir una línea de código**: el permiso
+`whatsapp_business_management` se puede demostrar en **WhatsApp Manager**, así que no hace falta
+construir una pantalla de plantillas en la Consola.
+
+### El orden importa: primero el 2, después el 1
+
+Un nombre de plantilla **solo se estrena una vez**. `pedido_listo` hace falta de todos modos —sin
+ella el botón del despacho deja el mensaje en dead letter y la pantalla enseña «No salió»—, así que
+crearla **es** el video 2. Creada en silencio, para el video habría que inventar otra plantilla
+distinta y de adorno.
+
+Al revés no hay pérdida: una vez aprobada (minutos u horas), el video 1 puede enseñar **además** el
+envío de una plantilla de verdad llegando al teléfono, que es literalmente lo que Meta pide ver. El
+orden, entonces:
+
+1. Grabar el **video 2** creando `pedido_listo`.
+2. Esperar a que Meta la apruebe.
+3. Grabar el **video 1**, ya con el envío de plantilla dentro.
+
+Si corre prisa, el video 1 se puede grabar antes: la respuesta a mano desde la Bandeja ya cumple el
+requisito —«la app envía un mensaje y el mensaje llega»—. El envío de plantilla es un extra que lo
+hace más difícil de rechazar, no un requisito.
+
+> Detalle del botón que depende de esa plantilla, en
+> [`asistente-restaurante.md`](asistente-restaurante.md) §«El botón "avisar que está listo"».
+
+### Preparativos comunes, una sola vez
+
+| Qué | Cómo, en este PC |
+|---|---|
+| Grabador | **Herramienta de Recortes** de Windows 11 en modo vídeo: graba una región **con el cursor**. El Xbox Game Bar encaja mal: no captura el Explorador y va atado a una sola ventana |
+| Rótulos en inglés | **Clipchamp** (viene con Windows): texto superpuesto. La interfaz está en español y *«interfaz no inglesa sin subtítulos»* es causa de rechazo listada |
+| Resolución | Pantalla completa a 1080p, navegador al 110–125 % para que el texto se lea |
+| Audio | No hace falta. Lo que se evalúa es lo que se ve y lo que dicen los rótulos |
+| El «cliente final» | **WhatsApp Web con el número personal, en otra ventana al lado.** Ahorra montar vídeo del teléfono, y WhatsApp Web es un cliente de WhatsApp igual que el móvil. El número del negocio no puede usarse así: está en la Cloud API |
+| Sesión | Empezar **desde el login** en los dos. Arrancar con la sesión abierta es causa de rechazo listada |
+
+> ⚠️ **Un permiso por vídeo, y la línea está en el verbo.** *Enviar* una plantilla es `messaging`;
+> *crearla* es `management`. Que en el vídeo 1 salga un envío de plantilla es correcto; lo que no
+> puede salir ahí es la pantalla de creación. Y en el vídeo 2 no se envía nada.
+
+> ⚠️ **En pantalla hay datos de un cliente real.** El `+57 315 281 2484` sirve hoy a **Pregonchos**
+> y su Bandeja tiene conversaciones de personas reales. Antes de grabar, escribe tu nombre o tu
+> número en **«Buscar una conversación»**: filtra en local y deja a la vista solo la tuya. Y el
+> cliente final del vídeo tiene que ser **tu segundo número**, nunca el de un comensal.
+
+### Video 2 — `whatsapp_business_management` (grabar primero)
+
+**~2 minutos**, todo en el panel de Meta.
+
+| # | Qué se hace | Rótulo en inglés |
+|---|---|---|
+| 1 | Empezar con la sesión de Meta **cerrada**; entrar a `business.facebook.com` | *Signing in to our Meta Business account* |
+| 2 | **WhatsApp Manager → Account tools → Message templates** | *WhatsApp Manager: the message templates of the WhatsApp Business Account* |
+| 3 | Enseñar `recordatorio_cita` en **APPROVED** | *We already manage message templates for the businesses on our platform* |
+| 4 | **Create template** → nombre `pedido_listo`, categoría **Utility**, idioma **Español (es)** | *Creating a new UTILITY template: an order-ready notification* |
+| 5 | Pegar el cuerpo palabra por palabra y rellenar los tres ejemplos | *The template body, with three variables* |
+| 6 | **Submit**, y enseñar que queda *In review* / *Pending* | *The template is submitted for review through the WhatsApp Business Management API* |
+
+Cuerpo exacto — tiene que coincidir con `intelligence/core/plantillas.js` o el envío falla con
+`(#132001) Template name does not exist`:
+
+```
+Hola {{1}}, tu pedido {{2}} de {{3}} ya está listo y puedes pasar a recogerlo.
+Si necesitas algo, respóndenos a este mensaje.
+```
+
+Ejemplos para los huecos: `Nicolás` · `ORD-0042` · `Pregonchos`.
 
 ### Video 1 — `whatsapp_business_messaging`
 
-1. Empezar **con la sesión cerrada** en `escalapp.cloud/admin`.
-2. Iniciar sesión (rótulo en inglés: *«Business owner logs into EscalApp»*).
-3. Abrir **la Bandeja** (`/admin/bandeja`) y una conversación real
-   (*«Inbox: conversations of this business's end customers»*).
-4. **Escribir y enviar** un mensaje desde la app (*«The business replies from our app…»*).
-5. **Cortar al teléfono**: el mensaje llegando a WhatsApp (*«…and it arrives on WhatsApp»*).
-6. Contestar desde el teléfono y mostrar que **entra** en la Bandeja (*«…and inbound messages are
-   received via webhook»*).
+**~3 minutos**, con dos ventanas al lado: la Consola y WhatsApp Web con el número personal.
 
-### Video 2 — `whatsapp_business_management`
+| # | Qué se hace | Rótulo en inglés |
+|---|---|---|
+| 1 | `escalapp.cloud/admin` **sin sesión** → iniciar sesión | *A business owner signs in to EscalApp, our multi-tenant SaaS* |
+| 2 | Menú lateral → **Conversaciones** (`/admin/admin/bandeja`) | *Inbox: the WhatsApp conversations between this business and its own end customers* |
+| 3 | Desde WhatsApp Web, el cliente escribe al número del negocio | *An end customer writes to the business's WhatsApp number* |
+| 4 | Volver a la Bandeja: el mensaje **aparece solo** (refresca cada 5 s) | *The inbound message arrives through our webhook* |
+| 5 | Abrir la conversación, escribir una respuesta y enviarla | *The business replies from our app, inside the 24-hour customer service window* |
+| 6 | Cambiar a WhatsApp Web: **el mensaje llega** | *The reply is delivered to the customer's WhatsApp* |
+| 7 | *(solo si `pedido_listo` está aprobada)* Entrar al negocio de restaurante → **Despacho** → **«Avisar que está listo»**, que pasa a **«Avisado»** | *The business sends a UTILITY template message to notify its customer* |
+| 8 | WhatsApp Web otra vez: llega la plantilla | *The template message is delivered* |
 
-1. Igual: empezar desde el login (cuesta 10 segundos y quita una causa de rechazo).
-2. Entrar a **WhatsApp Manager → Message templates → Create template**.
-3. Crear una plantilla `UTILITY` en español — la de recordatorio de cita sirve de modelo.
-4. Enviarla y mostrar que queda **en revisión / aprobada**.
+El paso 4 no es relleno: es la mitad del permiso que Meta no pregunta por escrito pero sí mira —que
+**recibimos** por webhook, no solo que enviamos—. Y que el mensaje entre **sin tocar nada** se ve
+mejor que pulsar un botón de refrescar.
 
-**Reglas para los dos:** cursor visible, sin audio, alta resolución, **rótulos en inglés** sobre
-cada paso (la interfaz es española: sin rótulos, rechazo), y **un permiso por video**.
+### Lo que hay que decidir antes de grabar el vídeo 1
 
-> **2026-09-07 — el video 2 dejó de ser un trámite y pasó a ser trabajo real que hacía falta.**
-> El despacho tiene desde ese día un botón que le avisa al cliente que su pedido está listo para
-> recoger, y ese aviso **es** una plantilla: `pedido_listo` [es] `UTILITY`, ya escrita en
-> `intelligence/core/plantillas.js` y con sus pruebas. **Falta crearla en WhatsApp Manager**, con
-> nombre, idioma y texto idénticos.
->
-> O sea que grabar el video 2 y desbloquear la función son **la misma tarea**. Y de paso mejora el
-> video 1: en vez de solo contestar a mano desde la Bandeja, se puede enseñar la app mandando una
-> plantilla de verdad y llegando al teléfono, que es exactamente lo que Meta quiere ver. Detalle en
-> [`asistente-restaurante.md`](asistente-restaurante.md) §«El botón "avisar que está listo"».
+**Con qué usuario se inicia sesión**, porque ése es el que hay que darle al revisor (§4): si no
+puede reproducir lo que vio, es causa de rechazo.
+
+Hoy la Bandeja de ese número es la de Pregonchos, un cliente real; dar su login es dar acceso a las
+conversaciones de sus comensales. La salida limpia es **crear un usuario aparte con rol
+`ADMINISTRADOR` sobre ese negocio**, grabar con él, dárselo al revisor y desactivarlo cuando la
+revisión termine. ⬜ Pendiente.
 
 ---
 
