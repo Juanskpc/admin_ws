@@ -204,6 +204,25 @@ const CARTA = [
             ['Hervidos de frutas', 'Lulo, mora o maracuyá.', 9000, '🍹'],
         ],
     },
+    {
+        // No está en el menú impreso: son productos que el negocio vende igualmente y pidió
+        // agregar aparte. Por eso van sin descripción de ingredientes — no se inventan.
+        nombre: 'Cafetería',
+        descripcion: 'Desayunos y porciones',
+        icono: '🍳',
+        productos: [
+            ['Desayuno con huevo al gusto', null, 9000, '🍳'],
+            ['Desayuno con carne de res, cerdo y pechuga', null, 10000, '🥩'],
+            ['Ojaldra', null, 2000, '🥐'],
+            ['Pan con queso', null, 3000, '🧀'],
+            ['Envueltos', null, 3000, '🌽'],
+            ['Sándwich', null, 3000, '🥪'],
+            ['Porción de papa', null, 6000, '🍟'],
+            ['Sopa', null, 3000, '🍲'],
+            ['Huevos solos', null, 3000, '🥚'],
+            ['Porción de arroz', null, 3000, '🍚'],
+        ],
+    },
 ];
 
 /** Resuelve el negocio del administrador y verifica que sea uno y de tipo RESTAURANTE. */
