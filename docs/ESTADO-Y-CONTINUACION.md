@@ -1,6 +1,6 @@
 # EscalApp Intelligence — estado y cómo continuar
 
-**Última actualización:** 2026-09-02 (sesión de **proveedor de facturación y precios**; el resumen está en §4-0.7, que es por donde hay que empezar. La sesión anterior —facturación electrónica + políticas + landing— está en §4-0.6)
+**Última actualización:** 2026-09-10 (sesión del **App Review de Meta**; el resumen está en §4-0.8, que es por donde hay que empezar, y ahí está también **por dónde arranca la sesión de facturación electrónica**. Las anteriores: proveedor de facturación y precios en §4-0.7, facturación + políticas + landing en §4-0.6)
 **Propósito:** que retomar el trabajo no cueste una sesión de arqueología. Si vuelves a este
 proyecto después de semanas, **lee este documento primero** y sigue por donde diga.
 
@@ -491,6 +491,79 @@ en verde.** El roadmap original está agotado: todo lo que se hace ahora sale de
 >
 > Como en la sesión anterior: `admin_ws` y `admin_app-v21` siguen con todo el trabajo de FE-1/FE-4,
 > los borradores legales y ahora estos documentos **en el árbol de trabajo, sin commitear**.
+
+> ### 8. CIERRE DE LA SESIÓN DEL 2026-09-10 — App Review enviado, y por dónde sigue facturación
+>
+> #### Lo que pasó: la solicitud está enviada
+>
+> **El App Review de `whatsapp_business_messaging` y `whatsapp_business_management` se envió el
+> 2026-09-10 y está «Revisión en curso».** Meta dice hasta 20 días. El detalle completo —qué se
+> declaró, con qué palabras y por qué— está en **[`meta-app-review.md`](meta-app-review.md) §0**,
+> que es lo que hay que leer si contestan pidiendo algo.
+>
+> **Mientras dure: no tocar** los vídeos, las descripciones ni la configuración básica de la app
+> (editar puede reiniciar la revisión), **no despublicar** la app, **no desactivar** al usuario
+> `90000001`, y que no se caigan las tres URLs legales ni el login. Nada de eso impide seguir
+> desplegando el producto.
+>
+> #### Lo que se tocó de código, y ya está en producción
+>
+> 1. **`pedido_listo` quedó aprobada en Meta como `es_CO`, no como `es`.** Meta busca la plantilla
+>    por **nombre + idioma**, así que el catálogo diciendo `es` habría reventado con el mismo
+>    `(#132001)` de dos días antes, esta vez con la plantilla aprobada y a la vista en el panel —
+>    un fallo que no apunta a ningún sitio. Corregido en `intelligence/core/plantillas.js` y
+>    desplegado. **El botón «Avisar que está listo» del despacho ya funciona de verdad.**
+> 2. **Políticas legales v1.1, desplegadas.** La justificación que se le envía a Meta describe
+>    acceder a la WABA de los clientes; la política de privacidad no lo mencionaba. Nueva §8 en
+>    privacidad, viñeta en términos §10 y las instrucciones para desconectarse en la página de
+>    eliminación.
+> 3. **`scripts/crear_usuario_revisor.js`** — el login del revisor (`90000001`, solo negocio 12, sin
+>    roles globales). Por defecto **no escribe**; `--desactivar` lo retira sin borrarlo. ⚠️
+>    **Retirarlo cuando Meta dé veredicto.**
+> 4. **[`legal/solicitudes-de-autoridades.md`](legal/solicitudes-de-autoridades.md)** — se marcaron
+>    cuatro casillas sobre solicitudes de autoridades y no existía la política detrás. Ahora existe.
+>
+> #### ⚠️ Sigue abierto: el número dice `verificación: EXPIRED`
+>
+> El 2026-09-04 el diagnóstico decía `VERIFIED`. Hoy dice `EXPIRED`, con el número igualmente
+> `CONNECTED` y calidad `GREEN`, y los envíos saliendo. No bloquea nada hoy, pero es lo primero que
+> mirar si un día Meta empieza a rechazar envíos.
+>
+> #### POR DÓNDE EMPEZAR MAÑANA — facturación electrónica
+>
+> El trabajo de Meta está esperando a Meta. Lo que mueve la aguja es facturación, y **lo que la
+> bloquea no es código: es elegir proveedor** (FE-0). Orden:
+>
+> 1. **Contar los tiquetes reales de Pregonchos** (`id_negocio` 12): órdenes pagadas al mes en
+>    `restaurante.pedid_orden`. Todo el análisis de costos se apoya en «900 documentos al mes», que
+>    es una hipótesis inventada. **Con la cifra real, la elección de proveedor se cierra sola**, y
+>    no depende de nadie. Es la primera media hora de la sesión.
+> 2. **Cotizar** con las preguntas de [`facturacion-electronica.md`](facturacion-electronica.md)
+>    §8.2 — Alegra, Dataico, The Factory HKA (PT confirmados) y Factus. El criterio es la **forma**
+>    del costo, no el precio: cobramos mensualidad fija, así que un proveedor **por documento** hace
+>    que el cliente que más factura sea el que menos margen deje. **Factus está descartado para POS**
+>    (verificado en su API v2).
+> 3. **Preguntarles a todos si un documento POS consume el mismo cupo que una factura.** Ninguno lo
+>    dice en su web y para un restaurante cambia el costo entero.
+>
+> **Lo que se puede hacer sin esperar a nadie**, si se quiere código el primer día:
+>
+> - **Aplicar `npm run migrate:facturacion` en la base compartida (5433).** FE-1 está hecha y
+>   probada, pero **solo en la base local**: ni en la compartida ni en producción. Es lo que separa
+>   «existe» de «se puede usar».
+> - **Diseñar el puerto de FE-2** (la interfaz que aísla al proveedor). Se puede escribir antes de
+>   saber cuál será: precisamente para eso existe.
+> - Ahí hay que resolver una pregunta que FE-1 dejó abierta a propósito: **`features.js` vive hoy en
+>   `intelligence/core/`**, y que facturación dependa de Intelligence sería una dependencia al
+>   revés. Se decide en FE-2, que es cuando hace falta.
+>
+> El plan por fases completo está en [`facturacion-electronica.md`](facturacion-electronica.md) §9,
+> y la decisión de fondo en [ADR-026](adr/ADR-026-facturacion-electronica.md).
+>
+> #### Y una fecha que no espera a nadie
+>
+> **El 1 de octubre de 2026 Meta empieza a cobrar los mensajes de servicio.** Medir los salientes
+> por negocio antes de esa fecha sigue pendiente, y sigue sin depender de nadie.
 
 ### Qué hay vivo, y dónde apunta
 
