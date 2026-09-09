@@ -110,15 +110,37 @@ Ninguna es código. Están en *App Dashboard → Settings → Basic* salvo donde
 > `category` y `user_support_email` — callar no distingue «vacío» de «no puedo verlo». Son campos
 > de administrador: se miran en el panel, no desde aquí.
 
-### Lo que hay que producir (y no existe todavía)
+### Lo que hay que producir — hecho el 2026-09-10
 
 | Qué | Estado | Nota |
 |---|---|---|
-| **Video 1** — messaging | ⬜ | Grabar. El material real ya existe |
-| **Video 2** — management | ✅ 2026-09-10 | Crear una plantilla en WhatsApp Manager, grabando. **Crea `pedido_listo`**: hace falta de todos modos (ver abajo) |
-| **Descripción 1 y 2** en inglés | ⬜ | Borradores listos abajo, §4 |
-| **Usuario de prueba** para el revisor | ⬜ | Un login de la Consola de producción, con datos de demostración |
-| **Notas para el revisor** | ⬜ | Una frase, §4 |
+| **Video 1** — messaging | ✅ 2026-09-10 | El pedido entero por WhatsApp y el aviso del botón llegando, en una toma |
+| **Video 2** — management | ✅ 2026-09-10 | La creación de `pedido_listo` en WhatsApp Manager |
+| **Descripción 1 y 2** en inglés | ✅ | §4, listas para pegar |
+| **Usuario de prueba** para el revisor | ✅ 2026-09-10 | Ver abajo |
+| **Notas para el revisor** | ✅ | §4 |
+
+**Lo único que queda son las ocho casillas del panel**, y enviar.
+
+#### El usuario que se le entrega al revisor
+
+Creado con `scripts/crear_usuario_revisor.js`, que se apoya en el mismo DAO que la Consola para
+que el alta **reconstruya los niveles**: un `INSERT` a mano deja un usuario que entra y no ve
+nada, con el guardia cancelando la navegación sin error.
+
+| | |
+|---|---|
+| Documento (con esto inicia sesión) | `90000001` · `id_usuario` 32 |
+| Alcance | **solo** negocio 12 · Restaurante pregonchos · rol ADMINISTRADOR |
+| Roles globales | ninguno — **no** es super admin, no ve otros inquilinos |
+| Clave | **no se guarda en el repo.** Está en el formulario de Meta; para cambiarla, volver a crear el usuario o usar la Consola |
+
+Comprobado contra producción el mismo día: el login devuelve token, la Bandeja le contesta y solo
+le enseña Pregonchos.
+
+> ⚠️ **Retirarlo cuando Meta termine** — es la mitad que se queda sin hacer:
+> `node scripts/crear_usuario_revisor.js --desactivar=90000001 --aplicar`. Deja el usuario en
+> estado `I`; no borra, para no llevarse por delante su rastro de auditoría.
 
 ---
 
@@ -266,7 +288,8 @@ revisión termine. ⬜ Pendiente.
 > We are applying to become a WhatsApp Tech Provider. We submit one separate screencast for
 > `whatsapp_business_messaging` and one for `whatsapp_business_management`. Our product UI is in
 > Spanish; every relevant step is annotated in English in the videos. Test credentials for our
-> admin console: <usuario> / <clave> at https://escalapp.cloud/admin.
+> admin console: 90000001 / <clave> at https://escalapp.cloud/admin (log in with the ID number,
+> not an email). This account only has access to one demo-facing business.
 
 ---
 
