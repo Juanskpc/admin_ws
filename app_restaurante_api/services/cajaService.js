@@ -617,13 +617,22 @@ async function getMovimientos(idCaja) {
     });
 }
 
-async function registrarMovimiento({ idCaja, tipo, monto, concepto, idUsuario, idOrden, idMovimientoAnula = null, transaction }) {
+async function registrarMovimiento({
+    idCaja, tipo, monto, concepto, idUsuario, idOrden,
+    idMovimientoAnula = null, permitirCero = false, transaction,
+}) {
     if (!['INGRESO', 'EGRESO'].includes(tipo)) {
         const err = new Error('Tipo de movimiento inválido (INGRESO o EGRESO).');
         err.statusCode = 422;
         throw err;
     }
-    if (!(Number(monto) > 0)) {
+    const importe = Number(monto);
+    // El cero se permite **solo** cuando quien llama ya justificó por qué, y nunca por
+    // omisión: un movimiento manual de cero pesos no significa nada y ensucia el arqueo.
+    // Hoy lo justifican dos sitios, los dos en este archivo: el cobro de un pedido que un
+    // descuento dejó en cero, y la reversa de ese mismo movimiento al anularlo.
+    // Los negativos siguen prohibidos siempre: el signo lo pone `tipo`, no el monto.
+    if (!Number.isFinite(importe) || importe < 0 || (importe === 0 && !permitirCero)) {
         const err = new Error('El monto debe ser mayor a cero.');
         err.statusCode = 422;
         throw err;
@@ -637,6 +646,43 @@ async function registrarMovimiento({ idCaja, tipo, monto, concepto, idUsuario, i
         id_usuario: idUsuario,
         id_movimiento_anula: idMovimientoAnula || null,
     }, { transaction });
+}
+
+/**
+ * Un pedido puede cobrarse en CERO, pero solo si un descuento se comió su valor.
+ *
+ * El caso real es la cena de los empleados: el restaurante la registra como pedido para que
+ * salga en el consumo y en el inventario, y la descuenta entera porque no la cobra. Sin esto
+ * la única salida era no tomar el pedido, y entonces ni el inventario ni el informe se
+ * enteraban de esa comida.
+ *
+ * La condición se comprueba contra la orden guardada, no contra el `monto` que llega por
+ * parámetro: son dos caminos distintos hasta el mismo número y solo uno es la fuente de
+ * verdad. Y se exige que **haya** descuento y que **haya** algo que descontar, porque el otro
+ * modo de llegar a cero es un pedido vacío o roto, y ese sí debe seguir rebotando.
+ */
+async function exigirCeroJustificadoPorDescuento({ idOrden, transaction }) {
+    const orden = await Models.PedidOrden.findByPk(idOrden, {
+        attributes: ['id_orden', 'subtotal', 'impuesto', 'valor_domicilio', 'descuento', 'total'],
+        transaction,
+    });
+
+    const bruto = Number(orden?.subtotal ?? 0)
+        + Number(orden?.impuesto ?? 0)
+        + Number(orden?.valor_domicilio ?? 0);
+    const rebaja = Number(orden?.descuento ?? 0);
+
+    // En centavos, como el cuadre del multipago: comparar decimales a pelo miente.
+    const cubreElTotal = Math.round(bruto * 100) === Math.round(rebaja * 100);
+
+    if (!orden || rebaja <= 0 || bruto <= 0 || !cubreElTotal) {
+        const err = new Error(
+            'Un pedido solo puede cobrarse en cero cuando el descuento cubre su valor completo.',
+        );
+        err.code = 'COBRO_CERO_SIN_DESCUENTO';
+        err.statusCode = 422;
+        throw err;
+    }
 }
 
 /**
@@ -654,6 +700,11 @@ async function registrarMovimiento({ idCaja, tipo, monto, concepto, idUsuario, i
  */
 async function registrarIngresoOrden({ idNegocio, idOrden, idUsuario, monto, numeroOrden, valorDomicilio = 0, transaction }) {
     const caja = await requireCajaAbierta(idNegocio, { transaction });
+
+    const importe = Number(monto ?? 0);
+    const esCero = Number.isFinite(importe) && importe === 0;
+    if (esCero) await exigirCeroJustificadoPorDescuento({ idOrden, transaction });
+
     await registrarMovimiento({
         idCaja: caja.id_caja,
         tipo: 'INGRESO',
@@ -661,6 +712,10 @@ async function registrarIngresoOrden({ idNegocio, idOrden, idUsuario, monto, num
         concepto: `Orden ${numeroOrden}`,
         idUsuario,
         idOrden,
+        // Queda un INGRESO de cero, y es a propósito: no mueve el arqueo pero deja el pedido
+        // en el listado del turno. Saltarse el movimiento lo haría desaparecer de la caja,
+        // que es justo donde el negocio quiere ver las cenas que regaló.
+        permitirCero: esCero,
         transaction,
     });
 
@@ -774,6 +829,9 @@ async function anularOrdenCobrada({ idNegocio, idOrden, idUsuario }) {
                 idUsuario,
                 idOrden,
                 idMovimientoAnula: mov.id_movimiento,
+                // Reversar un cero da un cero. El original ya pasó por la comprobación del
+                // descuento; volver a exigirla aquí impediría anular una cena de empleado.
+                permitirCero: Number(mov.monto) === 0,
                 transaction: t,
             });
             montoRevertido += mov.tipo === 'INGRESO' ? Number(mov.monto) : -Number(mov.monto);
