@@ -20,6 +20,7 @@ const MetodosPago  = require('../controllers/metodoPagoController');
 const Usuarios     = require('../controllers/usuarioController');
 const Marca        = require('../controllers/marcaController');
 const Citas        = require('../controllers/citaController');
+const CodigoCita   = require('../services/codigoCita');
 const Config       = require('../controllers/configController');
 const Vitrina      = require('../controllers/vitrinaController');
 const Categorias   = require('../controllers/categoriaController');
@@ -142,13 +143,17 @@ router.post('/publico/:id_negocio/cita',
     Publico.crearCitaPublica,
 );
 
-// Consultar / cancelar por código
-router.get('/publico/cita/:codigo_publico',
-    [param('codigo_publico').isUUID()],
-    Publico.consultarCita);
-router.post('/publico/cita/:codigo_publico/cancelar',
-    [param('codigo_publico').isUUID()],
-    Publico.cancelarCitaPublica);
+// Consultar / cancelar por código.
+//
+// Ya no es `isUUID`: desde que el código son 8 caracteres legibles, esa validación rechazaba
+// con un 422 todos los códigos nuevos. `esValido` acepta las dos formas —el formato corto,
+// con guiones o sin ellos, y los UUID que ya están en manos de clientes— y el servicio se
+// encarga de normalizar antes de buscar.
+const codigoValido = param('codigo_publico').custom(v => CodigoCita.esValido(v))
+    .withMessage('Código de reserva inválido');
+
+router.get('/publico/cita/:codigo_publico', [codigoValido], Publico.consultarCita);
+router.post('/publico/cita/:codigo_publico/cancelar', [codigoValido], Publico.cancelarCitaPublica);
 
 // ═════════ RUTAS PROTEGIDAS ═════════
 router.use(verificarToken);
@@ -248,6 +253,7 @@ router.get('/disponibilidad', [
     query('fecha').matches(/^\d{4}-\d{2}-\d{2}$/).withMessage('fecha YYYY-MM-DD requerida'),
     query('id_servicio').optional().isInt({ min: 1 }),
     query('id_servicios').optional().matches(/^\d+(,\d+)*$/).withMessage('id_servicios debe ser una lista de ids separada por comas'),
+    query('excluir_cita').optional().isInt({ min: 1 }),
 ], Disponibilidad.getSlots);
 
 // Bloqueos
@@ -282,6 +288,13 @@ router.get('/clientes', [
     query('offset').optional().isInt({ min: 0 }),
 ], exigirVista('/clientes'), Clientes.listar);
 
+// Antes de `/clientes/:id`: si no, «exportar» se tomaría por un id y fallaría el isUUID.
+router.get('/clientes/exportar', [
+    query('id_negocio').isInt({ min: 1 }),
+    query('formato').isIn(['xlsx', 'pdf']),
+    query('buscar').optional({ nullable: true, checkFalsy: true }).isString().isLength({ max: 100 }),
+], exigirVista('/clientes'), Clientes.exportar);
+
 router.get('/clientes/:id', [
     param('id').isUUID(),
     query('id_negocio').isInt({ min: 1 }),
@@ -312,6 +325,18 @@ router.post('/citas', [
     body('cliente_nombre').trim().notEmpty().isLength({ max: 150 }),
     body('cliente_email').optional({ nullable: true, checkFalsy: true }).isEmail(),
 ], Citas.crearManual);
+
+// Editar una cita ya agendada: servicios, profesional y hora. `id_servicios` es la lista
+// completa que debe quedar, no un delta.
+router.put('/citas/:id', [
+    param('id').isInt({ min: 1 }),
+    body('id_negocio').isInt({ min: 1 }),
+    body('id_servicios').isArray({ min: 1 }),
+    body('id_servicios.*').isInt({ min: 1 }),
+    body('id_profesional').optional({ nullable: true }).isInt({ min: 1 }),
+    body('fecha_hora_inicio').optional({ nullable: true, checkFalsy: true }).notEmpty(),
+], exigirAccion('citas_editar'), Citas.actualizar);
+
 router.post('/citas/:id/confirmar', [
     param('id').isInt({ min: 1 }),
     body('id_negocio').isInt({ min: 1 }),
@@ -482,7 +507,9 @@ router.post('/usuarios', [
     body('primer_nombre').trim().notEmpty().isLength({ max: 100 }),
     body('primer_apellido').trim().notEmpty().isLength({ max: 100 }),
     body('num_identificacion').trim().notEmpty().isLength({ max: 30 }),
-    body('email').trim().isEmail().isLength({ max: 120 }),
+    // El correo es opcional: quien inicia sesión es el documento, no el email. Un empleado
+    // sin cuenta de correo —lo normal en un salón— no puede quedarse sin acceso por eso.
+    body('email').optional({ nullable: true, checkFalsy: true }).trim().isEmail().isLength({ max: 120 }),
     body('telefono').optional({ nullable: true, checkFalsy: true }).isString().isLength({ max: 30 }),
     body('id_rol').isInt({ min: 1 }),
     body('password').optional({ nullable: true, checkFalsy: true }).isLength({ min: 8 }),
@@ -493,7 +520,8 @@ router.put('/usuarios/:id', [
     body('id_negocio').isInt({ min: 1 }),
     body('primer_nombre').optional().trim().notEmpty().isLength({ max: 100 }),
     body('primer_apellido').optional().trim().notEmpty().isLength({ max: 100 }),
-    body('email').optional().trim().isEmail().isLength({ max: 120 }),
+    // "" y null son «borrar el correo», no un email inválido: el servicio lo guarda como NULL.
+    body('email').optional({ nullable: true, checkFalsy: true }).trim().isEmail().isLength({ max: 120 }),
     body('id_rol').optional().isInt({ min: 1 }),
     body('password').optional({ nullable: true, checkFalsy: true }).isLength({ min: 8 }),
 ], Usuarios.actualizar);

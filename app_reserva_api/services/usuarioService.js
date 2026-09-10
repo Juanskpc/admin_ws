@@ -47,29 +47,31 @@ function nombreCompleto(u) {
 }
 
 /**
- * Normaliza a mayúsculas los campos de nombre e identificación.
+ * Limpia los campos de nombre antes de guardarlos.
  *
- * La directiva del formulario ya lo hace mientras se escribe, pero la validación de verdad va
- * aquí: la API es alcanzable sin pasar por la pantalla, y basta un `curl` o un cliente futuro
- * para meter «Ana Pérez» junto a «ANA PÉREZ» y romper la uniformidad que se buscaba. Que el
- * formulario lo muestre y el servidor lo garantice no es duplicar: es que una cosa es comodidad
- * y la otra es la regla.
+ * Nombres, apellidos y especialidad se guardan **como los escribió la persona** —«Ana Pérez» o
+ * «ANA PÉREZ», lo que el negocio prefiera—; solo se les quitan los espacios de los extremos.
  *
- * Se deja fuera el **email** (se guarda en minúscula; en mayúscula despistaría al iniciar
- * sesión) y la **contraseña**, que en mayúsculas simplemente sería otra contraseña.
+ * La **identificación** sí va siempre en mayúscula: es con lo que se inicia sesión, y un
+ * pasaporte o una cédula de extranjería con letras no puede depender de cómo se tecleó el día
+ * del alta. La directiva del formulario lo hace mientras se escribe; aquí se garantiza, porque
+ * la API es alcanzable sin pasar por la pantalla.
+ *
+ * Nunca se toca el **email** (se guarda en minúscula aparte) ni la **contraseña**.
  */
-const CAMPOS_MAYUSCULA = [
-    'primer_nombre', 'segundo_nombre', 'primer_apellido', 'segundo_apellido',
-    'num_identificacion', 'especialidad',
-];
+const CAMPOS_TEXTO = ['primer_nombre', 'segundo_nombre', 'primer_apellido', 'segundo_apellido', 'especialidad'];
+const CAMPOS_MAYUSCULA = ['num_identificacion'];
 
 function aMayusculas(valor) {
     return typeof valor === 'string' ? valor.trim().toUpperCase() : valor;
 }
 
-/** Devuelve una copia de `datos` con los campos de nombre ya en mayúscula. */
+/** Devuelve una copia de `datos` con los nombres recortados y la identificación en mayúscula. */
 function normalizarNombres(datos) {
     const salida = { ...datos };
+    for (const campo of CAMPOS_TEXTO) {
+        if (typeof salida[campo] === 'string') salida[campo] = salida[campo].trim();
+    }
     for (const campo of CAMPOS_MAYUSCULA) {
         if (salida[campo] !== undefined && salida[campo] !== null) {
             salida[campo] = aMayusculas(salida[campo]);
@@ -420,22 +422,30 @@ async function validarRolDelVertical(idRol) {
 async function crear({ idNegocio, datos: datosCrudos, idProfesionalExistente = null }) {
     const datos = normalizarNombres(datosCrudos);
     const rol = await validarRolDelVertical(datos.id_rol);
-    const email = String(datos.email || '').trim().toLowerCase();
+    // El email es opcional. Quien identifica al usuario al entrar es la cédula (el login pide
+    // `num_identificacion`, no el correo), así que exigir un email dejaba fuera a media
+    // plantilla de un salón o inventaba direcciones falsas para rellenar el hueco.
+    const email = String(datos.email || '').trim().toLowerCase() || null;
     const cedula = String(datos.num_identificacion || '').trim();
 
-    if (!email || !cedula) throw error('El email y la identificación son obligatorios.');
+    if (!cedula) throw error('La identificación es obligatoria.');
 
-    const choque = await Models.GenerUsuario.findOne({
-        where: { [Op.or]: [{ email }, { num_identificacion: cedula }] },
-        attributes: ['id_usuario', 'email', 'num_identificacion'],
+    // Dos comprobaciones separadas, no un OR: sin email el OR se quedaría en una sola condición
+    // y el mensaje de duplicado señalaría al campo equivocado.
+    const choqueCedula = await Models.GenerUsuario.findOne({
+        where: { num_identificacion: cedula }, attributes: ['id_usuario'],
     });
-    if (choque) {
-        throw error(
-            choque.email === email
-                ? 'Ya existe un usuario con ese email.'
-                : 'Ya existe un usuario con esa identificación.',
-            409, 'USUARIO_DUPLICADO',
-        );
+    if (choqueCedula) {
+        throw error('Ya existe un usuario con esa identificación.', 409, 'USUARIO_DUPLICADO');
+    }
+
+    if (email) {
+        const choqueEmail = await Models.GenerUsuario.findOne({
+            where: { email }, attributes: ['id_usuario'],
+        });
+        if (choqueEmail) {
+            throw error('Ya existe un usuario con ese email.', 409, 'USUARIO_DUPLICADO');
+        }
     }
 
     return Models.sequelize.transaction(async (t) => {
@@ -515,10 +525,17 @@ async function actualizar({ idNegocio, idUsuario, datos: datosCrudos }) {
     const usuario = await Models.GenerUsuario.findByPk(idUsuario);
     if (!usuario) throw error('Usuario no encontrado.', 404);
 
-    if (datos.email) {
-        const email = String(datos.email).trim().toLowerCase();
+    // `undefined` es «no se tocó el campo»; `null` o cadena vacía son «bórralo». La distinción
+    // importa: el formulario manda siempre el email, y con el correo ya opcional vaciarlo tiene
+    // que poder guardarse en vez de quedarse con el valor viejo.
+    const emailNuevo = datos.email === undefined
+        ? undefined
+        : (String(datos.email ?? '').trim().toLowerCase() || null);
+
+    if (emailNuevo) {
         const choque = await Models.GenerUsuario.findOne({
-            where: { email, id_usuario: { [Op.ne]: idUsuario } }, attributes: ['id_usuario'],
+            where: { email: emailNuevo, id_usuario: { [Op.ne]: idUsuario } },
+            attributes: ['id_usuario'],
         });
         if (choque) throw error('Ya existe otro usuario con ese email.', 409);
     }
@@ -528,7 +545,7 @@ async function actualizar({ idNegocio, idUsuario, datos: datosCrudos }) {
         for (const campo of ['primer_nombre', 'segundo_nombre', 'primer_apellido', 'segundo_apellido', 'telefono']) {
             if (datos[campo] !== undefined) cambios[campo] = datos[campo]?.trim() || null;
         }
-        if (datos.email) cambios.email = String(datos.email).trim().toLowerCase();
+        if (emailNuevo !== undefined) cambios.email = emailNuevo;
         // Cambiar la contraseña obliga al usuario a ponerse una propia en el siguiente acceso.
         if (datos.password?.trim()) {
             cambios.password = datos.password.trim();

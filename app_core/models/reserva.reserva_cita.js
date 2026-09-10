@@ -14,7 +14,11 @@ module.exports = (sequelize, DataTypes) => {
     // SIEMPRE nullable (ADR-006): la cita existe aunque no se pueda identificar a nadie,
     // que es lo que pasa cuando el teléfono no es un móvil colombiano utilizable.
     id_persona_negocio:            { type: DataTypes.UUID, allowNull: true },
-    codigo_publico:                { type: DataTypes.UUID, allowNull: false, defaultValue: DataTypes.UUIDV4 },
+    // 8 caracteres Base32 Crockford para las citas nuevas (ver app_reserva_api/services/
+    // codigoCita.js); las citas viejas conservan su UUID de 36 caracteres, que cabe igual
+    // en VARCHAR(36). El servicio lo genera explícitamente al crear la cita — el DEFAULT de
+    // la columna (reserva.fn_codigo_cita()) es solo el respaldo para inserciones por SQL crudo.
+    codigo_publico:                { type: DataTypes.STRING(36), allowNull: false },
     creado_por_id_usuario:         DataTypes.INTEGER,
     cancelado_por:                 DataTypes.STRING(20),  // 'cliente' | 'negocio'
     cancelado_motivo:              DataTypes.TEXT,

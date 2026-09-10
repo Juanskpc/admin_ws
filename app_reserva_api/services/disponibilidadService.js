@@ -33,7 +33,12 @@ const Reglas = require('./reglasAgenda');
  *
  * Devuelve: { fecha, duracion_servicio_min, buffer_min, paso_slot_min, slots: [{ hora, disponible, motivo? }] }
  */
-async function calcularSlots({ idNegocio, idServicio, idServicios, idProfesional, fechaISO }) {
+/**
+ * @param {number} [params.excluirCita] — id de cita que NO debe contar como ocupada.
+ *        Al editar una cita, su propia hora tiene que seguir ofreciéndose: sin esto el
+ *        formulario de edición mostraría como tomado justo el hueco que ya es suyo.
+ */
+async function calcularSlots({ idNegocio, idServicio, idServicios, idProfesional, fechaISO, excluirCita = null }) {
     const ids = normalizarIdsServicio(idServicios, idServicio);
     if (!idNegocio || ids.length === 0 || !idProfesional || !fechaISO) {
         const e = new Error('Parámetros incompletos'); e.statusCode = 400; throw e;
@@ -65,12 +70,15 @@ async function calcularSlots({ idNegocio, idServicio, idServicios, idProfesional
         slots: [],
     };
 
-    const huecos = await Reglas.huecosReservables({
-        idNegocio,
-        idProfesional,
-        fechaISO,
-        bufferMin: cfg.buffer_limpieza_min,
-    });
+    const huecos = await Reglas.huecosReservables(
+        {
+            idNegocio,
+            idProfesional,
+            fechaISO,
+            bufferMin: cfg.buffer_limpieza_min,
+        },
+        { excluirCita },
+    );
     if (huecos.length === 0) return vacio;
 
     const minimoInicio = Reglas.addMinutes(new Date(), cfg.anticipacion_min_horas * 60);

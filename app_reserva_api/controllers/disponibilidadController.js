@@ -29,6 +29,8 @@ async function getSlots(req, res) {
             idServicios:   req.query.id_servicios,
             idServicio:    req.query.id_servicio ? Number(req.query.id_servicio) : undefined,
             fechaISO:      String(req.query.fecha),
+            // Al editar una cita se excluye a sí misma, o su propia hora saldría ocupada.
+            excluirCita:   req.query.excluir_cita ? Number(req.query.excluir_cita) : null,
         });
         return Respuesta.success(res, 'Slots calculados', data);
     } catch (err) {

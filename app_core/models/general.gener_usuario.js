@@ -9,7 +9,11 @@ module.exports = (sequelize, DataTypes) => {
         segundo_apellido: DataTypes.STRING(100),
         num_identificacion: { type: DataTypes.STRING(50), allowNull: false, unique: true },
         telefono: DataTypes.STRING(50),
-        email: { type: DataTypes.STRING(255), unique: true, allowNull: false },
+        // Opcional desde 2026-09-09 (migrate:usuario-email-opcional). El login pide
+        // `num_identificacion`, así que el correo no es una credencial sino un dato de
+        // contacto, y hay empleados que no tienen. Sigue siendo único cuando existe: en
+        // PostgreSQL un índice UNIQUE admite varios NULL.
+        email: { type: DataTypes.STRING(255), unique: true, allowNull: true },
         password: { type: DataTypes.STRING(255), allowNull: false },
         fecha_nacimiento: DataTypes.DATEONLY,
         es_admin_principal: {

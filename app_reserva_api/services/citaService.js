@@ -7,7 +7,26 @@ const Disponibilidad = require('./disponibilidadService');
 const Notificacion = require('./notificacionService');
 const Reglas = require('./reglasAgenda');
 const EstadoCita = require('./estadoCita');
+const CodigoCita = require('./codigoCita');
 const Audit = require('../../app_core/helpers/auditHelper');
+
+/**
+ * Un código corto que todavía no tiene ninguna cita. `generar()` es aleatorio (32^8
+ * combinaciones), así que un choque es casi imposible — pero "casi" no es "nunca", y aquí es
+ * barato comprobarlo antes de intentar el INSERT en vez de que falle contra el índice único.
+ */
+async function generarCodigoLibre({ transaction } = {}) {
+    for (let intento = 0; intento < 5; intento++) {
+        const candidato = CodigoCita.generar();
+        const existe = await Models.ReservaCita.findOne({
+            where: { codigo_publico: candidato },
+            attributes: ['id_cita'],
+            transaction,
+        });
+        if (!existe) return candidato;
+    }
+    const e = new Error('No se pudo generar un código de cita libre'); e.statusCode = 500; throw e;
+}
 
 /**
  * Crea una cita aplicando todas las reglas de negocio:
@@ -38,6 +57,69 @@ const Audit = require('../../app_core/helpers/auditHelper');
  * @param {Object=}  opciones.transaction       Transacción de quien llama. Si viene, este
  *                   servicio NO confirma: la decisión de commit es de quien la abrió.
  */
+/**
+ * Interpreta una fecha-hora que llega sin huso como hora de pared de Bogotá.
+ *
+ * Estaba repetida en `crearCita` y `reagendarCita` con la misma expresión; al aparecer un
+ * tercer llamante (`actualizarCita`) se saca aquí para que las tres no puedan divergir.
+ */
+function parsearInicio(fechaHoraInicioISO) {
+    const traeHuso = fechaHoraInicioISO.includes('+') || fechaHoraInicioISO.endsWith('Z');
+    const inicio = new Date(`${fechaHoraInicioISO}${traeHuso ? '' : '-05:00'}`);
+    if (Number.isNaN(inicio.getTime())) {
+        const e = new Error('fecha_hora_inicio inválida'); e.statusCode = 400; throw e;
+    }
+    return inicio;
+}
+
+/**
+ * Valida que el profesional y los servicios sean utilizables juntos en este negocio, y
+ * devuelve las filas ya leídas para que quien llame calcule duración y monto sin repetir
+ * las consultas.
+ *
+ * Se extrae de `crearCita` porque editar una cita tiene que aplicar exactamente las mismas
+ * reglas: si al crear no se admite un servicio que el profesional no ofrece, al cambiarlo
+ * después tampoco. Tenerlo en dos sitios era la forma segura de que un día dejaran de
+ * coincidir.
+ */
+async function validarProfesionalYServicios(
+    { idNegocio, idProfesional, idServicios }, { transaction = null } = {},
+) {
+    const profesional = await Models.ReservaProfesional.findOne({
+        where: { id_profesional: idProfesional, id_negocio: idNegocio, estado: 'A' },
+        transaction,
+    });
+    if (!profesional) {
+        const e = new Error('Profesional no válido'); e.statusCode = 404; e.code = 'PROFESIONAL_NO_VALIDO'; throw e;
+    }
+
+    const servicios = await Models.ReservaServicio.findAll({
+        where: { id_servicio: { [Op.in]: idServicios }, id_negocio: idNegocio, estado: 'A' },
+        transaction,
+    });
+    if (servicios.length !== idServicios.length) {
+        const e = new Error('Algún servicio no es válido para este negocio');
+        e.statusCode = 400; e.code = 'SERVICIO_NO_VALIDO'; throw e;
+    }
+
+    const ofrecidos = await Models.ReservaProfesionalServicio.findAll({
+        where: { id_profesional: idProfesional, id_servicio: { [Op.in]: idServicios } },
+        transaction,
+    });
+    // Si el profesional aún no tiene asignaciones, lo permitimos (ofrece todos por defecto).
+    // Si ya tiene asignaciones, deben cubrir todos los pedidos.
+    const totalAsignados = await Models.ReservaProfesionalServicio.count({
+        where: { id_profesional: idProfesional },
+        transaction,
+    });
+    if (totalAsignados > 0 && ofrecidos.length !== idServicios.length) {
+        const e = new Error('El profesional no ofrece alguno de los servicios solicitados');
+        e.statusCode = 400; e.code = 'SERVICIO_NO_OFRECIDO'; throw e;
+    }
+
+    return { profesional, servicios };
+}
+
 async function crearCita(params, { transaction: transaccionExterna = null } = {}) {
     const {
         idNegocio, idProfesional, idServicios = [],
@@ -51,42 +133,15 @@ async function crearCita(params, { transaction: transaccionExterna = null } = {}
 
     const cfg = await Disponibilidad.getConfig(idNegocio);
 
-    // Validar profesional pertenece al negocio
-    const profesional = await Models.ReservaProfesional.findOne({
-        where: { id_profesional: idProfesional, id_negocio: idNegocio, estado: 'A' },
-    });
-    if (!profesional) {
-        const e = new Error('Profesional no válido'); e.statusCode = 404; e.code = 'PROFESIONAL_NO_VALIDO'; throw e;
-    }
-
-    // Validar servicios pertenecen al negocio y son ofrecidos por el profesional
-    const servicios = await Models.ReservaServicio.findAll({
-        where: { id_servicio: { [Op.in]: idServicios }, id_negocio: idNegocio, estado: 'A' },
-    });
-    if (servicios.length !== idServicios.length) {
-        const e = new Error('Algún servicio no es válido para este negocio');
-        e.statusCode = 400; e.code = 'SERVICIO_NO_VALIDO'; throw e;
-    }
-
-    const ofrecidos = await Models.ReservaProfesionalServicio.findAll({
-        where: { id_profesional: idProfesional, id_servicio: { [Op.in]: idServicios } },
-    });
-    // Si el profesional aún no tiene asignaciones, lo permitimos (ofrece todos por defecto).
-    // Si ya tiene asignaciones, deben cubrir todos los pedidos.
-    const totalAsignados = await Models.ReservaProfesionalServicio.count({ where: { id_profesional: idProfesional } });
-    if (totalAsignados > 0 && ofrecidos.length !== idServicios.length) {
-        const e = new Error('El profesional no ofrece alguno de los servicios solicitados');
-        e.statusCode = 400; e.code = 'SERVICIO_NO_OFRECIDO'; throw e;
-    }
+    const { profesional, servicios } = await validarProfesionalYServicios(
+        { idNegocio, idProfesional, idServicios },
+    );
 
     // Calcular duración total y monto total
     const duracionTotal = servicios.reduce((acc, s) => acc + s.duracion_min, 0);
     const montoTotal = servicios.reduce((acc, s) => acc + Number(s.precio), 0);
 
-    const fechaInicio = new Date(`${fechaHoraInicioISO}${fechaHoraInicioISO.includes('+') || fechaHoraInicioISO.endsWith('Z') ? '' : '-05:00'}`);
-    if (Number.isNaN(fechaInicio.getTime())) {
-        const e = new Error('fecha_hora_inicio inválida'); e.statusCode = 400; throw e;
-    }
+    const fechaInicio = parsearInicio(fechaHoraInicioISO);
     const fechaFin = new Date(fechaInicio.getTime() + duracionTotal * 60_000);
 
     // Validar anticipación mínima
@@ -148,10 +203,13 @@ async function crearCita(params, { transaction: transaccionExterna = null } = {}
               )
             : null;
 
+        const codigoPublico = await generarCodigoLibre({ transaction: t });
+
         const cita = await Models.ReservaCita.create({
             id_negocio: idNegocio,
             id_profesional: idProfesional,
             id_persona_negocio: idPersonaNegocio,
+            codigo_publico: codigoPublico,
             fecha_hora_inicio: fechaInicio,
             fecha_hora_fin: fechaFin,
             estado: 'pendiente',
@@ -237,8 +295,10 @@ async function getCitaConDetalle(idCita, { transaction = null } = {}) {
 }
 
 async function getCitaPorCodigo(codigoPublico) {
+    const normalizado = CodigoCita.normalizar(codigoPublico);
+    if (!normalizado) return null;
     return Models.ReservaCita.findOne({
-        where: { codigo_publico: codigoPublico },
+        where: { codigo_publico: normalizado },
         include: [
             { model: Models.ReservaProfesional, as: 'profesional',
               attributes: ['id_profesional', 'nombre', 'foto_url', 'color_hex', 'especialidad'] },
@@ -262,7 +322,11 @@ async function getCitaPorCodigo(codigoPublico) {
  * una probabilidad (ADR-002).
  */
 async function cancelarPorCliente(codigoPublico, motivo, { idNegocio = null, transaction = null } = {}) {
-    const where = { codigo_publico: codigoPublico };
+    const normalizado = CodigoCita.normalizar(codigoPublico);
+    if (!normalizado) {
+        const e = new Error('Cita no encontrada'); e.statusCode = 404; throw e;
+    }
+    const where = { codigo_publico: normalizado };
     if (idNegocio) where.id_negocio = idNegocio;
 
     const cita = await Models.ReservaCita.findOne({ where, transaction });
@@ -355,11 +419,7 @@ async function reagendarCita(
         });
         const duracionTotal = servicios.reduce((acc, s) => acc + s.duracion_min, 0);
 
-        const traeHuso = nuevaFechaHoraInicioISO.includes('+') || nuevaFechaHoraInicioISO.endsWith('Z');
-        const inicio = new Date(`${nuevaFechaHoraInicioISO}${traeHuso ? '' : '-05:00'}`);
-        if (Number.isNaN(inicio.getTime())) {
-            const e = new Error('fecha_hora_inicio inválida'); e.statusCode = 400; throw e;
-        }
+        const inicio = parsearInicio(nuevaFechaHoraInicioISO);
         const fin = new Date(inicio.getTime() + duracionTotal * 60_000);
         const profesionalDestino = idProfesional || cita.id_profesional;
 
@@ -394,6 +454,161 @@ async function reagendarCita(
 
         if (propia) {
             await t.commit();
+            Notificacion.enviar('cita_reagendada', { cita: cita.toJSON() })
+                .catch(err => console.error('[Reserva] notif error:', err.message));
+        }
+
+        return await getCitaConDetalle(idCita, { transaction: propia ? null : t });
+    } catch (err) {
+        if (propia && t.finished !== 'commit' && t.finished !== 'rollback') await t.rollback();
+        throw err;
+    }
+}
+
+/**
+ * Edita una cita ya agendada: sus servicios, su profesional y su hora.
+ *
+ * Es lo que faltaba para poder corregir un pedido sin borrarlo y volverlo a crear —que era
+ * la única salida y perdía el histórico, el código público y los recordatorios ya
+ * programados—.
+ *
+ * ## Por qué recalcula y revalida siempre
+ *
+ * Cambiar de servicio cambia la duración, y la duración cambia la hora de fin. Un corte de
+ * 30 min que pasa a corte + barba de 50 ocupa veinte minutos que pueden ser de la cita
+ * siguiente. Por eso no basta con reescribir las líneas: hay que recolocar el fin y volver a
+ * pasar por `verificarReservable`, igual que si se estuviera creando. Se excluye la propia
+ * cita del choque, porque de lo contrario colisionaría consigo misma.
+ *
+ * ## Qué NO toca
+ *
+ * Ni el estado ni el cobro. Una cita en estado terminal (completada, cancelada, no_show) se
+ * rechaza: la completada ya pasó por caja con su `monto_total`, y moverlo ahora descuadraría
+ * un turno que quizá ya se cerró. Para eso están las acciones de estado, no esta.
+ *
+ * Los datos del cliente tampoco se tocan aquí: esta operación es sobre lo que se presta y
+ * cuándo, que es lo que compite por la agenda.
+ *
+ * @param {number}   params.idCita
+ * @param {number}   params.idNegocio
+ * @param {number[]} params.idServicios          Lista COMPLETA que debe quedar (reemplaza).
+ * @param {number=}  params.idProfesional        Si se omite, conserva el actual.
+ * @param {string=}  params.fechaHoraInicioISO   Si se omite, conserva la hora actual.
+ * @param {number=}  params.idUsuario            Quién edita, para el evento de auditoría.
+ */
+async function actualizarCita(
+    { idCita, idNegocio, idServicios = [], idProfesional = null, fechaHoraInicioISO = null, idUsuario = null },
+    { transaction: transaccionExterna = null } = {},
+) {
+    if (!idCita || !idNegocio || !idServicios.length) {
+        const e = new Error('Datos incompletos para editar la cita'); e.statusCode = 400; throw e;
+    }
+
+    const cfg = await Disponibilidad.getConfig(idNegocio);
+    const propia = !transaccionExterna;
+    const t = transaccionExterna || (await Models.sequelize.transaction());
+
+    try {
+        const cita = await Models.ReservaCita.findOne({
+            where: { id_cita: idCita, id_negocio: idNegocio },
+            transaction: t,
+            lock: t.LOCK.UPDATE,
+        });
+        if (!cita) {
+            const e = new Error('Cita no encontrada'); e.statusCode = 404; throw e;
+        }
+        if (EstadoCita.esTerminal(cita.estado)) {
+            const e = new Error(`Una cita "${cita.estado}" ya está cerrada y no se puede editar.`);
+            e.statusCode = 409; e.code = 'TRANSICION_INVALIDA'; throw e;
+        }
+
+        const profesionalDestino = idProfesional || cita.id_profesional;
+
+        const { servicios } = await validarProfesionalYServicios(
+            { idNegocio, idProfesional: profesionalDestino, idServicios },
+            { transaction: t },
+        );
+
+        const duracionTotal = servicios.reduce((acc, s) => acc + s.duracion_min, 0);
+        const montoTotal = servicios.reduce((acc, s) => acc + Number(s.precio), 0);
+
+        const inicio = fechaHoraInicioISO
+            ? parsearInicio(fechaHoraInicioISO)
+            : new Date(cita.fecha_hora_inicio);
+        const fin = new Date(inicio.getTime() + duracionTotal * 60_000);
+
+        // Mismo grano de bloqueo que al crear: la agenda de un profesional.
+        await Models.sequelize.query('SELECT pg_advisory_xact_lock(:clave);', {
+            replacements: { clave: profesionalDestino },
+            transaction: t,
+        });
+
+        await Reglas.verificarReservable(
+            { idNegocio, idProfesional: profesionalDestino, inicio, fin, bufferMin: cfg.buffer_limpieza_min },
+            { transaction: t, excluirCita: idCita },
+        );
+
+        // Huella del antes, para que el evento diga qué cambió y no solo que se editó.
+        const antes = {
+            id_profesional: cita.id_profesional,
+            fecha_hora_inicio: cita.fecha_hora_inicio,
+            fecha_hora_fin: cita.fecha_hora_fin,
+            monto_total: Number(cita.monto_total),
+            servicios: (await Models.ReservaCitaServicio.findAll({
+                where: { id_cita: idCita },
+                attributes: ['id_servicio'],
+                transaction: t,
+            })).map(l => l.id_servicio),
+        };
+
+        // Las líneas se reemplazan enteras y con snapshot nuevo: si el precio de lista
+        // cambió desde que se agendó, lo que se cobra es lo que vale hoy el servicio que
+        // realmente se va a prestar.
+        await Models.ReservaCitaServicio.destroy({ where: { id_cita: idCita }, transaction: t });
+        await Models.ReservaCitaServicio.bulkCreate(
+            servicios.map(s => ({
+                id_cita: idCita,
+                id_servicio: s.id_servicio,
+                precio_snapshot: Number(s.precio),
+                duracion_snapshot_min: s.duracion_min,
+            })),
+            { transaction: t },
+        );
+
+        await cita.update(
+            {
+                id_profesional: profesionalDestino,
+                fecha_hora_inicio: inicio,
+                fecha_hora_fin: fin,
+                monto_total: montoTotal,
+                fecha_actualizacion: new Date(),
+            },
+            { transaction: t },
+        );
+
+        await Audit.registrarEvento({
+            modulo: 'reserva',
+            accion: 'cita_editada',
+            idUsuario,
+            idNegocio,
+            detalle: {
+                id_cita: idCita,
+                antes,
+                despues: {
+                    id_profesional: profesionalDestino,
+                    fecha_hora_inicio: inicio,
+                    fecha_hora_fin: fin,
+                    monto_total: montoTotal,
+                    servicios: servicios.map(s => s.id_servicio),
+                },
+            },
+            transaction: t,
+        });
+
+        if (propia) {
+            await t.commit();
+            // Al cliente le cambió lo que va a recibir o cuándo: se le avisa con el mismo
+            // canal del reagendado, que es el aviso que ya entiende.
             Notificacion.enviar('cita_reagendada', { cita: cita.toJSON() })
                 .catch(err => console.error('[Reserva] notif error:', err.message));
         }
@@ -506,6 +721,6 @@ async function eliminarCita(idCita, idNegocio, { idUsuario = null } = {}) {
 }
 
 module.exports = {
-    crearCita, reagendarCita, getCitaConDetalle, getCitaPorCodigo, cancelarPorCliente,
-    aprobarPago, rechazarPago, eliminarCita,
+    crearCita, actualizarCita, reagendarCita, getCitaConDetalle, getCitaPorCodigo,
+    cancelarPorCliente, aprobarPago, rechazarPago, eliminarCita,
 };

@@ -1,7 +1,9 @@
 'use strict';
 const { validationResult } = require('express-validator');
 const ClienteService = require('../services/clienteService');
+const ClienteExportService = require('../services/clienteExportService');
 const Respuesta = require('../../app_core/helpers/respuesta');
+const { registrarEvento } = require('../../app_core/helpers/auditHelper');
 
 function check(req, res) {
     const e = validationResult(req);
@@ -100,4 +102,42 @@ async function actualizar(req, res) {
     }
 }
 
-module.exports = { listar, buscarPorTelefono, detalle, actualizar };
+/**
+ * GET /reserva/clientes/exportar?id_negocio=&formato=xlsx|pdf&buscar=
+ *
+ * La cartera entera en un archivo, con el mismo filtro que la pantalla. Se deja constancia en
+ * auditoría: sacar de golpe los teléfonos de todos los clientes es justo el tipo de acción sobre
+ * datos personales de la que conviene poder responder quién y cuándo.
+ */
+async function exportar(req, res) {
+    if (!check(req, res)) return;
+    try {
+        const idNegocio = Number(req.query.id_negocio);
+        const formato = req.query.formato === 'pdf' ? 'pdf' : 'xlsx';
+        const buscar = req.query.buscar ? String(req.query.buscar).trim() : null;
+
+        const clientes = await ClienteService.listarParaExportar({ idNegocio, buscar });
+        const nombreNegocio = await ClienteExportService.getNombreNegocio(idNegocio);
+        const generar = formato === 'pdf' ? ClienteExportService.generarPDF : ClienteExportService.generarXLSX;
+        const { buffer, filename } = await generar(clientes, { nombreNegocio, buscar });
+
+        await registrarEvento({
+            modulo: 'clientes',
+            accion: 'exportar',
+            idNegocio,
+            detalle: { formato, filas: clientes.length, buscar },
+        });
+
+        res.setHeader('Content-Type', formato === 'pdf'
+            ? 'application/pdf'
+            : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+        // Sin esto el navegador no ve la cabecera y el archivo baja sin nombre ni extensión.
+        res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
+        return res.send(buffer);
+    } catch (err) {
+        return fallo(res, err, 'exportar', 'No se pudo generar el archivo de clientes.');
+    }
+}
+
+module.exports = { listar, exportar, buscarPorTelefono, detalle, actualizar };

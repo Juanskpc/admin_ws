@@ -75,23 +75,32 @@ function aCliente(fila) {
  * @param {number} [params.limite]
  * @param {number} [params.offset]
  */
-async function listar({ idNegocio, buscar = null, limite = 50, offset = 0 }) {
-    // Un término de búsqueda puede ser un nombre o un trozo de teléfono. Si son dígitos se
-    // compara contra el número **ya normalizado**, porque en la base está en E.164: buscar
-    // "300 111" a pelo no encontraría "+573001112233".
+/**
+ * El WHERE de la búsqueda, compartido por el listado y la exportación: el archivo tiene que
+ * traer exactamente lo que la pantalla muestra con el mismo término.
+ *
+ * Un término puede ser un nombre o un trozo de teléfono. Si son dígitos se compara contra el
+ * número **ya normalizado**, porque en la base está en E.164: buscar "300 111" a pelo no
+ * encontraría "+573001112233".
+ */
+function filtroBusqueda(buscar) {
     const termino = buscar ? String(buscar).trim() : '';
     const digitos = termino.replace(/\D/g, '');
-
     const filtro = termino
         ? `AND (pn.nombre_mostrado ILIKE :like
                 OR (:digitos <> '' AND pn.telefono_e164 LIKE '%' || :digitos))`
         : '';
+    return { filtro, like: `%${termino}%`, digitos };
+}
+
+async function listar({ idNegocio, buscar = null, limite = 50, offset = 0 }) {
+    const { filtro, like, digitos } = filtroBusqueda(buscar);
 
     const replacements = {
         idNegocio,
         limite: Math.min(Math.max(Number(limite) || 50, 1), 200),
         offset: Math.max(Number(offset) || 0, 0),
-        like: `%${termino}%`,
+        like,
         digitos,
     };
 
@@ -123,6 +132,37 @@ async function listar({ idNegocio, buscar = null, limite = 50, offset = 0 }) {
     );
 
     return { total, clientes: filas.map(aCliente) };
+}
+
+/** Tope de la exportación: de sobra para un salón, y evita que un archivo tumbe el proceso. */
+const MAX_EXPORTAR = 10000;
+
+/**
+ * La cartera completa —sin paginar— para el Excel/PDF, con el mismo filtro y el mismo orden
+ * que el listado en pantalla.
+ */
+async function listarParaExportar({ idNegocio, buscar = null }) {
+    const { filtro, like, digitos } = filtroBusqueda(buscar);
+    const filas = await sequelize.query(
+        `
+        SELECT pn.id_persona_negocio, pn.nombre_mostrado, pn.telefono_e164,
+               pn.notas, pn.etiquetas, pn.creado_en,
+               agg.total_citas, agg.citas_completadas, agg.citas_canceladas,
+               agg.inasistencias, agg.primera_cita, agg.ultima_cita, agg.total_gastado,
+               mail.email
+          FROM platform.persona_negocio pn
+          ${SQL_AGREGADOS}
+         WHERE pn.id_negocio = :idNegocio
+           ${filtro}
+         ORDER BY agg.ultima_cita DESC NULLS LAST, pn.creado_en DESC
+         LIMIT :max;
+        `,
+        {
+            replacements: { idNegocio, like, digitos, max: MAX_EXPORTAR },
+            type: sequelize.QueryTypes.SELECT,
+        }
+    );
+    return filas.map(aCliente);
 }
 
 /**
@@ -242,4 +282,4 @@ async function citasDe({ idNegocio, idPersonaNegocio, limite = 20 }) {
     );
 }
 
-module.exports = { listar, buscarPorTelefono, buscarPorId, actualizar, citasDe };
+module.exports = { listar, listarParaExportar, buscarPorTelefono, buscarPorId, actualizar, citasDe };

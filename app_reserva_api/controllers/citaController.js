@@ -99,6 +99,35 @@ async function crearManual(req, res) {
     }
 }
 
+/**
+ * PUT /reserva/citas/:id
+ *
+ * Edita una cita agendada: qué servicios lleva, con qué profesional y a qué hora. El estado y
+ * el cobro no se tocan aquí — para eso están confirmar/completar/cancelar.
+ *
+ * `id_servicios` es la lista COMPLETA que debe quedar, no un delta: quitar un servicio es
+ * mandarla sin él. Es lo que espera un formulario con casillas, que es quien llama.
+ */
+async function actualizar(req, res) {
+    if (!check(req, res)) return;
+    try {
+        const cita = await CitaService.actualizarCita({
+            idCita:             Number(req.params.id),
+            idNegocio:          Number(req.body.id_negocio),
+            idServicios:        (req.body.id_servicios || []).map(Number),
+            idProfesional:      req.body.id_profesional ? Number(req.body.id_profesional) : null,
+            fechaHoraInicioISO: req.body.fecha_hora_inicio ? String(req.body.fecha_hora_inicio) : null,
+            idUsuario:          req.usuario?.id_usuario,
+        });
+        return Respuesta.success(res, 'Cita actualizada', cita);
+    } catch (err) {
+        if (err.statusCode) return Respuesta.error(res, err.message, err.statusCode,
+            err.code ? [{ code: err.code }] : null);
+        console.error('[Reserva/Citas] actualizar:', err.message);
+        return Respuesta.error(res, 'Error al editar la cita.');
+    }
+}
+
 /** POST /reserva/citas/:id/confirmar */
 async function confirmar(req, res) {
     try {
@@ -233,7 +262,7 @@ async function eliminar(req, res) {
 }
 
 module.exports = {
-    listar, listarPendientesPago, getById, crearManual,
+    listar, listarPendientesPago, getById, crearManual, actualizar,
     confirmar, completar, noShow, cancelarPorNegocio,
     aprobarPago, rechazarPago, descargarComprobante, eliminar,
 };
