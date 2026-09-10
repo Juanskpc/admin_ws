@@ -66,6 +66,9 @@ router.post('/auth/canjear-codigo', [
     body('code').trim().notEmpty().withMessage('El código es requerido'),
 ], SsoController.canjearCodigo);
 
+// Rubros (público — la landing pinta sus chips con esto, sin sesión)
+router.get('/rubros', TipoNegocioController.getRubros);
+
 // Paletas de colores (públicas — para que la app del negocio cargue los colores)
 router.get('/paletas', PaletaColorController.getListaPaletas);
 router.get('/paletas/:id', PaletaColorController.paletaIdValidators, PaletaColorController.getPaletaById);
@@ -177,7 +180,8 @@ router.post('/negocios', [
         .isEmail().withMessage('El email de contacto no es válido'),
     // El país decide cómo se normaliza el teléfono de los clientes del negocio
     // (app_core/helpers/telefono.js). Se restringe a los que sabemos normalizar.
-    body('pais').optional({ nullable: true }).isIn(PAISES).withMessage('País no soportado')
+    body('pais').optional({ nullable: true }).isIn(PAISES).withMessage('País no soportado'),
+    body('id_rubro').optional({ nullable: true }).isInt({ min: 1 }).withMessage('Rubro inválido')
 ], NegocioController.createNegocio);
 router.patch('/negocios/:id/plan', requireSuperAdmin, [
     param('id').isInt({ min: 1 }).withMessage('ID de negocio inválido'),
@@ -191,7 +195,8 @@ router.put('/negocios/:id', requireSuperAdmin, [
     body('nombre').trim().notEmpty().withMessage('El nombre del negocio es requerido'),
     body('email_contacto').optional({ nullable: true }).isEmail().withMessage('Email de contacto inválido'),
     body('id_tipo_negocio').optional({ nullable: true }).isInt({ min: 1 }).withMessage('Tipo de negocio inválido'),
-    body('pais').optional({ nullable: true }).isIn(PAISES).withMessage('País no soportado')
+    body('pais').optional({ nullable: true }).isIn(PAISES).withMessage('País no soportado'),
+    body('id_rubro').optional({ nullable: true }).isInt({ min: 1 }).withMessage('Rubro inválido')
 ], NegocioController.updateNegocio);
 router.patch('/negocios/:id/estado', requireSuperAdmin, [
     param('id').isInt({ min: 1 }).withMessage('ID de negocio inválido'),
@@ -283,7 +288,14 @@ router.put(
 
 router.post('/negocios/registrar-cliente', requireSuperAdmin, [
     body('negocio.nombre').trim().notEmpty().withMessage('El nombre del negocio es requerido'),
-    body('negocio.id_tipo_negocio').isInt({ min: 1 }).withMessage('El tipo de negocio es requerido'),
+    // Se acepta el oficio (`id_rubro`) o, por compatibilidad, el módulo a secas. El DAO
+    // traduce lo que llegue; lo que no puede es faltar los dos.
+    body('negocio.id_tipo_negocio').optional({ nullable: true }).isInt({ min: 1 }).withMessage('Tipo de negocio inválido'),
+    body('negocio.id_rubro').optional({ nullable: true }).isInt({ min: 1 }).withMessage('Rubro inválido'),
+    body('negocio').custom((v) => {
+        if (!v?.id_rubro && !v?.id_tipo_negocio) throw new Error('El tipo de negocio es requerido');
+        return true;
+    }),
     body('negocio.email_contacto').optional({ nullable: true }).isEmail().withMessage('Email de contacto inválido'),
     // El país decide cómo se normaliza el teléfono de los clientes del negocio
     // (app_core/helpers/telefono.js). Se restringe a los que sabemos normalizar.

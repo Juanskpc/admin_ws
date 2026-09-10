@@ -12,7 +12,11 @@ module.exports = (sequelize, DataTypes) => {
         url_whatsapp: DataTypes.STRING,
         url_facebook: DataTypes.STRING,
         url_instagram: DataTypes.STRING,
+        // El MODULO sobre el que opera el negocio. De aqui cuelgan roles y permisos, asi
+        // que no puede ser el oficio del cliente: para eso esta `id_rubro`.
         id_tipo_negocio: { type: DataTypes.INTEGER },
+        /** Que oficio dijo ser el cliente (heladeria, barberia...). Solo para hablar con el. */
+        id_rubro: { type: DataTypes.INTEGER, allowNull: true },
         id_paleta: { type: DataTypes.INTEGER, allowNull: true },
         permite_multipago: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
         /** Opt-in: habilita cobrar el valor del domicilio y pagarlo al domiciliario desde caja. */
@@ -41,9 +45,15 @@ module.exports = (sequelize, DataTypes) => {
     });
 
     GenerNegocio.associate = (models) => {
+        // El MODULO sobre el que corre.
         GenerNegocio.belongsTo(models.GenerTipoNegocio, {
             foreignKey: 'id_tipo_negocio',
             as: 'tipoNegocio'
+        });
+        // El OFICIO que dijo ser el cliente. Puede coincidir con el modulo o no.
+        GenerNegocio.belongsTo(models.GenerTipoNegocio, {
+            foreignKey: 'id_rubro',
+            as: 'rubro'
         });
         GenerNegocio.hasMany(models.GenerNegocioPlan, {
             foreignKey: 'id_negocio'

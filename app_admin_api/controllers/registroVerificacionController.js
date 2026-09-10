@@ -1,5 +1,6 @@
 const { body, validationResult } = require('express-validator');
 const RegistroVerifService = require('../services/registroVerificacionService');
+const { resolverRubroElegido } = require('../services/registroTrialService');
 const Respuesta = require('../../app_core/helpers/respuesta');
 
 /**
@@ -27,15 +28,20 @@ const enviarCodigoValidators = [
         .optional()
         .trim()
         .isLength({ min: 3, max: 50 }).withMessage('El número de identificación debe tener entre 3 y 50 caracteres'),
+    // El oficio se valida contra la BASE, no contra una lista escrita aquí.
+    //
+    // Antes era un `isIn` con cuatro claves, y era la primera de las cuatro copias que había
+    // que sincronizar a mano cada vez que la landing añadía un chip: olvidarla daba un 400 que
+    // no explicaba nada. Ahora la única fuente es `gener_tipo_negocio.id_tipo_modulo`, así que
+    // un rubro nuevo funciona en cuanto existe la fila.
     body('tipo_negocio')
         .optional()
         .trim()
-        // Solo los tipos que la landing ofrece como DISPONIBLES. Si se añade un chip nuevo hay
-        // que añadirlo aquí también, o el registro contesta 400 y el usuario no entiende por qué.
-        // Ver TIPO_NEGOCIO_MAPA en services/registroTrialService.js, que traduce estos valores
-        // al tipo real de la base.
-        .isIn(['RESTAURANTE', 'CAFETERIA', 'BARBERIA', 'SALON_BELLEZA'])
-        .withMessage('Tipo de negocio inválido'),
+        .custom(async (valor) => {
+            const rubro = await resolverRubroElegido(valor);
+            if (!rubro) throw new Error('Tipo de negocio inválido');
+            return true;
+        }),
     body('id_plan')
         .optional()
         .isInt({ min: 1 }).withMessage('ID de plan inválido'),

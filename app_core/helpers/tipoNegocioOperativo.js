@@ -152,4 +152,88 @@ async function remapearRolesDeNegocio(idNegocio, idTipoNegocioNuevo, { transacti
     return { remapeados: aTraducir.length, ajustesDesactivados: ajustesDesactivados || 0 };
 }
 
-module.exports = { getTiposOperativos, assertTipoOperativo, remapearRolesDeNegocio };
+/**
+ * Los oficios que se le pueden ofrecer a un cliente, con el módulo que los atiende.
+ *
+ * Un rubro es una fila de `gener_tipo_negocio` con `id_tipo_modulo` apuntando a otra (o a sí
+ * misma). El cliente dice «tengo una heladería»; el negocio se monta sobre RESTAURANTE. Las dos
+ * cosas se guardan: `gener_negocio.id_rubro` para hablar con él, `id_tipo_negocio` para que los
+ * roles y los permisos sigan funcionando como siempre.
+ *
+ * Se filtra además por catálogo de permisos: un módulo apuntado pero sin sembrar daría un
+ * negocio en el que nadie puede entrar, y ese es justo el fallo que este archivo existe para
+ * impedir. Así, encender un rubro nuevo es una fila en la base y nada más.
+ */
+async function getRubros({ transaction } = {}) {
+    const operativos = await getTiposOperativos({ transaction });
+
+    const filas = await Models.GenerTipoNegocio.findAll({
+        where: { estado: 'A', id_tipo_modulo: { [Op.ne]: null } },
+        attributes: ['id_tipo_negocio', 'nombre', 'descripcion', 'icono', 'color_hex', 'orden', 'id_tipo_modulo'],
+        include: [{
+            model: Models.GenerTipoNegocio,
+            as: 'modulo',
+            required: true,
+            attributes: ['id_tipo_negocio', 'nombre'],
+        }],
+        order: [['orden', 'ASC'], ['nombre', 'ASC']],
+        transaction,
+    });
+
+    return filas
+        .filter((f) => operativos.has(Number(f.id_tipo_modulo)))
+        .map((f) => ({
+            id_tipo_negocio: f.id_tipo_negocio,
+            nombre: f.nombre,
+            // `descripcion` es la etiqueta legible con tildes; `nombre` es la clave.
+            etiqueta: f.descripcion || f.nombre,
+            icono: f.icono || null,
+            color_hex: f.color_hex || null,
+            orden: f.orden,
+            id_tipo_modulo: f.id_tipo_modulo,
+            modulo: f.modulo?.nombre || null,
+        }));
+}
+
+/**
+ * Traduce lo que eligió el cliente a las dos cosas que hay que guardar.
+ *
+ * Acepta un rubro («HELADERIA») o directamente un módulo («RESTAURANTE»), porque durante un
+ * tiempo convivirán las dos formas: la consola manda rubro desde 2026-09-10 y cualquier llamada
+ * anterior manda el módulo a secas. Un módulo es su propio rubro, así que no hay ambigüedad.
+ *
+ * Falla —en vez de elegir por su cuenta— si el tipo no tiene módulo detrás: crear ese negocio
+ * es crear una cuenta que no se puede abrir.
+ *
+ * @returns {Promise<{idRubro:number, idModulo:number}>}
+ */
+async function resolverRubro(idElegido, { transaction } = {}) {
+    const id = Number(idElegido);
+    const tipo = await Models.GenerTipoNegocio.findOne({
+        where: { id_tipo_negocio: id, estado: 'A' },
+        attributes: ['id_tipo_negocio', 'nombre', 'id_tipo_modulo'],
+        transaction,
+    });
+
+    if (!tipo) {
+        const err = new Error('El tipo de negocio seleccionado no es válido');
+        err.code = 'TIPO_NEGOCIO_INVALIDO';
+        err.statusCode = 400;
+        throw err;
+    }
+
+    // Un rubro sabe cuál es su módulo. Un módulo "suelto" (RESERVA, que nadie dice ser) llega
+    // aquí sin `id_tipo_modulo`, y entonces el módulo es él mismo si tiene catálogo.
+    const idModulo = tipo.id_tipo_modulo ?? tipo.id_tipo_negocio;
+    await assertTipoOperativo(idModulo, { transaction });
+
+    return { idRubro: tipo.id_tipo_negocio, idModulo: Number(idModulo) };
+}
+
+module.exports = {
+    getTiposOperativos,
+    assertTipoOperativo,
+    remapearRolesDeNegocio,
+    getRubros,
+    resolverRubro,
+};

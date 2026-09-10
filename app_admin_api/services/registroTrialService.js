@@ -20,34 +20,51 @@ const MailService    = require('./mailService');
 const { initTransaction } = require('../../app_core/helpers/funcionesAdicionales');
 const datosFiscales = require('../../app_core/facturacion/datosFiscales');
 const { syncUsuarioRolActivo, rebuildNivelesUsuario } = require('../../app_core/dao/usuarioAdminDao');
+const tipoOperativo = require('../../app_core/helpers/tipoNegocioOperativo');
 
 const TIPO        = 'REGISTRO';
 const MAX_ATTEMPTS = parseInt(process.env.OTP_MAX_ATTEMPTS || '5', 10);
 const TRIAL_DAYS    = 7;
 
 /**
- * Traduce lo que elige el visitante en la landing al tipo de negocio REAL de la base.
+ * Claves que mandaba la landing antes de que los rubros vivieran en la base (< 2026-09-10).
  *
- * No son lo mismo, y confundirlos ya costó un negocio inservible: la landing habla el idioma del
- * cliente («Barbería», «Cafetería») y la base habla el de los motores que existen. Hoy solo hay
- * dos motores desplegados —restaurante y reserva— y varios oficios distintos caben en cada uno.
- *
- * ⚠️ **`BARBERIA` NO va al tipo `BARBERIA` de la base.** Esa fila (id 3) viene de la migración
- * base y **no tiene aplicación detrás**: un negocio creado ahí se queda sin vertical a la que
- * entrar. Las citas las atiende el vertical de **reserva**, que es lo que está en producción
- * desde el 2026-08-24. El nombre coincide y el destino no, que es justo la clase de trampa que
- * no se ve leyendo el código deprisa.
- *
- * `tipoDb` tiene que coincidir **exacto** con `general.gener_tipo_negocio.nombre`, porque la
- * búsqueda es por nombre. Y la lista de claves debe coincidir con el validador de
- * `registroVerificacionController.js` y con los chips `disponible: true` de la landing.
+ * Se conservan porque la landing está **prerenderizada** y un visitante puede tener la página
+ * vieja abierta o cacheada cuando se despliega la nueva. Sin esto, ese registro contestaría 400
+ * sin motivo aparente. Se pueden borrar cuando ya no queden páginas viejas circulando.
  */
-const TIPO_NEGOCIO_MAPA = {
-    RESTAURANTE:   { tipoDb: 'RESTAURANTE', nombre: 'Mi Restaurante' },
-    CAFETERIA:     { tipoDb: 'RESTAURANTE', nombre: 'Mi Cafetería' },
-    BARBERIA:      { tipoDb: 'RESERVA',     nombre: 'Mi Barbería' },
-    SALON_BELLEZA: { tipoDb: 'RESERVA',     nombre: 'Mi Salón de belleza' },
+const CLAVES_HISTORICAS = {
+    SALON_BELLEZA: 'SALON DE BELLEZA',
 };
+
+/**
+ * Traduce lo que eligió el visitante al rubro de la base, con su módulo detrás.
+ *
+ * Antes esto era un objeto escrito a mano aquí mismo, y era una de las **cuatro copias** de la
+ * misma decisión —chips de la landing, validador del controlador, este mapa y la tabla— que
+ * había que sincronizar sin que nada avisara si se olvidaba una. Olvidar el mapa creaba un
+ * negocio sin vertical; olvidar el validador daba un 400 mudo. Ahora la fuente es
+ * `gener_tipo_negocio.id_tipo_modulo` y no hay nada que sincronizar.
+ *
+ * Acepta el id numérico del rubro (lo que manda la landing nueva) o su clave en texto
+ * («HELADERIA», «SALON_BELLEZA»), porque las dos formas van a convivir un tiempo.
+ *
+ * @returns {Promise<{id_tipo_negocio:number, nombre:string, etiqueta:string, id_tipo_modulo:number}|null>}
+ */
+async function resolverRubroElegido(valor) {
+    const crudo = String(valor ?? '').trim();
+    if (!crudo) return null;
+
+    const rubros = await tipoOperativo.getRubros();
+
+    if (/^\d+$/.test(crudo)) {
+        return rubros.find((r) => Number(r.id_tipo_negocio) === Number(crudo)) ?? null;
+    }
+
+    const clave = crudo.toUpperCase();
+    const normalizada = CLAVES_HISTORICAS[clave] ?? clave.replace(/_/g, ' ');
+    return rubros.find((r) => r.nombre.toUpperCase() === normalizada) ?? null;
+}
 
 /**
  * Divide un nombre completo en sus partes (primer_nombre, segundo_nombre?, primer_apellido).
@@ -128,25 +145,20 @@ async function verificarYCrearCuentaTrial(email, code) {
         attributes: ['id_plan', 'nombre'],
     });
 
-    // 9. Buscar tipo de negocio en la DB, traduciendo primero lo que eligió el visitante.
-    const eleccion = TIPO_NEGOCIO_MAPA[String(tipoNegocioStr || '').toUpperCase()] || null;
-    let idTipoNegocio = null;
+    // 9. Resolver el oficio que eligió el visitante y el módulo que lo atiende.
+    let rubro = null;
     try {
-        const tipoNegocio = await Models.GenerTipoNegocio.findOne({
-            where: { nombre: { [Op.iLike]: eleccion?.tipoDb ?? tipoNegocioStr }, estado: 'A' },
-            attributes: ['id_tipo_negocio'],
-        });
-        idTipoNegocio = tipoNegocio?.id_tipo_negocio ?? null;
-    } catch {
-        // GenerTipoNegocio no crítico — continuamos sin tipo
+        rubro = await resolverRubroElegido(tipoNegocioStr);
+    } catch (e) {
+        console.error('[RegistroTrial] Error resolviendo el rubro:', e.message);
     }
+    const idTipoNegocio = rubro?.id_tipo_modulo ?? null;
 
-    // Sin tipo no hay rol, y sin rol el usuario entra a una app sin un solo módulo visible. Es
+    // Sin módulo no hay rol, y sin rol el usuario entra a una app sin un solo módulo visible. Es
     // preferible verlo en el log del registro que descubrirlo cuando el cliente no puede entrar.
     if (!idTipoNegocio) {
         console.warn(
-            `[RegistroTrial] Sin tipo de negocio para «${tipoNegocioStr}» ` +
-                `(buscado como «${eleccion?.tipoDb ?? tipoNegocioStr}») — el negocio quedará sin rol.`
+            `[RegistroTrial] Sin rubro utilizable para «${tipoNegocioStr}» — el negocio quedará sin rol.`
         );
     }
 
@@ -168,11 +180,17 @@ async function verificarYCrearCuentaTrial(email, code) {
         }, { transaction });
         idUsuario = nuevoUsuario.id_usuario;
 
-        // Crear sucursal (negocio)
-        const nombreNegocio = eleccion?.nombre || 'Mi Sucursal';
+        // Crear sucursal (negocio).
+        //
+        // El nombre sale de la etiqueta del rubro («Mi Heladería»), no de una lista de nombres
+        // aparte: así el que se registra como pizzería ve «Mi Pizzería» y no «Mi Restaurante»,
+        // que es lo que veía antes y le hacía dudar de si se había equivocado.
+        const nombreNegocio = rubro?.etiqueta ? `Mi ${rubro.etiqueta}` : 'Mi Sucursal';
         const nuevoNegocio  = await Models.GenerNegocio.create({
             nombre:          nombreNegocio,
+            // El módulo manda sobre roles y permisos; el rubro es lo que el cliente dijo ser.
             id_tipo_negocio: idTipoNegocio,
+            id_rubro:        rubro?.id_tipo_negocio ?? null,
             email_contacto:  normalizedEmail,
             estado:          'A',
         }, { transaction });
@@ -257,4 +275,4 @@ async function verificarYCrearCuentaTrial(email, code) {
     };
 }
 
-module.exports = { verificarYCrearCuentaTrial };
+module.exports = { verificarYCrearCuentaTrial, resolverRubroElegido };

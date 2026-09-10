@@ -59,4 +59,14 @@ function createTipoNegocio(data) {
     });
 }
 
-module.exports = { getListaTiposNegocio, getTipoNegocioById, createTipoNegocio };
+/**
+ * Los oficios que se le pueden ofrecer a un cliente, ya filtrados por módulo disponible.
+ *
+ * Es lo que alimenta el desplegable de la consola y los chips de la landing, para que la
+ * decisión viva en un solo sitio en vez de en cuatro copias que había que sincronizar a mano.
+ */
+function getRubros() {
+    return tipoOperativo.getRubros();
+}
+
+module.exports = { getListaTiposNegocio, getTipoNegocioById, createTipoNegocio, getRubros };

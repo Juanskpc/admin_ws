@@ -45,10 +45,11 @@ async function createNegocio(req, res) {
             return Respuesta.error(res, 'Datos de entrada inválidos', 400, errors.array());
         }
 
-        const { nombre, nit, email_contacto, telefono, direccion, id_tipo_negocio, pais } = req.body;
+        const { nombre, nit, email_contacto, telefono, direccion, id_tipo_negocio, id_rubro, pais } = req.body;
         const negocio = await NegocioDao.createNegocio({
             nombre, nit, email_contacto, telefono, direccion,
             ...(id_tipo_negocio ? { id_tipo_negocio: Number(id_tipo_negocio) } : {}),
+            ...(id_rubro ? { id_rubro: Number(id_rubro) } : {}),
             ...(pais ? { pais: String(pais).toUpperCase() } : {}),
         });
 

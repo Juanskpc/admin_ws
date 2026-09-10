@@ -18,6 +18,22 @@ async function getListaTiposNegocio(req, res) {
 }
 
 /**
+ * Listar los oficios que se pueden ofrecer, con el módulo que los atiende.
+ *
+ * Es PÚBLICA: la landing la necesita para pintar sus chips antes de que nadie tenga sesión.
+ * No expone nada sensible — es el catálogo comercial, lo mismo que ya se ve en la página.
+ */
+async function getRubros(req, res) {
+    try {
+        const rubros = await TipoNegocioDao.getRubros();
+        return Respuesta.success(res, 'Rubros obtenidos', rubros);
+    } catch (error) {
+        console.error('Error en getRubros:', error);
+        return Respuesta.error(res, 'Error al obtener los rubros');
+    }
+}
+
+/**
  * Obtener un tipo de negocio por ID.
  */
 async function getTipoNegocioById(req, res) {
@@ -65,4 +81,4 @@ async function createTipoNegocio(req, res) {
     }
 }
 
-module.exports = { getListaTiposNegocio, getTipoNegocioById, createTipoNegocio };
+module.exports = { getListaTiposNegocio, getRubros, getTipoNegocioById, createTipoNegocio };

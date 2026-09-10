@@ -64,7 +64,8 @@
     "migrate:restaurante-subniveles-tipo-pedido": "node migrations/migrate_restaurante_subniveles_tipo_pedido.js",
     "migrate:restaurante-caja-anular-pedido": "node migrations/migrate_restaurante_caja_anular_pedido.js",
     "migrate:facturacion": "node migrations/migrate_facturacion_datos_fiscales.js",
-    "migrate:pais-negocio": "node migrations/migrate_pais_negocio.js"
+    "migrate:pais-negocio": "node migrations/migrate_pais_negocio.js",
+    "migrate:rubros-negocio": "node migrations/migrate_rubros_negocio.js"
   },
   "keywords": [],
   "author": "",

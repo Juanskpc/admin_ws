@@ -34,12 +34,17 @@ function getNegocioById(idNegocio) {
  */
 async function createNegocio(negocio, t) {
     const options = t ? { transaction: t } : {};
-    // Un negocio de un tipo sin catalogo de permisos nace inaccesible. Ver
-    // helpers/tipoNegocioOperativo.js.
-    if (negocio.id_tipo_negocio) {
-        await tipoOperativo.assertTipoOperativo(negocio.id_tipo_negocio, { transaction: t });
+    // Lo que llega es el OFICIO del cliente (heladería, barbería…). De ahí salen las dos cosas
+    // que se guardan: el rubro, para hablar con él, y el módulo, del que cuelgan roles y
+    // permisos. Ver helpers/tipoNegocioOperativo.js.
+    const elegido = negocio.id_rubro ?? negocio.id_tipo_negocio;
+    const datos = { ...negocio };
+    if (elegido) {
+        const { idRubro, idModulo } = await tipoOperativo.resolverRubro(elegido, { transaction: t });
+        datos.id_rubro = idRubro;
+        datos.id_tipo_negocio = idModulo;
     }
-    const creado = await Models.GenerNegocio.create(negocio, options);
+    const creado = await Models.GenerNegocio.create(datos, options);
     // Todo negocio nace con su ficha fiscal, en modo NINGUNO: no le pide nada al cliente, pero
     // evita que existan negocios sin ficha, que es un segundo estado posible para lo mismo.
     await datosFiscales.asegurarFicha(creado.id_negocio, { transaction: t });
@@ -195,12 +200,19 @@ async function getListaNegociosAdmin() {
     const negocios = await Models.GenerNegocio.findAll({
         attributes: [
             'id_negocio', 'nombre', 'nit', 'email_contacto', 'telefono',
-            'direccion', 'id_tipo_negocio', 'pais', 'estado', 'fecha_registro',
+            'direccion', 'id_tipo_negocio', 'id_rubro', 'pais', 'estado', 'fecha_registro',
         ],
         include: [{
             model: Models.GenerTipoNegocio,
             as: 'tipoNegocio',
             attributes: ['id_tipo_negocio', 'nombre', 'icono', 'color_hex'],
+            required: false,
+        }, {
+            // El oficio que dijo ser el cliente. Es lo que se enseña en la consola; el módulo
+            // se queda para quien necesite saber sobre qué software corre.
+            model: Models.GenerTipoNegocio,
+            as: 'rubro',
+            attributes: ['id_tipo_negocio', 'nombre', 'descripcion', 'icono', 'color_hex'],
             required: false,
         }],
         order: [['fecha_registro', 'DESC']],
@@ -217,10 +229,14 @@ async function getListaNegociosAdmin() {
         telefono: n.telefono,
         direccion: n.direccion,
         id_tipo_negocio: n.id_tipo_negocio,
+        id_rubro: n.id_rubro ?? null,
         pais: n.pais ?? 'CO',
-        tipo_nombre: n.tipoNegocio?.nombre ?? null,
-        tipo_icono: n.tipoNegocio?.icono ?? null,
-        tipo_color: n.tipoNegocio?.color_hex ?? null,
+        // `tipo_*` describe el OFICIO cuando se conoce, porque es lo que el usuario reconoce.
+        // El módulo viaja aparte en `modulo_nombre` para quien lo necesite.
+        tipo_nombre: n.rubro?.descripcion ?? n.rubro?.nombre ?? n.tipoNegocio?.nombre ?? null,
+        tipo_icono: n.rubro?.icono ?? n.tipoNegocio?.icono ?? null,
+        tipo_color: n.rubro?.color_hex ?? n.tipoNegocio?.color_hex ?? null,
+        modulo_nombre: n.tipoNegocio?.nombre ?? null,
         estado: n.estado,
         fecha_registro: n.fecha_registro,
         plan: planMap.get(n.id_negocio) || null,
@@ -243,9 +259,18 @@ async function updateNegocio(idNegocio, data) {
         throw err;
     }
 
-    const tipoNuevo = data.id_tipo_negocio ? Number(data.id_tipo_negocio) : null;
-    const cambiaTipo = tipoNuevo !== null && tipoNuevo !== Number(negocio.id_tipo_negocio);
-    if (cambiaTipo) await tipoOperativo.assertTipoOperativo(tipoNuevo);
+    // Pasar de «Restaurante» a «Heladería» cambia el oficio pero NO el módulo, así que los
+    // roles siguen valiendo y no hay nada que traducir. Solo un cambio de módulo de verdad
+    // —de restaurante a barbería— obliga a rehacerlos.
+    const elegido = data.id_rubro ?? data.id_tipo_negocio;
+    let rubroNuevo = null;
+    let moduloNuevo = null;
+    if (elegido) {
+        const r = await tipoOperativo.resolverRubro(elegido);
+        rubroNuevo = r.idRubro;
+        moduloNuevo = r.idModulo;
+    }
+    const cambiaModulo = moduloNuevo !== null && moduloNuevo !== Number(negocio.id_tipo_negocio);
 
     const transaction = await initTransaction();
     try {
@@ -255,12 +280,12 @@ async function updateNegocio(idNegocio, data) {
             email_contacto: data.email_contacto ?? null,
             telefono: data.telefono ?? null,
             direccion: data.direccion ?? null,
-            ...(tipoNuevo ? { id_tipo_negocio: tipoNuevo } : {}),
+            ...(moduloNuevo ? { id_tipo_negocio: moduloNuevo, id_rubro: rubroNuevo } : {}),
             ...(data.pais ? { pais: String(data.pais).toUpperCase() } : {}),
         }, { transaction });
 
-        if (cambiaTipo) {
-            await tipoOperativo.remapearRolesDeNegocio(idNegocio, tipoNuevo, { transaction });
+        if (cambiaModulo) {
+            await tipoOperativo.remapearRolesDeNegocio(idNegocio, moduloNuevo, { transaction });
         }
 
         await transaction.commit();
@@ -294,21 +319,13 @@ async function setEstadoNegocio(idNegocio, estado) {
 async function registrarCliente({ negocio, plan, admin, id_usuario_existente }) {
     // ── Validaciones previas (fallar rápido, fuera de la transacción) ──────────
 
-    const tipo = await Models.GenerTipoNegocio.findOne({
-        where: { id_tipo_negocio: negocio.id_tipo_negocio, estado: 'A' },
-        attributes: ['id_tipo_negocio'],
-    });
-    if (!tipo) {
-        const err = new Error('El tipo de negocio seleccionado no es válido');
-        err.statusCode = 400;
-        throw err;
-    }
+    // El cliente elige su oficio; de ahí sale el módulo. `resolverRubro` comprueba las dos
+    // cosas de una vez: que el tipo exista y que haya un módulo detrás capaz de atenderlo.
+    const { idRubro, idModulo } = await tipoOperativo.resolverRubro(
+        negocio.id_rubro ?? negocio.id_tipo_negocio,
+    );
 
-    // Que el tipo exista no significa que se pueda usar: media docena de tipos del catálogo no
-    // tienen módulo y darían un negocio en el que nadie puede entrar.
-    await tipoOperativo.assertTipoOperativo(negocio.id_tipo_negocio);
-
-    const roles = await usuarioAdminDao.getRolesActivos({ idTipoNegocio: negocio.id_tipo_negocio });
+    const roles = await usuarioAdminDao.getRolesActivos({ idTipoNegocio: idModulo });
     const rolAdmin = roles.find((r) => usuarioAdminDao.isAdminRoleName(r.descripcion));
     if (!rolAdmin) {
         const err = new Error('El tipo de negocio no tiene un rol de administrador definido');
@@ -362,7 +379,8 @@ async function registrarCliente({ negocio, plan, admin, id_usuario_existente }) 
             email_contacto: negocio.email_contacto ?? null,
             telefono: negocio.telefono ?? null,
             direccion: negocio.direccion ?? null,
-            id_tipo_negocio: Number(negocio.id_tipo_negocio),
+            id_tipo_negocio: idModulo,
+            id_rubro: idRubro,
             // Sin país explícito queda 'CO' por el DEFAULT de la columna: es lo que eran
             // todos los negocios hasta que apareció el primero chileno.
             ...(negocio.pais ? { pais: String(negocio.pais).toUpperCase() } : {}),
