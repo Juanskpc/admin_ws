@@ -1,4 +1,5 @@
 const Models = require('../models/conection');
+const tipoOperativo = require('../helpers/tipoNegocioOperativo');
 
 const TIPO_ATTRS = [
     'id_tipo_negocio', 'nombre', 'descripcion',
@@ -8,14 +9,27 @@ const TIPO_ATTRS = [
 
 /**
  * Obtiene todos los tipos de negocio activos.
- * @returns {Array} Lista de tipos de negocio
+ *
+ * Cada tipo viaja con `operativo`: si tiene módulo de verdad o es solo una fila del catálogo.
+ *
+ * No se filtran aquí los que no lo son porque esta lista también alimenta los **filtros** de la
+ * consola —hay negocios antiguos de tipos sin módulo y deben poder listarse—. Quien crea un
+ * negocio sí debe ofrecer únicamente los operativos. Ver `helpers/tipoNegocioOperativo.js`.
  */
-function getListaTiposNegocio() {
-    return Models.GenerTipoNegocio.findAll({
-        where: { estado: 'A' },
-        attributes: TIPO_ATTRS,
-        order: [['nombre', 'ASC']]
-    });
+async function getListaTiposNegocio() {
+    const [tipos, operativos] = await Promise.all([
+        Models.GenerTipoNegocio.findAll({
+            where: { estado: 'A' },
+            attributes: TIPO_ATTRS,
+            order: [['nombre', 'ASC']],
+        }),
+        tipoOperativo.getTiposOperativos(),
+    ]);
+
+    return tipos.map((t) => ({
+        ...t.get({ plain: true }),
+        operativo: operativos.has(Number(t.id_tipo_negocio)),
+    }));
 }
 
 /**

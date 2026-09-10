@@ -27,6 +27,10 @@ const AuditoriaController = require('../controllers/auditoriaController');
 const DatosFiscalesController = require('../controllers/datosFiscalesController');
 const { verificarToken, requireSuperAdmin } = require('../../app_core/middleware/auth');
 
+// Los países cuyos móviles sabemos pasar a E.164. La lista sale del propio normalizador para
+// que añadir un país sea tocar un sitio y no dos. Ver app_core/helpers/telefono.js.
+const PAISES = require('../../app_core/helpers/telefono').paisesSoportados();
+
 // ============================================================
 // RUTAS PÚBLICAS (no requieren autenticación)
 // ============================================================
@@ -170,7 +174,10 @@ router.post('/negocios', [
         .notEmpty().withMessage('El nombre del negocio es requerido'),
     body('email_contacto')
         .optional()
-        .isEmail().withMessage('El email de contacto no es válido')
+        .isEmail().withMessage('El email de contacto no es válido'),
+    // El país decide cómo se normaliza el teléfono de los clientes del negocio
+    // (app_core/helpers/telefono.js). Se restringe a los que sabemos normalizar.
+    body('pais').optional({ nullable: true }).isIn(PAISES).withMessage('País no soportado')
 ], NegocioController.createNegocio);
 router.patch('/negocios/:id/plan', requireSuperAdmin, [
     param('id').isInt({ min: 1 }).withMessage('ID de negocio inválido'),
@@ -183,7 +190,8 @@ router.put('/negocios/:id', requireSuperAdmin, [
     param('id').isInt({ min: 1 }).withMessage('ID de negocio inválido'),
     body('nombre').trim().notEmpty().withMessage('El nombre del negocio es requerido'),
     body('email_contacto').optional({ nullable: true }).isEmail().withMessage('Email de contacto inválido'),
-    body('id_tipo_negocio').optional({ nullable: true }).isInt({ min: 1 }).withMessage('Tipo de negocio inválido')
+    body('id_tipo_negocio').optional({ nullable: true }).isInt({ min: 1 }).withMessage('Tipo de negocio inválido'),
+    body('pais').optional({ nullable: true }).isIn(PAISES).withMessage('País no soportado')
 ], NegocioController.updateNegocio);
 router.patch('/negocios/:id/estado', requireSuperAdmin, [
     param('id').isInt({ min: 1 }).withMessage('ID de negocio inválido'),
@@ -277,6 +285,9 @@ router.post('/negocios/registrar-cliente', requireSuperAdmin, [
     body('negocio.nombre').trim().notEmpty().withMessage('El nombre del negocio es requerido'),
     body('negocio.id_tipo_negocio').isInt({ min: 1 }).withMessage('El tipo de negocio es requerido'),
     body('negocio.email_contacto').optional({ nullable: true }).isEmail().withMessage('Email de contacto inválido'),
+    // El país decide cómo se normaliza el teléfono de los clientes del negocio
+    // (app_core/helpers/telefono.js). Se restringe a los que sabemos normalizar.
+    body('negocio.pais').optional({ nullable: true }).isIn(PAISES).withMessage('País no soportado'),
     body('plan.id_plan').optional({ nullable: true }).isInt({ min: 1 }).withMessage('Plan inválido'),
     body('plan.meses').optional({ nullable: true }).isInt({ min: 1, max: 60 }).withMessage('Duración inválida'),
     // Modo A: usuario existente

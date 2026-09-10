@@ -45,16 +45,23 @@ async function createNegocio(req, res) {
             return Respuesta.error(res, 'Datos de entrada inválidos', 400, errors.array());
         }
 
-        const { nombre, nit, email_contacto, telefono, direccion, id_tipo_negocio } = req.body;
+        const { nombre, nit, email_contacto, telefono, direccion, id_tipo_negocio, pais } = req.body;
         const negocio = await NegocioDao.createNegocio({
             nombre, nit, email_contacto, telefono, direccion,
             ...(id_tipo_negocio ? { id_tipo_negocio: Number(id_tipo_negocio) } : {}),
+            ...(pais ? { pais: String(pais).toUpperCase() } : {}),
         });
 
         return Respuesta.success(res, 'Negocio creado exitosamente', negocio, 201);
     } catch (error) {
+        // Los errores de dominio (tipo sin módulo, p. ej.) traen su propio código y estado: se
+        // reenvían tal cual en lugar de convertirlos en un 500 mudo.
         console.error('Error en createNegocio:', error);
-        return Respuesta.error(res, 'Error al crear el negocio');
+        return Respuesta.error(
+            res,
+            error.statusCode ? error.message : 'Error al crear el negocio',
+            error.statusCode || 500,
+        );
     }
 }
 

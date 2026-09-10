@@ -3,6 +3,7 @@ const { initTransaction } = require('../helpers/funcionesAdicionales');
 const planHelper = require('../helpers/planHelper');
 const usuarioAdminDao = require('./usuarioAdminDao');
 const datosFiscales = require('../facturacion/datosFiscales');
+const tipoOperativo = require('../helpers/tipoNegocioOperativo');
 
 /**
  * Obtiene la lista de negocios activos.
@@ -33,6 +34,11 @@ function getNegocioById(idNegocio) {
  */
 async function createNegocio(negocio, t) {
     const options = t ? { transaction: t } : {};
+    // Un negocio de un tipo sin catalogo de permisos nace inaccesible. Ver
+    // helpers/tipoNegocioOperativo.js.
+    if (negocio.id_tipo_negocio) {
+        await tipoOperativo.assertTipoOperativo(negocio.id_tipo_negocio, { transaction: t });
+    }
     const creado = await Models.GenerNegocio.create(negocio, options);
     // Todo negocio nace con su ficha fiscal, en modo NINGUNO: no le pide nada al cliente, pero
     // evita que existan negocios sin ficha, que es un segundo estado posible para lo mismo.
@@ -189,7 +195,7 @@ async function getListaNegociosAdmin() {
     const negocios = await Models.GenerNegocio.findAll({
         attributes: [
             'id_negocio', 'nombre', 'nit', 'email_contacto', 'telefono',
-            'direccion', 'id_tipo_negocio', 'estado', 'fecha_registro',
+            'direccion', 'id_tipo_negocio', 'pais', 'estado', 'fecha_registro',
         ],
         include: [{
             model: Models.GenerTipoNegocio,
@@ -211,6 +217,7 @@ async function getListaNegociosAdmin() {
         telefono: n.telefono,
         direccion: n.direccion,
         id_tipo_negocio: n.id_tipo_negocio,
+        pais: n.pais ?? 'CO',
         tipo_nombre: n.tipoNegocio?.nombre ?? null,
         tipo_icono: n.tipoNegocio?.icono ?? null,
         tipo_color: n.tipoNegocio?.color_hex ?? null,
@@ -222,6 +229,11 @@ async function getListaNegociosAdmin() {
 
 /**
  * Actualiza los datos de un negocio.
+ *
+ * Cambiar `id_tipo_negocio` no es un cambio de etiqueta: los roles cuelgan del tipo, así que el
+ * negocio arrastra usuarios con roles que ya no le corresponden y su vertical deja de abrirse sin
+ * decir por qué. Por eso el cambio de tipo va en transacción con la traducción de roles, y se
+ * niega antes de tocar nada si el tipo nuevo no tiene módulo.
  */
 async function updateNegocio(idNegocio, data) {
     const negocio = await Models.GenerNegocio.findOne({ where: { id_negocio: idNegocio } });
@@ -231,14 +243,31 @@ async function updateNegocio(idNegocio, data) {
         throw err;
     }
 
-    await negocio.update({
-        nombre: data.nombre,
-        nit: data.nit ?? null,
-        email_contacto: data.email_contacto ?? null,
-        telefono: data.telefono ?? null,
-        direccion: data.direccion ?? null,
-        ...(data.id_tipo_negocio ? { id_tipo_negocio: Number(data.id_tipo_negocio) } : {}),
-    });
+    const tipoNuevo = data.id_tipo_negocio ? Number(data.id_tipo_negocio) : null;
+    const cambiaTipo = tipoNuevo !== null && tipoNuevo !== Number(negocio.id_tipo_negocio);
+    if (cambiaTipo) await tipoOperativo.assertTipoOperativo(tipoNuevo);
+
+    const transaction = await initTransaction();
+    try {
+        await negocio.update({
+            nombre: data.nombre,
+            nit: data.nit ?? null,
+            email_contacto: data.email_contacto ?? null,
+            telefono: data.telefono ?? null,
+            direccion: data.direccion ?? null,
+            ...(tipoNuevo ? { id_tipo_negocio: tipoNuevo } : {}),
+            ...(data.pais ? { pais: String(data.pais).toUpperCase() } : {}),
+        }, { transaction });
+
+        if (cambiaTipo) {
+            await tipoOperativo.remapearRolesDeNegocio(idNegocio, tipoNuevo, { transaction });
+        }
+
+        await transaction.commit();
+    } catch (error) {
+        await transaction.rollback();
+        throw error;
+    }
 
     return negocio;
 }
@@ -274,6 +303,10 @@ async function registrarCliente({ negocio, plan, admin, id_usuario_existente }) 
         err.statusCode = 400;
         throw err;
     }
+
+    // Que el tipo exista no significa que se pueda usar: media docena de tipos del catálogo no
+    // tienen módulo y darían un negocio en el que nadie puede entrar.
+    await tipoOperativo.assertTipoOperativo(negocio.id_tipo_negocio);
 
     const roles = await usuarioAdminDao.getRolesActivos({ idTipoNegocio: negocio.id_tipo_negocio });
     const rolAdmin = roles.find((r) => usuarioAdminDao.isAdminRoleName(r.descripcion));
@@ -330,6 +363,9 @@ async function registrarCliente({ negocio, plan, admin, id_usuario_existente }) 
             telefono: negocio.telefono ?? null,
             direccion: negocio.direccion ?? null,
             id_tipo_negocio: Number(negocio.id_tipo_negocio),
+            // Sin país explícito queda 'CO' por el DEFAULT de la columna: es lo que eran
+            // todos los negocios hasta que apareció el primero chileno.
+            ...(negocio.pais ? { pais: String(negocio.pais).toUpperCase() } : {}),
             estado: 'A',
         }, { transaction });
         const idNegocio = nuevo.id_negocio;

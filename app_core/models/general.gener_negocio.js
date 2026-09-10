@@ -6,6 +6,9 @@ module.exports = (sequelize, DataTypes) => {
         email_contacto: DataTypes.STRING,
         telefono: DataTypes.STRING,
         direccion: DataTypes.STRING,
+        // ISO 3166-1 alfa-2. Decide cómo se normaliza el teléfono de sus clientes.
+        // Ver migrations/migrate_pais_negocio.js y app_core/helpers/telefono.js.
+        pais: { type: DataTypes.CHAR(2), defaultValue: 'CO' },
         url_whatsapp: DataTypes.STRING,
         url_facebook: DataTypes.STRING,
         url_instagram: DataTypes.STRING,

@@ -11,7 +11,8 @@
  * número y son dos clientes distintos.
  */
 const Models = require('../../app_core/models/conection');
-const { normalizarE164Colombia } = require('../../app_core/helpers/telefono');
+const { normalizarE164 } = require('../../app_core/helpers/telefono');
+const { paisDeNegocio } = require('../../app_core/helpers/paisNegocio');
 
 const sequelize = Models.sequelize;
 
@@ -128,10 +129,13 @@ async function listar({ idNegocio, buscar = null, limite = 50, offset = 0 }) {
  * Un cliente por teléfono — lo que alimenta el autocompletado del formulario de cita.
  *
  * Devuelve `null` cuando no se conoce, y también cuando el teléfono no es un móvil
- * colombiano utilizable: no es un error, es que no hay a quién reconocer.
+ * utilizable **en el país del negocio**: no es un error, es que no hay a quién reconocer.
+ *
+ * El país tiene que ser el mismo con el que se guardó el cliente, o el buscador no encontraría
+ * a quien sí está en la cartera. Por eso ambos lados lo sacan de `gener_negocio.pais`.
  */
 async function buscarPorTelefono({ idNegocio, telefono }) {
-    const telefonoE164 = normalizarE164Colombia(telefono);
+    const telefonoE164 = normalizarE164(telefono, await paisDeNegocio(idNegocio));
     if (!telefonoE164) return null;
 
     const [fila] = await sequelize.query(

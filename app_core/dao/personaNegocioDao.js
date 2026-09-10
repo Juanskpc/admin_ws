@@ -12,7 +12,8 @@
  *            (id_negocio, telefono_e164). Jamás cruza inquilinos.
  */
 const db = require('../models/conection');
-const { normalizarE164Colombia } = require('../helpers/telefono');
+const { normalizarE164 } = require('../helpers/telefono');
+const { paisDeNegocio } = require('../helpers/paisNegocio');
 
 const sequelize = db.sequelize;
 
@@ -32,7 +33,11 @@ const sequelize = db.sequelize;
  * @returns {Promise<string|null>} id_persona_negocio, o null si el teléfono no es utilizable.
  */
 async function resolverOCrear({ idNegocio, telefono, nombre = null }, { transaction } = {}) {
-    const telefonoE164 = normalizarE164Colombia(telefono);
+    // El país lo decide el negocio, no la plataforma: un salón chileno guarda +56 y uno
+    // colombiano +57. Sin esto, el móvil de un cliente chileno se consideraba basura y la
+    // cita se guardaba sin ficha, en silencio. Ver helpers/telefono.js.
+    const pais = await paisDeNegocio(idNegocio, { transaction });
+    const telefonoE164 = normalizarE164(telefono, pais);
     if (!telefonoE164) return null;
 
     const nombreLimpio = nombre ? String(nombre).trim() || null : null;
