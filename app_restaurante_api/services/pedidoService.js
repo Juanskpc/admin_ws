@@ -368,8 +368,14 @@ async function resolverDescuento({ idNegocio, descuento, baseCobrable = null, tr
     });
     if (!negocio || !negocio.permite_descuento) return 0;
 
-    const base = Number(baseCobrable);
-    const acotado = Number.isFinite(base) ? Math.min(monto, Math.max(base, 0)) : monto;
+    // `baseCobrable` ausente se comprueba contra null ANTES de convertir: `Number(null)`
+    // es 0, no NaN, así que con `Number.isFinite` el «no me dieron base» se leía como
+    // «la base es 0» y el descuento se acotaba a cero. Por eso las rutas que no pasan
+    // base —`actualizarDescuento` y `agregarItemsOrden`— guardaban siempre 0.
+    const base = baseCobrable == null ? null : Number(baseCobrable);
+    const acotado = base !== null && Number.isFinite(base)
+        ? Math.min(monto, Math.max(base, 0))
+        : monto;
     return Math.round(acotado * 100) / 100;
 }
 
@@ -423,7 +429,7 @@ async function recalcularTotalesOrden({ idOrden, porcentajeImpuesto = 0, valorDo
  * @param {number} params.porcentajeImpuesto — ej: 0.19
  */
 async function crearOrden({
-    idNegocio, idMetodoPago = null, idUsuario, idMesa, nota, items, porcentajeImpuesto = 0, permitirStockNegativo = false,
+    idNegocio, idMetodoPago = null, pagos = null, idUsuario, idMesa, nota, items, porcentajeImpuesto = 0, permitirStockNegativo = false,
     tipoPedido = 'MESA', contactoNombre = null, contactoTelefono = null,
     direccionDomicilio = null, notaDomicilio = null, idDomiciliario = null,
     valorDomicilio = 0, descuento = 0,
@@ -537,6 +543,12 @@ async function crearOrden({
             transaction: t,
         });
 
+        // Multipago elegido al tomar el pedido: se guarda ya, aunque el cobro venga
+        // después, para que Despacho y Mesas lo muestren y lo puedan editar.
+        if (Array.isArray(pagos) && pagos.length > 0) {
+            await validarYGuardarPagos({ orden, pagos, transaction: t, exigirCuadre: false });
+        }
+
         if (transaccionPropia) await t.commit();
 
         // Retornar orden con detalles. Con transacción ajena aún sin confirmar hay que leer
@@ -555,6 +567,7 @@ async function agregarItemsOrden({
     idOrden,
     idNegocio,
     idMetodoPago = null,
+    pagos = null,
     nota,
     items,
     porcentajeImpuesto = 0,
@@ -634,6 +647,17 @@ async function agregarItemsOrden({
             descuento: rebaja,
             transaction: t,
         });
+
+        // Sobre una orden ya cobrada el desglose es el pago real y no se toca; aquí
+        // solo se corrige la intención de una orden que sigue pendiente de pago.
+        if (orden.estado_pago !== 'pagado') {
+            if (Array.isArray(pagos) && pagos.length > 0) {
+                await validarYGuardarPagos({ orden, pagos, transaction: t, exigirCuadre: false });
+            } else if (idMetodoPago) {
+                // Volvió a pago simple: el desglose que había queda obsoleto.
+                await Models.RestPagoOrden.destroy({ where: { id_orden: idOrden }, transaction: t });
+            }
+        }
 
         await t.commit();
         return getOrdenById(idOrden);
@@ -761,6 +785,10 @@ async function getOrdenesDespacho({ idNegocio, idUsuario }) {
                             { model: Models.PedidDetalle, as: 'detalles',
                                 attributes: ['id_detalle', 'cantidad', 'precio_unitario', 'nota'],
                                 include: [{ model: Models.CartaProducto, as: 'producto', attributes: ['id_producto', 'nombre'] }] },
+                // Desglose de multipago: el elegido al tomar el pedido (aún sin cobrar) o
+                // el ya cobrado. Despacho lo pinta para poder revisarlo y ajustarlo.
+                { model: Models.RestPagoOrden, as: 'pagos',
+                    attributes: ['id_pago', 'id_metodo_pago', 'valor'], required: false },
             ],
             order: [['fecha_creacion', 'DESC']],
         }),
@@ -944,8 +972,15 @@ async function marcarDetalleCompleto(idDetalle) {
  *  - La suma de los valores debe ser EXACTAMENTE igual al total de la orden.
  * Reemplaza cualquier desglose previo de la orden (idempotente ante recobro).
  * Devuelve la lista de pagos normalizada.
+ *
+ * @param {boolean} [exigirCuadre=true] — en false guarda el desglose como
+ *   INTENCIÓN de una orden aún sin cobrar (lo que eligió quien tomó el pedido,
+ *   para que Despacho y Mesas lo muestren y lo puedan editar). Ahí el total
+ *   todavía puede moverse —se agregan productos, se cobra el domicilio—, así que
+ *   exigir el cuadre haría fallar la toma del pedido. Al cobrar se vuelve a
+ *   validar con `exigirCuadre` en true, que es donde el cuadre sí es innegociable.
  */
-async function validarYGuardarPagos({ orden, pagos, transaction }) {
+async function validarYGuardarPagos({ orden, pagos, transaction, exigirCuadre = true }) {
     const negocio = await Models.GenerNegocio.findByPk(orden.id_negocio, {
         attributes: ['id_negocio', 'permite_multipago'],
         transaction,
@@ -990,7 +1025,7 @@ async function validarYGuardarPagos({ orden, pagos, transaction }) {
 
     // Comparar en centavos para evitar problemas de coma flotante.
     const total = Number(orden.total);
-    if (Math.round(suma * 100) !== Math.round(total * 100)) {
+    if (exigirCuadre && Math.round(suma * 100) !== Math.round(total * 100)) {
         const e = new Error(
             `La suma de las formas de pago (${suma}) debe ser igual al total de la orden (${total}).`
         );
@@ -1044,6 +1079,11 @@ async function marcarPagado(idOrden, { idMetodoPago, pagos, origenCobro = 'CAJA'
                 e.statusCode = 422;
                 throw e;
             }
+
+            // Se cobra con una sola forma de pago: si la orden traía un desglose de
+            // multipago pendiente, deja de valer. Sin esto quedaría en la tabla un
+            // reparto que nadie cobró y que `cerrarOrden` leería como pago real.
+            await Models.RestPagoOrden.destroy({ where: { id_orden: orden.id_orden }, transaction: t });
         }
 
         const registraEnCaja = origenCobro !== 'DOMICILIARIO';
@@ -1247,15 +1287,20 @@ async function cerrarOrden(idOrden, { idUsuario, idMetodoPago, pagos } = {}) {
 
         // Multipago: llega el desglose ahora, o la orden ya fue cobrada con
         // multipago (rest_pago_orden con filas) desde el flujo de despacho.
+        //
+        // Las filas de una orden AÚN NO COBRADA son solo la intención de quien tomó
+        // el pedido, no un cobro: si aquí llega un pago simple, mandan las de ahora.
         let esMultipago = Array.isArray(pagos) && pagos.length > 0;
         if (esMultipago) {
             await validarYGuardarPagos({ orden, pagos, transaction: t });
-        } else {
+        } else if (orden.estado_pago === 'pagado') {
             const pagosExistentes = await Models.RestPagoOrden.count({
                 where: { id_orden: orden.id_orden },
                 transaction: t,
             });
             esMultipago = pagosExistentes > 0;
+        } else {
+            await Models.RestPagoOrden.destroy({ where: { id_orden: orden.id_orden }, transaction: t });
         }
 
         let metodoPagoFinal = null;

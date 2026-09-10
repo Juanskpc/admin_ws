@@ -11,6 +11,10 @@ const { validationResult } = require('express-validator');
 const crearOrdenValidators = [
     body('id_negocio').isInt({ min: 1 }).withMessage('id_negocio inválido'),
     body('id_metodo_pago').optional({ nullable: true }).isInt({ min: 1 }).withMessage('id_metodo_pago inválido'),
+    // Multipago elegido al tomar el pedido: se guarda como intención y el cobro lo re-valida.
+    body('pagos').optional({ nullable: true }).isArray({ min: 2 }).withMessage('pagos debe tener al menos 2 formas de pago'),
+    body('pagos.*.id_metodo_pago').optional().isInt({ min: 1 }).withMessage('id_metodo_pago inválido en pagos'),
+    body('pagos.*.valor').optional().isFloat({ gt: 0 }).withMessage('valor inválido en pagos'),
     body('id_mesa').optional({ nullable: true }).isInt({ min: 1 }).withMessage('id_mesa inválido'),
     body('nota').optional({ nullable: true }).isString(),
     body('permitir_stock_negativo').optional().isBoolean().withMessage('permitir_stock_negativo debe ser booleano'),
@@ -33,6 +37,9 @@ const crearOrdenValidators = [
 const agregarItemsOrdenValidators = [
     body('id_negocio').isInt({ min: 1 }).withMessage('id_negocio inválido'),
     body('id_metodo_pago').optional({ nullable: true }).isInt({ min: 1 }).withMessage('id_metodo_pago inválido'),
+    body('pagos').optional({ nullable: true }).isArray({ min: 2 }).withMessage('pagos debe tener al menos 2 formas de pago'),
+    body('pagos.*.id_metodo_pago').optional().isInt({ min: 1 }).withMessage('id_metodo_pago inválido en pagos'),
+    body('pagos.*.valor').optional().isFloat({ gt: 0 }).withMessage('valor inválido en pagos'),
     body('nota').optional({ nullable: true }).isString(),
     body('permitir_stock_negativo').optional().isBoolean().withMessage('permitir_stock_negativo debe ser booleano'),
     body('items').isArray({ min: 1 }).withMessage('Debe haber al menos un item'),
@@ -99,6 +106,7 @@ async function crearOrden(req, res) {
         const orden = await PedidoService.crearOrden({
             idNegocio:  id_negocio,
             idMetodoPago: id_metodo_pago ? Number(id_metodo_pago) : null,
+            pagos: Array.isArray(req.body.pagos) ? req.body.pagos : null,
             idUsuario:  req.usuario.id_usuario,
             idMesa:     id_mesa || null,
             nota,
@@ -125,6 +133,9 @@ async function crearOrden(req, res) {
                 faltantes: err.faltantes || [],
             });
         }
+        if (err.statusCode) {
+            return Respuesta.error(res, err.message, err.statusCode, { code: err.code });
+        }
         console.error('[Pedidos] Error crearOrden:', err.message);
         return Respuesta.error(res, 'Error al crear la orden.');
     }
@@ -148,6 +159,7 @@ async function agregarItemsOrden(req, res) {
             idOrden,
             idNegocio: id_negocio,
             idMetodoPago: id_metodo_pago ? Number(id_metodo_pago) : null,
+            pagos: Array.isArray(req.body.pagos) ? req.body.pagos : null,
             nota,
             items,
             porcentajeImpuesto: porcentaje_impuesto || 0,
@@ -172,6 +184,9 @@ async function agregarItemsOrden(req, res) {
             });
         }
 
+        if (err.statusCode) {
+            return Respuesta.error(res, err.message, err.statusCode, { code: err.code });
+        }
         console.error('[Pedidos] Error agregarItemsOrden:', err.message);
         return Respuesta.error(res, 'Error al agregar items a la orden.');
     }

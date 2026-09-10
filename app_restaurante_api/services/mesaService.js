@@ -83,7 +83,7 @@ async function getMesasDashboard(idNegocio) {
             as: 'ordenes',
             where: { estado: 'ABIERTA' },
             required: false,
-            attributes: ['id_orden', 'total', 'fecha_creacion', 'estado_cocina', 'id_metodo_pago', 'nota'],
+            attributes: ['id_orden', 'total', 'fecha_creacion', 'estado_cocina', 'id_metodo_pago', 'nota', 'descuento', 'estado_pago'],
             include: [{
                 model: Models.PedidDetalle,
                 as: 'detalles',
@@ -93,6 +93,13 @@ async function getMesasDashboard(idNegocio) {
                     as: 'producto',
                     attributes: ['nombre', 'precio'],
                 }],
+            }, {
+                // Desglose de multipago elegido al tomar el pedido: la mesa lo muestra
+                // al cobrar para poder revisarlo y ajustarlo antes de cerrar la cuenta.
+                model: Models.RestPagoOrden,
+                as: 'pagos',
+                attributes: ['id_pago', 'id_metodo_pago', 'valor'],
+                required: false,
             }],
         }],
     });
@@ -134,10 +141,18 @@ async function getMesasDashboard(idNegocio) {
             order: ordenActiva ? {
                 id_orden: ordenActiva.id_orden,
                 total,
+                // La rebaja ya viene restada del total; se manda aparte para poder
+                // mostrarla y corregirla desde el cobro de la mesa.
+                descuento: Number(ordenActiva.descuento ?? 0),
+                estado_pago: ordenActiva.estado_pago ?? null,
                 id_metodo_pago: ordenActiva.id_metodo_pago ?? null,
+                pagos: (ordenActiva.pagos ?? []).map((p) => ({
+                    id_metodo_pago: p.id_metodo_pago,
+                    valor: Number(p.valor ?? 0),
+                })),
                 nota: ordenActiva.nota ?? null,
                 items,
-            } : { total: 0, items: [] },
+            } : { total: 0, items: [], pagos: [], descuento: 0 },
         };
     });
 }
