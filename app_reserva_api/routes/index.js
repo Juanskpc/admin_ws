@@ -25,6 +25,7 @@ const Config       = require('../controllers/configController');
 const Vitrina      = require('../controllers/vitrinaController');
 const Categorias   = require('../controllers/categoriaController');
 const Clientes     = require('../controllers/clienteController');
+const { paisesSoportados } = require('../../app_core/helpers/paises');
 const { verificarToken } = require('../../app_core/middleware/auth');
 const { exigirAccion } = require('../middleware/exigirAccion');
 const { exigirVista } = require('../middleware/exigirVista');
@@ -514,6 +515,10 @@ router.post('/usuarios', [
     body('id_rol').isInt({ min: 1 }),
     body('password').optional({ nullable: true, checkFalsy: true }).isLength({ min: 8 }),
     body('id_profesional').optional({ nullable: true, checkFalsy: true }).isInt({ min: 1 }),
+    // Atender citas es una capacidad aparte del rol: un administrador o un cajero también
+    // pueden prestar servicios. Ver `atiendeCitas` en el servicio.
+    body('es_profesional').optional().isBoolean(),
+    body('especialidad').optional({ nullable: true }).isString().isLength({ max: 150 }),
 ], Usuarios.crear);
 router.put('/usuarios/:id', [
     param('id').isInt({ min: 1 }),
@@ -524,6 +529,9 @@ router.put('/usuarios/:id', [
     body('email').optional({ nullable: true, checkFalsy: true }).trim().isEmail().isLength({ max: 120 }),
     body('id_rol').optional().isInt({ min: 1 }),
     body('password').optional({ nullable: true, checkFalsy: true }).isLength({ min: 8 }),
+    body('es_profesional').optional().isBoolean(),
+    body('especialidad').optional({ nullable: true }).isString().isLength({ max: 150 }),
+    body('id_profesional').optional({ nullable: true, checkFalsy: true }).isInt({ min: 1 }),
 ], Usuarios.actualizar);
 router.patch('/usuarios/:id/estado', [
     param('id').isInt({ min: 1 }),
@@ -611,6 +619,10 @@ router.put('/config', [
     body('instrucciones_pago').optional({ nullable: true }).isString(),
     body('permite_cobro_profesional').optional().isBoolean(),
     body('permite_multipago').optional().isBoolean(),
+    // La lista sale del catálogo, no de una constante escrita aquí: ofrecer en la pantalla un
+    // país que el normalizador de teléfonos no entiende es el fallo mudo que ya se pagó una vez.
+    body('pais').optional({ nullable: true, checkFalsy: true })
+        .isIn(paisesSoportados()).withMessage('País no soportado'),
 ], Config.actualizar);
 
 module.exports = router;

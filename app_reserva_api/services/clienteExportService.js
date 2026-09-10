@@ -11,9 +11,21 @@
  * Las fechas se escriben en hora de Bogotá pase lo que pase con el TZ del proceso.
  */
 const Models = require('../../app_core/models/conection');
+const { infoPais, monedaDePais } = require('../../app_core/helpers/paises');
 
 const AZUL = 'FF1E3A5F';
-const FORMATO_MONEDA = '"$"#,##0';
+
+/**
+ * El formato de celda de Excel para un importe, con el símbolo del país.
+ *
+ * Estaba clavado en `"$"#,##0`: la cartera de un negocio peruano salía en dólares y sin
+ * céntimos. El símbolo y los decimales vienen de la misma tabla que decide la moneda en
+ * pantalla, así que el archivo y la consola no pueden discrepar.
+ */
+function formatoMonedaExcel(m) {
+    const decimales = m.decimales > 0 ? `.${'0'.repeat(m.decimales)}` : '';
+    return `"${m.simbolo} "#,##0${decimales}`;
+}
 
 /** Partes de una fecha en hora de pared de Bogotá. */
 function partesBogota(valor) {
@@ -47,17 +59,31 @@ function fechaExcel(valor) {
     return p ? new Date(Date.UTC(Number(p.year), Number(p.month) - 1, Number(p.day))) : null;
 }
 
-/** '+573001112233' → '300 111 2233'. Lo mismo que muestra la pantalla. */
-function telefonoLegible(e164) {
-    const nacional = String(e164 || '').replace(/^\+57/, '');
-    return /^\d{10}$/.test(nacional)
+/**
+ * '+573001112233' → '300 111 2233'. Lo mismo que muestra la pantalla.
+ *
+ * El prefijo a quitar sale del país del negocio, no de un `+57` escrito aquí: con el primer
+ * cliente chileno esta columna pasó a mostrar el número en crudo, con prefijo y todo, en la
+ * única vista pensada para leerlo a ojo.
+ */
+function telefonoLegible(e164, pais = null) {
+    const { telefono } = infoPais(pais);
+    const conPrefijo = String(e164 || '');
+    const prefijo = `+${telefono.cc}`;
+    const nacional = conPrefijo.startsWith(prefijo) ? conPrefijo.slice(prefijo.length) : conPrefijo;
+    if (nacional.length !== telefono.largo) return conPrefijo;
+    // Diez dígitos se leen 3-3-4 (Colombia, México); nueve, 1-4-4 (Chile, Perú, Ecuador).
+    return telefono.largo === 10
         ? `${nacional.slice(0, 3)} ${nacional.slice(3, 6)} ${nacional.slice(6)}`
-        : String(e164 || '');
+        : `${nacional.slice(0, 1)} ${nacional.slice(1, 5)} ${nacional.slice(5)}`;
 }
 
-function moneda(valor) {
-    return new Intl.NumberFormat('es-CO', {
-        style: 'currency', currency: 'COP', maximumFractionDigits: 0,
+function moneda(valor, m) {
+    return new Intl.NumberFormat(m.locale, {
+        style: 'currency',
+        currency: m.codigo,
+        minimumFractionDigits: m.decimales,
+        maximumFractionDigits: m.decimales,
     }).format(Number(valor || 0)).replace(/\s/g, ' ');
 }
 
@@ -88,10 +114,11 @@ function subtitulo(clientes, buscar) {
 
 /**
  * @param {object[]} clientes  Lo que devuelve `clienteService.listarParaExportar`.
- * @param {{ nombreNegocio: string, buscar?: string|null }} opciones
+ * @param {{ nombreNegocio: string, buscar?: string|null, pais?: string|null }} opciones
  * @returns {Promise<{ buffer: Buffer, filename: string }>}
  */
-async function generarXLSX(clientes, { nombreNegocio, buscar = null }) {
+async function generarXLSX(clientes, { nombreNegocio, buscar = null, pais = null }) {
+    const moneda_ = monedaDePais(pais);
     const ExcelJS = require('exceljs');
 
     const wb = new ExcelJS.Workbook();
@@ -149,7 +176,7 @@ async function generarXLSX(clientes, { nombreNegocio, buscar = null }) {
             fechaExcel(c.creado_en),
             c.notas || '',
         ]);
-        fila.getCell(8).numFmt = FORMATO_MONEDA;
+        fila.getCell(8).numFmt = formatoMonedaExcel(moneda_);
         [9, 10, 11].forEach((n) => { fila.getCell(n).numFmt = 'dd/mm/yyyy'; });
         fila.getCell(12).alignment = { wrapText: true, vertical: 'top' };
     }
@@ -175,20 +202,21 @@ async function generarXLSX(clientes, { nombreNegocio, buscar = null }) {
  * A4 apaisado: ocho columnas no caben en vertical sin encoger la letra hasta hacerla ilegible.
  *
  * @param {object[]} clientes
- * @param {{ nombreNegocio: string, buscar?: string|null }} opciones
+ * @param {{ nombreNegocio: string, buscar?: string|null, pais?: string|null }} opciones
  * @returns {Promise<{ buffer: Buffer, filename: string }>}
  */
-function generarPDF(clientes, { nombreNegocio, buscar = null }) {
+function generarPDF(clientes, { nombreNegocio, buscar = null, pais = null }) {
     const PDFDocument = require('pdfkit');
+    const moneda_ = monedaDePais(pais);
 
     const MARGEN = 36;
     const COLS = [
         { titulo: 'Nombre',        ancho: 170, valor: (c) => c.nombre || 'Sin nombre' },
-        { titulo: 'Teléfono',      ancho: 85,  valor: (c) => telefonoLegible(c.telefono) },
+        { titulo: 'Teléfono',      ancho: 85,  valor: (c) => telefonoLegible(c.telefono, pais) },
         { titulo: 'Email',         ancho: 170, valor: (c) => c.email || '—' },
         { titulo: 'Citas',         ancho: 45,  valor: (c) => String(c.total_citas), num: true },
         { titulo: 'No asistió',    ancho: 55,  valor: (c) => String(c.inasistencias), num: true },
-        { titulo: 'Gastado',       ancho: 85,  valor: (c) => moneda(c.total_gastado), num: true },
+        { titulo: 'Gastado',       ancho: 85,  valor: (c) => moneda(c.total_gastado, moneda_), num: true },
         { titulo: 'Última cita',   ancho: 80,  valor: (c) => fechaTexto(c.ultima_cita) || '—', num: true },
         { titulo: 'Cliente desde', ancho: 80,  valor: (c) => fechaTexto(c.primera_cita || c.creado_en), num: true },
     ];
@@ -261,7 +289,7 @@ function generarPDF(clientes, { nombreNegocio, buscar = null }) {
             const total = clientes.reduce((s, c) => s + Number(c.total_gastado || 0), 0);
             const citas = clientes.reduce((s, c) => s + Number(c.total_citas || 0), 0);
             const inas  = clientes.reduce((s, c) => s + Number(c.inasistencias || 0), 0);
-            celdas(['TOTAL', '', '', String(citas), String(inas), moneda(total), '', ''], { negrita: true });
+            celdas(['TOTAL', '', '', String(citas), String(inas), moneda(total, moneda_), '', ''], { negrita: true });
         }
 
         // Numeración al pie. Se baja el margen inferior para que escribir ahí no abra otra página.
@@ -281,9 +309,15 @@ function generarPDF(clientes, { nombreNegocio, buscar = null }) {
     });
 }
 
-async function getNombreNegocio(idNegocio) {
-    const negocio = await Models.GenerNegocio.findByPk(idNegocio, { attributes: ['nombre'] });
-    return negocio?.nombre || 'Negocio';
+/**
+ * Nombre y país del negocio: la cabecera del archivo y la moneda con la que se escriben sus
+ * importes. Van juntos en una consulta porque se piden a la vez y son la misma fila.
+ */
+async function getNegocio(idNegocio) {
+    const negocio = await Models.GenerNegocio.findByPk(idNegocio, {
+        attributes: ['nombre', 'pais'],
+    });
+    return { nombreNegocio: negocio?.nombre || 'Negocio', pais: negocio?.pais || null };
 }
 
-module.exports = { generarXLSX, generarPDF, getNombreNegocio, telefonoLegible };
+module.exports = { generarXLSX, generarPDF, getNegocio, telefonoLegible };

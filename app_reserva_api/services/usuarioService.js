@@ -30,6 +30,23 @@ const { Op } = Models.Sequelize;
 
 const TIPO_NEGOCIO = 'RESERVA';
 const ROL_PROFESIONAL = 'PROFESIONAL';
+
+/**
+ * ¿Esta persona atiende citas?
+ *
+ * **Atender citas es una capacidad, no un rol** (2026-09-10). Antes la ficha de agenda se creaba
+ * solo si el rol era PROFESIONAL, y eso dejaba fuera al caso más común de un salón pequeño: la
+ * dueña, que administra *y* corta el pelo. Como el rol es uno solo por negocio, tenía que elegir
+ * entre poder configurar su negocio o poder recibir citas.
+ *
+ * Ahora son dos preguntas separadas: el **rol** dice qué pantallas ve y el **`es_profesional`**
+ * dice si tiene ficha en la agenda. El rol PROFESIONAL sigue implicando la ficha —un profesional
+ * sin ficha es un acceso que no sirve para nada— pero ya no es la única vía.
+ */
+function atiendeCitas({ rol, datos }) {
+    if (rol?.descripcion === ROL_PROFESIONAL) return true;
+    return datos?.es_profesional === true || datos?.es_profesional === 'true';
+}
 /** `gener_tipo_nivel` 4 = «Operación específica dentro de una vista». */
 const TIPO_NIVEL_ACCION = 4;
 
@@ -402,6 +419,26 @@ async function savePermisosRol({ idRol, idNegocio, modulos }) {
 
 // ─────────────────────────── Escritura de usuarios ───────────────────────────
 
+/**
+ * El rol que la persona tiene hoy en este negocio. `null` si no tiene ninguno.
+ *
+ * `incluirInactivos` existe para `cambiarEstado`, que desactiva la fila del rol antes de decidir
+ * qué hacer con la ficha de agenda: filtrando por activos, ahí el rol ya se habría vuelto
+ * invisible y la decisión se tomaría con datos a medias.
+ */
+async function rolEnNegocio({ idUsuario, idNegocio, transaction, incluirInactivos = false }) {
+    const fila = await Models.GenerUsuarioRol.findOne({
+        where: {
+            id_usuario: idUsuario,
+            id_negocio: idNegocio,
+            ...(incluirInactivos ? {} : { estado: 'A' }),
+        },
+        include: [{ model: Models.GenerRol, as: 'rol', attributes: ['id_rol', 'descripcion'] }],
+        transaction,
+    });
+    return fila?.rol ?? null;
+}
+
 async function validarRolDelVertical(idRol) {
     const roles = await listarRoles();
     const rol = roles.find(r => r.id_rol === Number(idRol));
@@ -472,7 +509,7 @@ async function crear({ idNegocio, datos: datosCrudos, idProfesionalExistente = n
         }, { transaction: t });
 
         let profesional = null;
-        if (rol.descripcion === ROL_PROFESIONAL) {
+        if (atiendeCitas({ rol, datos })) {
             profesional = await vincularProfesional({
                 idNegocio, usuario, datos, idProfesionalExistente, transaction: t,
             });
@@ -482,8 +519,28 @@ async function crear({ idNegocio, datos: datosCrudos, idProfesionalExistente = n
     });
 }
 
-/** Enlaza (o crea) la ficha de agenda del profesional recién dado de alta. */
+/**
+ * Enlaza (o crea) la ficha de agenda de quien atiende citas.
+ *
+ * Tres casos, en este orden: la persona ya tiene ficha en este negocio (se reactiva), se pidió
+ * enlazar una ficha suelta que ya existía (se le pone dueño), o no hay ninguna (se crea).
+ *
+ * El primero es el que importa cuando se quita y se vuelve a poner la capacidad: crear una
+ * ficha nueva dejaría su historial de citas colgando de la vieja, y en la agenda aparecerían dos
+ * personas con el mismo nombre.
+ */
 async function vincularProfesional({ idNegocio, usuario, datos, idProfesionalExistente, transaction }) {
+    const suya = await Models.ReservaProfesional.findOne({
+        where: { id_negocio: idNegocio, id_usuario: usuario.id_usuario }, transaction,
+    });
+    if (suya) {
+        const cambios = { estado: 'A', fecha_actualizacion: new Date() };
+        if (datos.especialidad !== undefined && datos.especialidad !== null) {
+            cambios.especialidad = String(datos.especialidad).trim() || null;
+        }
+        return suya.update(cambios, { transaction });
+    }
+
     if (idProfesionalExistente) {
         const pro = await Models.ReservaProfesional.findOne({
             where: { id_profesional: idProfesionalExistente, id_negocio: idNegocio },
@@ -493,7 +550,10 @@ async function vincularProfesional({ idNegocio, usuario, datos, idProfesionalExi
         if (pro.id_usuario && pro.id_usuario !== usuario.id_usuario) {
             throw error('Ese profesional ya tiene un usuario asignado.', 409);
         }
-        return pro.update({ id_usuario: usuario.id_usuario }, { transaction });
+        return pro.update(
+            { id_usuario: usuario.id_usuario, estado: 'A', fecha_actualizacion: new Date() },
+            { transaction },
+        );
     }
 
     return Models.ReservaProfesional.create({
@@ -506,6 +566,21 @@ async function vincularProfesional({ idNegocio, usuario, datos, idProfesionalExi
         color_hex: datos.color_hex || null,
         estado: 'A',
     }, { transaction });
+}
+
+/**
+ * Retira a alguien de la agenda sin borrarle el pasado.
+ *
+ * La ficha se desactiva, no se elimina: las citas apuntan a `id_profesional`, así que borrarla
+ * dejaría el historial —y los informes de caja por profesional— señalando al vacío. Desactivada
+ * deja de ofrecerse para citas nuevas, que es lo que se pidió, y volver a activarla es un clic.
+ */
+async function retirarDeAgenda({ idNegocio, idUsuario, transaction }) {
+    const pro = await Models.ReservaProfesional.findOne({
+        where: { id_negocio: idNegocio, id_usuario: idUsuario }, transaction,
+    });
+    if (!pro || pro.estado === 'I') return pro;
+    return pro.update({ estado: 'I', fecha_actualizacion: new Date() }, { transaction });
 }
 
 /**
@@ -553,14 +628,40 @@ async function actualizar({ idNegocio, idUsuario, datos: datosCrudos }) {
         }
         await usuario.update(cambios, { transaction: t });
 
+        let rol = null;
         if (datos.id_rol) {
-            const rol = await validarRolDelVertical(datos.id_rol);
+            rol = await validarRolDelVertical(datos.id_rol);
             await Models.GenerUsuarioRol.destroy({
                 where: { id_usuario: idUsuario, id_negocio: idNegocio }, transaction: t,
             });
             await Models.GenerUsuarioRol.create({
                 id_usuario: idUsuario, id_rol: rol.id_rol, id_negocio: idNegocio, estado: 'A',
             }, { transaction: t });
+        } else {
+            rol = await rolEnNegocio({ idUsuario, idNegocio, transaction: t });
+        }
+
+        // ── ¿Atiende citas? ──
+        //
+        // Se decide con el rol **resultante** y con `es_profesional`. Que el rol se lea aunque no
+        // se esté cambiando no es un lujo: sin eso, editarle el teléfono a un PROFESIONAL
+        // parecería un cambio inocente y le retiraría la ficha de la agenda.
+        //
+        // `undefined` en `es_profesional` significa «no se tocó»: las llamadas que no conocen
+        // esta capacidad (o los formularios viejos) no deben decidir por omisión.
+        const pedido = datos.es_profesional;
+        if (pedido !== undefined || rol?.descripcion === ROL_PROFESIONAL) {
+            if (atiendeCitas({ rol, datos })) {
+                await vincularProfesional({
+                    idNegocio,
+                    usuario: { ...usuario.toJSON(), ...cambios, id_usuario: idUsuario },
+                    datos,
+                    idProfesionalExistente: datos.id_profesional ? Number(datos.id_profesional) : null,
+                    transaction: t,
+                });
+            } else {
+                await retirarDeAgenda({ idNegocio, idUsuario, transaction: t });
+            }
         }
 
         // Si tiene ficha de profesional, el nombre se mantiene sincronizado: dos nombres para la
@@ -606,7 +707,24 @@ async function cambiarEstado({ idNegocio, idUsuario, estado, idUsuarioSolicitant
         const pro = await Models.ReservaProfesional.findOne({
             where: { id_negocio: idNegocio, id_usuario: idUsuario }, transaction: t,
         });
-        if (pro) await pro.update({ estado, fecha_actualizacion: new Date() }, { transaction: t });
+        if (pro) {
+            // Quitar el acceso saca a la persona de la agenda, siempre. Devolvérselo **no** la
+            // devuelve a la agenda por su cuenta salvo que su rol sea PROFESIONAL, que es el
+            // único caso en el que atender citas no es opcional.
+            //
+            // El motivo: desde que atender es una capacidad aparte del rol, una ficha
+            // desactivada puede serlo por dos razones —le quitaron el acceso, o le quitaron la
+            // capacidad— y la tabla no distingue cuál. Reactivar a ciegas devolvería a la agenda
+            // a alguien a quien se le retiró a propósito, y eso sí que nadie lo vería venir; que
+            // falte alguien en la agenda, en cambio, salta a la vista y se arregla con un clic.
+            const rolActual = await rolEnNegocio({
+                idUsuario, idNegocio, transaction: t, incluirInactivos: true,
+            });
+            const devolverAAgenda = rolActual?.descripcion === ROL_PROFESIONAL;
+            if (estado === 'I' || devolverAAgenda) {
+                await pro.update({ estado, fecha_actualizacion: new Date() }, { transaction: t });
+            }
+        }
         return vinculo;
     });
 }

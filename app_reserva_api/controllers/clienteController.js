@@ -117,9 +117,9 @@ async function exportar(req, res) {
         const buscar = req.query.buscar ? String(req.query.buscar).trim() : null;
 
         const clientes = await ClienteService.listarParaExportar({ idNegocio, buscar });
-        const nombreNegocio = await ClienteExportService.getNombreNegocio(idNegocio);
+        const { nombreNegocio, pais } = await ClienteExportService.getNegocio(idNegocio);
         const generar = formato === 'pdf' ? ClienteExportService.generarPDF : ClienteExportService.generarXLSX;
-        const { buffer, filename } = await generar(clientes, { nombreNegocio, buscar });
+        const { buffer, filename } = await generar(clientes, { nombreNegocio, buscar, pais });
 
         await registrarEvento({
             modulo: 'clientes',

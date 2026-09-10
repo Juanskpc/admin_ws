@@ -501,11 +501,12 @@ async function elegirProfesional(idNegocio, args) {
  * Hasta hoy esto solo filtraba por `codigo_publico` + `id_negocio`. Es decir: **el código ERA la
  * autorización**. Quien tuviera un código podía cancelar o mover esa cita, fuese quien fuese.
  *
- * No se explotaba porque `codigo_publico` es un UUID v4 y no se adivina — o sea que la seguridad
- * la estaba dando la *longitud* del identificador, sin que nadie lo hubiera decidido. Eso es un
- * accidente afortunado, no un diseño, y se rompe en cuanto el código se acorte para poder
- * dictarlo por teléfono (que es justo lo que se quiere hacer). Cancelar es además la operación
- * irreversible del catálogo: una cita cancelada por error no se «descancela».
+ * No se explotaba porque `codigo_publico` era entonces un UUID v4, que no se adivina — o sea que
+ * la seguridad la estaba dando la *longitud* del identificador, sin que nadie lo hubiera
+ * decidido. Eso es un accidente afortunado, no un diseño, y **ya se rompió**: el código se
+ * acortó para poder dictarlo por teléfono (`migrate:reserva-codigo-corto`), así que hoy lo único
+ * que sostiene esto es la comprobación de abajo. Cancelar es además la operación irreversible
+ * del catálogo: una cita cancelada por error no se «descancela».
  *
  * Así que la pertenencia se comprueba **antes** de acortar nada, y vale por sí sola.
  *

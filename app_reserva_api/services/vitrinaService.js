@@ -1,6 +1,7 @@
 'use strict';
 const Models = require('../../app_core/models/conection');
 const ConfigService = require('./configService');
+const { monedaDePais } = require('../../app_core/helpers/paises');
 
 /**
  * La página pública del negocio: lo que ve un cliente que llega desde un enlace o un QR.
@@ -100,7 +101,7 @@ async function getVitrina(idNegocio) {
         attributes: [
             'id_negocio', 'nombre', 'email_contacto', 'telefono', 'direccion',
             'url_whatsapp', 'url_facebook', 'url_instagram',
-            'logo_url', 'banner_url', 'colores', 'id_paleta',
+            'logo_url', 'banner_url', 'colores', 'id_paleta', 'pais',
         ],
         include: [
             { model: Models.GenerTipoNegocio, as: 'tipoNegocio',
@@ -248,6 +249,9 @@ async function getVitrina(idNegocio) {
                 facebook: limpio(negocio.url_facebook),
                 instagram: limpio(negocio.url_instagram),
             },
+            // La portada es pública: no hay sesión de la que sacar la moneda, así que viaja
+            // aquí. Sin esto, un negocio chileno publicaría sus precios en pesos colombianos.
+            moneda: monedaDePais(negocio.pais),
         },
         reglas: {
             anticipacion_min_horas: cfg.anticipacion_min_horas,

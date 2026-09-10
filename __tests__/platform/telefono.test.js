@@ -104,3 +104,46 @@ describe('normalizarE164 con país', () => {
         paises.forEach((p) => expect(normalizarE164('0', p)).toBeNull());
     });
 });
+
+/**
+ * Los países que se añadieron con la moneda (2026-09-10).
+ *
+ * Se prueban aquí y no solo en el catálogo porque el fallo que importa es silencioso: un móvil
+ * válido que devuelve `null` no da error, simplemente deja al cliente sin ficha y sin
+ * recordatorio. Ofrecer un país en el selector de moneda sin que el normalizador lo entienda
+ * sería repetir exactamente lo que costó el primer cliente chileno.
+ */
+describe('países añadidos con el catálogo de monedas', () => {
+    it('Perú: móviles de 9 dígitos que empiezan por 9', () => {
+        ['987654321', '+51 987 654 321', '51987654321'].forEach((entrada) => {
+            expect(normalizarE164(entrada, 'PE')).toBe('+51987654321');
+        });
+        expect(normalizarE164('12345678', 'PE')).toBeNull();   // fijo de Lima
+    });
+
+    it('Ecuador: el 0 nacional se quita y el prefijo son tres dígitos', () => {
+        ['987654321', '0987654321', '+593 98 765 4321', '593987654321'].forEach((entrada) => {
+            expect(normalizarE164(entrada, 'EC')).toBe('+593987654321');
+        });
+        expect(normalizarE164('22345678', 'EC')).toBeNull();
+    });
+
+    it('México: acepta el 1 que arrastra WhatsApp, pero guarda sin él', () => {
+        ['5512345678', '+52 55 1234 5678', '525512345678', '5215512345678'].forEach((entrada) => {
+            expect(normalizarE164(entrada, 'MX')).toBe('+525512345678');
+        });
+        // Sin distinción de móvil, lo único que descalifica es el largo o la basura.
+        expect(normalizarE164('12345', 'MX')).toBeNull();
+        expect(normalizarE164('5555555555', 'MX')).toBeNull();
+    });
+
+    it('el mismo número cambia de país según quién lo captura', () => {
+        // Chile y Perú comparten forma —9 dígitos empezando por 9— y no hay forma de
+        // distinguirlos mirando el número. Los distingue el negocio que lo apunta, que es
+        // justo para lo que existe `gener_negocio.pais`.
+        expect(normalizarE164('987654321', 'CL')).toBe('+56987654321');
+        expect(normalizarE164('987654321', 'PE')).toBe('+51987654321');
+        expect(normalizarE164('5512345678', 'CO')).toBeNull();
+        expect(normalizarE164('3001112233', 'PE')).toBeNull();
+    });
+});

@@ -92,7 +92,11 @@ async function leerCita({ idCita = null, codigoPublico = null, idNegocio }, { tr
           FROM reserva.reserva_cita c
          WHERE c.id_negocio = :idNegocio
            AND (:idCita::int IS NULL OR c.id_cita = :idCita::int)
-           AND (:codigoPublico::uuid IS NULL OR c.codigo_publico = :codigoPublico::uuid);
+           -- El codigo publico dejo de ser UUID al llegar el codigo corto que el cliente
+           -- teclea (migrate:reserva-codigo-corto): castear a uuid aqui hacia que Postgres
+           -- rechazara la comparacion entera -«el operador no existe: character varying =
+           -- uuid»- y con ella el consumidor del outbox, o sea todos los recordatorios.
+           AND (:codigoPublico::text IS NULL OR c.codigo_publico = :codigoPublico::text);
         `,
         {
             replacements: { idCita, codigoPublico, idNegocio },

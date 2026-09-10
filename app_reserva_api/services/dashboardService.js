@@ -2,6 +2,7 @@
 const Models = require('../../app_core/models/conection');
 const Reglas = require('./reglasAgenda');
 const { getIdsConPlanActivo } = require('../../app_core/helpers/planHelper');
+const { monedaDePais } = require('../../app_core/helpers/paises');
 const { Op } = Models.Sequelize;
 
 /**
@@ -239,7 +240,7 @@ async function verificarAccesoReserva(idUsuario) {
                 },
                 { model: Models.GenerPaletaColor, as: 'paletaColor', attributes: ['id_paleta', 'nombre', 'colores'] },
             ],
-            attributes: ['id_negocio', 'nombre', 'id_tipo_negocio', 'id_paleta', 'logo_url', 'colores'],
+            attributes: ['id_negocio', 'nombre', 'id_tipo_negocio', 'id_paleta', 'logo_url', 'colores', 'pais'],
         }],
     });
 
@@ -296,6 +297,11 @@ async function verificarAccesoReserva(idUsuario) {
             // a la vista del usuario.
             logo_url: neg.logo_url || null,
             colores: neg.colores || null,
+            // País y moneda viajan por el mismo motivo que los colores: los precios se pintan
+            // en el primer render y pedirlos aparte los mostraría un instante en pesos
+            // colombianos antes de corregirse.
+            pais: neg.pais || null,
+            moneda: monedaDePais(neg.pais),
             roles,
             permisos_vista,
             permisos_subnivel,
