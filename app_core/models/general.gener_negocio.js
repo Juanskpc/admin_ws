@@ -25,6 +25,9 @@ module.exports = (sequelize, DataTypes) => {
         permite_descuento: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
         /** Opt-in: al enviar un pedido, pregunta si se cobra ahora o se envía sin cobrar. */
         pregunta_cobro_envio: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+        // ¿El negocio maneja tiqueteras y fiado? Opt-in: nace apagado, y mientras lo esté el
+        // módulo de Clientes no existe para él — ni menú, ni forma de pago, ni API.
+        permite_cuentas_cliente: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
         /** Logo del negocio. Ruta relativa servida desde /uploads. */
         logo_url: DataTypes.STRING(500),
         /** Imagen ancha de cabecera del portal público (16:5). */

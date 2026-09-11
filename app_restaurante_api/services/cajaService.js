@@ -2,6 +2,7 @@
 const { Op } = require('sequelize');
 const Models = require('../../app_core/models/conection');
 const { usuarioTieneSubnivel } = require('../../app_core/helpers/permisoSubnivel');
+const { avisar, TEMAS } = require('./avisoService');
 
 const SUBNIVEL_ANULAR_PEDIDO = 'caja_eliminar_pedido';
 
@@ -45,13 +46,18 @@ async function abrirCaja({ idNegocio, idUsuario, montoApertura, observaciones })
         err.statusCode = 409;
         throw err;
     }
-    return Models.RestCaja.create({
+    const caja = await Models.RestCaja.create({
         id_negocio: idNegocio,
         id_usuario: idUsuario,
         monto_apertura: montoApertura,
         observaciones: observaciones || null,
         estado: 'A',
     });
+
+    // Abrir el turno desbloquea el POS de TODOS los equipos del negocio. Es justo el caso que
+    // obligaba a recargar: uno abre la caja en el computador y los demás seguían bloqueados.
+    avisar(idNegocio, TEMAS.CAJA, TEMAS.PEDIDOS);
+    return caja;
 }
 
 /**
@@ -66,7 +72,9 @@ async function getDesglosePorMetodo(idCaja) {
     //    al id_metodo_pago de la orden (o "Manual / Sin orden").
     const rows = await Models.sequelize.query(`
         WITH ingresos AS (
-            SELECT m.id_orden, m.monto
+            -- La forma de pago viaja en el propio movimiento solo cuando NO hay pedido detrás
+            -- (un abono a la cuenta de un cliente, por ejemplo). Con pedido manda la orden.
+            SELECT m.id_orden, m.monto, m.id_metodo_pago AS metodo_directo
             FROM restaurante.rest_movimiento_caja m
             WHERE m.id_caja = :idCaja AND m.tipo = 'INGRESO'
               -- Un ingreso anulado ya no es plata en el cajón: se excluye del
@@ -91,13 +99,14 @@ async function getDesglosePorMetodo(idCaja) {
             GROUP BY pp.id_metodo_pago
         ),
         simple AS (
-            SELECT po.id_metodo_pago, SUM(i.monto) AS total
+            SELECT COALESCE(po.id_metodo_pago, i.metodo_directo) AS id_metodo_pago,
+                   SUM(i.monto) AS total
             FROM ingresos i
             LEFT JOIN restaurante.pedid_orden po ON po.id_orden = i.id_orden
             WHERE NOT EXISTS (
                 SELECT 1 FROM restaurante.rest_pago_orden pp WHERE pp.id_orden = i.id_orden
             )
-            GROUP BY po.id_metodo_pago
+            GROUP BY COALESCE(po.id_metodo_pago, i.metodo_directo)
         ),
         combinado AS (
             SELECT id_metodo_pago, total FROM multipago
@@ -294,6 +303,7 @@ async function transferirDomiciliarioACaja({ idNegocio, idDomiciliario, idUsuari
         }
 
         await t.commit();
+        avisar(idNegocio, TEMAS.CAJA, TEMAS.PEDIDOS);
         return { total_pedidos: ordenes.length, total_monto: totalMonto };
     } catch (err) {
         if (!t.finished) await t.rollback();
@@ -366,6 +376,7 @@ async function cerrarCaja({ idCaja, idNegocio, montoReportado, observaciones }) 
             : observaciones;
     }
     await caja.save();
+    avisar(idNegocio, TEMAS.CAJA, TEMAS.PEDIDOS);
     return caja;
 }
 
@@ -619,6 +630,7 @@ async function getMovimientos(idCaja) {
 
 async function registrarMovimiento({
     idCaja, tipo, monto, concepto, idUsuario, idOrden,
+    idMetodoPago = null,
     idMovimientoAnula = null, permitirCero = false, transaction,
 }) {
     if (!['INGRESO', 'EGRESO'].includes(tipo)) {
@@ -637,15 +649,28 @@ async function registrarMovimiento({
         err.statusCode = 422;
         throw err;
     }
-    return Models.RestMovimientoCaja.create({
+    const movimiento = await Models.RestMovimientoCaja.create({
         id_caja: idCaja,
         tipo,
         monto,
         concepto: concepto || null,
         id_orden: idOrden || null,
         id_usuario: idUsuario,
+        // Solo tiene sentido cuando el movimiento NO cuelga de un pedido: si hay pedido, la
+        // forma de pago la manda la orden (o su desglose de multipago) y guardarla otra vez
+        // aquí crearía dos verdades para el mismo cobro.
+        id_metodo_pago: idOrden ? null : (idMetodoPago || null),
         id_movimiento_anula: idMovimientoAnula || null,
     }, { transaction });
+
+    // Solo el movimiento MANUAL avisa desde aquí. Los que entran con transacción vienen del
+    // cobro de un pedido o de una anulación, y esos ya avisan al confirmar la suya: hacerlo
+    // también aquí sería un aviso dentro de una transacción sin confirmar, más una consulta
+    // extra por cada cobro para averiguar el negocio.
+    if (!transaction) {
+        avisar(await getIdNegocioDeCaja(idCaja), TEMAS.CAJA);
+    }
+    return movimiento;
 }
 
 /**
@@ -839,7 +864,14 @@ async function anularOrdenCobrada({ idNegocio, idOrden, idUsuario }) {
 
         await orden.update({ estado: 'ANULADA' }, { transaction: t });
 
+        // Si el pedido se había pagado con una tiquetera, hay que devolverle al cliente lo que
+        // se le descontó. Sin esto, anular el pedido le quitaba la comida Y el almuerzo.
+        await require('./cuentaService').revertirConsumoDeOrden({
+            idNegocio, idOrden, idUsuario, transaction: t,
+        });
+
         await t.commit();
+        avisar(idNegocio, TEMAS.CAJA, TEMAS.PEDIDOS, TEMAS.MESAS, TEMAS.CLIENTES);
         return {
             id_orden: idOrden,
             numero_orden: numeroOrden,
@@ -922,6 +954,7 @@ async function anularMovimientoCaja({ idNegocio, idMovimiento, idUsuario }) {
         });
 
         await t.commit();
+        avisar(idNegocio, TEMAS.CAJA);
         return {
             id_movimiento: mov.id_movimiento,
             tipo: mov.tipo,

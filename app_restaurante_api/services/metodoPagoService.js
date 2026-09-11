@@ -30,6 +30,18 @@ async function actualizar({ idMetodo, idNegocio, nombre }) {
 async function inactivar({ idMetodo, idNegocio }) {
     const m = await Models.RestMetodoPago.findOne({ where: { id_metodo_pago: idMetodo, id_negocio: idNegocio } });
     if (!m) return null;
+
+    // «Cuenta / Tiquetera» no es una forma de pago más: es la que le dice al cobro que ese
+    // dinero no entra al cajón hoy. Apagarla dejaría el módulo de clientes sin manera de
+    // cobrar, y el fallo aparecería lejos de aquí —al intentar cobrar— sin decir por qué.
+    // Renombrarla sí se permite: el código la reconoce por la marca, no por el nombre.
+    if (m.es_cuenta) {
+        const e = new Error('La forma de pago de las cuentas de cliente no se puede desactivar.');
+        e.code = 'METODO_PAGO_PROTEGIDO';
+        e.statusCode = 409;
+        throw e;
+    }
+
     return m.update({ estado: 'I' });
 }
 

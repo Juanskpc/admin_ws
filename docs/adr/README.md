@@ -75,6 +75,7 @@ Si eres nuevo en el proyecto, lee en orden ADR-001 → ADR-006. Con eso entiende
 - [ADR-023 — Guardarraíles de producto: promesas y handoff](ADR-023-guardarrailes.md) · Aceptado *(2026-08-19, al empezar F7)*
 - [ADR-024 — Convenciones de persistencia y gobierno de datos](ADR-024-persistencia.md) · Aceptado
 - [ADR-026 — Facturación electrónica: integrar un proveedor tecnológico, no construir el emisor](ADR-026-facturacion-electronica.md) · **Propuesto** *(2026-09-01)*
+- [ADR-027 — Avisos en vivo a las pantallas: SSE y una señal que no es un evento de dominio](ADR-027-avisos-en-vivo.md) · **Propuesto** *(2026-09-11)*
 
 ## Documentos relacionados (en `/docs/architecture`)
 

@@ -115,6 +115,37 @@ Lo que esto cambia:
 
 ---
 
+## 4-bis. Qué pasa cuando un cliente no paga a tiempo (desde 2026-09-11)
+
+**Vencer el plan ya no corta la operación el mismo día: hay 5 días de gracia.**
+
+| Estado | Qué ve el cliente | ¿Puede trabajar? |
+|---|---|---|
+| `ACTIVO` | nada | sí |
+| `GRACIA` (día 1 a 5 tras `fecha_fin`) | franja «tu plan está vencido, tienes N días para actualizar tu pago» | **sí, con normalidad** |
+| `VENCIDO` (día 6 en adelante) | pantalla `/sin-plan` | no |
+| `SIN_PLAN` | pantalla `/sin-plan` | no |
+
+Por qué: el pago de un negocio pequeño casi nunca cae el día exacto, y cerrarle la caja a un
+restaurante en plena hora de almuerzo por un retraso de un día es la forma más cara de cobrar
+$59.999. El aviso llega **antes** del corte, que es cuando todavía se puede arreglar.
+
+Dónde vive: `app_core/helpers/planHelper.js` — `DIAS_GRACIA_PLAN = 5` y `evaluarPlan()`. La
+bandera que miran los guardias de las apps sigue siendo `plan_activo`, que ahora **incluye la
+gracia**; el detalle viaja aparte en `plan` (`estado`, `en_gracia`, `dias_gracia_restantes`,
+`fecha_fin`) y es lo que pinta la franja en admin, restaurante y reserva. Cambiar los 5 días es
+cambiar una constante, pero es una **decisión comercial**: está cubierta por
+`__tests__/negocios/plan_gracia.test.js`.
+
+La franja se puede cerrar con una «x» y **vuelve a salir al siguiente inicio de sesión** (lo
+cerrado se guarda contra el token de la sesión, no «para siempre»).
+
+Lo que esto **no** hace: no cobra, no renueva y no avisa por WhatsApp ni por correo. El pago se
+sigue confirmando a mano, y hasta que alguien renueve la fila de `gener_negocio_plan` el reloj
+corre.
+
+---
+
 ## 5. Lo que este documento NO decide
 
 - **El precio del plan base.** $27.999 y $59.999 se conservan tal cual; no había razón para tocarlos

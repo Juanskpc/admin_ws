@@ -9,6 +9,8 @@ const DashboardController  = require('../controllers/dashboardController');
 const CartaController      = require('../controllers/cartaController');
 const CartaAdminController = require('../controllers/cartaAdminController');
 const PublicoController    = require('../controllers/publicoController');
+const EventosController    = require('../controllers/eventosController');
+const CuentaController     = require('../controllers/cuentaController');
 const PedidoController     = require('../controllers/pedidoController');
 const MesaController       = require('../controllers/mesaController');
 const InventarioController = require('../controllers/inventarioController');
@@ -83,6 +85,82 @@ router.use(verificarToken);
 // pertenece al id_negocio que pide. Arranca en modo observacion (audita, no bloquea).
 const { exigirPertenenciaNegocio } = require('../../app_core/middleware/authzNegocio');
 router.use(exigirPertenenciaNegocio);
+
+// --- Avisos en vivo (SSE) ---
+// Conexión larga: el navegador la deja abierta y el servidor le avisa cuando otro compañero
+// del mismo negocio cambia algo. Va antes que el resto por claridad, no por precedencia.
+router.get('/eventos', EventosController.suscribirEventos);
+
+// --- Clientes: cuentas, tiqueteras y fiado ---
+//
+// `id_negocio` es obligatorio en todas y no opcional: estas rutas devuelven saldos de personas,
+// y una consulta sin negocio no tiene un valor por defecto razonable que no sea adivinar.
+router.get('/clientes', [
+	query('id_negocio').isInt({ min: 1 }),
+	query('busqueda').optional({ nullable: true }).isString().isLength({ max: 120 }),
+	query('filtro').optional().isIn(['todos', 'deben', 'a_favor']),
+	query('limite').optional().isInt({ min: 1, max: 500 }),
+	query('offset').optional().isInt({ min: 0 }),
+], CuentaController.listar);
+
+router.get('/clientes/:id', [
+	param('id').isInt({ min: 1 }),
+	query('id_negocio').isInt({ min: 1 }),
+], CuentaController.detalle);
+
+router.get('/clientes/:id/movimientos', [
+	param('id').isInt({ min: 1 }),
+	query('id_negocio').isInt({ min: 1 }),
+	query('limite').optional().isInt({ min: 1, max: 500 }),
+	query('offset').optional().isInt({ min: 0 }),
+], CuentaController.movimientos);
+
+router.get('/clientes/:id/cobertura', [
+	param('id').isInt({ min: 1 }),
+	query('id_negocio').isInt({ min: 1 }),
+	query('id_orden').optional().isInt({ min: 1 }),
+	query('total').optional().isFloat({ min: 0 }),
+], CuentaController.cobertura);
+
+router.post('/clientes', [
+	body('id_negocio').isInt({ min: 1 }),
+	body('nombre').isString().trim().isLength({ min: 2, max: 160 }),
+	body('telefono').optional({ nullable: true }).isString().isLength({ max: 40 }),
+	body('modo').optional().isIn(['DINERO', 'TIQUETES']),
+	body('cupo').optional().isFloat({ min: 0 }),
+	body('nota').optional({ nullable: true }).isString().isLength({ max: 1000 }),
+], CuentaController.crear);
+
+router.put('/clientes/:id', [
+	param('id').isInt({ min: 1 }),
+	body('id_negocio').isInt({ min: 1 }),
+	body('modo').optional().isIn(['DINERO', 'TIQUETES']),
+	body('cupo').optional().isFloat({ min: 0 }),
+	body('estado').optional().isIn(['A', 'I']),
+	body('nota').optional({ nullable: true }).isString().isLength({ max: 1000 }),
+], CuentaController.actualizar);
+
+// Entra plata: exige el subnivel `clientes_abonar` (se verifica en el controlador).
+router.post('/clientes/:id/abonos', [
+	param('id').isInt({ min: 1 }),
+	body('id_negocio').isInt({ min: 1 }),
+	body('id_metodo_pago').isInt({ min: 1 }),
+	body('monto').isFloat({ gt: 0 }),
+	body('tiquetes').optional().isInt({ min: 0 }),
+	body('id_producto').optional({ nullable: true }).isInt({ min: 1 }),
+	body('concepto').optional({ nullable: true }).isString().isLength({ max: 255 }),
+], CuentaController.abonar);
+
+// NO entra plata: exige el subnivel `clientes_ajustar`, que el cajero no tiene.
+router.post('/clientes/:id/ajustes', [
+	param('id').isInt({ min: 1 }),
+	body('id_negocio').isInt({ min: 1 }),
+	body('tipo').isIn(['ABONO', 'CARGO']),
+	body('monto').optional().isFloat({ min: 0 }),
+	body('tiquetes').optional().isInt({ min: 0 }),
+	body('id_producto').optional({ nullable: true }).isInt({ min: 1 }),
+	body('concepto').isString().trim().isLength({ min: 3, max: 255 }),
+], CuentaController.ajustar);
 
 // --- Dashboard ---
 router.get('/dashboard/resumen', DashboardController.getResumenDashboard);

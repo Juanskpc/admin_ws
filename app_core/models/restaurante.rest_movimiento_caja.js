@@ -7,6 +7,10 @@ module.exports = (sequelize, DataTypes) => {
     concepto:      DataTypes.STRING(255),
     id_orden:      DataTypes.INTEGER,
     id_usuario:    { type: DataTypes.INTEGER, allowNull: false },
+    // Con qué se pagó, cuando el movimiento NO cuelga de un pedido (un abono a la cuenta de
+    // un cliente, por ejemplo). Sin esto, esos ingresos caían en el arqueo como «Manual /
+    // Sin orden» y el cajero no sabía si esa plata estaba en el cajón o llegó por transferencia.
+    id_metodo_pago: { type: DataTypes.INTEGER, allowNull: true },
     // Movimiento que esta fila reversa. Non-null ⟹ la fila ES una anulación.
     // Nada se borra: el original queda visible y el neto se corrige sumando.
     id_movimiento_anula: { type: DataTypes.INTEGER, allowNull: true },

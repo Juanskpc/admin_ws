@@ -3,7 +3,7 @@ const { v4: uuidv4 } = require('uuid');
 const DashboardService = require('../services/dashboardService');
 const AccessCodeStore = require('../../app_parqueadero_api/services/accessCodeStore');
 const Respuesta = require('../../app_core/helpers/respuesta');
-const { tienePlanActivo } = require('../../app_core/helpers/planHelper');
+const { getEstadoPlan } = require('../../app_core/helpers/planHelper');
 
 /**
  * dashboardController — Endpoints para el módulo restaurante.
@@ -36,7 +36,11 @@ async function verificarTokenAcceso(req, res) {
         }
 
         const idNegocioActivo = acceso.negocio?.id_negocio ?? null;
-        acceso.plan_activo = idNegocioActivo ? await tienePlanActivo(idNegocioActivo) : false;
+        // `plan_activo` sigue siendo la bandera que miran los guardias, pero ahora incluye
+        // los días de gracia posteriores al vencimiento; `plan` lleva el detalle para el aviso.
+        const estadoPlan = await getEstadoPlan(idNegocioActivo);
+        acceso.plan_activo = estadoPlan.activo;
+        acceso.plan = estadoPlan;
 
         return Respuesta.success(res, 'Token válido', acceso);
     } catch (err) {
@@ -80,6 +84,19 @@ async function getPerfilRestaurante(req, res) {
         if (!perfil) {
             return Respuesta.error(res, 'No tienes acceso al módulo de restaurante.', 403);
         }
+
+        // El perfil se refresca cada minuto desde la app: es la vía por la que el aviso de
+        // «plan vencido, te quedan N días» se actualiza —y desaparece al confirmarse el
+        // pago— sin obligar al usuario a cerrar sesión.
+        // El negocio pedido solo vale si es del propio usuario: si no, se usa el suyo por
+        // defecto. Aceptarlo a ciegas contaría el estado del plan de un negocio ajeno.
+        const idPedido = req.query.id_negocio ? Number(req.query.id_negocio) : null;
+        const esSuyo = idPedido !== null
+            && (perfil.negocios || []).some((n) => n.id_negocio === idPedido);
+        const idNegocioPerfil = esSuyo ? idPedido : perfil.negocio?.id_negocio ?? null;
+        const estadoPlanPerfil = await getEstadoPlan(idNegocioPerfil);
+        perfil.plan_activo = estadoPlanPerfil.activo;
+        perfil.plan = estadoPlanPerfil;
 
         return Respuesta.success(res, 'Perfil obtenido', perfil);
     } catch (err) {
@@ -157,7 +174,11 @@ async function canjearCodigo(req, res) {
         }
 
         const idNegocioActivo = entry.idNegocio || acceso.negocio?.id_negocio || null;
-        acceso.plan_activo = idNegocioActivo ? await tienePlanActivo(idNegocioActivo) : false;
+        // `plan_activo` sigue siendo la bandera que miran los guardias, pero ahora incluye
+        // los días de gracia posteriores al vencimiento; `plan` lleva el detalle para el aviso.
+        const estadoPlan = await getEstadoPlan(idNegocioActivo);
+        acceso.plan_activo = estadoPlan.activo;
+        acceso.plan = estadoPlan;
 
         return Respuesta.success(res, 'Acceso concedido', {
             token: entry.token,

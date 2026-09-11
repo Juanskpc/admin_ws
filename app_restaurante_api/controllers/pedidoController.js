@@ -11,6 +11,9 @@ const { validationResult } = require('express-validator');
 const crearOrdenValidators = [
     body('id_negocio').isInt({ min: 1 }).withMessage('id_negocio inválido'),
     body('id_metodo_pago').optional({ nullable: true }).isInt({ min: 1 }).withMessage('id_metodo_pago inválido'),
+    // La cuenta del cliente elegida al tomar el pedido. Igual que la forma de pago: es una
+    // intención que se guarda para no volver a preguntarla al cobrar. No descuenta nada.
+    body('id_cuenta').optional({ nullable: true }).isInt({ min: 1 }).withMessage('id_cuenta inválido'),
     // Multipago elegido al tomar el pedido: se guarda como intención y el cobro lo re-valida.
     body('pagos').optional({ nullable: true }).isArray({ min: 2 }).withMessage('pagos debe tener al menos 2 formas de pago'),
     body('pagos.*.id_metodo_pago').optional().isInt({ min: 1 }).withMessage('id_metodo_pago inválido en pagos'),
@@ -37,6 +40,7 @@ const crearOrdenValidators = [
 const agregarItemsOrdenValidators = [
     body('id_negocio').isInt({ min: 1 }).withMessage('id_negocio inválido'),
     body('id_metodo_pago').optional({ nullable: true }).isInt({ min: 1 }).withMessage('id_metodo_pago inválido'),
+    body('id_cuenta').optional({ nullable: true }).isInt({ min: 1 }).withMessage('id_cuenta inválido'),
     body('pagos').optional({ nullable: true }).isArray({ min: 2 }).withMessage('pagos debe tener al menos 2 formas de pago'),
     body('pagos.*.id_metodo_pago').optional().isInt({ min: 1 }).withMessage('id_metodo_pago inválido en pagos'),
     body('pagos.*.valor').optional().isFloat({ gt: 0 }).withMessage('valor inválido en pagos'),
@@ -60,6 +64,9 @@ const marcarPagadoValidators = [
     body('pagos.*.valor').optional().isFloat({ gt: 0 }).withMessage('valor inválido en pagos'),
     body('origen_cobro').optional({ nullable: true }).isIn(['CAJA', 'DOMICILIARIO'])
         .withMessage('origen_cobro inválido'),
+    // De quién es la tiquetera cuando se paga con la cuenta del cliente. El servidor NO lo
+    // deduce del teléfono del pedido: adivinarlo le descontaría el almuerzo a otra persona.
+    body('id_cuenta').optional({ nullable: true }).isInt({ min: 1 }).withMessage('id_cuenta inválido'),
 ];
 
 const actualizarValorDomicilioValidators = [
@@ -89,6 +96,7 @@ const cerrarOrdenValidators = [
     body('pagos').optional({ nullable: true }).isArray({ min: 2 }).withMessage('pagos debe tener al menos 2 formas de pago'),
     body('pagos.*.id_metodo_pago').optional().isInt({ min: 1 }).withMessage('id_metodo_pago inválido en pagos'),
     body('pagos.*.valor').optional().isFloat({ gt: 0 }).withMessage('valor inválido en pagos'),
+    body('id_cuenta').optional({ nullable: true }).isInt({ min: 1 }).withMessage('id_cuenta inválido'),
 ];
 
 async function crearOrden(req, res) {
@@ -106,6 +114,7 @@ async function crearOrden(req, res) {
         const orden = await PedidoService.crearOrden({
             idNegocio:  id_negocio,
             idMetodoPago: id_metodo_pago ? Number(id_metodo_pago) : null,
+            idCuenta: req.body.id_cuenta ? Number(req.body.id_cuenta) : null,
             pagos: Array.isArray(req.body.pagos) ? req.body.pagos : null,
             idUsuario:  req.usuario.id_usuario,
             idMesa:     id_mesa || null,
@@ -159,6 +168,7 @@ async function agregarItemsOrden(req, res) {
             idOrden,
             idNegocio: id_negocio,
             idMetodoPago: id_metodo_pago ? Number(id_metodo_pago) : null,
+            idCuenta: req.body.id_cuenta ? Number(req.body.id_cuenta) : null,
             pagos: Array.isArray(req.body.pagos) ? req.body.pagos : null,
             nota,
             items,
@@ -285,6 +295,8 @@ async function marcarPagado(req, res) {
             idMetodoPago: req.body.id_metodo_pago ? Number(req.body.id_metodo_pago) : null,
             pagos: Array.isArray(req.body.pagos) ? req.body.pagos : null,
             origenCobro: req.body.origen_cobro || 'CAJA',
+            idCuenta: req.body.id_cuenta ? Number(req.body.id_cuenta) : null,
+            idUsuario: req.usuario?.id_usuario ?? null,
         });
         if (!orden) return Respuesta.error(res, 'Orden no encontrada', 404);
         return Respuesta.success(res, 'Pago registrado', orden);
@@ -292,7 +304,7 @@ async function marcarPagado(req, res) {
         if (err.code === 'METODO_PAGO_REQUERIDO' || err.code === 'METODO_PAGO_INVALIDO') {
             return Respuesta.error(res, err.message, err.statusCode || 422, { code: err.code });
         }
-        if (err.code === 'CAJA_CERRADA') {
+        if (['CAJA_CERRADA', 'CUENTA_REQUERIDA', 'CUENTA_SIN_SALDO', 'CUENTA_NO_EXISTE', 'CUENTA_INACTIVA'].includes(err.code)) {
             return Respuesta.error(res, err.message, err.statusCode || 409, { code: err.code });
         }
         console.error('[Despacho] Error marcarPagado:', err.message);
@@ -373,11 +385,15 @@ async function cerrarOrden(req, res) {
             idUsuario: req.usuario?.id_usuario,
             idMetodoPago: req.body?.id_metodo_pago ? Number(req.body.id_metodo_pago) : null,
             pagos: Array.isArray(req.body?.pagos) ? req.body.pagos : null,
+            idCuenta: req.body?.id_cuenta ? Number(req.body.id_cuenta) : null,
         });
         if (!orden) return Respuesta.error(res, 'Orden no encontrada', 404);
         return Respuesta.success(res, 'Orden cerrada', orden);
     } catch (err) {
-        if (err.code === 'CAJA_CERRADA' || err.code === 'METODO_PAGO_INVALIDO' || err.code === 'METODO_PAGO_REQUERIDO') {
+        if ([
+            'CAJA_CERRADA', 'METODO_PAGO_INVALIDO', 'METODO_PAGO_REQUERIDO',
+            'CUENTA_REQUERIDA', 'CUENTA_SIN_SALDO', 'CUENTA_NO_EXISTE', 'CUENTA_INACTIVA',
+        ].includes(err.code)) {
             return Respuesta.error(res, err.message, err.statusCode || 409, { code: err.code });
         }
         console.error('[Pedidos] Error cerrarOrden:', err.message);

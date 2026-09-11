@@ -1,4 +1,5 @@
 const Models = require('../../app_core/models/conection');
+const { avisar, TEMAS } = require('./avisoService');
 
 /**
  * mesaService — Lógica de negocio para las mesas del restaurante.
@@ -83,7 +84,7 @@ async function getMesasDashboard(idNegocio) {
             as: 'ordenes',
             where: { estado: 'ABIERTA' },
             required: false,
-            attributes: ['id_orden', 'total', 'fecha_creacion', 'estado_cocina', 'id_metodo_pago', 'nota', 'descuento', 'estado_pago'],
+            attributes: ['id_orden', 'total', 'fecha_creacion', 'estado_cocina', 'id_metodo_pago', 'id_cuenta', 'nota', 'descuento', 'estado_pago'],
             include: [{
                 model: Models.PedidDetalle,
                 as: 'detalles',
@@ -146,6 +147,9 @@ async function getMesasDashboard(idNegocio) {
                 descuento: Number(ordenActiva.descuento ?? 0),
                 estado_pago: ordenActiva.estado_pago ?? null,
                 id_metodo_pago: ordenActiva.id_metodo_pago ?? null,
+                // De quién es la tiquetera, elegida al tomar el pedido. Viaja para que el
+                // cobro de la mesa no vuelva a preguntar lo que el cajero ya dijo.
+                id_cuenta: ordenActiva.id_cuenta ?? null,
                 pagos: (ordenActiva.pagos ?? []).map((p) => ({
                     id_metodo_pago: p.id_metodo_pago,
                     valor: Number(p.valor ?? 0),
@@ -166,7 +170,7 @@ async function crearMesa({ idNegocio, nombre, numero, capacidad }) {
         nextNumero = (Number(maxNumero) || 0) + 1;
     }
 
-    return Models.RestMesa.create({
+    const mesa = await Models.RestMesa.create({
         id_negocio: idNegocio,
         nombre,
         numero: nextNumero,
@@ -175,6 +179,9 @@ async function crearMesa({ idNegocio, nombre, numero, capacidad }) {
         estado_servicio: 'DISPONIBLE',
         fecha_inicio_servicio: null,
     });
+
+    avisar(idNegocio, TEMAS.MESAS);
+    return mesa;
 }
 
 async function actualizarMesa(idMesa, { nombre, numero, capacidad }) {
@@ -186,6 +193,8 @@ async function actualizarMesa(idMesa, { nombre, numero, capacidad }) {
         numero: numero ?? mesa.numero,
         capacidad: capacidad ?? mesa.capacidad,
     });
+
+    avisar(mesa.id_negocio, TEMAS.MESAS);
     return mesa;
 }
 
@@ -200,6 +209,7 @@ async function setMesaEstado(idMesa, estado) {
     }
 
     await mesa.update(updates);
+    avisar(mesa.id_negocio, TEMAS.MESAS);
     return mesa;
 }
 
@@ -219,6 +229,7 @@ async function setMesaEstadoServicio(idMesa, estadoServicio) {
     }
 
     await mesa.update(updates);
+    avisar(mesa.id_negocio, TEMAS.MESAS);
     return mesa;
 }
 
@@ -253,6 +264,7 @@ async function liberarMesa(idMesa) {
         }, { transaction: t });
 
         await t.commit();
+        avisar(mesa.id_negocio, TEMAS.MESAS);
         return mesa;
     } catch (error) {
         await t.rollback();

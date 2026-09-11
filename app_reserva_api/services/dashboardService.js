@@ -1,7 +1,7 @@
 'use strict';
 const Models = require('../../app_core/models/conection');
 const Reglas = require('./reglasAgenda');
-const { getIdsConPlanActivo } = require('../../app_core/helpers/planHelper');
+const { getEstadosPlanPorNegocio } = require('../../app_core/helpers/planHelper');
 const { monedaDePais } = require('../../app_core/helpers/paises');
 const { Op } = Models.Sequelize;
 
@@ -265,7 +265,10 @@ async function verificarAccesoReserva(idUsuario) {
     // sesión sin el campo —así que al revalidar el token el front leía `undefined`, lo trataba
     // como `false` y bloqueaba la app de un negocio que sí paga—, y con varios negocios la
     // bandera se quedaba con el plan del primero aunque el usuario cambiara de inquilino.
-    const idsConPlan = await getIdsConPlanActivo(idNegocios);
+    //
+    // `plan_activo` incluye los días de gracia posteriores al vencimiento (ver planHelper);
+    // el detalle de esa gracia viaja en `plan` para poder avisar «te quedan N días».
+    const estadosPlan = await getEstadosPlanPorNegocio(idNegocios);
 
     const negocios = await Promise.all(negociosUsuario.map(async (nu) => {
         const neg = nu.negocio;
@@ -305,7 +308,8 @@ async function verificarAccesoReserva(idUsuario) {
             roles,
             permisos_vista,
             permisos_subnivel,
-            plan_activo: idsConPlan.has(neg.id_negocio),
+            plan_activo: estadosPlan.get(neg.id_negocio)?.activo ?? false,
+            plan: estadosPlan.get(neg.id_negocio) ?? null,
         };
     }));
 
@@ -327,6 +331,7 @@ async function verificarAccesoReserva(idUsuario) {
         // Se conserva en la raíz por compatibilidad con lo que ya leía el front; la fuente
         // buena es el `plan_activo` de cada negocio.
         plan_activo: negocios[0]?.plan_activo ?? false,
+        plan: negocios[0]?.plan ?? null,
     };
 }
 

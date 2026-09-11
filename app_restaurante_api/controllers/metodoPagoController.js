@@ -69,6 +69,11 @@ async function inactivar(req, res) {
         if (!m) return Respuesta.error(res, 'Método de pago no encontrado', 404);
         return Respuesta.success(res, 'Método de pago inactivado', m);
     } catch (err) {
+        // Los errores tipados del servicio se reenvían con su código: si no, «esta forma de
+        // pago no se puede desactivar» llegaba como un 500 mudo y parecía una avería.
+        if (err.statusCode) {
+            return Respuesta.error(res, err.message, err.statusCode, { code: err.code });
+        }
         console.error('[Restaurante/MetodoPago] inactivar:', err.message);
         return Respuesta.error(res, 'Error al inactivar el método de pago.');
     }

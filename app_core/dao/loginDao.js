@@ -1,5 +1,5 @@
 const Models = require('../models/conection');
-const { getIdsConPlanActivo } = require('../helpers/planHelper');
+const { getEstadosPlanPorNegocio } = require('../helpers/planHelper');
 
 /**
  * Obtiene credenciales del usuario por número de identificación.
@@ -56,9 +56,11 @@ async function getUsuarioLogin(idUsuario) {
         }]
     });
 
-    // Verificar qué negocios tienen plan activo
+    // Estado del plan de cada negocio. `plan_activo` incluye los días de gracia
+    // posteriores al vencimiento (ver planHelper): el detalle de esa gracia viaja
+    // en `plan` para que las apps puedan avisar «te quedan N días para pagar».
     const idNegocios = negociosUsuario.map(nu => nu.negocio.id_negocio);
-    const idsConPlan = await getIdsConPlanActivo(idNegocios);
+    const estadosPlan = await getEstadosPlanPorNegocio(idNegocios);
 
     // Agrupar negocios con sus roles y estado de plan
     const negocios = negociosUsuario.map(nu => {
@@ -71,7 +73,8 @@ async function getUsuarioLogin(idUsuario) {
             id_negocio: negocio.id_negocio,
             nombre: negocio.nombre,
             roles,
-            plan_activo: idsConPlan.has(negocio.id_negocio),
+            plan_activo: estadosPlan.get(negocio.id_negocio)?.activo ?? false,
+            plan: estadosPlan.get(negocio.id_negocio) ?? null,
         };
     });
 

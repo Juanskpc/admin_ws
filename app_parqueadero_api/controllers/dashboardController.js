@@ -3,7 +3,7 @@ const { v4: uuidv4 } = require('uuid');
 const DashboardService = require('../services/dashboardService');
 const AccessCodeStore  = require('../services/accessCodeStore');
 const Respuesta = require('../../app_core/helpers/respuesta');
-const { tienePlanActivo } = require('../../app_core/helpers/planHelper');
+const { getEstadoPlan } = require('../../app_core/helpers/planHelper');
 
 async function verificarTokenAcceso(req, res) {
   const { token } = req.body;
@@ -14,7 +14,11 @@ async function verificarTokenAcceso(req, res) {
     if (!acceso) return Respuesta.error(res, 'No tienes acceso al módulo de parqueadero.', 403);
 
     const idNegocioActivo = acceso.negocio?.id_negocio ?? null;
-    acceso.plan_activo = idNegocioActivo ? await tienePlanActivo(idNegocioActivo) : false;
+    // `plan_activo` sigue siendo la bandera que miran los guardias, pero ahora incluye
+    // los días de gracia posteriores al vencimiento; `plan` lleva el detalle para el aviso.
+    const estadoPlan = await getEstadoPlan(idNegocioActivo);
+    acceso.plan_activo = estadoPlan.activo;
+    acceso.plan = estadoPlan;
 
     return Respuesta.success(res, 'Token válido', acceso);
   } catch (err) {
@@ -113,7 +117,11 @@ async function canjearCodigo(req, res) {
     }
 
     const idNegocioActivo = entry.idNegocio || acceso.negocio?.id_negocio || null;
-    acceso.plan_activo = idNegocioActivo ? await tienePlanActivo(idNegocioActivo) : false;
+    // `plan_activo` sigue siendo la bandera que miran los guardias, pero ahora incluye
+    // los días de gracia posteriores al vencimiento; `plan` lleva el detalle para el aviso.
+    const estadoPlan = await getEstadoPlan(idNegocioActivo);
+    acceso.plan_activo = estadoPlan.activo;
+    acceso.plan = estadoPlan;
 
     return Respuesta.success(res, 'Acceso concedido', {
       token: entry.token,

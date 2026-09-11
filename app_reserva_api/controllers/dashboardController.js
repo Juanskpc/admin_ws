@@ -77,6 +77,7 @@ async function canjearCodigo(req, res) {
         // `verificarAccesoReserva` ya trae `plan_activo` por negocio; aquí solo se alinea la
         // bandera de la raíz con el negocio que el código de acceso seleccionó.
         acceso.plan_activo = acceso.negocio?.plan_activo ?? false;
+        acceso.plan = acceso.negocio?.plan ?? null;
 
         return Respuesta.success(res, 'Acceso concedido', { token: entry.token, ...acceso });
     } catch (err) {

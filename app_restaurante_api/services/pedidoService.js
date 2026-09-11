@@ -1,5 +1,7 @@
 const Models = require('../../app_core/models/conection');
 const cajaService = require('./cajaService');
+const { avisar, avisarTrasCommit, TEMAS } = require('./avisoService');
+const cuentaService = require('./cuentaService');
 const personaNegocioDao = require('../../app_core/dao/personaNegocioDao');
 const usuarioAsistenteDao = require('../../app_core/dao/usuarioAsistenteDao');
 // La costura de entitlements (ADR-021). Es lo único que este servicio sabe de lo comercial, y
@@ -429,7 +431,7 @@ async function recalcularTotalesOrden({ idOrden, porcentajeImpuesto = 0, valorDo
  * @param {number} params.porcentajeImpuesto — ej: 0.19
  */
 async function crearOrden({
-    idNegocio, idMetodoPago = null, pagos = null, idUsuario, idMesa, nota, items, porcentajeImpuesto = 0, permitirStockNegativo = false,
+    idNegocio, idMetodoPago = null, idCuenta = null, pagos = null, idUsuario, idMesa, nota, items, porcentajeImpuesto = 0, permitirStockNegativo = false,
     tipoPedido = 'MESA', contactoNombre = null, contactoTelefono = null,
     direccionDomicilio = null, notaDomicilio = null, idDomiciliario = null,
     valorDomicilio = 0, descuento = 0,
@@ -518,6 +520,10 @@ async function crearOrden({
             total,
             estado: 'ABIERTA',
             id_metodo_pago: idMetodoPago || null,
+            // Intención, igual que la forma de pago: se guarda al tomar el pedido para que
+            // cobrar desde Mesas o Despacho no vuelva a preguntar de quién es la tiquetera.
+            // Nada se descuenta hasta el cobro.
+            id_cuenta: idCuenta || null,
             tipo_pedido: tipoPedido,
             valor_domicilio: domicilio,
             descuento: rebaja,
@@ -549,6 +555,17 @@ async function crearOrden({
             await validarYGuardarPagos({ orden, pagos, transaction: t, exigirCuadre: false });
         }
 
+        // Va ANTES del commit porque se registra un gancho, no se emite: Sequelize lo dispara
+        // solo si esta transacción confirma. Con la transacción del Policy Gate —que simula y
+        // deshace— eso es la diferencia entre avisar de un pedido real y mandar a doce tablets
+        // a buscar uno que nunca existió.
+        avisarTrasCommit(
+            t,
+            idNegocio,
+            TEMAS.PEDIDOS,
+            ...(idMesa ? [TEMAS.MESAS] : []),
+        );
+
         if (transaccionPropia) await t.commit();
 
         // Retornar orden con detalles. Con transacción ajena aún sin confirmar hay que leer
@@ -567,6 +584,7 @@ async function agregarItemsOrden({
     idOrden,
     idNegocio,
     idMetodoPago = null,
+    idCuenta = null,
     pagos = null,
     nota,
     items,
@@ -619,6 +637,9 @@ async function agregarItemsOrden({
         if (idMetodoPago) {
             patchOrden.id_metodo_pago = idMetodoPago;
         }
+        if (idCuenta !== undefined && idCuenta !== null) {
+            patchOrden.id_cuenta = idCuenta;
+        }
         if (Object.keys(patchOrden).length > 0) {
             await orden.update(patchOrden, { transaction: t });
         }
@@ -658,6 +679,15 @@ async function agregarItemsOrden({
                 await Models.RestPagoOrden.destroy({ where: { id_orden: idOrden }, transaction: t });
             }
         }
+
+        avisarTrasCommit(
+            t,
+            idNegocio,
+            TEMAS.PEDIDOS,
+            TEMAS.MESAS,
+            // Agregar productos a una orden que ya está en cocina cambia la comanda.
+            TEMAS.COCINA,
+        );
 
         await t.commit();
         return getOrdenById(idOrden);
@@ -886,7 +916,10 @@ async function enviarACocina(idOrden) {
         { estado_cocina: 'PENDIENTE' },
         { where: { id_orden: idOrden } }
     );
-    return getOrdenById(idOrden);
+
+    const orden = await getOrdenById(idOrden);
+    avisar(orden?.id_negocio, TEMAS.COCINA, TEMAS.PEDIDOS);
+    return orden;
 }
 
 /**
@@ -909,7 +942,12 @@ async function cambiarEstadoCocina(idOrden, nuevoEstado) {
             { where: { id_orden: idOrden, estado: 'LISTO' } }
         );
     }
-    return getOrdenById(idOrden);
+
+    const orden = await getOrdenById(idOrden);
+    // También `pedidos`: Despacho muestra qué está listo para salir, y es justo la pantalla
+    // que tiene que enterarse en el momento en que cocina marca el plato.
+    avisar(orden?.id_negocio, TEMAS.COCINA, TEMAS.PEDIDOS);
+    return orden;
 }
 
 /**
@@ -962,7 +1000,76 @@ async function marcarDetalleCompleto(idDetalle) {
     const detalle = await Models.PedidDetalle.findByPk(idDetalle);
     if (!detalle) return null;
     await detalle.update({ estado: 'LISTO' });
+
+    // El detalle no guarda el negocio: cuelga de la orden.
+    const orden = await Models.PedidOrden.findByPk(detalle.id_orden, { attributes: ['id_negocio'] });
+    avisar(orden?.id_negocio, TEMAS.COCINA);
     return detalle;
+}
+
+/**
+ * ¿Cuánto de este cobro se paga con la cuenta del cliente (tiquetera o fiado)?
+ *
+ * La forma de pago «Cuenta / Tiquetera» está marcada con `es_cuenta` en la tabla, no se
+ * reconoce por el nombre: un negocio puede renombrarla y el cobro tiene que seguir sabiendo
+ * que ese dinero no entra al cajón.
+ *
+ * Devuelve 0 cuando el cobro no la usa, que es el caso normal.
+ */
+async function importeContraCuenta({ idNegocio, idMetodoPago, pagos, total, transaction }) {
+    const metodoCuenta = await cuentaService.getMetodoPagoCuenta(idNegocio, { transaction });
+    if (!metodoCuenta) return 0;
+
+    if (Array.isArray(pagos) && pagos.length > 0) {
+        return pagos
+            .filter((p) => Number(p.id_metodo_pago) === metodoCuenta.id_metodo_pago)
+            .reduce((suma, p) => suma + Number(p.valor || 0), 0);
+    }
+
+    return Number(idMetodoPago) === metodoCuenta.id_metodo_pago ? Number(total || 0) : 0;
+}
+
+/** El desglose de multipago ya guardado de una orden, para releerlo al cerrar. */
+async function leerPagosDeOrden(idOrden, transaction) {
+    const filas = await Models.RestPagoOrden.findAll({
+        where: { id_orden: idOrden },
+        attributes: ['id_metodo_pago', 'valor'],
+        transaction,
+    });
+    return filas.map((f) => ({ id_metodo_pago: f.id_metodo_pago, valor: Number(f.valor) }));
+}
+
+/**
+ * Carga contra la cuenta del cliente la parte del cobro que se pagó con ella.
+ *
+ * Exige `idCuenta` explícito y no lo deduce del `id_persona_negocio` del pedido a propósito:
+ * un pedido para llevar puede llevar el teléfono de quien lo recoge, y adivinar de quién es la
+ * tiquetera es exactamente el error que le descontaría el almuerzo al cliente equivocado.
+ */
+async function aplicarCobroConCuenta({ orden, idCuenta, importe, idCaja, idUsuario, transaction }) {
+    if (!idCuenta) {
+        const e = new Error('Indica de qué cliente es la cuenta con la que se paga.');
+        e.code = 'CUENTA_REQUERIDA'; e.statusCode = 422;
+        throw e;
+    }
+    if (!idCaja) {
+        // Sin turno abierto no hay dónde anotar el contrapeso, y sin él el arqueo quedaría
+        // descuadrado por el importe de la tiquetera.
+        const e = new Error('Para cobrar con la cuenta del cliente debe haber una caja abierta.');
+        e.code = 'CAJA_CERRADA'; e.statusCode = 409;
+        throw e;
+    }
+
+    return cuentaService.aplicarConsumo({
+        idNegocio: orden.id_negocio,
+        idCuenta: Number(idCuenta),
+        idOrden: orden.id_orden,
+        numeroOrden: orden.numero_orden,
+        monto: importe,
+        idUsuario,
+        idCaja,
+        transaction,
+    });
 }
 
 /**
@@ -1045,7 +1152,7 @@ async function validarYGuardarPagos({ orden, pagos, transaction, exigirCuadre = 
  *
  * Acepta pago simple (`idMetodoPago`) o Multipago (`pagos: [{id_metodo_pago, valor}]`).
  */
-async function marcarPagado(idOrden, { idMetodoPago, pagos, origenCobro = 'CAJA' } = {}) {
+async function marcarPagado(idOrden, { idMetodoPago, pagos, origenCobro = 'CAJA', idCuenta = null, idUsuario = null } = {}) {
     const t = await Models.sequelize.transaction();
     try {
         const orden = await Models.PedidOrden.findByPk(idOrden, {
@@ -1099,12 +1206,41 @@ async function marcarPagado(idOrden, { idMetodoPago, pagos, origenCobro = 'CAJA'
             })
             : null;
 
+        const contraCuenta = await importeContraCuenta({
+            idNegocio: orden.id_negocio,
+            idMetodoPago,
+            pagos,
+            total: orden.total,
+            transaction: t,
+        });
+        if (contraCuenta > 0) {
+            await aplicarCobroConCuenta({
+                orden,
+                // Lo que mande quien cobra manda; si no dice nada, vale la cuenta que se eligió
+                // al tomar el pedido.
+                idCuenta: idCuenta || orden.id_cuenta,
+                importe: contraCuenta,
+                idCaja: caja?.id_caja ?? null,
+                idUsuario: idUsuario || orden.id_usuario,
+                transaction: t,
+            });
+        }
+
         await orden.update({
             estado_pago:    'pagado',
             // En multipago el detalle vive en rest_pago_orden; la columna queda null.
             id_metodo_pago: esMultipago ? null : idMetodoPago,
             id_caja:        caja ? caja.id_caja : null,
         }, { transaction: t });
+
+        avisarTrasCommit(
+            t,
+            orden.id_negocio,
+            TEMAS.PEDIDOS,
+            // El cobro entra en el turno salvo que lo cobre el domiciliario en la calle.
+            ...(registraEnCaja ? [TEMAS.CAJA] : []),
+            ...(orden.id_mesa ? [TEMAS.MESAS] : []),
+        );
 
         await t.commit();
         return orden;
@@ -1162,6 +1298,7 @@ async function actualizarValorDomicilio(idOrden, { idNegocio, valorDomicilio }) 
             transaction: t,
         });
 
+        avisarTrasCommit(t, idNegocio, TEMAS.PEDIDOS);
         await t.commit();
         return getOrdenById(idOrden);
     } catch (err) {
@@ -1214,6 +1351,7 @@ async function actualizarDescuento(idOrden, { idNegocio, descuento }) {
             transaction: t,
         });
 
+        avisarTrasCommit(t, idNegocio, TEMAS.PEDIDOS);
         await t.commit();
         return getOrdenById(idOrden);
     } catch (err) {
@@ -1254,6 +1392,7 @@ async function cancelarOrden(idOrden, { idUsuario } = {}) {
         throw e;
     }
     await orden.update({ estado: 'CANCELADA', fecha_cierre: new Date() });
+    avisar(orden.id_negocio, TEMAS.PEDIDOS, TEMAS.MESAS, TEMAS.COCINA);
     return orden;
 }
 
@@ -1268,7 +1407,7 @@ async function cancelarOrden(idOrden, { idUsuario } = {}) {
  * @param {number} idOrden
  * @param {{ idUsuario: number }} ctx — usuario que ejecuta el cobro
  */
-async function cerrarOrden(idOrden, { idUsuario, idMetodoPago, pagos } = {}) {
+async function cerrarOrden(idOrden, { idUsuario, idMetodoPago, pagos, idCuenta = null } = {}) {
     const t = await Models.sequelize.transaction();
     try {
         const orden = await Models.PedidOrden.findOne({
@@ -1326,6 +1465,7 @@ async function cerrarOrden(idOrden, { idUsuario, idMetodoPago, pagos } = {}) {
 
         // Si marcarPagado ya registró el ingreso en caja, reusar ese id_caja
         let idCaja = orden.id_caja || null;
+        const yaEstabaCobrada = Boolean(idCaja);
         if (!idCaja) {
             const caja = await cajaService.registrarIngresoOrden({
                 idNegocio:   orden.id_negocio,
@@ -1339,6 +1479,29 @@ async function cerrarOrden(idOrden, { idUsuario, idMetodoPago, pagos } = {}) {
             idCaja = caja.id_caja;
         }
 
+        // Solo si el ingreso se registra AHORA. Si la orden ya venía cobrada desde despacho, su
+        // consumo contra la cuenta se anotó entonces: repetirlo aquí le cobraría dos veces la
+        // misma comida al cliente, y eso solo se descubre cuando él reclama.
+        if (!yaEstabaCobrada) {
+            const contraCuenta = await importeContraCuenta({
+                idNegocio: orden.id_negocio,
+                idMetodoPago: metodoPagoFinal,
+                pagos: esMultipago ? await leerPagosDeOrden(orden.id_orden, t) : null,
+                total: orden.total,
+                transaction: t,
+            });
+            if (contraCuenta > 0) {
+                await aplicarCobroConCuenta({
+                    orden,
+                    idCuenta: idCuenta || orden.id_cuenta,
+                    importe: contraCuenta,
+                    idCaja,
+                    idUsuario: idUsuario || orden.id_usuario,
+                    transaction: t,
+                });
+            }
+        }
+
         await orden.update(
             {
                 estado: 'CERRADA',
@@ -1348,6 +1511,15 @@ async function cerrarOrden(idOrden, { idUsuario, idMetodoPago, pagos } = {}) {
                 id_metodo_pago: esMultipago ? null : metodoPagoFinal,
             },
             { transaction: t },
+        );
+
+        avisarTrasCommit(
+            t,
+            orden.id_negocio,
+            TEMAS.PEDIDOS,
+            TEMAS.CAJA,
+            TEMAS.COCINA,
+            ...(orden.id_mesa ? [TEMAS.MESAS] : []),
         );
 
         await t.commit();

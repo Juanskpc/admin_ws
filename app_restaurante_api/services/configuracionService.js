@@ -110,6 +110,7 @@ async function getConfiguracionNegocio(idUsuario, idNegocio = null) {
             'permite_pago_domicilio',
             'permite_descuento',
             'pregunta_cobro_envio',
+            'permite_cuentas_cliente',
             'fecha_registro',
         ],
         include: [
@@ -152,6 +153,7 @@ async function getConfiguracionNegocio(idUsuario, idNegocio = null) {
         permite_pago_domicilio: !!negocio.permite_pago_domicilio,
         permite_descuento: !!negocio.permite_descuento,
         pregunta_cobro_envio: !!negocio.pregunta_cobro_envio,
+        permite_cuentas_cliente: !!negocio.permite_cuentas_cliente,
         fecha_registro: negocio.fecha_registro,
         roles: acceso.roles,
         can_edit: acceso.canEdit,
@@ -230,6 +232,11 @@ async function updateConfiguracionNegocio(idUsuario, payload = {}) {
         patch.pregunta_cobro_envio = payload.pregunta_cobro_envio === true || payload.pregunta_cobro_envio === 'true';
     }
 
+    if (payload.permite_cuentas_cliente !== undefined) {
+        patch.permite_cuentas_cliente =
+            payload.permite_cuentas_cliente === true || payload.permite_cuentas_cliente === 'true';
+    }
+
     if (payload.id_paleta !== undefined) {
         if (payload.id_paleta === null) {
             patch.id_paleta = null;
@@ -257,7 +264,21 @@ async function updateConfiguracionNegocio(idUsuario, payload = {}) {
     }
 
     try {
-        await negocio.update(patch);
+        // El interruptor de cuentas arrastra su forma de pago: encenderlo la activa y apagarlo
+        // la esconde. Van juntos y en la misma transacción porque son la misma decisión — un
+        // negocio con las cuentas apagadas pero «Cuenta / Tiquetera» en el desplegable de cobro
+        // es exactamente el estado confuso que el interruptor existe para evitar.
+        if (patch.permite_cuentas_cliente !== undefined) {
+            await Models.sequelize.transaction(async (t) => {
+                await negocio.update(patch, { transaction: t });
+                await Models.RestMetodoPago.update(
+                    { estado: patch.permite_cuentas_cliente ? 'A' : 'I' },
+                    { where: { id_negocio: negocio.id_negocio, es_cuenta: true }, transaction: t },
+                );
+            });
+        } else {
+            await negocio.update(patch);
+        }
     } catch (err) {
         if (err?.name === 'SequelizeUniqueConstraintError') {
             const error = new Error('Ya existe otro negocio con ese NIT.');

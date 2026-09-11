@@ -23,6 +23,11 @@ module.exports = (sequelize, DataTypes) => {
         fecha_cierre:   { type: DataTypes.DATE },
         id_caja:        { type: DataTypes.INTEGER, allowNull: true },
         id_metodo_pago: { type: DataTypes.INTEGER, allowNull: true },
+        // De quién es la tiquetera/fiado con el que se va a pagar. Se guarda desde que se toma
+        // el pedido, igual que `id_metodo_pago`: es una INTENCIÓN, no un cobro. Cobrar es lo
+        // que descuenta el saldo. Sin esto, elegir el cliente en el POS se perdía al ir a
+        // cobrar la mesa desde otra pantalla.
+        id_cuenta:      { type: DataTypes.INTEGER, allowNull: true },
         tipo_pedido:    { type: DataTypes.STRING(20), defaultValue: 'MESA' },
         contacto_nombre:     DataTypes.STRING(160),
         contacto_telefono:   DataTypes.STRING(40),
@@ -53,6 +58,7 @@ module.exports = (sequelize, DataTypes) => {
         PedidOrden.belongsTo(models.RestMesa,      { foreignKey: 'id_mesa', as: 'mesaRef' });
         PedidOrden.belongsTo(models.RestCaja,      { foreignKey: 'id_caja', as: 'caja' });
         PedidOrden.belongsTo(models.RestMetodoPago, { foreignKey: 'id_metodo_pago', as: 'metodoPago' });
+        PedidOrden.belongsTo(models.RestCuenta,     { foreignKey: 'id_cuenta', as: 'cuenta' });
         PedidOrden.belongsTo(models.GenerUsuario,  { foreignKey: 'id_domiciliario', as: 'domiciliario' });
         PedidOrden.hasMany(models.PedidDetalle,    { foreignKey: 'id_orden', as: 'detalles' });
     };
