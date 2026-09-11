@@ -420,7 +420,7 @@ async function verificarAccesoRestaurante(idUsuario) {
                     attributes: ['id_paleta', 'nombre', 'colores'],
                 },
             ],
-            attributes: ['id_negocio', 'nombre', 'id_tipo_negocio', 'id_paleta', 'permite_multipago', 'permite_pago_domicilio', 'permite_descuento', 'pregunta_cobro_envio', 'permite_cuentas_cliente'],
+            attributes: ['id_negocio', 'nombre', 'id_tipo_negocio', 'id_paleta', 'permite_multipago', 'permite_pago_domicilio', 'permite_descuento', 'pregunta_cobro_envio', 'permite_cuentas_cliente', 'controla_inventario'],
         }],
     });
 
@@ -483,6 +483,7 @@ async function verificarAccesoRestaurante(idUsuario) {
             permite_descuento: !!negocio.permite_descuento,
             pregunta_cobro_envio: !!negocio.pregunta_cobro_envio,
             permite_cuentas_cliente: !!negocio.permite_cuentas_cliente,
+            controla_inventario: negocio.controla_inventario !== false,
             roles,
             permisos_vista: permisosVista,
             permisos_subnivel: permisosSubnivel,

@@ -187,6 +187,8 @@ router.patch('/configuracion', [
 	body('permite_pago_domicilio').optional().isBoolean(),
 	body('permite_descuento').optional().isBoolean(),
 	body('pregunta_cobro_envio').optional().isBoolean(),
+	body('permite_cuentas_cliente').optional().isBoolean(),
+	body('controla_inventario').optional().isBoolean(),
 	body('id_paleta').optional({ nullable: true }).isInt({ min: 1 }),
 ], ConfiguracionController.updateConfiguracion);
 

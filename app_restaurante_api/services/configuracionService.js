@@ -111,6 +111,7 @@ async function getConfiguracionNegocio(idUsuario, idNegocio = null) {
             'permite_descuento',
             'pregunta_cobro_envio',
             'permite_cuentas_cliente',
+            'controla_inventario',
             'fecha_registro',
         ],
         include: [
@@ -154,6 +155,7 @@ async function getConfiguracionNegocio(idUsuario, idNegocio = null) {
         permite_descuento: !!negocio.permite_descuento,
         pregunta_cobro_envio: !!negocio.pregunta_cobro_envio,
         permite_cuentas_cliente: !!negocio.permite_cuentas_cliente,
+        controla_inventario: negocio.controla_inventario !== false,
         fecha_registro: negocio.fecha_registro,
         roles: acceso.roles,
         can_edit: acceso.canEdit,
@@ -235,6 +237,13 @@ async function updateConfiguracionNegocio(idUsuario, payload = {}) {
     if (payload.permite_cuentas_cliente !== undefined) {
         patch.permite_cuentas_cliente =
             payload.permite_cuentas_cliente === true || payload.permite_cuentas_cliente === 'true';
+    }
+
+    // Opt-OUT: a diferencia de los `permite_*`, este nace encendido. Se apaga cuando el
+    // negocio no lleva receta cargada y el aviso de stock solo le estorba.
+    if (payload.controla_inventario !== undefined) {
+        patch.controla_inventario =
+            payload.controla_inventario === true || payload.controla_inventario === 'true';
     }
 
     if (payload.id_paleta !== undefined) {

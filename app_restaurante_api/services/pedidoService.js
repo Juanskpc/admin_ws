@@ -201,7 +201,40 @@ async function generarNumeroOrden(idNegocio) {
     return `ORD-${num}`;
 }
 
+/**
+ * ¿Este negocio lleva control de inventario?
+ *
+ * Es un opt-OUT (`gener_negocio.controla_inventario`, ENCENDIDO por defecto): la mayoría de
+ * los negocios pequeños no tienen la receta cargada, así que la comprobación de stock solo
+ * les servía para que el POS les preguntara en cada venta por insumos que nunca registraron.
+ *
+ * Si el negocio no aparece, se responde que SÍ controla: ante la duda se conserva el
+ * comportamiento de siempre, nunca se retira una comprobación por un dato que falta.
+ */
+async function negocioControlaInventario(idNegocio, { transaction = null } = {}) {
+    const negocio = await Models.GenerNegocio.findByPk(idNegocio, {
+        attributes: ['id_negocio', 'controla_inventario'],
+        transaction,
+    });
+    return negocio ? negocio.controla_inventario !== false : true;
+}
+
+/**
+ * Descuenta del inventario los insumos que se lleva el pedido, y rechaza el pedido si no
+ * alcanzan (salvo que quien llama ya haya aceptado dejar el stock en negativo).
+ *
+ * Con el control de inventario apagado no hace NADA: ni consulta, ni bloquea, ni descuenta.
+ * Descontar sin bloquear habría sido la media tinta peor de las dos — el negocio que apaga
+ * esto no lleva stock, y dejarle los insumos cayendo a negativo llena Inventario de alertas
+ * rojas que son justo lo que quería quitarse de encima.
+ *
+ * La comprobación vive AQUÍ y no en quien llama a propósito: son dos rutas las que mueven
+ * inventario (tomar el pedido y añadirle ítems) y mañana pueden ser tres. Preguntarlo en el
+ * punto donde se toca el stock hace imposible que una ruta nueva se olvide.
+ */
 async function consumirIngredientesPorItems({ idNegocio, items, permitirStockNegativo = false, transaction }) {
+    if (!(await negocioControlaInventario(idNegocio, { transaction }))) return;
+
     const ingredientesNecesarios = new Map();
 
     for (const item of items) {

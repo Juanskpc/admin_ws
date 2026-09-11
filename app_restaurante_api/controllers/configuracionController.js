@@ -13,6 +13,36 @@ function resolveStatusCode(error) {
     return Number(error?.statusCode || 500);
 }
 
+/**
+ * Campos que el negocio puede cambiar desde Configuración.
+ *
+ * Es UNA lista y no un objeto copiado campo por campo porque esa copia ya se dejó atrás dos
+ * banderas —`permite_cuentas_cliente` y `controla_inventario`—, y el síntoma no señalaba a
+ * ningún sitio: el interruptor llegaba al servidor, el validador lo daba por bueno, y el
+ * servicio contestaba «No se enviaron cambios para guardar» porque el campo se había caído
+ * aquí en medio. Añadir una opción nueva es añadir una palabra a esta lista.
+ *
+ * Sigue siendo lista blanca, que es lo que importa: lo que no esté aquí no llega a la base,
+ * aunque alguien lo mande en el cuerpo.
+ */
+const CAMPOS_EDITABLES = [
+    'nombre',
+    'nit',
+    'email_contacto',
+    'telefono',
+    'direccion',
+    'url_whatsapp',
+    'url_facebook',
+    'url_instagram',
+    'permite_multipago',
+    'permite_pago_domicilio',
+    'permite_descuento',
+    'pregunta_cobro_envio',
+    'permite_cuentas_cliente',
+    'controla_inventario',
+    'id_paleta',
+];
+
 async function getConfiguracion(req, res) {
     try {
         const validationError = getValidationErrors(req, res);
@@ -37,20 +67,12 @@ async function updateConfiguracion(req, res) {
         const idUsuario = req.usuario.id_usuario;
         const payload = {
             id_negocio: req.body.id_negocio ? Number(req.body.id_negocio) : null,
-            nombre: req.body.nombre,
-            nit: req.body.nit,
-            email_contacto: req.body.email_contacto,
-            telefono: req.body.telefono,
-            direccion: req.body.direccion,
-            url_whatsapp: req.body.url_whatsapp,
-            url_facebook: req.body.url_facebook,
-            url_instagram: req.body.url_instagram,
-            permite_multipago: req.body.permite_multipago !== undefined ? req.body.permite_multipago : undefined,
-            permite_pago_domicilio: req.body.permite_pago_domicilio !== undefined ? req.body.permite_pago_domicilio : undefined,
-            permite_descuento: req.body.permite_descuento !== undefined ? req.body.permite_descuento : undefined,
-            pregunta_cobro_envio: req.body.pregunta_cobro_envio !== undefined ? req.body.pregunta_cobro_envio : undefined,
-            id_paleta: req.body.id_paleta !== undefined ? req.body.id_paleta : undefined,
         };
+        // Solo viaja lo que venga en el cuerpo: el servicio distingue «no lo mandaron» de
+        // «lo mandaron vacío», y copiar los ausentes como undefined le quitaba esa señal.
+        for (const campo of CAMPOS_EDITABLES) {
+            if (req.body[campo] !== undefined) payload[campo] = req.body[campo];
+        }
 
         const data = await ConfiguracionService.updateConfiguracionNegocio(idUsuario, payload);
         return Respuesta.success(res, 'Configuracion actualizada', data);
