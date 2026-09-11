@@ -390,6 +390,12 @@ router.get('/caja/:id/movimientos', [
 	param('id').isInt({ min: 1 }),
 ], CajaController.getMovimientos);
 
+// Los productos del pedido de una fila de caja (acordeón del listado de movimientos).
+router.get('/caja/ordenes/:id/items', [
+	param('id').isInt({ min: 1 }),
+	query('id_negocio').isInt({ min: 1 }),
+], CajaController.getItemsOrden);
+
 router.post('/caja/movimientos', [
 	body('id_caja').isInt({ min: 1 }),
 	body('tipo').isIn(['INGRESO', 'EGRESO']),

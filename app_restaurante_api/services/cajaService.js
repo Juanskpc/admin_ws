@@ -967,6 +967,78 @@ async function anularMovimientoCaja({ idNegocio, idMovimiento, idUsuario }) {
     }
 }
 
+/**
+ * Los productos de un pedido, para desplegarlos bajo su fila en Caja.
+ *
+ * Se piden uno a uno al abrir el acordeón y no junto con los movimientos: un turno
+ * largo son cientos de filas, y devolver el detalle de todas convierte una consulta
+ * barata en una respuesta enorme que además casi nadie mira.
+ *
+ * El `id_negocio` va en el WHERE, no solo comprobado antes: la ruta recibe un id de
+ * orden suelto y sin eso, iterar ids leería los pedidos de otro inquilino.
+ */
+async function getItemsOrden({ idOrden, idNegocio }) {
+    const orden = await Models.PedidOrden.findOne({
+        where: { id_orden: idOrden, id_negocio: idNegocio },
+        attributes: [
+            'id_orden', 'numero_orden', 'tipo_pedido', 'estado', 'nota',
+            'subtotal', 'impuesto', 'descuento', 'valor_domicilio', 'total',
+        ],
+        include: [{
+            model: Models.PedidDetalle,
+            as: 'detalles',
+            attributes: ['id_detalle', 'cantidad', 'precio_unitario', 'subtotal', 'nota'],
+            include: [
+                {
+                    model: Models.CartaProducto,
+                    as: 'producto',
+                    attributes: ['id_producto', 'nombre', 'icono'],
+                },
+                {
+                    model: Models.PedidDetalleExclu,
+                    as: 'exclusiones',
+                    attributes: ['id_detalle_exclu'],
+                    required: false,
+                    include: [{
+                        model: Models.CartaIngrediente,
+                        as: 'ingrediente',
+                        attributes: ['id_ingrediente', 'nombre'],
+                    }],
+                },
+            ],
+        }],
+        order: [[{ model: Models.PedidDetalle, as: 'detalles' }, 'id_detalle', 'ASC']],
+    });
+
+    if (!orden) return null;
+
+    const json = orden.toJSON();
+    return {
+        id_orden: json.id_orden,
+        numero_orden: json.numero_orden,
+        tipo_pedido: json.tipo_pedido,
+        estado: json.estado,
+        nota: json.nota || null,
+        subtotal: Number(json.subtotal || 0),
+        impuesto: Number(json.impuesto || 0),
+        descuento: Number(json.descuento || 0),
+        valor_domicilio: Number(json.valor_domicilio || 0),
+        total: Number(json.total || 0),
+        items: (json.detalles || []).map((d) => ({
+            id_detalle: d.id_detalle,
+            nombre: d.producto?.nombre || 'Producto',
+            icono: d.producto?.icono || null,
+            cantidad: Number(d.cantidad || 0),
+            precio_unitario: Number(d.precio_unitario || 0),
+            subtotal: Number(d.subtotal || 0),
+            nota: d.nota || null,
+            sin: (d.exclusiones || [])
+                .map((e) => e.ingrediente?.nombre)
+                .filter(Boolean),
+        })),
+    };
+}
+
 module.exports = {
     requireCajaAbierta,
     anularOrdenCobrada,
@@ -979,6 +1051,7 @@ module.exports = {
     listarHistorialCajas,
     usuarioPerteneceANegocio,
     getMovimientos,
+    getItemsOrden,
     getResumenDomiciliarios,
     transferirDomiciliarioACaja,
     registrarMovimiento,

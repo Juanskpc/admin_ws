@@ -173,6 +173,52 @@ async function getMovimientos(req, res) {
     }
 }
 
+/**
+ * GET /restaurante/caja/ordenes/:id/items?id_negocio=N
+ *
+ * Los productos del pedido que hay detrás de una fila de caja. Sin
+ * `caja_ver_ingresos` se listan igual —qué se vendió es información operativa—
+ * pero sin un solo precio, igual que hacen los movimientos.
+ */
+async function getItemsOrden(req, res) {
+    if (!handleValidation(req, res)) return;
+    try {
+        const idOrden = Number(req.params.id);
+        const idNegocio = Number(req.query.id_negocio);
+
+        const pertenece = await CajaService.usuarioPerteneceANegocio({
+            idUsuario: req.usuario?.id_usuario,
+            idNegocio,
+        });
+        if (!pertenece) return Respuesta.error(res, 'No tienes acceso a este negocio.', 403);
+
+        const orden = await CajaService.getItemsOrden({ idOrden, idNegocio });
+        if (!orden) return Respuesta.error(res, 'Pedido no encontrado.', 404);
+
+        if (await puedeVerIngresos(req, idNegocio)) {
+            return Respuesta.success(res, 'Productos del pedido', orden);
+        }
+
+        return Respuesta.success(res, 'Productos del pedido', {
+            ...orden,
+            subtotal: null,
+            impuesto: null,
+            descuento: null,
+            valor_domicilio: null,
+            total: null,
+            items: orden.items.map((i) => ({
+                ...i,
+                precio_unitario: null,
+                subtotal: null,
+            })),
+            importes_ocultos: true,
+        });
+    } catch (err) {
+        console.error('[Caja] Error getItemsOrden:', err.message);
+        return Respuesta.error(res, 'Error al obtener los productos del pedido.');
+    }
+}
+
 /** GET /restaurante/caja/historial?id_negocio=N&desde=&hasta=&limite=&offset= */
 async function getHistorial(req, res) {
     if (!handleValidation(req, res)) return;
@@ -454,6 +500,7 @@ module.exports = {
     abrirCaja,
     cerrarCaja,
     getMovimientos,
+    getItemsOrden,
     getResumenDomiciliarios,
     registrarMovimiento,
     transferirDomiciliario,
