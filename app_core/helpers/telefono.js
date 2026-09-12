@@ -104,4 +104,43 @@ function paisesSoportados() {
     return Object.keys(PAISES);
 }
 
-module.exports = { normalizarE164, normalizarE164Colombia, paisesSoportados };
+/**
+ * Parte un número guardado en país + número nacional, para repintar el formulario.
+ *
+ * Al editar a alguien hay que volver a poner el selector en su país y el resto en la casilla,
+ * y lo único que hay en la base es '+573001112233'. Se busca el prefijo **más largo** que
+ * encaje: sin eso, un '+51…' peruano podría resolverse por un país cuyo `cc` fuera un prefijo
+ * suyo. Lo que no empiece por '+' se devuelve entero como nacional — es lo guardado antes de
+ * que existiera el selector, y el formulario lo normalizará al guardar.
+ *
+ * @returns {{ pais: string|null, nacional: string }}
+ */
+function partirE164(valor) {
+    const texto = String(valor ?? '').trim();
+    if (!texto) return { pais: null, nacional: '' };
+    if (!texto.startsWith('+')) return { pais: null, nacional: texto.replace(/[^0-9]/g, '') };
+
+    const digitos = texto.replace(/[^0-9]/g, '');
+    const candidatos = Object.entries(PAISES)
+        .filter(([, r]) => digitos.startsWith(r.cc) && digitos.length === r.cc.length + r.largo)
+        .sort((a, b) => b[1].cc.length - a[1].cc.length);
+
+    if (!candidatos.length) return { pais: null, nacional: digitos };
+    const [codigo, reglas] = candidatos[0];
+    return { pais: codigo, nacional: digitos.slice(reglas.cc.length) };
+}
+
+/**
+ * Enlace `wa.me` de un número, o `null` si no es un móvil utilizable.
+ *
+ * Normaliza primero a propósito: los teléfonos guardados antes del selector de país están en
+ * la base como '3001112233' y un `wa.me/3001112233` abre un chat con un número que no existe.
+ * Devolver `null` es un resultado legítimo — es lo que hace que el botón no se pinte en vez de
+ * pintarse roto.
+ */
+function urlWhatsapp(valor, pais) {
+    const e164 = normalizarE164(valor, pais);
+    return e164 ? `https://wa.me/${e164.slice(1)}` : null;
+}
+
+module.exports = { normalizarE164, normalizarE164Colombia, paisesSoportados, partirE164, urlWhatsapp };

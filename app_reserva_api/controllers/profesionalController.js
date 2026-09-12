@@ -9,6 +9,18 @@ function check(req, res) {
     return true;
 }
 
+/**
+ * Un error de dominio se reenvía tal cual; el resto sigue siendo un 500 con su traza.
+ *
+ * Sin esto, un teléfono que no es móvil del país elegido llegaba al navegador como «Error al
+ * guardar el profesional» y el formulario no podía decir qué campo corregir.
+ */
+function fallo(res, err, contexto, porDefecto) {
+    if (err.statusCode) return Respuesta.error(res, err.message, err.statusCode);
+    console.error(`[Reserva/Profesionales] ${contexto}:`, err.message);
+    return Respuesta.error(res, porDefecto);
+}
+
 async function listar(req, res) {
     try {
         const idNegocio = Number(req.query.id_negocio);
@@ -42,8 +54,7 @@ async function crear(req, res) {
         const p = await ProfesionalService.crear(req.body);
         return Respuesta.success(res, 'Profesional creado', p, 201);
     } catch (err) {
-        console.error('[Reserva/Profesionales] crear:', err.message);
-        return Respuesta.error(res, 'Error al crear el profesional.');
+        return fallo(res, err, 'crear', 'Error al crear el profesional.');
     }
 }
 
@@ -54,8 +65,7 @@ async function actualizar(req, res) {
         if (!p) return Respuesta.error(res, 'Profesional no encontrado', 404);
         return Respuesta.success(res, 'Profesional actualizado', p);
     } catch (err) {
-        console.error('[Reserva/Profesionales] actualizar:', err.message);
-        return Respuesta.error(res, 'Error al actualizar el profesional.');
+        return fallo(res, err, 'actualizar', 'Error al actualizar el profesional.');
     }
 }
 

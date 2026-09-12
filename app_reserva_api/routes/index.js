@@ -25,7 +25,8 @@ const Config       = require('../controllers/configController');
 const Vitrina      = require('../controllers/vitrinaController');
 const Categorias   = require('../controllers/categoriaController');
 const Clientes     = require('../controllers/clienteController');
-const { paisesSoportados } = require('../../app_core/helpers/paises');
+const { paisesSoportados, paisesParaSeleccion } = require('../../app_core/helpers/paises');
+const Respuesta = require('../../app_core/helpers/respuesta');
 const { verificarToken } = require('../../app_core/middleware/auth');
 const { exigirAccion } = require('../middleware/exigirAccion');
 const { exigirVista } = require('../middleware/exigirVista');
@@ -167,6 +168,14 @@ router.use(exigirPertenenciaNegocio);
 router.get('/dashboard/resumen', [query('id_negocio').isInt({ min: 1 })], Dashboard.getResumen);
 router.get('/perfil', Dashboard.getPerfil);
 
+// Catálogo de países: código, nombre, indicativo telefónico y moneda.
+//
+// Existe como ruta suelta porque el selector de indicativo del teléfono vive en Usuarios y en
+// Profesionales, que no cargan la configuración del negocio. La alternativa era escribir la
+// lista de prefijos en el frontend, y entonces añadir un país en `helpers/paises.js` dejaría
+// de bastar. No lleva `id_negocio`: es catálogo de plataforma, igual para todos.
+router.get('/paises', (_req, res) => Respuesta.success(res, 'Países', paisesParaSeleccion()));
+
 // Servicios
 router.get('/servicios', [query('id_negocio').isInt({ min: 1 })], Servicios.listar);
 router.get('/servicios/:id', [
@@ -207,6 +216,7 @@ router.post('/profesionales', [
     body('nombre').trim().notEmpty().isLength({ max: 150 }),
     body('especialidad').optional({ nullable: true }).isString().isLength({ max: 150 }),
     body('telefono').optional({ nullable: true, checkFalsy: true }).isString().isLength({ max: 30 }),
+    body('telefono_pais').optional({ nullable: true, checkFalsy: true }).isIn(paisesSoportados()),
     body('email').optional({ nullable: true, checkFalsy: true }).isEmail(),
     body('foto_url').optional({ nullable: true }).isString().isLength({ max: 500 }),
     body('color_hex').optional({ nullable: true }).matches(/^#?[0-9a-fA-F]{6}$/),
@@ -216,6 +226,8 @@ router.put('/profesionales/:id', [
     param('id').isInt({ min: 1 }),
     body('id_negocio').isInt({ min: 1 }),
     body('nombre').optional().trim().notEmpty().isLength({ max: 150 }),
+    body('telefono').optional({ nullable: true }).isString().isLength({ max: 30 }),
+    body('telefono_pais').optional({ nullable: true, checkFalsy: true }).isIn(paisesSoportados()),
     body('email').optional({ nullable: true, checkFalsy: true }).isEmail(),
 ], Profesionales.actualizar);
 router.patch('/profesionales/:id/inactivar', [
@@ -474,6 +486,7 @@ router.put('/vitrina', [
     body('url_whatsapp').optional({ nullable: true }).isString().isLength({ max: 300 }),
     body('url_facebook').optional({ nullable: true }).isString().isLength({ max: 300 }),
     body('url_instagram').optional({ nullable: true }).isString().isLength({ max: 300 }),
+    body('url_tiktok').optional({ nullable: true }).isString().isLength({ max: 300 }),
     body('descripcion_publica').optional({ nullable: true }).isString().isLength({ max: 1200 }),
     body('publico_activo').optional().isBoolean(),
 ], exigirAccion('configuracion_vitrina'), Vitrina.actualizar);
@@ -512,6 +525,9 @@ router.post('/usuarios', [
     // sin cuenta de correo —lo normal en un salón— no puede quedarse sin acceso por eso.
     body('email').optional({ nullable: true, checkFalsy: true }).trim().isEmail().isLength({ max: 120 }),
     body('telefono').optional({ nullable: true, checkFalsy: true }).isString().isLength({ max: 30 }),
+    // El indicativo viaja aparte del número: el formulario tiene un selector de país y el
+    // servicio normaliza a E.164 con él. Ausente = el país del negocio, que es lo que había.
+    body('telefono_pais').optional({ nullable: true, checkFalsy: true }).isIn(paisesSoportados()),
     body('id_rol').isInt({ min: 1 }),
     body('password').optional({ nullable: true, checkFalsy: true }).isLength({ min: 8 }),
     body('id_profesional').optional({ nullable: true, checkFalsy: true }).isInt({ min: 1 }),
@@ -527,6 +543,8 @@ router.put('/usuarios/:id', [
     body('primer_apellido').optional().trim().notEmpty().isLength({ max: 100 }),
     // "" y null son «borrar el correo», no un email inválido: el servicio lo guarda como NULL.
     body('email').optional({ nullable: true, checkFalsy: true }).trim().isEmail().isLength({ max: 120 }),
+    body('telefono').optional({ nullable: true }).isString().isLength({ max: 30 }),
+    body('telefono_pais').optional({ nullable: true, checkFalsy: true }).isIn(paisesSoportados()),
     body('id_rol').optional().isInt({ min: 1 }),
     body('password').optional({ nullable: true, checkFalsy: true }).isLength({ min: 8 }),
     body('es_profesional').optional().isBoolean(),

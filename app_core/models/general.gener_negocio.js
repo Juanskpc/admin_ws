@@ -12,6 +12,7 @@ module.exports = (sequelize, DataTypes) => {
         url_whatsapp: DataTypes.STRING,
         url_facebook: DataTypes.STRING,
         url_instagram: DataTypes.STRING,
+        url_tiktok: DataTypes.STRING,
         // El MODULO sobre el que opera el negocio. De aqui cuelgan roles y permisos, asi
         // que no puede ser el oficio del cliente: para eso esta `id_rubro`.
         id_tipo_negocio: { type: DataTypes.INTEGER },

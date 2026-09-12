@@ -1,5 +1,7 @@
 'use strict';
 const Models = require('../../app_core/models/conection');
+const { normalizarE164 } = require('../../app_core/helpers/telefono');
+const { PAIS_POR_DEFECTO } = require('../../app_core/helpers/paises');
 const { Op } = Models.Sequelize;
 
 /**
@@ -55,6 +57,37 @@ function error(mensaje, statusCode = 422, code) {
     e.statusCode = statusCode;
     if (code) e.code = code;
     return e;
+}
+
+/**
+ * El teléfono se guarda en E.164 ('+573188887013'), con indicativo y sin espacios.
+ *
+ * El formulario manda dos cosas: el país elegido en el selector y el número nacional. Se guardan
+ * juntos porque el destino del dato es un enlace 'wa.me', y eso exige el indicativo: un
+ * '3188887013' suelto abre un chat con un número que no existe. Sin espacios porque ahí no hay
+ * una forma «bonita» universal —en Chile se agrupa distinto que en Colombia— y el que formatea
+ * es quien lo pinta, no quien lo guarda.
+ *
+ * Un número que no se reconoce como móvil del país elegido se **rechaza** en vez de guardarse a
+ * medias: si se guardara, el botón de WhatsApp del portal aparecería y no llevaría a ninguna
+ * parte, que es peor que no aparecer. 'null' y '' siguen siendo «sin teléfono».
+ */
+function normalizarTelefono(valor, pais) {
+    const crudo = String(valor ?? '').trim();
+    if (!crudo) return null;
+    const e164 = normalizarE164(crudo, pais || PAIS_POR_DEFECTO);
+    if (!e164) {
+        throw error('El teléfono no parece un móvil válido del país seleccionado.', 422, 'TELEFONO_INVALIDO');
+    }
+    return e164;
+}
+
+/** País del negocio. Es el que se asume cuando el formulario no manda `telefono_pais`. */
+async function paisDelNegocio(idNegocio, transaction) {
+    const negocio = await Models.GenerNegocio.findByPk(idNegocio, {
+        attributes: ['pais'], transaction,
+    });
+    return negocio?.pais || PAIS_POR_DEFECTO;
 }
 
 /** Nombre completo sin dobles espacios cuando faltan los segundos nombres. */
@@ -467,6 +500,11 @@ async function crear({ idNegocio, datos: datosCrudos, idProfesionalExistente = n
 
     if (!cedula) throw error('La identificación es obligatoria.');
 
+    const telefono = normalizarTelefono(
+        datos.telefono,
+        datos.telefono_pais || await paisDelNegocio(idNegocio),
+    );
+
     // Dos comprobaciones separadas, no un OR: sin email el OR se quedaría en una sola condición
     // y el mensaje de duplicado señalaría al campo equivocado.
     const choqueCedula = await Models.GenerUsuario.findOne({
@@ -493,7 +531,7 @@ async function crear({ idNegocio, datos: datosCrudos, idProfesionalExistente = n
             segundo_apellido: datos.segundo_apellido?.trim() || null,
             num_identificacion: cedula,
             email,
-            telefono: datos.telefono?.trim() || null,
+            telefono,
             password: datos.password?.trim() || cedula,   // el hook del modelo aplica bcrypt
             debe_cambiar_password: !datos.password?.trim(),
             estado: 'A',
@@ -520,6 +558,23 @@ async function crear({ idNegocio, datos: datosCrudos, idProfesionalExistente = n
 }
 
 /**
+ * El contacto de la ficha de agenda **es** el del usuario.
+ *
+ * Estaban por separado —`gener_usuario.telefono` y `reserva_profesional.telefono`— y eso
+ * significaba que escribir el teléfono en Usuarios dejaba la ficha vacía: la agenda mostraba a
+ * la persona sin número y el portal público no tenía con qué armar el botón de WhatsApp. Eran
+ * dos casillas para el mismo dato y quien las rellenaba no sabía cuál miraba cada pantalla.
+ *
+ * Con esto la ficha copia lo que tenga el usuario cada vez que se toca. La columna se conserva
+ * —una ficha suelta, sin cuenta de acceso, sigue necesitando su propio teléfono— pero cuando
+ * hay usuario detrás, él manda. La propagación inversa (editar desde Profesionales) la hace
+ * `profesionalService.actualizar`.
+ */
+function contactoDeUsuario(usuario) {
+    return { telefono: usuario.telefono ?? null, email: usuario.email ?? null };
+}
+
+/**
  * Enlaza (o crea) la ficha de agenda de quien atiende citas.
  *
  * Tres casos, en este orden: la persona ya tiene ficha en este negocio (se reactiva), se pidió
@@ -534,7 +589,11 @@ async function vincularProfesional({ idNegocio, usuario, datos, idProfesionalExi
         where: { id_negocio: idNegocio, id_usuario: usuario.id_usuario }, transaction,
     });
     if (suya) {
-        const cambios = { estado: 'A', fecha_actualizacion: new Date() };
+        const cambios = {
+            estado: 'A',
+            fecha_actualizacion: new Date(),
+            ...contactoDeUsuario(usuario),
+        };
         if (datos.especialidad !== undefined && datos.especialidad !== null) {
             cambios.especialidad = String(datos.especialidad).trim() || null;
         }
@@ -551,7 +610,12 @@ async function vincularProfesional({ idNegocio, usuario, datos, idProfesionalExi
             throw error('Ese profesional ya tiene un usuario asignado.', 409);
         }
         return pro.update(
-            { id_usuario: usuario.id_usuario, estado: 'A', fecha_actualizacion: new Date() },
+            {
+                id_usuario: usuario.id_usuario,
+                estado: 'A',
+                fecha_actualizacion: new Date(),
+                ...contactoDeUsuario(usuario),
+            },
             { transaction },
         );
     }
@@ -561,8 +625,7 @@ async function vincularProfesional({ idNegocio, usuario, datos, idProfesionalExi
         id_usuario: usuario.id_usuario,
         nombre: nombreCompleto(usuario),
         especialidad: datos.especialidad?.trim() || null,
-        telefono: datos.telefono?.trim() || null,
-        email: usuario.email,
+        ...contactoDeUsuario(usuario),
         color_hex: datos.color_hex || null,
         estado: 'A',
     }, { transaction });
@@ -615,10 +678,17 @@ async function actualizar({ idNegocio, idUsuario, datos: datosCrudos }) {
         if (choque) throw error('Ya existe otro usuario con ese email.', 409);
     }
 
+    const paisTelefono = datos.telefono === undefined
+        ? null
+        : (datos.telefono_pais || await paisDelNegocio(idNegocio));
+
     return Models.sequelize.transaction(async (t) => {
         const cambios = {};
-        for (const campo of ['primer_nombre', 'segundo_nombre', 'primer_apellido', 'segundo_apellido', 'telefono']) {
+        for (const campo of ['primer_nombre', 'segundo_nombre', 'primer_apellido', 'segundo_apellido']) {
             if (datos[campo] !== undefined) cambios[campo] = datos[campo]?.trim() || null;
+        }
+        if (datos.telefono !== undefined) {
+            cambios.telefono = normalizarTelefono(datos.telefono, paisTelefono);
         }
         if (emailNuevo !== undefined) cambios.email = emailNuevo;
         // Cambiar la contraseña obliga al usuario a ponerse una propia en el siguiente acceso.
@@ -672,6 +742,7 @@ async function actualizar({ idNegocio, idUsuario, datos: datosCrudos }) {
         if (pro) {
             await pro.update({
                 nombre: nombreCompleto({ ...usuario.toJSON(), ...cambios }),
+                ...contactoDeUsuario({ ...usuario.toJSON(), ...cambios }),
                 fecha_actualizacion: new Date(),
             }, { transaction: t });
         }

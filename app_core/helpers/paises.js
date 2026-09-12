@@ -92,11 +92,20 @@ function paisesSoportados() {
     return Object.keys(PAISES);
 }
 
-/** Lista para pintar un selector: código, nombre y la moneda que arrastra cada uno. */
+/**
+ * Lista para pintar un selector: código, nombre, indicativo telefónico y moneda.
+ *
+ * El indicativo viaja en la misma fila por lo mismo que la moneda: el selector de país del
+ * teléfono («+57 Colombia») lo necesita, y una lista de prefijos escrita en el frontend sería
+ * otra copia de esta tabla — la que se queda vieja el día que se añada un país aquí.
+ */
 function paisesParaSeleccion() {
     return paisesSoportados().map((codigo) => ({
         codigo,
         nombre: PAISES[codigo].nombre,
+        indicativo: `+${PAISES[codigo].telefono.cc}`,
+        /** Dígitos del número nacional, para que el formulario avise antes de enviar. */
+        largo: PAISES[codigo].telefono.largo,
         moneda: { ...PAISES[codigo].moneda },
     }));
 }

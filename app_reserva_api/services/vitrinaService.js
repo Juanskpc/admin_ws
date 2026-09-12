@@ -2,6 +2,7 @@
 const Models = require('../../app_core/models/conection');
 const ConfigService = require('./configService');
 const { monedaDePais } = require('../../app_core/helpers/paises');
+const { urlWhatsapp } = require('../../app_core/helpers/telefono');
 
 /**
  * La página pública del negocio: lo que ve un cliente que llega desde un enlace o un QR.
@@ -100,7 +101,7 @@ async function getVitrina(idNegocio) {
         where: { id_negocio: idNegocio, estado: 'A' },
         attributes: [
             'id_negocio', 'nombre', 'email_contacto', 'telefono', 'direccion',
-            'url_whatsapp', 'url_facebook', 'url_instagram',
+            'url_whatsapp', 'url_facebook', 'url_instagram', 'url_tiktok',
             'logo_url', 'banner_url', 'colores', 'id_paleta', 'pais',
         ],
         include: [
@@ -124,7 +125,8 @@ async function getVitrina(idNegocio) {
         }),
         Models.ReservaProfesional.findAll({
             where: { id_negocio: idNegocio, estado: 'A' },
-            attributes: ['id_profesional', 'nombre', 'especialidad', 'foto_url', 'color_hex'],
+            attributes: ['id_profesional', 'nombre', 'especialidad', 'foto_url', 'color_hex',
+                         'telefono'],
             order: [['nombre', 'ASC']],
         }),
         Models.ReservaHorario.findAll({
@@ -181,6 +183,11 @@ async function getVitrina(idNegocio) {
             foto_url: p.foto_url,
             color_hex: p.color_hex,
             ofrece_todo: !asignados,
+            // El enlace, no el número: la página solo necesita a dónde lleva el botón, y armar el
+            // `wa.me` aquí deja la regla —qué es un móvil en cada país— en un único sitio.
+            // `null` cuando el teléfono no se reconoce, y eso es lo que hace que el botón no se
+            // pinte en vez de pintarse roto.
+            whatsapp: urlWhatsapp(p.telefono, negocio.pais),
             id_servicios: idsServicios,
             horario: horarioEfectivo(horariosPorProfesional.get(p.id_profesional) || [], horariosGenerales),
         };
@@ -248,6 +255,7 @@ async function getVitrina(idNegocio) {
                 whatsapp: limpio(negocio.url_whatsapp),
                 facebook: limpio(negocio.url_facebook),
                 instagram: limpio(negocio.url_instagram),
+                tiktok: limpio(negocio.url_tiktok),
             },
             // La portada es pública: no hay sesión de la que sacar la moneda, así que viaja
             // aquí. Sin esto, un negocio chileno publicaría sus precios en pesos colombianos.
@@ -299,16 +307,21 @@ function normalizarRed(red, valor) {
         return `https://wa.me/${conPais}`;
     }
 
-    const dominio = red === 'facebook' ? 'facebook.com' : 'instagram.com';
     if (/^https?:\/\//i.test(v)) {
         if (v.length > URL_MAX) throw error('El enlace es demasiado largo.', 422);
         return v;
     }
     // `@usuario`, `usuario` o `instagram.com/usuario` → URL absoluta del perfil.
-    const usuario = v.replace(/^@/, '').replace(/^(www\.)?(facebook|fb|instagram)\.com\//i, '').replace(/\/+$/, '');
+    const usuario = v.replace(/^@/, '').replace(/^(www\.)?(facebook|fb|instagram|tiktok)\.com\/@?/i, '').replace(/\/+$/, '');
     if (!/^[A-Za-z0-9._-]{1,60}$/.test(usuario)) {
         throw error(`El usuario de ${red} solo puede tener letras, números, puntos, guiones o guion bajo.`, 422);
     }
+    // TikTok exige la arroba **dentro** de la URL: `tiktok.com/minegocio` es un 404. Quien pegue
+    // el enlace de su perfil la traerá ya puesta, y el limpiado de arriba la quita para no
+    // acabar con dos.
+    if (red === 'tiktok') return `https://www.tiktok.com/@${usuario}`;
+
+    const dominio = red === 'facebook' ? 'facebook.com' : 'instagram.com';
     return `https://${dominio}/${usuario}`;
 }
 
@@ -316,7 +329,7 @@ function normalizarRed(red, valor) {
 async function getVitrinaEdicion(idNegocio) {
     const negocio = await Models.GenerNegocio.findByPk(idNegocio, {
         attributes: ['id_negocio', 'nombre', 'email_contacto', 'telefono', 'direccion',
-                     'url_whatsapp', 'url_facebook', 'url_instagram'],
+                     'url_whatsapp', 'url_facebook', 'url_instagram', 'url_tiktok'],
     });
     if (!negocio) throw error('Negocio no encontrado.');
     const cfg = await ConfigService.get(idNegocio);
@@ -330,6 +343,7 @@ async function getVitrinaEdicion(idNegocio) {
         url_whatsapp: negocio.url_whatsapp,
         url_facebook: negocio.url_facebook,
         url_instagram: negocio.url_instagram,
+        url_tiktok: negocio.url_tiktok,
         descripcion_publica: cfg.descripcion_publica,
         publico_activo: cfg.publico_activo !== false,
     };
@@ -367,7 +381,8 @@ async function guardarVitrina(idNegocio, datos) {
         cambiosNegocio.direccion = direccion || null;
     }
 
-    for (const [campo, red] of [['url_whatsapp', 'whatsapp'], ['url_facebook', 'facebook'], ['url_instagram', 'instagram']]) {
+    for (const [campo, red] of [['url_whatsapp', 'whatsapp'], ['url_facebook', 'facebook'],
+                                ['url_instagram', 'instagram'], ['url_tiktok', 'tiktok']]) {
         if (datos[campo] !== undefined) cambiosNegocio[campo] = normalizarRed(red, datos[campo]);
     }
 
