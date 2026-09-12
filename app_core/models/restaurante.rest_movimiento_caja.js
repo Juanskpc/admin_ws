@@ -23,6 +23,9 @@ module.exports = (sequelize, DataTypes) => {
     RestMovimientoCaja.belongsTo(models.RestCaja,     { foreignKey: 'id_caja',    as: 'caja' });
     RestMovimientoCaja.belongsTo(models.PedidOrden,   { foreignKey: 'id_orden',   as: 'orden' });
     RestMovimientoCaja.belongsTo(models.GenerUsuario, { foreignKey: 'id_usuario', as: 'usuario' });
+    // Solo viene poblada en los movimientos manuales (y los abonos a cuenta): cuando
+    // hay pedido detrás, la forma de pago la manda la orden o su desglose de multipago.
+    RestMovimientoCaja.belongsTo(models.RestMetodoPago, { foreignKey: 'id_metodo_pago', as: 'metodoPago' });
   };
 
   return RestMovimientoCaja;

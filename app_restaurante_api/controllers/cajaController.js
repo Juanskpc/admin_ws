@@ -56,13 +56,22 @@ function ocultarImportesCaja(caja) {
     };
 }
 
-/** Deja los movimientos listables (fecha, tipo, concepto, usuario) pero sin monto. */
+/**
+ * Deja los movimientos listables (fecha, tipo, concepto, usuario, forma de pago)
+ * pero sin monto. El NOMBRE de la forma de pago se queda: es lo que permite filtrar
+ * el listado, y saber que un pedido se cobró por transferencia no dice cuánto fue.
+ * Su `valor` sí se va, que ahí es donde estaba la cifra.
+ */
 function ocultarImportesMovimientos(movimientos) {
-    return (movimientos || []).map((m) => ({
-        ...(typeof m.toJSON === 'function' ? m.toJSON() : m),
-        monto: null,
-        importes_ocultos: true,
-    }));
+    return (movimientos || []).map((m) => {
+        const json = typeof m.toJSON === 'function' ? m.toJSON() : m;
+        return {
+            ...json,
+            monto: null,
+            formas_pago: (json.formas_pago || []).map((f) => ({ ...f, valor: null })),
+            importes_ocultos: true,
+        };
+    });
 }
 
 /** GET /restaurante/caja/abierta?id_negocio=N */
@@ -327,17 +336,37 @@ async function getResumenDomiciliarios(req, res) {
 async function registrarMovimiento(req, res) {
     if (!handleValidation(req, res)) return;
     try {
-        const { id_caja, tipo, monto, concepto } = req.body;
+        const { id_caja, tipo, monto, concepto, id_metodo_pago } = req.body;
+
+        // El negocio sale de la propia caja, igual que en los movimientos: el body solo
+        // trae el id del turno, y tanto la pertenencia como la forma de pago se validan
+        // dentro de un negocio.
+        const idNegocio = await CajaService.getIdNegocioDeCaja(Number(id_caja));
+        if (!idNegocio) return Respuesta.error(res, 'Caja no encontrada.', 404);
+
+        const pertenece = await CajaService.usuarioPerteneceANegocio({
+            idUsuario: req.usuario?.id_usuario,
+            idNegocio,
+        });
+        if (!pertenece) return Respuesta.error(res, 'No tienes acceso a esta caja.', 403);
+
+        const mp = await CajaService.validarMetodoPagoManual({
+            idMetodoPago: id_metodo_pago ? Number(id_metodo_pago) : null,
+            idNegocio,
+        });
+
+        setAuditNegocio(idNegocio);
         const mov = await CajaService.registrarMovimiento({
             idCaja: Number(id_caja),
             tipo,
             monto: Number(monto),
             concepto,
             idUsuario: req.usuario.id_usuario,
+            idMetodoPago: mp?.id_metodo_pago ?? null,
         });
         return Respuesta.success(res, 'Movimiento registrado', mov, 201);
     } catch (err) {
-        if (err.statusCode === 422) return Respuesta.error(res, err.message, 422);
+        if (err.statusCode === 422) return Respuesta.error(res, err.message, 422, { code: err.code });
         console.error('[Caja] Error registrarMovimiento:', err.message);
         return Respuesta.error(res, 'Error al registrar movimiento.');
     }

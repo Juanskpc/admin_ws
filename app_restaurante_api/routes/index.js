@@ -403,6 +403,10 @@ router.post('/caja/movimientos', [
 	body('tipo').isIn(['INGRESO', 'EGRESO']),
 	body('monto').isFloat({ gt: 0 }),
 	body('concepto').optional({ nullable: true }).isString().isLength({ max: 255 }),
+	// Con qué entra o sale la plata: suma o resta al desglose de esa forma de pago.
+	// Opcional para no romper a quien ya llamaba sin ella; sin forma de pago el
+	// movimiento cae en «Manual / Sin orden».
+	body('id_metodo_pago').optional({ nullable: true, checkFalsy: true }).isInt({ min: 1 }),
 ], CajaController.registrarMovimiento);
 
 router.post('/caja/movimientos/:id/anular', [

@@ -133,7 +133,7 @@ async function generarXLSXCaja(caja, movimientos, nombreNegocio) {
     hoja.addRow([]);
     seccion('FORMAS DE PAGO');
 
-    const cabPagos = hoja.addRow(['Forma de pago', 'Valor']);
+    const cabPagos = hoja.addRow(['Forma de pago', 'Neto del turno']);
     [1, 2].forEach((c) => {
         cabPagos.getCell(c).font = { bold: true };
         cabPagos.getCell(c).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: GRIS } };
@@ -141,7 +141,7 @@ async function generarXLSXCaja(caja, movimientos, nombreNegocio) {
 
     const metodos = caja.ingresos_por_metodo || [];
     if (metodos.length === 0) {
-        hoja.addRow(['Sin ingresos registrados en el turno', '']);
+        hoja.addRow(['Sin movimientos con forma de pago en el turno', '']);
     } else {
         for (const m of metodos) {
             const fila = hoja.addRow([m.nombre, Number(m.total || 0)]);

@@ -36,6 +36,41 @@ async function requireCajaAbierta(idNegocio, { transaction } = {}) {
     return caja;
 }
 
+/**
+ * Ingresos y egresos del turno con las anulaciones ya descontadas.
+ *
+ * Una anulación son DOS filas: el original, que se queda para que el turno conserve su
+ * historia, y la compensatoria de signo contrario. Sumarlas a ciegas dejaba el neto bien
+ * pero inflaba las dos columnas: anular un egreso de 20.000 subía «Egresos» a 20.000 y
+ * «Ingresos» otros 20.000, cuando de esa plata nunca salió ni entró nada. El cajero veía
+ * un egreso que él mismo había cancelado sumando en el total de egresos.
+ *
+ * Así que del par no se cuenta ninguna de las dos: ni el original ni su reversa. El neto
+ * (`apertura + ingresos - egresos`) no cambia, porque las dos filas ya se anulaban entre
+ * sí; lo que cambia es que cada columna dice la verdad por separado.
+ *
+ * Requiere `id_movimiento`, `id_movimiento_anula`, `tipo` y `monto` en cada fila.
+ */
+function totalesDeMovimientos(movimientos) {
+    const reversados = new Set(
+        (movimientos || [])
+            .map((m) => m.id_movimiento_anula)
+            .filter((id) => id != null)
+            .map(Number),
+    );
+    const vivos = (movimientos || []).filter(
+        (m) => m.id_movimiento_anula == null && !reversados.has(Number(m.id_movimiento)),
+    );
+    const sumar = (tipo) => vivos
+        .filter((m) => m.tipo === tipo)
+        .reduce((suma, m) => suma + Number(m.monto), 0);
+
+    return { ingresos: sumar('INGRESO'), egresos: sumar('EGRESO') };
+}
+
+/** Columnas mínimas para que `totalesDeMovimientos` pueda descartar las anulaciones. */
+const COLUMNAS_TOTALES = ['id_movimiento', 'id_movimiento_anula', 'tipo', 'monto'];
+
 async function abrirCaja({ idNegocio, idUsuario, montoApertura, observaciones }) {
     const existente = await Models.RestCaja.findOne({
         where: { id_negocio: idNegocio, estado: 'A' },
@@ -61,29 +96,39 @@ async function abrirCaja({ idNegocio, idUsuario, montoApertura, observaciones })
 }
 
 /**
- * Retorna el total de ingresos del turno agrupado por forma de pago.
- * Los movimientos sin orden asociada se listan como "Manual / Sin orden".
+ * Retorna el dinero NETO del turno agrupado por forma de pago.
+ *
+ * Neto quiere decir que los egresos restan de la forma de pago con la que salieron,
+ * igual que los ingresos suman: si el cliente pagó 36.000 en efectivo y de ese
+ * efectivo salieron 4.000 para el domiciliario, en «Efectivo» quedan 32.000, que es
+ * lo que de verdad hay en el cajón. Sumar solo los ingresos hacía que el desglose no
+ * cuadrara nunca con el esperado en cuanto había un egreso.
+ *
+ * Los movimientos sin orden ni forma de pago se listan como "Manual / Sin orden".
  */
 async function getDesglosePorMetodo(idCaja) {
-    // El dinero de cada ingreso se atribuye por forma de pago:
+    // El dinero de cada movimiento se atribuye por forma de pago:
     //  - Órdenes con Multipago (filas en rest_pago_orden): se reparte el monto
-    //    del ingreso proporcionalmente al valor de cada forma de pago.
+    //    proporcionalmente al valor de cada forma de pago.
     //  - Órdenes con pago simple o movimientos manuales: el monto completo va
     //    al id_metodo_pago de la orden (o "Manual / Sin orden").
     const rows = await Models.sequelize.query(`
         WITH ingresos AS (
             -- La forma de pago viaja en el propio movimiento solo cuando NO hay pedido detrás
-            -- (un abono a la cuenta de un cliente, por ejemplo). Con pedido manda la orden.
-            SELECT m.id_orden, m.monto, m.id_metodo_pago AS metodo_directo
+            -- (un abono a la cuenta de un cliente o un egreso manual). Con pedido manda la orden.
+            -- El signo lo pone el tipo: un EGRESO entra al desglose en negativo.
+            SELECT m.id_orden,
+                   CASE WHEN m.tipo = 'EGRESO' THEN -m.monto ELSE m.monto END AS monto,
+                   m.id_metodo_pago AS metodo_directo
             FROM restaurante.rest_movimiento_caja m
-            WHERE m.id_caja = :idCaja AND m.tipo = 'INGRESO'
-              -- Un ingreso anulado ya no es plata en el cajón: se excluye del
+            WHERE m.id_caja = :idCaja AND m.tipo IN ('INGRESO', 'EGRESO')
+              -- Un movimiento anulado ya no es plata que se movió: se excluye del
               -- desglose para que el cuadre por forma de pago sea el real.
               AND NOT EXISTS (
                   SELECT 1 FROM restaurante.rest_movimiento_caja a
                   WHERE a.id_movimiento_anula = m.id_movimiento
               )
-              -- Y las filas compensatorias tampoco son una venta: son la reversa.
+              -- Y las filas compensatorias tampoco son un movimiento real: son la reversa.
               AND m.id_movimiento_anula IS NULL
         ),
         multipago AS (
@@ -352,12 +397,7 @@ async function cerrarCaja({ idCaja, idNegocio, montoReportado, observaciones }) 
     });
     if (!caja) return null;
 
-    const ingresos = caja.movimientos
-        .filter((m) => m.tipo === 'INGRESO')
-        .reduce((sum, m) => sum + Number(m.monto), 0);
-    const egresos = caja.movimientos
-        .filter((m) => m.tipo === 'EGRESO')
-        .reduce((sum, m) => sum + Number(m.monto), 0);
+    const { ingresos, egresos } = totalesDeMovimientos(caja.movimientos);
 
     const esperado = Number(caja.monto_apertura) + ingresos - egresos;
     const reportado = montoReportado != null && !Number.isNaN(Number(montoReportado))
@@ -392,18 +432,13 @@ async function getCajaAbierta(idNegocio) {
             {
                 model: Models.RestMovimientoCaja,
                 as: 'movimientos',
-                attributes: ['tipo', 'monto'],
+                attributes: COLUMNAS_TOTALES,
             },
         ],
     });
     if (!caja) return null;
 
-    const ingresos = caja.movimientos
-        .filter((m) => m.tipo === 'INGRESO')
-        .reduce((sum, m) => sum + Number(m.monto), 0);
-    const egresos = caja.movimientos
-        .filter((m) => m.tipo === 'EGRESO')
-        .reduce((sum, m) => sum + Number(m.monto), 0);
+    const { ingresos, egresos } = totalesDeMovimientos(caja.movimientos);
 
     const [json, desglose] = await Promise.all([
         Promise.resolve(caja.toJSON()),
@@ -454,15 +489,10 @@ async function usuarioPerteneceANegocio({ idUsuario, idNegocio }) {
 async function calcularTotalesCaja(caja) {
     const movimientos = await Models.RestMovimientoCaja.findAll({
         where: { id_caja: caja.id_caja },
-        attributes: ['tipo', 'monto'],
+        attributes: COLUMNAS_TOTALES,
     });
 
-    const ingresos = movimientos
-        .filter((m) => m.tipo === 'INGRESO')
-        .reduce((sum, m) => sum + Number(m.monto), 0);
-    const egresos = movimientos
-        .filter((m) => m.tipo === 'EGRESO')
-        .reduce((sum, m) => sum + Number(m.monto), 0);
+    const { ingresos, egresos } = totalesDeMovimientos(movimientos);
 
     const json = caja.toJSON();
     json.ingresos            = ingresos;
@@ -537,13 +567,25 @@ async function listarHistorialCajas({ idNegocio, desde = null, hasta = null, lim
         FROM restaurante.rest_caja c
         JOIN general.gener_usuario u ON u.id_usuario = c.id_usuario
         LEFT JOIN (
+            -- Mismo criterio que totalesDeMovimientos: del par anulado no cuenta ninguna
+            -- de las dos filas, ni el original ni su reversa. total_movimientos sí las
+            -- cuenta todas, porque el listado del turno las sigue mostrando.
             SELECT
-                id_caja,
-                SUM(CASE WHEN tipo = 'INGRESO' THEN monto ELSE 0 END) AS ingresos,
-                SUM(CASE WHEN tipo = 'EGRESO'  THEN monto ELSE 0 END) AS egresos,
+                m.id_caja,
+                SUM(CASE WHEN m.tipo = 'INGRESO' AND m.id_movimiento_anula IS NULL
+                              AND r.id_movimiento_anula IS NULL
+                         THEN m.monto ELSE 0 END) AS ingresos,
+                SUM(CASE WHEN m.tipo = 'EGRESO'  AND m.id_movimiento_anula IS NULL
+                              AND r.id_movimiento_anula IS NULL
+                         THEN m.monto ELSE 0 END) AS egresos,
                 COUNT(*) AS total_movimientos
-            FROM restaurante.rest_movimiento_caja
-            GROUP BY id_caja
+            FROM restaurante.rest_movimiento_caja m
+            LEFT JOIN (
+                SELECT DISTINCT id_movimiento_anula
+                FROM restaurante.rest_movimiento_caja
+                WHERE id_movimiento_anula IS NOT NULL
+            ) r ON r.id_movimiento_anula = m.id_movimiento
+            GROUP BY m.id_caja
         ) mv ON mv.id_caja = c.id_caja
         WHERE c.id_negocio = :idNegocio
           AND c.estado = 'C'
@@ -586,7 +628,60 @@ async function listarHistorialCajas({ idNegocio, desde = null, hasta = null, lim
     };
 }
 
+/**
+ * Con qué se pagó (o de dónde salió) el dinero de un movimiento.
+ *
+ * La forma de pago vive en tres sitios distintos según el movimiento, y esto los
+ * unifica en una sola lista para que la pantalla no tenga que saberlo:
+ *  - pedido con multipago → una entrada por cada forma de pago del desglose;
+ *  - pedido con pago simple → la forma de pago de la orden;
+ *  - movimiento manual o abono → la del propio movimiento.
+ *
+ * Es una lista y no un valor porque un pedido cobrado en efectivo y transferencia
+ * pertenece a las dos, y al filtrar por cualquiera de ellas debe aparecer.
+ */
+function formasPagoDeMovimiento(json) {
+    const pagos = (json.orden?.pagos || []).filter((p) => p.id_metodo_pago != null);
+    if (pagos.length > 0) {
+        // El `valor` que se devuelve es la parte de ESTE movimiento, no la de la orden:
+        // el egreso del domicilio de un pedido de 36.000 son 4.000, y copiar ahí el
+        // desglose de la orden diría que ese egreso fueron 36.000. Se reparte el monto
+        // del movimiento en la misma proporción que el multipago, igual que el desglose
+        // del turno.
+        const suma = pagos.reduce((total, p) => total + Number(p.valor ?? 0), 0);
+        const monto = json.monto != null ? Number(json.monto) : null;
+        return pagos.map((p) => ({
+            id_metodo_pago: Number(p.id_metodo_pago),
+            nombre: p.metodoPago?.nombre || 'Forma de pago',
+            valor: monto != null && suma > 0
+                ? Math.round(monto * (Number(p.valor ?? 0) / suma) * 100) / 100
+                : null,
+        }));
+    }
+
+    const directo = json.orden?.metodoPago || json.metodoPago;
+    if (directo?.id_metodo_pago != null) {
+        return [{
+            id_metodo_pago: Number(directo.id_metodo_pago),
+            nombre: directo.nombre || 'Forma de pago',
+            valor: json.monto != null ? Number(json.monto) : null,
+        }];
+    }
+
+    return [];
+}
+
 async function getMovimientos(idCaja) {
+    // Una fábrica y no un objeto compartido: Sequelize anota la asociación dentro del
+    // propio include, así que reutilizar el mismo literal en tres sitios hace que los
+    // tres se resuelvan como el mismo alias («table name specified more than once»).
+    const metodo = () => ({
+        model: Models.RestMetodoPago,
+        as: 'metodoPago',
+        attributes: ['id_metodo_pago', 'nombre'],
+        required: false,
+    });
+
     const movimientos = await Models.RestMovimientoCaja.findAll({
         where: { id_caja: idCaja },
         include: [
@@ -600,7 +695,19 @@ async function getMovimientos(idCaja) {
                 as: 'orden',
                 attributes: ['id_orden', 'numero_orden', 'tipo_pedido', 'estado'],
                 required: false,
+                include: [
+                    metodo(),
+                    {
+                        model: Models.RestPagoOrden,
+                        as: 'pagos',
+                        attributes: ['id_pago', 'id_metodo_pago', 'valor'],
+                        required: false,
+                        include: [metodo()],
+                    },
+                ],
             },
+            // La del propio movimiento: solo la llevan los manuales y los abonos.
+            metodo(),
         ],
         order: [['fecha', 'DESC']],
     });
@@ -624,8 +731,47 @@ async function getMovimientos(idCaja) {
         json.es_pago_domicilio = m.tipo === 'EGRESO'
             && m.id_orden != null
             && m.id_movimiento_anula == null;
+        // Con qué se pagó, ya resuelto: es lo que alimenta los filtros por forma de pago.
+        json.formas_pago = formasPagoDeMovimiento(json);
+        // Las filas anidadas ya cumplieron su función; devolverlas duplicaría la
+        // respuesta y la pantalla no las usa.
+        delete json.metodoPago;
+        if (json.orden) {
+            delete json.orden.metodoPago;
+            delete json.orden.pagos;
+        }
         return json;
     });
+}
+
+/**
+ * La forma de pago de un movimiento manual, comprobada contra el negocio.
+ *
+ * Sirve para los dos sentidos: un ingreso suma a esa forma de pago y un egreso le
+ * resta, así que en ambos casos tiene que ser una del negocio y estar activa. La
+ * de «Cuenta / Tiquetera» queda fuera: ese dinero no está en el cajón, y meter un
+ * movimiento manual ahí descuadraría la cuenta del cliente sin tocar su saldo.
+ *
+ * Devuelve `null` cuando no se indicó ninguna: el movimiento sin forma de pago
+ * sigue siendo válido y cae en «Manual / Sin orden», como los de siempre.
+ */
+async function validarMetodoPagoManual({ idMetodoPago, idNegocio }) {
+    if (!idMetodoPago) return null;
+
+    const mp = await Models.RestMetodoPago.findOne({
+        where: { id_metodo_pago: idMetodoPago, id_negocio: idNegocio, estado: 'A' },
+    });
+    if (!mp) {
+        const e = new Error('Forma de pago inválida para este negocio.');
+        e.code = 'METODO_PAGO_INVALIDO'; e.statusCode = 422;
+        throw e;
+    }
+    if (mp.es_cuenta) {
+        const e = new Error('La forma de pago de las cuentas de cliente no se puede usar en un movimiento manual.');
+        e.code = 'METODO_PAGO_INVALIDO'; e.statusCode = 422;
+        throw e;
+    }
+    return mp;
 }
 
 async function registrarMovimiento({
@@ -1055,6 +1201,7 @@ module.exports = {
     getResumenDomiciliarios,
     transferirDomiciliarioACaja,
     registrarMovimiento,
+    validarMetodoPagoManual,
     registrarIngresoOrden,
     getDesglosePorMetodo,
     validarPendientesCierre,
