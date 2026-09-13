@@ -1,5 +1,6 @@
 const CartaService = require('../services/cartaService');
 const PublicoService = require('../services/publicoService');
+const CartaDisenoService = require('../services/cartaDisenoService');
 const Respuesta = require('../../app_core/helpers/respuesta');
 const { tienePlanActivo } = require('../../app_core/helpers/planHelper');
 
@@ -23,9 +24,26 @@ async function getNegocio(req, res) {
 
         const planActivo = await tienePlanActivo(idNegocio);
 
+        // El diseño viaja en esta misma respuesta y no en una petición aparte: la carta no se
+        // pinta hasta tenerlo, así que no hay un parpadeo con los colores por defecto antes de
+        // los del negocio. Si leerlo falla, la carta sale con el diseño de siempre en vez de
+        // no salir.
+        let carta;
+        try {
+            carta = await CartaDisenoService.getCartaPublica(negocio);
+        } catch (err) {
+            console.error('[Publico] Error diseño de carta:', err.message);
+            carta = CartaDisenoService.cartaPorDefecto(negocio);
+        }
+
+        // Los colores y la paleta ya van resueltos dentro de `carta`: no se exponen crudos.
+        const { colores: _colores, id_paleta: _idPaleta, paletaColor: _paleta, ...datos } =
+            negocio.toJSON();
+
         return Respuesta.success(res, 'Negocio obtenido', {
-            ...negocio.toJSON(),
+            ...datos,
             plan_activo: planActivo,
+            carta,
         });
     } catch (err) {
         console.error('[Publico] Error getNegocio:', err.message);
@@ -59,7 +77,7 @@ async function getCategorias(req, res) {
     }
 }
 
-/** GET /restaurante/public/carta/productos?id_negocio=N&id_categoria=N */
+/** GET /restaurante/public/carta/productos?id_negocio=N&id_categoria=N[&incluir_agotados=1] */
 async function getProductos(req, res) {
     try {
         const idNegocio = Number(req.query.id_negocio);
@@ -70,7 +88,13 @@ async function getProductos(req, res) {
 
         if (!(await tienePlanActivo(idNegocio))) return planError(res);
 
-        const productos = await CartaService.getProductosPublicosByCategoria(idNegocio, idCategoria);
+        // Los agotados solo viajan si se piden. La carta los pide siempre y decide si mostrarlos
+        // según el diseño; así la vista previa de Configuración puede encender la opción sin
+        // esperar a publicar. Lo oculto (`visible = false`) no sale nunca.
+        const incluirAgotados = ['1', 'true'].includes(String(req.query.incluir_agotados));
+        const productos = await CartaService.getProductosPublicosByCategoria(
+            idNegocio, idCategoria, { incluirAgotados },
+        );
         const data = productos.map(p => ({
             id_producto: p.id_producto,
             nombre: p.nombre,
@@ -79,6 +103,7 @@ async function getProductos(req, res) {
             imagen_url: p.imagen_url,
             icono: p.icono,
             es_popular: p.es_popular,
+            disponible: p.disponible !== false,
             ingredientes: (p.ingredientes || []).map(pi => ({
                 id_producto_ingred: pi.id_producto_ingred,
                 id_ingrediente: pi.ingrediente.id_ingrediente,
@@ -91,6 +116,42 @@ async function getProductos(req, res) {
     } catch (err) {
         console.error('[Publico] Error getProductos:', err.message);
         return Respuesta.error(res, 'Error al obtener los productos.');
+    }
+}
+
+/** GET /restaurante/public/carta/completa?id_negocio=N[&incluir_agotados=1] */
+async function getCartaCompleta(req, res) {
+    try {
+        const idNegocio = Number(req.query.id_negocio);
+        if (!idNegocio) return Respuesta.error(res, 'id_negocio requerido', 400);
+
+        if (!(await tienePlanActivo(idNegocio))) return planError(res);
+
+        const incluirAgotados = ['1', 'true'].includes(String(req.query.incluir_agotados));
+        const categorias = await CartaService.getCartaPublicaCompleta(idNegocio, { incluirAgotados });
+        const data = categorias.map(c => ({
+            id_categoria: c.id_categoria,
+            nombre: c.nombre,
+            descripcion: c.descripcion,
+            icono: c.icono,
+            imagen_url: c.imagen_url,
+            orden: c.orden,
+            productos: (c.productos || []).map(p => ({
+                id_producto: p.id_producto,
+                nombre: p.nombre,
+                descripcion: p.descripcion,
+                precio: Number(p.precio),
+                imagen_url: p.imagen_url,
+                icono: p.icono,
+                es_popular: p.es_popular,
+                disponible: p.disponible !== false,
+            })),
+        }));
+
+        return Respuesta.success(res, 'Carta obtenida', data);
+    } catch (err) {
+        console.error('[Publico] Error getCartaCompleta:', err.message);
+        return Respuesta.error(res, 'Error al obtener la carta.');
     }
 }
 
@@ -116,6 +177,7 @@ async function getPaleta(req, res) {
 
 module.exports = {
     getNegocio,
+    getCartaCompleta,
     getCategorias,
     getProductos,
     getPaleta,

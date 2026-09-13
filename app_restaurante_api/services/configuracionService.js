@@ -311,6 +311,7 @@ async function updatePaletaNegocio(idUsuario, idNegocio, idPaleta) {
 }
 
 module.exports = {
+    resolveAccesoNegocio,
     getPaletasActivas,
     getPaletaNegocio,
     getConfiguracionNegocio,

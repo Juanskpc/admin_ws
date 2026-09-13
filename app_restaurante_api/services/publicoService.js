@@ -14,7 +14,18 @@ async function getNegocioPublico(idNegocio) {
             'url_whatsapp',
             'url_facebook',
             'url_instagram',
+            'logo_url',
+            // Para resolver el color de marca por defecto de la carta. El controlador no los
+            // devuelve crudos: van ya resueltos dentro de `carta`.
+            'colores',
+            'id_paleta',
         ],
+        include: [{
+            model: Models.GenerPaletaColor,
+            as: 'paletaColor',
+            required: false,
+            attributes: ['colores'],
+        }],
     });
 }
 

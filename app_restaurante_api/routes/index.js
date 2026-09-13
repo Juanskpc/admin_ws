@@ -18,6 +18,7 @@ const ReporteController    = require('../controllers/reporteController');
 const ConfiguracionController = require('../controllers/configuracionController');
 const CajaController       = require('../controllers/cajaController');
 const MetodoPagoController = require('../controllers/metodoPagoController');
+const CartaDisenoController = require('../controllers/cartaDisenoController');
 const { verificarToken }   = require('../../app_core/middleware/auth');
 
 // ───────── Multer: imágenes de la carta (productos y categorías) ─────────
@@ -75,6 +76,7 @@ router.get('/public/negocios/:id', [param('id').isInt({ min: 1 })], PublicoContr
 router.get('/public/negocios/:id/paleta', [param('id').isInt({ min: 1 })], PublicoController.getPaleta);
 router.get('/public/carta/categorias', PublicoController.getCategorias);
 router.get('/public/carta/productos', PublicoController.getProductos);
+router.get('/public/carta/completa', PublicoController.getCartaCompleta);
 
 // ============================================================
 // RUTAS PROTEGIDAS (requieren token JWT)
@@ -201,6 +203,43 @@ router.patch('/negocios/:id/paleta', [
 	param('id').isInt({ min: 1 }),
 	body('id_paleta').isInt({ min: 1 }),
 ], ConfiguracionController.assignPaletaNegocio);
+
+// --- Diseño de la carta virtual (Configuración → Apariencia) ---
+// El logo va a memoria y no a disco: `imagenService` fija el nombre a partir del id del
+// negocio y para eso necesita el buffer. Es el mismo archivo y la misma columna que usa la
+// agenda, así que el negocio tiene un solo logo en toda la plataforma. El recorte llega del
+// navegador ya en WebP; 3 MB solo cubre un PNG sin comprimir.
+const uploadLogoCarta = multer({
+	storage: multer.memoryStorage(),
+	fileFilter(_req, file, cb) {
+		if (['image/webp', 'image/jpeg', 'image/png'].includes(file.mimetype)) cb(null, true);
+		else cb(Object.assign(new Error('Formato no admitido. Usa WEBP, JPG o PNG.'), { statusCode: 400 }));
+	},
+	limits: { fileSize: 3 * 1024 * 1024 },
+});
+
+router.get('/carta/diseno', [
+	query('id_negocio').isInt({ min: 1 }),
+], CartaDisenoController.getDiseno);
+
+router.put('/carta/diseno', [
+	body('id_negocio').isInt({ min: 1 }),
+	body('plantilla').isString().isLength({ min: 1, max: 40 }),
+	body('formato').isString().isLength({ min: 1, max: 20 }),
+	body('marca').optional({ nullable: true }).isObject(),
+	body('opciones').optional({ nullable: true }).isObject(),
+], CartaDisenoController.publicar);
+
+// El `id_negocio` viaja en el cuerpo multipart: multer va antes del validador.
+router.post('/carta/diseno/logo',
+	uploadLogoCarta.single('imagen'),
+	[body('id_negocio').isInt({ min: 1 })],
+	CartaDisenoController.subirLogo,
+);
+
+router.delete('/carta/diseno/logo', [
+	query('id_negocio').isInt({ min: 1 }),
+], CartaDisenoController.eliminarLogo);
 
 // --- Carta / Menú (lectura pública para POS) ---
 router.get('/carta/categorias', CartaController.getCategorias);

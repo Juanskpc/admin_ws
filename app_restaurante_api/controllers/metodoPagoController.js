@@ -72,7 +72,7 @@ async function inactivar(req, res) {
         // Los errores tipados del servicio se reenvían con su código: si no, «esta forma de
         // pago no se puede desactivar» llegaba como un 500 mudo y parecía una avería.
         if (err.statusCode) {
-            return Respuesta.error(res, err.message, err.statusCode, { code: err.code });
+            return Respuesta.error(res, err.message, err.statusCode, { code: err.code, uso: err.uso });
         }
         console.error('[Restaurante/MetodoPago] inactivar:', err.message);
         return Respuesta.error(res, 'Error al inactivar el método de pago.');
