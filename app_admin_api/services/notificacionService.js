@@ -113,6 +113,19 @@ async function procesarAvisosDeVencimiento(dias) {
 async function ejecutarVerificacionDiaria() {
     console.log(`\n[${new Date().toISOString()}] Verificación diaria de vencimientos de plan...`);
 
+    // Primero el cobro, después el aviso: así el correo de «vence en 5 días» llega cuando la factura
+    // ya existe, y su botón «Pagar mi mensualidad» lleva a algo que pagar. Va con su propio try: si
+    // la cobranza falla, los avisos de vencimiento tienen que salir igual.
+    try {
+        const Cobranza = require('./cobranzaService');
+        const r = await Cobranza.generarCobrosPorVencer({ dias: DIAS_AVISO_1 });
+        console.log(
+            `  Cobros automáticos: ${r.generados} generados, ${r.existentes} ya existían, ${r.omitidos} omitidos`
+        );
+    } catch (err) {
+        console.error('  Error generando cobros automáticos:', err.message);
+    }
+
     try {
         const resultado5 = await procesarAvisosDeVencimiento(DIAS_AVISO_1);
         console.log(`  Aviso 5 días: ${resultado5.procesados} procesados, ${resultado5.correos} correos, ${resultado5.notificaciones} notificaciones`);

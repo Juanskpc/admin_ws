@@ -86,6 +86,18 @@ app.use(cors((req, callback) => {
 // Se deja apagado hasta rediseñarlo para la nueva arquitectura (clave por
 // usuario/negocio + almacén compartido, no en memoria del proceso).
 // Para reactivarlo temporalmente: RATE_LIMIT_ENABLED=true en el .env
+
+// ========================
+// Los webhooks de cobranza van ANTES del rate limiter y del parser JSON
+// ========================
+// Dos motivos, ninguno estético (el detalle está en el propio router):
+//   1. dLocal y Wompi firman el CUERPO CRUDO; `express.json()` se lo come y la firma deja de
+//      casar. Mismo caso que el webhook de WhatsApp, más abajo.
+//   2. El límite global es para humanos con navegador. Una pasarela reintentando una ráfaga lo
+//      agota, se lleva un 429 y los pagos se quedan sin confirmar. El router trae su propio
+//      límite, mucho más holgado.
+app.use('/admin/cobranza/webhook', require('./app_admin_api/webhooks/cobranzaWebhook'));
+
 const rateLimitEnabled = process.env.RATE_LIMIT_ENABLED === 'true';
 const isDev = process.env.NODE_ENV !== 'production';
 
@@ -260,6 +272,12 @@ app.use(errorHandler);
             // Iniciar scheduler de particiones de auditoría
             const auditScheduler = require('./app_core/helpers/auditParticionScheduler');
             auditScheduler.iniciar();
+
+            // Cobro automático de mensualidades. Nace apagado (COBRANZA_AUTO_ENABLED): un cron
+            // que cobra de verdad no debe arrancar por heredar un .env — la primera vez que
+            // cobre tiene que ser una decisión de una persona.
+            const cobranzaScheduler = require('./app_admin_api/services/cobranzaScheduler');
+            cobranzaScheduler.iniciar();
 
             // Modo de autorización multi-inquilino (ADR-002, ADR-010). Se anuncia siempre:
             // creer que se está bloqueando cuando solo se observa es el peor error posible aquí.

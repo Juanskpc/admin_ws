@@ -576,12 +576,12 @@ function buildPlanExpiryHtml(nombreNegocio, nombrePlan, fechaVencimiento, diasRe
         </div>
         <p>
           ${esUrgente
-            ? '<strong>¡Tu plan vence mañana!</strong> Renueva ahora para evitar la interrupción del servicio.'
-            : 'Aún tienes tiempo para renovar. Hazlo antes de la fecha de vencimiento para mantener tu acceso completo.'
+            ? '<strong>¡Tu plan vence mañana!</strong> Paga tu mensualidad ahora para evitar la interrupción del servicio.'
+            : 'Tu cobro de renovación ya está listo. Págalo con PSE, Nequi o tarjeta antes del vencimiento y tu plan se extiende solo.'
           }
         </p>
         <div class="btn-wrap">
-          <a class="btn" href="${process.env.FRONTEND_URL || 'https://escalapp.cloud'}/admin/configuracion">Ver mi plan →</a>
+          <a class="btn" href="${process.env.FRONTEND_URL || 'https://escalapp.cloud'}/pagar">Pagar mi mensualidad →</a>
         </div>
         <hr class="divider" />
         <p style="font-size:12px;color:#a0aec0;">
@@ -631,7 +631,7 @@ async function sendPlanExpiryWarningEmail(email, datos) {
         from,
         to: email,
         subject: `Tu plan ${datos.nombrePlan} vence en ${datos.diasRestantes} ${datos.diasRestantes === 1 ? 'día' : 'días'} — EscalApp`,
-        text: `EscalApp — Aviso de vencimiento\n\nTu plan "${datos.nombrePlan}" para "${datos.nombreNegocio}" vence el ${datos.fechaVencimiento}.\n\nFaltan ${datos.diasRestantes} ${datos.diasRestantes === 1 ? 'día' : 'días'}.\n\nRenueva desde: ${process.env.FRONTEND_URL || 'https://escalapp.cloud'}/admin/configuracion`,
+        text: `EscalApp — Aviso de vencimiento\n\nTu plan "${datos.nombrePlan}" para "${datos.nombreNegocio}" vence el ${datos.fechaVencimiento}.\n\nFaltan ${datos.diasRestantes} ${datos.diasRestantes === 1 ? 'día' : 'días'}.\n\nPaga tu mensualidad en: ${process.env.FRONTEND_URL || 'https://escalapp.cloud'}/pagar`,
         html: buildPlanExpiryHtml(datos.nombreNegocio, datos.nombrePlan, datos.fechaVencimiento, datos.diasRestantes, logoSrc),
         attachments,
     });

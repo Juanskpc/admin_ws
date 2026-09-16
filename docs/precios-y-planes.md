@@ -249,7 +249,8 @@ corre.
 - **El IVA sobre las mensualidades.** Hoy no se cobra porque la empresa no es responsable de IVA
   ([`obligaciones-escalapp.md`](obligaciones-escalapp.md) §2). Cuando eso cambie, «$158.999» y
   «$158.999 + IVA» son dos promesas distintas y hay clientes firmados de por medio.
-- **Cómo se cobra.** Hoy no hay pasarela ni débito automático. Y si el cliente es persona jurídica,
+- **Cómo se cobra.** Ya está resuelto: ver [`cobro-mensualidades.md`](cobro-mensualidades.md)
+  (Wompi, con cobro automático 5 días antes del vencimiento). Y si el cliente es persona jurídica,
   **retiene en la fuente**: se factura $158.999 y llega menos (§3 de `obligaciones-escalapp.md`).
 - **Qué pasa al pasar de 20 números de WhatsApp.** Embedded Signup cambia quién le paga a Meta y por
   tanto cambia esta tabla entera. Está en `ESTADO-Y-CONTINUACION.md` §4-0.

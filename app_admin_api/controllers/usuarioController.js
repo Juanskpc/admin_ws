@@ -149,10 +149,14 @@ async function createUsuario(req, res) {
             id_negocio
         } = req.body;
 
+        // El correo es opcional: sin él se guarda NULL, nunca una cadena vacía (el índice
+        // UNIQUE admite varios NULL, pero no dos '').
+        const emailNorm = email ? String(email).toLowerCase().trim() : null;
+
         // Verificar si ya existe un usuario con ese email o identificación
-        const existe = await UsuarioDao.verificarUsuarioExistente(email, num_identificacion);
+        const existe = await UsuarioDao.verificarUsuarioExistente(emailNorm, num_identificacion);
         if (existe) {
-            const campo = existe.email === email ? 'email' : 'número de identificación';
+            const campo = emailNorm && existe.email === emailNorm ? 'email' : 'número de identificación';
             return Respuesta.error(res, `Ya existe un usuario con ese ${campo}`, 409);
         }
 
@@ -163,7 +167,7 @@ async function createUsuario(req, res) {
             segundo_apellido,
             num_identificacion,
             telefono,
-            email,
+            email: emailNorm,
             password, // Se hashea automáticamente en el hook beforeCreate del modelo
             fecha_nacimiento
         };

@@ -272,9 +272,11 @@ function getUsuarioByIdRaw(idUsuario) {
 }
 
 function findUsuarioDuplicado({ email, num_identificacion, excludeId = null }) {
+    // Sin correo no se busca por correo: `{ email: null }` se traduce a `email IS NULL` y
+    // cualquier otro usuario sin correo saldría como «duplicado».
     const where = {
         [Op.or]: [
-            { email },
+            ...(email ? [{ email }] : []),
             { num_identificacion },
         ],
     };
