@@ -1,6 +1,7 @@
 const { validationResult } = require('express-validator');
 
 const NegocioDao = require('../../app_core/dao/negocioDao');
+const planHelper = require('../../app_core/helpers/planHelper');
 const Respuesta = require('../../app_core/helpers/respuesta');
 
 /**
@@ -86,7 +87,15 @@ async function getMisNegocios(req, res) {
             negocios = await NegocioDao.getNegociosByUsuario(idUsuario);
         }
 
-        return Respuesta.success(res, 'Negocios del usuario obtenidos', negocios);
+        // Cada negocio viaja con su plan: el dashboard avisa (vencido, en gracia, por iniciar)
+        // antes de mandar al usuario a una app que lo iba a rechazar sin explicarle por qué.
+        const planMap = await planHelper.getPlanesActivosPorNegocio(negocios.map((n) => n.id_negocio));
+        const conPlan = negocios.map((n) => ({
+            ...(typeof n.get === 'function' ? n.get({ plain: true }) : n),
+            plan: planMap.get(n.id_negocio) || null,
+        }));
+
+        return Respuesta.success(res, 'Negocios del usuario obtenidos', conPlan);
     } catch (error) {
         console.error('Error en getMisNegocios:', error);
         return Respuesta.error(res, 'Error al obtener los negocios del usuario');
@@ -95,7 +104,7 @@ async function getMisNegocios(req, res) {
 
 /**
  * Asigna o cambia el plan de un negocio.
- * PATCH /admin/negocios/:id/plan   body: { id_plan, meses? }
+ * PATCH /admin/negocios/:id/plan   body: { id_plan?, prueba?, meses?, fecha_inicio?, fecha_fin? }
  */
 async function cambiarPlan(req, res) {
     try {
@@ -105,12 +114,13 @@ async function cambiarPlan(req, res) {
         }
 
         const idNegocio = Number(req.params.id);
-        const { id_plan, meses, fecha_inicio, fecha_fin } = req.body;
+        const { id_plan, meses, fecha_inicio, fecha_fin, prueba } = req.body;
 
-        const row = await NegocioDao.asignarPlan(idNegocio, Number(id_plan), {
+        const row = await NegocioDao.asignarPlan(idNegocio, id_plan ? Number(id_plan) : null, {
             meses: meses ? Number(meses) : 1,
             fechaInicio: fecha_inicio || null,
             fechaFin: fecha_fin || null,
+            prueba: prueba === true || prueba === 'true',
         });
 
         return Respuesta.success(res, 'Plan asignado correctamente', {
@@ -197,8 +207,9 @@ async function registrarCliente(req, res) {
         }
 
         const { negocio, plan, admin, id_usuario_existente } = req.body;
+        // El correo del administrador es opcional: el login va por identificación.
         const adminNorm = admin
-            ? { ...admin, email: String(admin.email).toLowerCase().trim() }
+            ? { ...admin, email: admin.email ? String(admin.email).toLowerCase().trim() : null }
             : null;
 
         const result = await NegocioDao.registrarCliente({

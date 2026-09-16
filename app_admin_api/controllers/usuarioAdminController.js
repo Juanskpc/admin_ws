@@ -42,7 +42,8 @@ const usuarioAdminValidators = {
         body('segundo_apellido').optional({ nullable: true }).isString().isLength({ max: 100 }),
         body('num_identificacion').trim().notEmpty().isLength({ max: 50 }),
         body('telefono').optional({ nullable: true }).isString().isLength({ max: 50 }),
-        body('email').isEmail().normalizeEmail(),
+        // Opcional: el login va por identificación y el correo es solo un dato de contacto.
+        body('email').optional({ nullable: true, checkFalsy: true }).isEmail().normalizeEmail(),
         body('password')
             .optional({ nullable: true, checkFalsy: true })
             .isLength({ min: 8 }).withMessage('La contraseña debe tener mínimo 8 caracteres')
@@ -309,7 +310,8 @@ async function updatePerfilUsuario(req, res) {
             primer_apellido: req.body.primer_apellido,
             segundo_apellido: req.body.segundo_apellido,
             num_identificacion: req.body.num_identificacion,
-            email: req.body.email.toLowerCase().trim(),
+            // Vacío = sin correo (NULL), no una cadena vacía que choque con el índice UNIQUE.
+            email: req.body.email ? String(req.body.email).toLowerCase().trim() : null,
         };
         if (req.body.telefono !== undefined) payload.telefono = req.body.telefono;
         if (req.body.password) payload.password = req.body.password;
@@ -321,7 +323,7 @@ async function updatePerfilUsuario(req, res) {
         });
 
         if (duplicado) {
-            const campo = duplicado.email === payload.email ? 'email' : 'número de identificación';
+            const campo = payload.email && duplicado.email === payload.email ? 'email' : 'número de identificación';
             return Respuesta.error(res, `Ya existe un usuario con ese ${campo}`, 409);
         }
 

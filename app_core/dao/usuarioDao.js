@@ -22,8 +22,9 @@ function getInfoUsuario(idUsuario) {
 function verificarUsuarioExistente(email, numIdentificacion) {
     return Models.GenerUsuario.findOne({
         where: {
+            // Sin correo no se compara por correo: `email IS NULL` casaría con cualquiera.
             [Op.or]: [
-                { email },
+                ...(email ? [{ email }] : []),
                 { num_identificacion: numIdentificacion }
             ]
         },

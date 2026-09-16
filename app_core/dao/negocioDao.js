@@ -116,19 +116,104 @@ function fechaBogota(valor, finDeDia = false) {
     return new Date(valor);
 }
 
+/** Días que dura la prueba sin plan pagado. Los mismos que el registro trial de la landing. */
+const DIAS_PRUEBA = 7;
+
+/** El plan con el que corre una prueba: el mismo que asigna el registro trial. */
+const NOMBRE_PLAN_PRUEBA = 'Plan Básico';
+
+/** La fecha de calendario de hoy en Bogotá, 'YYYY-MM-DD'. */
+function hoyBogota() {
+    return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Bogota' }).format(new Date());
+}
+
+/**
+ * Suma meses y/o días a una fecha de calendario 'YYYY-MM-DD' y devuelve otra igual.
+ *
+ * Es aritmética de calendario, no de horas: se usa UTC solo como contenedor para que la zona
+ * del servidor no corra el día. Al sumar meses el día se recorta al último del mes destino
+ * (31-ene + 1 mes = 28-feb), que es lo que espera quien lee «un mes». El frontend repite
+ * exactamente esta cuenta para la vista previa (`core/utils/vigencia.ts`): si cambia una,
+ * cambia la otra, o la consola prometería una fecha y la base guardaría otra.
+ */
+function sumarPeriodo(fecha, { meses = 0, dias = 0 } = {}) {
+    const [y, m, d] = String(fecha).split('-').map(Number);
+    const mesDestino = m - 1 + Number(meses || 0);
+    const ultimoDia = new Date(Date.UTC(y, mesDestino + 1, 0)).getUTCDate();
+    const base = new Date(Date.UTC(y, mesDestino, Math.min(d, ultimoDia)));
+    base.setUTCDate(base.getUTCDate() + Number(dias || 0));
+    return base.toISOString().slice(0, 10);
+}
+
+/**
+ * Decide con qué plan y entre qué fechas corre una vigencia.
+ *
+ * Las dos puertas —registrar cliente y cambiar el plan desde Negocios— pasan por aquí para que
+ * la misma elección dé siempre las mismas fechas:
+ *
+ *   · **Plan pagado:** empieza el día elegido y termina ese mismo día N meses después.
+ *   · **Prueba** (el «Sin plan» de la consola): Plan Básico durante DIAS_PRUEBA días, sin
+ *     auto-renovación. Sin fila de plan el negocio no tiene fechas contra las que validar el
+ *     acceso, y eso es justo lo que se necesita tener claro.
+ *
+ * El inicio va a las 00:00:00 y el fin a las 23:59:59, ambos hora de Bogotá: el día que la
+ * consola enseña como «termina» es un día de acceso completo.
+ *
+ * @returns {Promise<{ idPlan:number, inicio:Date, fin:Date, esPrueba:boolean }>}
+ */
+async function resolverVigencia({ idPlan = null, meses = 1, fechaInicio = null, fechaFin = null, prueba = false } = {}) {
+    const esPrueba = Boolean(prueba);
+
+    const plan = await Models.GenerPlan.findOne({
+        where: esPrueba
+            ? { nombre: NOMBRE_PLAN_PRUEBA, estado: 'A' }
+            : { id_plan: idPlan, estado: 'A' },
+        attributes: ['id_plan'],
+    });
+    if (!plan) {
+        const err = new Error(esPrueba
+            ? `No hay un «${NOMBRE_PLAN_PRUEBA}» activo con el que correr la prueba`
+            : 'Plan no encontrado o inactivo');
+        err.statusCode = esPrueba ? 409 : 404;
+        throw err;
+    }
+
+    const diaInicio = fechaInicio ? String(fechaInicio).slice(0, 10) : hoyBogota();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(diaInicio)) {
+        const err = new Error('Fecha de inicio inválida');
+        err.statusCode = 400;
+        throw err;
+    }
+
+    const diaFin = fechaFin
+        ? String(fechaFin).slice(0, 10)
+        : sumarPeriodo(diaInicio, esPrueba ? { dias: DIAS_PRUEBA } : { meses: Number(meses) || 1 });
+
+    const inicio = fechaBogota(diaInicio, false);
+    const fin = fechaBogota(diaFin, true);
+    if (fin < inicio) {
+        const err = new Error('La fecha de fin no puede ser anterior a la de inicio');
+        err.statusCode = 400;
+        throw err;
+    }
+
+    return { idPlan: plan.id_plan, inicio, fin, esPrueba };
+}
+
 /**
  * Asigna (o cambia) el plan de un negocio.
  * Desactiva el plan vigente y crea una nueva vigencia, todo en una transacción.
  *
  * @param {number} idNegocio
- * @param {number} idPlan
+ * @param {number|null} idPlan           Ignorado si `opts.prueba`.
  * @param {Object} [opts]
  * @param {number} [opts.meses=1]        Duración si no se da fecha de fin.
- * @param {string} [opts.fechaInicio]    Fecha de inicio ('YYYY-MM-DD' o ISO).
+ * @param {string} [opts.fechaInicio]    Fecha de inicio ('YYYY-MM-DD' o ISO). Por defecto, hoy.
  * @param {string} [opts.fechaFin]       Fecha de fin ('YYYY-MM-DD' o ISO).
+ * @param {boolean} [opts.prueba]        Prueba de DIAS_PRUEBA días con el Plan Básico.
  * @returns {Promise<Object>} La fila gener_negocio_plan creada.
  */
-async function asignarPlan(idNegocio, idPlan, { meses = 1, fechaInicio = null, fechaFin = null } = {}) {
+async function asignarPlan(idNegocio, idPlan, { meses = 1, fechaInicio = null, fechaFin = null, prueba = false } = {}) {
     const negocio = await Models.GenerNegocio.findOne({
         where: { id_negocio: idNegocio, estado: 'A' },
         attributes: ['id_negocio'],
@@ -139,30 +224,7 @@ async function asignarPlan(idNegocio, idPlan, { meses = 1, fechaInicio = null, f
         throw err;
     }
 
-    const plan = await Models.GenerPlan.findOne({
-        where: { id_plan: idPlan, estado: 'A' },
-        attributes: ['id_plan'],
-    });
-    if (!plan) {
-        const err = new Error('Plan no encontrado o inactivo');
-        err.statusCode = 404;
-        throw err;
-    }
-
-    const inicio = fechaInicio ? fechaBogota(fechaInicio, false) : new Date();
-    let fin;
-    if (fechaFin) {
-        fin = fechaBogota(fechaFin, true);
-    } else {
-        fin = new Date(inicio);
-        fin.setMonth(fin.getMonth() + Number(meses || 1));
-    }
-
-    if (fin < inicio) {
-        const err = new Error('La fecha de fin no puede ser anterior a la de inicio');
-        err.statusCode = 400;
-        throw err;
-    }
+    const vigencia = await resolverVigencia({ idPlan, meses, fechaInicio, fechaFin, prueba });
 
     const transaction = await initTransaction();
     try {
@@ -175,11 +237,12 @@ async function asignarPlan(idNegocio, idPlan, { meses = 1, fechaInicio = null, f
         const row = await Models.GenerNegocioPlan.create(
             {
                 id_negocio: idNegocio,
-                id_plan: idPlan,
-                fecha_inicio: inicio,
-                fecha_fin: fin,
+                id_plan: vigencia.idPlan,
+                fecha_inicio: vigencia.inicio,
+                fecha_fin: vigencia.fin,
                 estado: 'A',
-                auto_renovacion: true,
+                // Una prueba termina sola: renovarla sería regalar el Plan Básico.
+                auto_renovacion: !vigencia.esPrueba,
             },
             { transaction },
         );
@@ -351,24 +414,23 @@ async function registrarCliente({ negocio, plan, admin, id_usuario_existente }) 
             num_identificacion: admin.num_identificacion,
         });
         if (duplicado) {
-            const campo = duplicado.email === admin.email ? 'email' : 'número de identificación';
+            const campo = admin.email && duplicado.email === admin.email ? 'email' : 'número de identificación';
             const err = new Error(`Ya existe un usuario con ese ${campo}`);
             err.statusCode = 409;
             throw err;
         }
     }
 
-    if (plan?.id_plan) {
-        const p = await Models.GenerPlan.findOne({
-            where: { id_plan: plan.id_plan, estado: 'A' },
-            attributes: ['id_plan'],
-        });
-        if (!p) {
-            const err = new Error('Plan no encontrado o inactivo');
-            err.statusCode = 404;
-            throw err;
-        }
-    }
+    // Con plan pagado, N meses desde la fecha de inicio; sin plan pero con fecha de inicio, la
+    // prueba de DIAS_PRUEBA días. Sin ninguna de las dos (llamadas antiguas) no se crea vigencia.
+    const vigencia = (plan?.id_plan || plan?.fecha_inicio)
+        ? await resolverVigencia({
+            idPlan: plan.id_plan || null,
+            meses: plan.meses,
+            fechaInicio: plan.fecha_inicio || null,
+            prueba: !plan.id_plan,
+        })
+        : null;
 
     const transaction = await initTransaction();
     try {
@@ -391,18 +453,15 @@ async function registrarCliente({ negocio, plan, admin, id_usuario_existente }) 
         // 1b. Ficha fiscal (modo NINGUNO: no se le pide nada todavía)
         await datosFiscales.asegurarFicha(idNegocio, { transaction });
 
-        // 2. Plan (opcional)
-        if (plan?.id_plan) {
-            const inicio = plan.fecha_inicio ? new Date(plan.fecha_inicio) : new Date();
-            const fin = new Date(inicio);
-            fin.setMonth(fin.getMonth() + Number(plan.meses || 1));
+        // 2. Vigencia: plan pagado o prueba (ver resolverVigencia)
+        if (vigencia) {
             await Models.GenerNegocioPlan.create({
                 id_negocio: idNegocio,
-                id_plan: plan.id_plan,
-                fecha_inicio: inicio,
-                fecha_fin: fin,
+                id_plan: vigencia.idPlan,
+                fecha_inicio: vigencia.inicio,
+                fecha_fin: vigencia.fin,
                 estado: 'A',
-                auto_renovacion: true,
+                auto_renovacion: !vigencia.esPrueba,
             }, { transaction });
         }
 

@@ -179,12 +179,34 @@ async function getIdsConPlanActivo(idNegocios) {
 }
 
 /**
- * Para una lista de IDs de negocio, devuelve un Map id_negocio → info del plan
- * más reciente y activo de ese negocio (o sin entrada si no tiene plan).
+ * La fila que resume el plan de un negocio para enseñarlo en pantalla.
  *
- * La forma del plan coincide con la usada por getMisNegociosPlanInfo:
+ * Entre las ya iniciadas manda la que llega más lejos —el mismo criterio que usa el acceso
+ * (`getFilasPlanVigentes`)—, de modo que la consola nunca diga «vencido» de un negocio que en
+ * realidad puede entrar. Solo si ninguna empezó todavía se enseña la próxima en empezar.
+ */
+function elegirFilaResumen(filas, ahora) {
+    const ms = (v) => (v ? new Date(v).getTime() : null);
+    const iniciadas = filas.filter((r) => !r.fecha_inicio || ms(r.fecha_inicio) <= ahora.getTime());
+    if (iniciadas.length) {
+        return [...iniciadas].sort((a, b) => {
+            if (!a.fecha_fin !== !b.fecha_fin) return a.fecha_fin ? 1 : -1;
+            return (ms(b.fecha_fin) - ms(a.fecha_fin)) || (ms(b.fecha_inicio) - ms(a.fecha_inicio));
+        })[0];
+    }
+    return [...filas].sort((a, b) => ms(a.fecha_inicio) - ms(b.fecha_inicio))[0];
+}
+
+/**
+ * Para una lista de IDs de negocio, devuelve un Map id_negocio → resumen del plan de ese
+ * negocio (o sin entrada si no tiene ninguna fila activa).
+ *
  *   { id_plan, nombre, precio, moneda, fecha_inicio, fecha_fin, vigente, dias_restantes,
- *     estado, en_gracia, dias_gracia_restantes }
+ *     estado, activo, en_gracia, dias_gracia_restantes, fecha_limite_gracia, dias_para_iniciar }
+ *
+ * `estado` añade a los de `evaluarPlan` uno más, **PENDIENTE**: el plan existe pero su
+ * `fecha_inicio` todavía no llega. Para el acceso es lo mismo que no tener plan (`activo:false`),
+ * pero para quien lo mira no: «inicia el 20» y «no tiene plan» piden conversaciones distintas.
  *
  * `vigente` sigue significando «dentro de fechas»: un plan en gracia es `vigente:false`
  * con `en_gracia:true`.
@@ -203,22 +225,26 @@ async function getPlanesActivosPorNegocio(idNegocios) {
             estado: 'A',
         },
         include: [{ model: Models.GenerPlan }],
-        order: [['fecha_inicio', 'DESC']],
     });
 
-    const map = new Map();
+    const porNegocio = new Map();
     for (const row of rows) {
-        // Como vienen ordenados por fecha_inicio DESC, el primero por negocio es el vigente.
-        if (map.has(row.id_negocio)) continue;
+        if (!porNegocio.has(row.id_negocio)) porNegocio.set(row.id_negocio, []);
+        porNegocio.get(row.id_negocio).push(row);
+    }
 
+    const map = new Map();
+    for (const [idNegocio, filas] of porNegocio) {
+        const row = elegirFilaResumen(filas, now);
         const p = row.GenerPlan;
         const inicio = row.fecha_inicio ? new Date(row.fecha_inicio) : null;
         const fin = row.fecha_fin ? new Date(row.fecha_fin) : null;
-        const vigente = (!inicio || inicio <= now) && (!fin || fin >= now);
-        const diasRestantes = fin ? Math.ceil((fin - now) / 86400000) : null;
+        const pendiente = !!inicio && inicio > now;
+        const vigente = !pendiente && (!fin || fin >= now);
+        const diasRestantes = fin ? Math.ceil((fin - now) / MS_DIA) : null;
         const estadoPlan = evaluarPlan(row, now);
 
-        map.set(row.id_negocio, {
+        map.set(idNegocio, {
             id_plan: p?.id_plan ?? null,
             nombre: p?.nombre ?? 'Sin nombre',
             precio: p ? parseFloat(p.precio) : 0,
@@ -227,9 +253,13 @@ async function getPlanesActivosPorNegocio(idNegocios) {
             fecha_fin: row.fecha_fin,
             vigente,
             dias_restantes: diasRestantes,
-            estado: estadoPlan.estado,
-            en_gracia: estadoPlan.en_gracia,
-            dias_gracia_restantes: estadoPlan.dias_gracia_restantes,
+            estado: pendiente ? 'PENDIENTE' : estadoPlan.estado,
+            activo: pendiente ? false : estadoPlan.activo,
+            en_gracia: pendiente ? false : estadoPlan.en_gracia,
+            dias_gracia_restantes: pendiente ? null : estadoPlan.dias_gracia_restantes,
+            // Se informa también mientras está al día: es la fecha real de corte.
+            fecha_limite_gracia: calcularLimiteGracia(fin),
+            dias_para_iniciar: pendiente ? Math.ceil((inicio - now) / MS_DIA) : null,
         });
     }
 
