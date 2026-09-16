@@ -25,11 +25,15 @@ const MetricasController = require('../controllers/metricasController');
 const FichaPersonaController = require('../controllers/fichaPersonaController');
 const AuditoriaController = require('../controllers/auditoriaController');
 const DatosFiscalesController = require('../controllers/datosFiscalesController');
+const CobranzaController = require('../controllers/cobranzaController');
 const { verificarToken, requireSuperAdmin } = require('../../app_core/middleware/auth');
+const rateLimit = require('express-rate-limit');
 
 // Los países cuyos móviles sabemos pasar a E.164. La lista sale del propio normalizador para
 // que añadir un país sea tocar un sitio y no dos. Ver app_core/helpers/telefono.js.
 const PAISES = require('../../app_core/helpers/telefono').paisesSoportados();
+const { paisesParaSeleccion } = require('../../app_core/helpers/paises');
+const Respuesta = require('../../app_core/helpers/respuesta');
 
 // ============================================================
 // RUTAS PÚBLICAS (no requieren autenticación)
@@ -69,10 +73,62 @@ router.post('/auth/canjear-codigo', [
 // Rubros (público — la landing pinta sus chips con esto, sin sesión)
 router.get('/rubros', TipoNegocioController.getRubros);
 
+// Países con indicativo telefónico (público — es catálogo de plataforma, sin datos de nadie).
+// Alimenta el selector de teléfono de la consola; la lista vive en helpers/paises.js.
+router.get('/paises', (_req, res) => Respuesta.success(res, 'Países', paisesParaSeleccion()));
+
 // Paletas de colores (públicas — para que la app del negocio cargue los colores)
 router.get('/paletas', PaletaColorController.getListaPaletas);
 router.get('/paletas/:id', PaletaColorController.paletaIdValidators, PaletaColorController.getPaletaById);
 router.get('/negocios/:id/paleta', PaletaColorController.negocioIdValidators, PaletaColorController.getPaletaNegocio);
+
+// --- Portal público de pagos: consultar y pagar la mensualidad SIN iniciar sesión ---
+//
+// Existe porque exigir login para pagar es la forma más eficaz de que no paguen. Pero una ruta
+// que responde a «dame una cédula» es también una ruta que alguien puede recorrer con un bucle,
+// así que lleva tres defensas, y ninguna es opcional:
+//
+//   1. **Su propio límite**, muy corto. El limitador global está APAGADO por defecto
+//      (RATE_LIMIT_ENABLED), así que sin este cualquiera prueba cédulas a la velocidad de su red.
+//   2. **POST y no GET**: la cédula viaja en el cuerpo y no en la URL, que es lo que acaba en los
+//      logs de Caddy y de morgan.
+//   3. **Respuesta mínima** (lo decide el servicio): nombre del negocio enmascarado, montos y
+//      referencias. Ni correo, ni teléfono, ni fechas del plan. Y la misma forma de respuesta
+//      exista o no la cédula, para no confirmarle a nadie quién es cliente nuestro.
+//
+// Y una cuarta que vive en el servicio y es la más importante: **pagar desde aquí nunca usa una
+// tarjeta guardada**. Siempre abre un checkout donde el pagador pone su medio. Si no, bastaría
+// con saberse la cédula de un cliente para cargarle un cobro.
+const limitePortalPagos = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 20,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { success: false, message: 'Demasiadas consultas. Intenta de nuevo en unos minutos.' },
+});
+
+const identificacionValidator = body('identificacion')
+    .trim()
+    .isLength({ min: 5, max: 20 }).withMessage('Número de identificación inválido')
+    .matches(/^[0-9A-Za-z-]+$/).withMessage('Número de identificación inválido');
+
+router.post('/publico/cobranza/consultar', limitePortalPagos, [
+    identificacionValidator,
+], CobranzaController.consultarPublico);
+
+router.post('/publico/cobranza/pagar', limitePortalPagos, [
+    identificacionValidator,
+    body('referencia').trim().matches(/^EA-\d+-\d{6}$/).withMessage('Referencia inválida'),
+    body('pasarela').isIn(['manual', 'dlocal', 'wompi']).withMessage('Medio de pago inválido'),
+], CobranzaController.pagarPublico);
+
+// Vuelta desde el checkout con `?id=<transacción>`. El estado lo pregunta el backend a la
+// pasarela; del navegador solo se acepta el id. Mismo límite que el resto del portal.
+router.post('/publico/cobranza/confirmar', limitePortalPagos, [
+    body('pasarela').isIn(['dlocal', 'wompi']).withMessage('Medio de pago inválido'),
+    body('id_transaccion').trim().isLength({ min: 3, max: 120 })
+        .matches(/^[A-Za-z0-9_-]+$/).withMessage('Transacción inválida'),
+], CobranzaController.confirmarRetorno);
 
 // ============================================================
 // RUTAS PROTEGIDAS (requieren token JWT)
@@ -97,7 +153,9 @@ router.post('/usuarios', [
     body('num_identificacion')
         .trim()
         .notEmpty().withMessage('El número de identificación es requerido'),
+    // Opcional: el login va por identificación y el correo es solo un dato de contacto.
     body('email')
+        .optional({ nullable: true, checkFalsy: true })
         .isEmail().withMessage('El email no es válido')
         .normalizeEmail(),
     body('password')
@@ -185,7 +243,11 @@ router.post('/negocios', [
 ], NegocioController.createNegocio);
 router.patch('/negocios/:id/plan', requireSuperAdmin, [
     param('id').isInt({ min: 1 }).withMessage('ID de negocio inválido'),
-    body('id_plan').isInt({ min: 1 }).withMessage('ID de plan inválido'),
+    // `prueba: true` asigna la prueba de 7 días con el Plan Básico y no necesita id_plan.
+    body('prueba').optional().isBoolean().withMessage('«prueba» debe ser verdadero o falso'),
+    body('id_plan')
+        .if((_, { req }) => req.body.prueba !== true && req.body.prueba !== 'true')
+        .isInt({ min: 1 }).withMessage('ID de plan inválido'),
     body('meses').optional().isInt({ min: 1, max: 60 }).withMessage('La duración en meses no es válida'),
     body('fecha_inicio').optional({ nullable: true }).isISO8601().withMessage('Fecha de inicio inválida'),
     body('fecha_fin').optional({ nullable: true }).isISO8601().withMessage('Fecha de fin inválida')
@@ -302,6 +364,8 @@ router.post('/negocios/registrar-cliente', requireSuperAdmin, [
     body('negocio.pais').optional({ nullable: true }).isIn(PAISES).withMessage('País no soportado'),
     body('plan.id_plan').optional({ nullable: true }).isInt({ min: 1 }).withMessage('Plan inválido'),
     body('plan.meses').optional({ nullable: true }).isInt({ min: 1, max: 60 }).withMessage('Duración inválida'),
+    // Con plan: empieza aquí y dura `meses`. Sin plan: la prueba de 7 días empieza aquí.
+    body('plan.fecha_inicio').optional({ nullable: true }).isISO8601().withMessage('Fecha de inicio inválida'),
     // Modo A: usuario existente
     body('id_usuario_existente').optional({ nullable: true }).isInt({ min: 1 }).withMessage('ID de usuario inválido'),
     // Modo B: crear usuario nuevo (campos requeridos solo cuando no viene id_usuario_existente)
@@ -314,8 +378,11 @@ router.post('/negocios/registrar-cliente', requireSuperAdmin, [
     body('admin.num_identificacion')
         .if((_, { req }) => !req.body.id_usuario_existente)
         .trim().notEmpty().withMessage('La identificación del administrador es requerida'),
+    // Opcional: el login va por identificación. Llega `null` cuando no se escribe correo, y sin
+    // `optional` el `isEmail` lo rechazaba («Email del administrador inválido»).
     body('admin.email')
         .if((_, { req }) => !req.body.id_usuario_existente)
+        .optional({ nullable: true, checkFalsy: true })
         .isEmail().withMessage('Email del administrador inválido'),
     body('admin.password')
         .if((_, { req }) => !req.body.id_usuario_existente)
@@ -351,6 +418,95 @@ router.get('/auditoria/eventos', requireSuperAdmin, auditoriaFiltrosComunes, Aud
 router.get('/auditoria/catalogo', requireSuperAdmin, AuditoriaController.getCatalogo);
 router.get('/auditoria/datos/export', requireSuperAdmin, AuditoriaController.exportDatos);
 router.get('/auditoria/eventos/export', requireSuperAdmin, AuditoriaController.exportEventos);
+
+// --- Cobranza: el cobro de NUESTRAS mensualidades (docs/cobro-mensualidades.md) ---
+//
+// Dos audiencias:
+//   - El ADMINISTRADOR del negocio ve y paga lo suyo (`mi-suscripcion`, `mis-cobros`, `pagar`). Sin
+//     requireSuperAdmin, pero el controlador comprueba contra la base que el negocio sea suyo:
+//     creerle al parámetro sería enseñarle la facturación de otro cliente.
+//   - Todo lo que confirma dinero o cambia lo que se cobra es super-admin sin excepción.
+//
+// El webhook (`/admin/cobranza/webhook/:pasarela`) NO se declara aquí: va montado en app.js antes
+// del parser JSON, porque las pasarelas firman el cuerpo crudo.
+router.get('/cobranza/mi-suscripcion', [
+    query('id_negocio').isInt({ min: 1 }).withMessage('id_negocio inválido'),
+], CobranzaController.getMiSuscripcion);
+
+router.get('/cobranza/mis-cobros', CobranzaController.getMisCobros);
+
+// Elegir plan: lo hace el administrador del negocio desde «Mis pagos». La validación de que el
+// plan existe, está activo y no es gratuito vive en el servicio; aquí solo la forma.
+router.post('/cobranza/mi-plan', [
+    body('id_negocio').isInt({ min: 1 }).withMessage('id_negocio inválido'),
+    body('id_plan').isInt({ min: 1 }).withMessage('Plan inválido'),
+], CobranzaController.elegirPlan);
+
+router.post('/cobranza/facturas/:id/pagar', [
+    param('id').isInt({ min: 1 }).withMessage('ID de factura inválido'),
+    body('pasarela').isIn(['manual', 'dlocal', 'wompi']).withMessage('Medio de pago inválido'),
+], CobranzaController.pagarFactura);
+
+router.get('/cobranza/cartera', requireSuperAdmin, [
+    query('estado').optional().isIn(['trial', 'activa', 'en_gracia', 'suspendida', 'cancelada'])
+        .withMessage('Estado inválido'),
+    query('q').optional().isString().trim().isLength({ max: 120 }).withMessage('Búsqueda inválida'),
+], CobranzaController.getCartera);
+
+router.get('/cobranza/ingresos', requireSuperAdmin, [
+    query('meses').optional().isInt({ min: 1, max: 36 }).withMessage('Rango de meses inválido'),
+], CobranzaController.getIngresos);
+
+router.put('/cobranza/negocios/:id_negocio/suscripcion', requireSuperAdmin, [
+    param('id_negocio').isInt({ min: 1 }).withMessage('ID de negocio inválido'),
+    body('id_plan').isInt({ min: 1 }).withMessage('Plan inválido'),
+    body('ciclo').optional().isIn(['mensual', 'anual']).withMessage('Ciclo inválido'),
+    body('moneda').optional().isLength({ min: 3, max: 3 }).withMessage('Moneda inválida (ISO 4217)'),
+    body('pasarela').optional().isString().trim().isLength({ max: 20 }).withMessage('Pasarela inválida'),
+    body('es_retenedor').optional().isBoolean().withMessage('es_retenedor debe ser booleano'),
+    body('dia_cobro').optional({ nullable: true }).isInt({ min: 1, max: 31 }).withMessage('Día de cobro inválido'),
+    body('notas').optional({ nullable: true }).isString().isLength({ max: 2000 }).withMessage('Notas demasiado largas'),
+], CobranzaController.configurarSuscripcion);
+
+router.post('/cobranza/negocios/:id_negocio/facturas', requireSuperAdmin, [
+    param('id_negocio').isInt({ min: 1 }).withMessage('ID de negocio inválido'),
+    body('desde').optional({ nullable: true }).isISO8601().withMessage('Fecha de inicio inválida (YYYY-MM-DD)'),
+], CobranzaController.generarFactura);
+
+// Confirmar un pago extiende el acceso del cliente: es la operación más delicada del módulo.
+// `comision_pasarela` y `retencion_declarada` se teclean, no se calculan — nosotros constatamos
+// lo que pasó en el banco, no lo suponemos (docs/obligaciones-escalapp.md §3).
+router.post('/cobranza/facturas/:id/pago-manual', requireSuperAdmin, [
+    param('id').isInt({ min: 1 }).withMessage('ID de factura inválido'),
+    body('fecha_pago').optional({ nullable: true }).isISO8601().withMessage('Fecha de pago inválida'),
+    body('medio_pago_texto').optional({ nullable: true }).isString().trim().isLength({ max: 120 })
+        .withMessage('Medio de pago inválido'),
+    body('comision_pasarela').optional().isFloat({ min: 0 }).withMessage('Comisión inválida'),
+    body('retencion_declarada').optional().isFloat({ min: 0 }).withMessage('Retención inválida'),
+    body('numero_factura').optional({ nullable: true }).isString().trim().isLength({ max: 40 })
+        .withMessage('Número de factura inválido'),
+    body('cufe').optional({ nullable: true }).isString().trim().isLength({ max: 120 }).withMessage('CUFE inválido'),
+    body('nota').optional({ nullable: true }).isString().isLength({ max: 2000 }).withMessage('Nota demasiado larga'),
+], CobranzaController.registrarPagoManual);
+
+// Cobrar por la pasarela: el «reintentar» de la consola y la forma de probar una pasarela nueva
+// sin esperar al cron.
+router.post('/cobranza/facturas/:id/cobrar', requireSuperAdmin, [
+    param('id').isInt({ min: 1 }).withMessage('ID de factura inválido'),
+], CobranzaController.cobrarFactura);
+
+router.post('/cobranza/facturas/:id/anular', requireSuperAdmin, [
+    param('id').isInt({ min: 1 }).withMessage('ID de factura inválido'),
+    body('motivo').isString().trim().isLength({ min: 3, max: 500 })
+        .withMessage('El motivo de la anulación es obligatorio'),
+], CobranzaController.anularFactura);
+
+// Confirmar un pago de Wompi por el id de su transacción: para probar en local (el webhook y la
+// vuelta con ?id= no llegan a localhost) y para el cliente que pagó y cuyo webhook se perdió.
+router.post('/cobranza/wompi/verificar', requireSuperAdmin, [
+    body('id_transaccion').trim().isLength({ min: 3, max: 120 })
+        .matches(/^[A-Za-z0-9_-]+$/).withMessage('Transacción inválida'),
+], CobranzaController.verificarPagoWompi);
 
 // --- Tipos de Negocio ---
 router.get('/tipos-negocio', TipoNegocioController.getListaTiposNegocio);
