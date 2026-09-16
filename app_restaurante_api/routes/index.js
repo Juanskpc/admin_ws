@@ -143,15 +143,25 @@ router.put('/clientes/:id', [
 ], CuentaController.actualizar);
 
 // Entra plata: exige el subnivel `clientes_abonar` (se verifica en el controlador).
+// `monto` es opcional porque en una tiquetera por producto lo calcula el servidor con el precio
+// de la carta; en una cuenta en dinero el servicio lo sigue exigiendo.
 router.post('/clientes/:id/abonos', [
 	param('id').isInt({ min: 1 }),
 	body('id_negocio').isInt({ min: 1 }),
 	body('id_metodo_pago').isInt({ min: 1 }),
-	body('monto').isFloat({ gt: 0 }),
+	body('monto').optional({ nullable: true }).isFloat({ min: 0 }),
 	body('tiquetes').optional().isInt({ min: 0 }),
 	body('id_producto').optional({ nullable: true }).isInt({ min: 1 }),
+	body('descuento').optional({ nullable: true }).isFloat({ min: 0 }),
 	body('concepto').optional({ nullable: true }).isString().isLength({ max: 255 }),
 ], CuentaController.abonar);
+
+// Quita la cuenta de la vista y del cobro, sin borrar su libro. Exige `clientes_eliminar`,
+// que nace denegado para todos (se verifica en el controlador).
+router.delete('/clientes/:id', [
+	param('id').isInt({ min: 1 }),
+	query('id_negocio').isInt({ min: 1 }),
+], CuentaController.eliminar);
 
 // NO entra plata: exige el subnivel `clientes_ajustar`, que el cajero no tiene.
 router.post('/clientes/:id/ajustes', [

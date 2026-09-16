@@ -71,6 +71,7 @@
     "migrate:pais-negocio": "node migrations/migrate_pais_negocio.js",
     "migrate:rubros-negocio": "node migrations/migrate_rubros_negocio.js",
     "migrate:restaurante-cuentas": "node migrations/migrate_restaurante_cuentas.js",
+    "migrate:restaurante-clientes-eliminar": "node migrations/migrate_restaurante_clientes_eliminar.js",
     "migrate:restaurante-control-inventario": "node migrations/migrate_restaurante_control_inventario.js",
     "migrate:restaurante-carta-diseno": "node migrations/migrate_restaurante_carta_diseno.js"
   },

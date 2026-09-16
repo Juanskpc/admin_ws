@@ -55,17 +55,88 @@ El reparto, que es la decisión central del módulo:
 
 | Cuándo | ¿Es venta? | ¿Mueve el cajón? | Cómo se anota |
 |---|---|---|---|
-| Vender tiquetera / recibir abono | **no** | **sí** | INGRESO en caja, **sin pedido** + ABONO en el libro |
-| Comer con la cuenta | **sí** | **no** | pedido normal + INGRESO **y** EGRESO que se anulan + CARGO en el libro |
+| Vender tiquetera / recibir abono | **no** | **sí** | INGRESO en caja «Tiquetera &lt;cliente&gt;», **sin pedido** + ABONO en el libro |
+| Comer con la cuenta | **sí** | **no** | pedido normal + **un solo INGRESO por lo que NO paga la cuenta** (de cero si la paga toda) + CARGO en el libro |
 
-Lo segundo es literalmente el truco que ya usaba el cobro del domicilio. **Si el EGRESO faltara,
-al cajero le faltaría en el cuadre exactamente lo que comieron los de tiquetera, todos los días, y
-el fallo no daría ningún error.** Está cubierto por `__tests__/restaurante/cuentas_tiquetera.test.js`,
-que mide el neto de caja antes y después.
+### ⚠️ Cambió el 2026-09-14: ya no hay EGRESO al comer con la tiquetera
 
-Se mantiene el INGRESO de cero en vez de no anotar nada por el mismo motivo que en los pedidos
-regalados: sin él, el pedido desaparecería del listado del turno, y ahí es justo donde el negocio
-quiere ver lo que sirvió.
+Hasta ese día, comer con la cuenta dejaba un INGRESO por el total del pedido y un EGRESO por la
+parte de la cuenta que lo anulaba — el truco del cobro del domicilio. El arqueo cuadraba, pero:
+
+1. **En Caja el EGRESO salía como «Domicilio»**, porque `getMovimientos` etiquetaba así cualquier
+   egreso atado a un pedido. El cajero veía un domicilio que no existía.
+2. **En un multipago el desglose por forma de pago mentía.** El EGRESO se repartía en proporción
+   contra *todas* las formas de pago, efectivo incluido: un pedido de $15.000 pagado con $5.000 en
+   efectivo y $10.000 de tiquetera dejaba $1.667 de efectivo en el desglose, con $5.000 en el cajón.
+
+Ahora el ingreso **nace ya sin la parte de la cuenta**: `cajaService.registrarIngresoOrden` recibe
+`montoContraCuenta`, y `pedidoService` lo calcula *antes* de anotar el ingreso (en `marcarPagado` y
+en `cerrarOrden`). El desglose (`getDesglosePorMetodo`) y la columna de formas de pago
+(`formasPagoDeMovimiento`) reparten solo entre las formas de pago que **no** son de cuenta, y la de
+cuenta sale con valor cero — sigue en la lista para que filtrar por ella encuentre el pedido. Ese
+mismo reparto deja bien los turnos viejos: su ingreso por el total y su egreso de la cuenta caen
+enteros sobre las formas de pago reales y el neto es la plata que entró.
+
+Los EGRESOS «Consumo de …» de antes del cambio se siguen viendo en los turnos viejos, ahora
+etiquetados como «Tiquetera» y no como domicilio.
+
+**Sigue habiendo INGRESO aunque sea de cero**, por el mismo motivo que en los pedidos regalados: sin
+él, el pedido desaparecería del listado del turno, y ahí es justo donde el negocio quiere ver lo que
+sirvió. Un cero que pagó la cuenta no pasa por `exigirCeroJustificadoPorDescuento`.
+
+Cubierto por `__tests__/restaurante/cuentas_tiquetera.test.js`: el neto de caja antes y después,
+que el pedido deje un único INGRESO de cero, y el multipago efectivo + cuenta midiendo el desglose.
+
+## Vender una tiquetera por producto: el valor lo pone la carta (desde 2026-09-14)
+
+Una tiquetera se paga por adelantado y vale **precio del producto × cantidad − descuento**.
+`registrarAbono` lo calcula con el precio de `carta_producto` e **ignora el `monto` que mande el
+navegador**: antes el cajero escribía el total a mano, y un error de dedo vendía 20 almuerzos por lo
+que valen dos sin que nada lo advirtiera. El **descuento** sí es decisión del negocio y es lo único
+que se pide; tiene que ser menor que el valor (`DESCUENTO_INVALIDO`): un descuento que se come la
+tiquetera entera es un regalo, y los regalos van por «Corregir saldo», que exige motivo.
+
+En la pantalla el total se ve calculado y sin campo editable, y el selector muestra el valor de cada
+producto. En una cuenta en dinero no cambia nada: el monto es el que el cliente entrega.
+
+El concepto en caja es siempre **«Tiquetera &lt;cliente&gt;»** y la columna «Tipo pedido» dice
+**Tiquetera** (antes «No aplica»: el movimiento no lleva pedido). Lo que se sabe porque
+`rest_cuenta_movimiento.id_movimiento_caja` apunta a él. La nota opcional va al libro del cliente,
+no al listado del turno.
+
+## Eliminar una tiquetera (desde 2026-09-14)
+
+`DELETE /restaurante/clientes/:id?id_negocio=N`, detrás del subnivel **`clientes_eliminar`**
+(`npm run migrate:restaurante-clientes-eliminar`), que nace **denegado para todos, administrador
+incluido**, y se concede en **Usuarios → Roles y permisos**, igual que `caja_eliminar_pedido`.
+
+- **No borra: marca `rest_cuenta.estado = 'E'`.** El libro cuelga de pedidos y de movimientos de caja
+  con `ON DELETE RESTRICT`, y aunque no colgara, borrarlo haría imposible explicarle a un cliente qué
+  pasó con su tiquetera. La cuenta deja de salir en la lista y en el selector del cobro; cobrar con
+  ella responde `CUENTA_NO_EXISTE`.
+- **No devuelve plata.** Lo pagado entró a una caja, quizá de un turno ya cerrado. La pantalla avisa
+  de lo que le quedaba al cliente antes de confirmar, y la auditoría (`cuenta_eliminada`) lo guarda.
+- **Si el cliente vuelve con el mismo teléfono, se reactiva con su historia** (hay una sola cuenta
+  por persona, `uq_rest_cuenta_negocio_persona`). Lo que tuviera a favor o debiendo sigue siendo suyo.
+
+⚠️ La migración siembra la fila en `gener_nivel_negocio` **solo en los negocios que ya tenían
+filas propias**: meterle una al que no tenía ninguna lo convertiría en «negocio con ajustes propios»
+y se quedaría sin ver el resto de la vertical.
+
+## La pantalla es una tabla (desde 2026-09-14)
+
+Sin tarjetas de resumen arriba («Me deben», «Pagado por adelantado», «Tiqueteras»): se quitaron el
+2026-09-15 porque solo restaban espacio. La pantalla es buscador + filtros + tabla a todo el ancho.
+
+**El detalle del cliente es un modal** (`.modal--detalle`), no un panel lateral: se abre al tocar
+la fila y lleva saldo, acciones e historial. Vender, corregir saldo y editar abren **encima** de él
+(`.overlay--encima` / `.modal--encima`, z-index 1002/1003): al cerrarlos el detalle sigue abierto y
+ya refrescado, que es donde se comprueba que el movimiento quedó.
+
+Columnas: Cliente · Tipo de tiquetera (en dinero / por producto, con los productos) · Saldo en dinero
+(a favor o debe) · Tiquetes comprados · Tiquetes restantes. `listarCuentas` devuelve `tiquetes_comprados`,
+`tiquetes_restantes` y `productos`, sumados del libro con el mismo criterio que el saldo (los
+anulados y sus reversas no cuentan). `total_tiquetes` se conserva y vale lo mismo que restantes.
 
 ## Dos unidades, un solo libro
 
@@ -132,10 +203,12 @@ quedó sin él y el cobro moría con un 422 que no explicaba nada.
 | *(módulo)* `/clientes` | ver las cuentas | ADMINISTRADOR, CAJERO |
 | `clientes_abonar` | vender tiqueteras y recibir pagos (**entra plata**) | ADMINISTRADOR, CAJERO |
 | `clientes_ajustar` | perdonar deudas y corregir saldos (**no entra plata**) | ADMINISTRADOR |
+| `clientes_eliminar` | eliminar la tiquetera (sale de la lista y del cobro) | **nadie** — se concede a mano |
 
 `clientes_ajustar` es el delicado: permite hacer desaparecer una deuda sin dejar rastro en la caja.
 Por eso va aparte, el cajero no lo tiene, y **no se hereda por ser administrador** (`adminSiempre:
-false`) — se concede a dedo. Todo ajuste exige un motivo escrito.
+false`) — se concede a dedo. Todo ajuste exige un motivo escrito. `clientes_eliminar` sigue la misma
+regla (`SUBNIVELES_A_DEDO` en `cuentaController.js`).
 
 ## Lo que este módulo NO hace
 

@@ -132,14 +132,24 @@ async function getDesglosePorMetodo(idCaja) {
               AND m.id_movimiento_anula IS NULL
         ),
         multipago AS (
+            -- La parte que pagó la cuenta del cliente (tiquetera o fiado) no entró al cajón: el
+            -- ingreso del pedido ya viene sin ella, así que se reparte SOLO entre las formas de
+            -- pago que sí trajeron plata. Repartirlo también contra la cuenta dejaba el efectivo
+            -- del desglose por debajo del que había en el cajón. Vale igual para los cobros
+            -- anteriores al 2026-09-14 (ingreso por el total + egreso de la cuenta): los dos se
+            -- atribuyen a las formas de pago reales y su neto es justo la plata que entró.
             SELECT pp.id_metodo_pago,
                    SUM(i.monto * (pp.valor / NULLIF(tot.suma, 0))) AS total
             FROM ingresos i
             JOIN restaurante.rest_pago_orden pp ON pp.id_orden = i.id_orden
+            JOIN restaurante.rest_metodo_pago mpp
+              ON mpp.id_metodo_pago = pp.id_metodo_pago AND NOT mpp.es_cuenta
             JOIN (
-                SELECT id_orden, SUM(valor) AS suma
-                FROM restaurante.rest_pago_orden
-                GROUP BY id_orden
+                SELECT po2.id_orden, SUM(po2.valor) AS suma
+                FROM restaurante.rest_pago_orden po2
+                JOIN restaurante.rest_metodo_pago mp2
+                  ON mp2.id_metodo_pago = po2.id_metodo_pago AND NOT mp2.es_cuenta
+                GROUP BY po2.id_orden
             ) tot ON tot.id_orden = i.id_orden
             GROUP BY pp.id_metodo_pago
         ),
@@ -648,15 +658,27 @@ function formasPagoDeMovimiento(json) {
         // desglose de la orden diría que ese egreso fueron 36.000. Se reparte el monto
         // del movimiento en la misma proporción que el multipago, igual que el desglose
         // del turno.
-        const suma = pagos.reduce((total, p) => total + Number(p.valor ?? 0), 0);
+        //
+        // La parte pagada con la cuenta del cliente no entró al cajón: sale con valor cero
+        // (sigue en la lista para que el filtro por esa forma de pago encuentre el pedido) y
+        // el monto se reparte solo entre las demás.
+        const esCuenta = (p) => Boolean(p.metodoPago?.es_cuenta);
+        const suma = pagos
+            .filter((p) => !esCuenta(p))
+            .reduce((total, p) => total + Number(p.valor ?? 0), 0);
         const monto = json.monto != null ? Number(json.monto) : null;
-        return pagos.map((p) => ({
-            id_metodo_pago: Number(p.id_metodo_pago),
-            nombre: p.metodoPago?.nombre || 'Forma de pago',
-            valor: monto != null && suma > 0
-                ? Math.round(monto * (Number(p.valor ?? 0) / suma) * 100) / 100
-                : null,
-        }));
+        return pagos.map((p) => {
+            let valor = null;
+            if (monto != null && esCuenta(p)) valor = 0;
+            else if (monto != null && suma > 0) {
+                valor = Math.round(monto * (Number(p.valor ?? 0) / suma) * 100) / 100;
+            }
+            return {
+                id_metodo_pago: Number(p.id_metodo_pago),
+                nombre: p.metodoPago?.nombre || 'Forma de pago',
+                valor,
+            };
+        });
     }
 
     const directo = json.orden?.metodoPago || json.metodoPago;
@@ -678,7 +700,7 @@ async function getMovimientos(idCaja) {
     const metodo = () => ({
         model: Models.RestMetodoPago,
         as: 'metodoPago',
-        attributes: ['id_metodo_pago', 'nombre'],
+        attributes: ['id_metodo_pago', 'nombre', 'es_cuenta'],
         required: false,
     });
 
@@ -721,16 +743,41 @@ async function getMovimientos(idCaja) {
             .map(Number)
     );
 
+    // Los movimientos que nacieron de vender una tiquetera o recibir un abono. No llevan pedido,
+    // así que sin esta marca la columna «Tipo pedido» los mostraba como «No aplica».
+    const deTiquetera = new Set();
+    if (movimientos.length) {
+        const filas = await Models.sequelize.query(
+            `SELECT id_movimiento_caja FROM restaurante.rest_cuenta_movimiento
+              WHERE id_movimiento_caja IN (:ids)`,
+            {
+                replacements: { ids: movimientos.map((m) => Number(m.id_movimiento)) },
+                type: Models.sequelize.QueryTypes.SELECT,
+            },
+        );
+        for (const f of filas) deTiquetera.add(Number(f.id_movimiento_caja));
+    }
+
     return movimientos.map((m) => {
         const json = m.toJSON();
         json.es_anulacion = m.id_movimiento_anula != null;
         json.anulado = anulados.has(Number(m.id_movimiento));
+        // Antes del 2026-09-14, comer con la tiquetera dejaba un EGRESO atado a la orden
+        // («Consumo de …») que no es ningún pago al domiciliario. Los turnos viejos lo conservan.
+        const esConsumoTiqueteraAntiguo = m.tipo === 'EGRESO'
+            && m.id_orden != null
+            && m.id_movimiento_anula == null
+            && String(m.concepto || '').startsWith('Consumo de ');
+        json.es_tiquetera = deTiquetera.has(Number(m.id_movimiento))
+            || (m.id_movimiento_anula != null && deTiquetera.has(Number(m.id_movimiento_anula)))
+            || esConsumoTiqueteraAntiguo;
         // El único egreso que se ata a una orden es el pago al domiciliario
         // (las reversas llevan id_movimiento_anula). Sirve para etiquetar la fila
         // como "Domicilio" aunque el pedido sea Para llevar.
         json.es_pago_domicilio = m.tipo === 'EGRESO'
             && m.id_orden != null
-            && m.id_movimiento_anula == null;
+            && m.id_movimiento_anula == null
+            && !esConsumoTiqueteraAntiguo;
         // Con qué se pagó, ya resuelto: es lo que alimenta los filtros por forma de pago.
         json.formas_pago = formasPagoDeMovimiento(json);
         // Las filas anidadas ya cumplieron su función; devolverlas duplicaría la
@@ -787,8 +834,9 @@ async function registrarMovimiento({
     const importe = Number(monto);
     // El cero se permite **solo** cuando quien llama ya justificó por qué, y nunca por
     // omisión: un movimiento manual de cero pesos no significa nada y ensucia el arqueo.
-    // Hoy lo justifican dos sitios, los dos en este archivo: el cobro de un pedido que un
-    // descuento dejó en cero, y la reversa de ese mismo movimiento al anularlo.
+    // Hoy lo justifican tres casos, los tres en este archivo: el cobro de un pedido que un
+    // descuento dejó en cero, el de un pedido que pagó entero la cuenta del cliente, y la
+    // reversa de cualquiera de ellos al anularlo.
     // Los negativos siguen prohibidos siempre: el signo lo pone `tipo`, no el monto.
     if (!Number.isFinite(importe) || importe < 0 || (importe === 0 && !permitirCero)) {
         const err = new Error('El monto debe ser mayor a cero.');
@@ -869,17 +917,24 @@ async function exigirCeroJustificadoPorDescuento({ idOrden, transaction }) {
  * (cobro en despacho, cierre de orden y transferencia del domiciliario pasan todos
  * por aquí), el egreso no se puede duplicar ni quedar huérfano.
  */
-async function registrarIngresoOrden({ idNegocio, idOrden, idUsuario, monto, numeroOrden, valorDomicilio = 0, transaction }) {
+async function registrarIngresoOrden({
+    idNegocio, idOrden, idUsuario, monto, numeroOrden, valorDomicilio = 0, montoContraCuenta = 0, transaction,
+}) {
     const caja = await requireCajaAbierta(idNegocio, { transaction });
 
-    const importe = Number(monto ?? 0);
+    // Lo que paga la cuenta del cliente NO entra al cajón: la plata de una tiquetera entró el día
+    // que se vendió, y la de un fiado entrará el día que la pague. El ingreso lleva solo lo que el
+    // cliente pone ahora — cero si la cuenta cubre todo el pedido.
+    const contraCuenta = Number(montoContraCuenta ?? 0);
+    const importe = Math.max(0, Math.round((Number(monto ?? 0) - contraCuenta) * 100) / 100);
     const esCero = Number.isFinite(importe) && importe === 0;
-    if (esCero) await exigirCeroJustificadoPorDescuento({ idOrden, transaction });
+    // Un cero que pagó la cuenta ya está justificado; el que no, solo lo justifica un descuento.
+    if (esCero && !(contraCuenta > 0)) await exigirCeroJustificadoPorDescuento({ idOrden, transaction });
 
     await registrarMovimiento({
         idCaja: caja.id_caja,
         tipo: 'INGRESO',
-        monto,
+        monto: importe,
         concepto: `Orden ${numeroOrden}`,
         idUsuario,
         idOrden,

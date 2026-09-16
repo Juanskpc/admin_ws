@@ -22,6 +22,8 @@ function resolveDefaultSubnivelPermission({ codigo, rolDescripcion, modulePermis
     // Anular un pedido ya cobrado mueve dinero de un turno cerrado: nace denegado
     // para todos, administradores incluidos, y se concede a mano en Roles y permisos.
     if (codigo === 'caja_eliminar_pedido') return false;
+    // Eliminar la tiquetera de un cliente, igual: se concede a dedo.
+    if (codigo === 'clientes_eliminar') return false;
 
     if (isAdminRoleName(rolDescripcion)) return true;
     if (!modulePermission) return false;

@@ -387,7 +387,7 @@ describe('la plata no se cuenta dos veces', () => {
         expect(despues.saldo).toBeCloseTo(100000 - precioProducto, 2);
     });
 
-    test('el pedido pagado con la cuenta sigue apareciendo en el turno', async () => {
+    test('el pedido pagado con la cuenta deja UN solo ingreso, de cero, y sigue en el turno', async () => {
         const cuenta = await crearCuenta('Cliente Visible tiquetera-test');
         await cuentaService.registrarAbono({
             idNegocio: ID_NEGOCIO, idCuenta: cuenta.id_cuenta, idUsuario,
@@ -399,14 +399,74 @@ describe('la plata no se cuenta dos veces', () => {
         });
 
         // Desaparecer del turno sería peor que descuadrar: el negocio no vería lo que sirvió.
+        // Pero ya no hay ingreso por el total + egreso de la cuenta (2026-09-14): ese egreso salía
+        // en Caja como «domicilio». Queda un único ingreso de cero, porque no entró plata.
         const movs = await sequelize.query(
             `SELECT tipo, monto::numeric AS monto FROM restaurante.rest_movimiento_caja
               WHERE id_orden = :idOrden ORDER BY id_movimiento`,
             { replacements: { idOrden: orden.id_orden }, type: sequelize.QueryTypes.SELECT },
         );
-        expect(movs.map((m) => m.tipo)).toEqual(['INGRESO', 'EGRESO']);
-        expect(Number(movs[0].monto)).toBeCloseTo(precioProducto, 2);
-        expect(Number(movs[1].monto)).toBeCloseTo(precioProducto, 2);
+        expect(movs.map((m) => m.tipo)).toEqual(['INGRESO']);
+        expect(Number(movs[0].monto)).toBe(0);
+    });
+
+    test('pagar parte en efectivo y parte con la cuenta: entra solo el efectivo, y el desglose no lo recorta', async () => {
+        /**
+         * Es el caso que el EGRESO de antes dejaba mal: se repartía contra todas las formas de pago
+         * del multipago, y el efectivo del desglose quedaba por debajo del que había en el cajón.
+         */
+        const [{ permite_multipago: multipagoOriginal }] = await sequelize.query(
+            `SELECT permite_multipago FROM general.gener_negocio WHERE id_negocio = :n`,
+            { replacements: { n: ID_NEGOCIO }, type: sequelize.QueryTypes.SELECT },
+        );
+        await sequelize.query(
+            `UPDATE general.gener_negocio SET permite_multipago = true WHERE id_negocio = :n`,
+            { replacements: { n: ID_NEGOCIO } },
+        );
+        try {
+            const cuenta = await crearCuenta('Cliente Mixto tiquetera-test');
+            await cuentaService.registrarAbono({
+                idNegocio: ID_NEGOCIO, idCuenta: cuenta.id_cuenta, idUsuario,
+                idMetodoPago: idMetodoEfectivo, monto: precioProducto * 3, concepto: 'tiquetera-test mixto',
+            });
+
+            const totalDe = (desglose, idMetodo) =>
+                Number(desglose.find((d) => Number(d.id_metodo_pago) === Number(idMetodo))?.total ?? 0);
+            const antes = await cajaService.getDesglosePorMetodo(idCaja);
+            const netoAntes = await netoDeCaja(idCaja);
+
+            const orden = await crearOrdenDe(2);
+            await pedidoService.cerrarOrden(orden.id_orden, {
+                idUsuario,
+                idCuenta: cuenta.id_cuenta,
+                pagos: [
+                    { id_metodo_pago: idMetodoEfectivo, valor: precioProducto },
+                    { id_metodo_pago: idMetodoCuenta, valor: precioProducto },
+                ],
+            });
+
+            const movs = await sequelize.query(
+                `SELECT tipo, monto::numeric AS monto FROM restaurante.rest_movimiento_caja
+                  WHERE id_orden = :idOrden ORDER BY id_movimiento`,
+                { replacements: { idOrden: orden.id_orden }, type: sequelize.QueryTypes.SELECT },
+            );
+            expect(movs.map((m) => m.tipo)).toEqual(['INGRESO']);
+            expect(Number(movs[0].monto)).toBeCloseTo(precioProducto, 2);
+            expect(await netoDeCaja(idCaja)).toBeCloseTo(netoAntes + precioProducto, 2);
+
+            const despues = await cajaService.getDesglosePorMetodo(idCaja);
+            expect(totalDe(despues, idMetodoEfectivo) - totalDe(antes, idMetodoEfectivo))
+                .toBeCloseTo(precioProducto, 2);
+            expect(totalDe(despues, idMetodoCuenta) - totalDe(antes, idMetodoCuenta)).toBeCloseTo(0, 2);
+
+            const saldo = await cuentaService.getCuenta({ idNegocio: ID_NEGOCIO, idCuenta: cuenta.id_cuenta });
+            expect(saldo.saldo).toBeCloseTo(precioProducto * 2, 2);
+        } finally {
+            await sequelize.query(
+                `UPDATE general.gener_negocio SET permite_multipago = :v WHERE id_negocio = :n`,
+                { replacements: { v: multipagoOriginal, n: ID_NEGOCIO } },
+            );
+        }
     });
 });
 
@@ -472,14 +532,64 @@ describe('el saldo manda', () => {
 });
 
 describe('tiquetes contados', () => {
+    test('el valor de la tiquetera lo pone la carta, no quien la vende', async () => {
+        const cuenta = await crearCuenta('Cliente Carta tiquetera-test', { modo: 'TIQUETES' });
+        const descuento = Math.round(precioProducto * 10 * 0.1);
+        const netoAntes = await netoDeCaja(idCaja);
+
+        await cuentaService.registrarAbono({
+            idNegocio: ID_NEGOCIO, idCuenta: cuenta.id_cuenta, idUsuario,
+            idMetodoPago: idMetodoEfectivo,
+            // Un navegador manipulado (o un error de dedo) no puede vender 10 almuerzos por un peso.
+            monto: 1,
+            tiquetes: 10,
+            idProducto,
+            descuento,
+            concepto: 'tiquetera-test nota',
+        });
+
+        // Entra precio × cantidad − descuento, calculado en el servidor.
+        expect(await netoDeCaja(idCaja)).toBeCloseTo(netoAntes + precioProducto * 10 - descuento, 2);
+
+        // En caja se llama «Tiquetera <cliente>» y sale como tiquetera, no como «No aplica».
+        const [apunte] = await sequelize.query(
+            `SELECT id_movimiento_caja FROM restaurante.rest_cuenta_movimiento
+              WHERE id_cuenta = :c AND tipo = 'ABONO'`,
+            { replacements: { c: cuenta.id_cuenta }, type: sequelize.QueryTypes.SELECT },
+        );
+        const movimientos = await cajaService.getMovimientos(idCaja);
+        const mov = movimientos.find((m) => Number(m.id_movimiento) === Number(apunte.id_movimiento_caja));
+        expect(mov.concepto).toBe('Tiquetera Cliente Carta tiquetera-test');
+        expect(mov.es_tiquetera).toBe(true);
+        expect(mov.es_pago_domicilio).toBe(false);
+
+        // Y la lista dice cuántos compró y cuántos le quedan.
+        const [enLista] = await cuentaService.listarCuentas({
+            idNegocio: ID_NEGOCIO, busqueda: 'Cliente Carta tiquetera-test',
+        });
+        expect(enLista.tiquetes_comprados).toBe(10);
+        expect(enLista.tiquetes_restantes).toBe(10);
+    });
+
+    test('un descuento que se come toda la tiquetera se rechaza', async () => {
+        const cuenta = await crearCuenta('Cliente Regalo tiquetera-test', { modo: 'TIQUETES' });
+        await expect(
+            cuentaService.registrarAbono({
+                idNegocio: ID_NEGOCIO, idCuenta: cuenta.id_cuenta, idUsuario,
+                idMetodoPago: idMetodoEfectivo, tiquetes: 2, idProducto,
+                descuento: precioProducto * 2,
+            }),
+        ).rejects.toMatchObject({ code: 'DESCUENTO_INVALIDO' });
+    });
+
     test('se compran 20, se come 1, quedan 19', async () => {
         const cuenta = await crearCuenta('Cliente Tiquetes tiquetera-test', { modo: 'TIQUETES' });
         await cuentaService.registrarAbono({
             idNegocio: ID_NEGOCIO, idCuenta: cuenta.id_cuenta, idUsuario,
             idMetodoPago: idMetodoEfectivo,
-            monto: precioProducto * 18, // el negocio hace descuento por el mes entero
             tiquetes: 20,
             idProducto,
+            descuento: precioProducto * 2, // el negocio hace descuento por el mes entero
             concepto: 'tiquetera-test 20 almuerzos',
         });
 
@@ -566,6 +676,62 @@ describe('deshacer', () => {
                 tipo: 'ABONO', monto: 10000, concepto: '   ',
             }),
         ).rejects.toMatchObject({ code: 'CONCEPTO_REQUERIDO' });
+    });
+
+    test('eliminar la tiquetera la saca de la lista y del cobro, pero su libro sigue ahí', async () => {
+        const cuenta = await crearCuenta('Cliente Borrado tiquetera-test');
+        await cuentaService.registrarAbono({
+            idNegocio: ID_NEGOCIO, idCuenta: cuenta.id_cuenta, idUsuario,
+            idMetodoPago: idMetodoEfectivo, monto: 40000, concepto: 'tiquetera-test borrado',
+        });
+
+        const eliminada = await cuentaService.eliminarCuenta({ idNegocio: ID_NEGOCIO, idCuenta: cuenta.id_cuenta });
+        // Lo que le quedaba viaja en la respuesta, para la confirmación y la auditoría.
+        expect(eliminada.saldo).toBe(40000);
+
+        const lista = await cuentaService.listarCuentas({
+            idNegocio: ID_NEGOCIO, busqueda: 'Cliente Borrado tiquetera-test',
+        });
+        expect(lista).toHaveLength(0);
+        expect(await cuentaService.getCuenta({ idNegocio: ID_NEGOCIO, idCuenta: cuenta.id_cuenta })).toBeNull();
+
+        const orden = await crearOrdenDe(1);
+        await expect(
+            pedidoService.cerrarOrden(orden.id_orden, {
+                idUsuario, idMetodoPago: idMetodoCuenta, idCuenta: cuenta.id_cuenta,
+            }),
+        ).rejects.toMatchObject({ code: 'CUENTA_NO_EXISTE' });
+
+        // No se borra nada: el historial del cliente sigue siendo defendible.
+        const [{ n }] = await sequelize.query(
+            `SELECT COUNT(*)::int AS n FROM restaurante.rest_cuenta_movimiento WHERE id_cuenta = :c`,
+            { replacements: { c: cuenta.id_cuenta }, type: sequelize.QueryTypes.SELECT },
+        );
+        expect(n).toBeGreaterThan(0);
+    });
+
+    test('eliminar exige el permiso clientes_eliminar, que el administrador no hereda', async () => {
+        /**
+         * Entra por el CONTROLADOR y no por el servicio: la regla vive ahí, y una prueba contra el
+         * servicio daría verde aunque cualquiera pudiera borrar tiqueteras desde la API.
+         */
+        const cuentaController = require('../../app_restaurante_api/controllers/cuentaController');
+        const cuenta = await crearCuenta('Cliente Protegido tiquetera-test');
+
+        const res = {
+            statusCode: 200,
+            body: null,
+            status(code) { this.statusCode = code; return this; },
+            json(body) { this.body = body; return this; },
+        };
+        await cuentaController.eliminar({
+            params: { id: String(cuenta.id_cuenta) },
+            query: { id_negocio: String(ID_NEGOCIO) },
+            usuario: { id_usuario: idUsuario },
+        }, res);
+
+        expect(res.statusCode).toBe(403);
+        expect(await cuentaService.getCuenta({ idNegocio: ID_NEGOCIO, idCuenta: cuenta.id_cuenta })).not.toBeNull();
     });
 
     test('un abono no se puede pagar con la propia cuenta', async () => {

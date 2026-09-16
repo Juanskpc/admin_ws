@@ -17,12 +17,20 @@ const Models = require('../../app_core/models/conection');
  *   clientes_ajustar  → mover un saldo sin que entre plata: perdonar una deuda, regalar un
  *                       almuerzo. Es la operación que permite hacer desaparecer dinero sin
  *                       rastro en caja, así que va aparte y el cajero no la tiene.
+ *   clientes_eliminar → quitar la cuenta de la vista y del cobro. Nace denegado para todos.
  *
  * Que el frontend esconda los botones es cosmético: un `curl` no ve botones.
  */
 
 const SUB_ABONAR = 'clientes_abonar';
 const SUB_AJUSTAR = 'clientes_ajustar';
+const SUB_ELIMINAR = 'clientes_eliminar';
+
+/**
+ * Los que NO se heredan por ser administrador: el dueño puede querer dárselos a una sola
+ * persona, así que se conceden a mano en Usuarios → Roles y permisos.
+ */
+const SUBNIVELES_A_DEDO = new Set([SUB_AJUSTAR, SUB_ELIMINAR]);
 
 /**
  * Las cuentas de cliente son opt-in por negocio (`permite_cuentas_cliente`).
@@ -72,11 +80,11 @@ function responderError(res, err, mensajePorDefecto) {
 async function exigirSubnivel(req, res, codigo) {
     const permitido = await usuarioTieneSubnivel({
         idUsuario: req.usuario.id_usuario,
-        idNegocio: Number(req.body.id_negocio ?? req.query.id_negocio),
+        // `req.body` no existe en un DELETE sin cuerpo: sin el `?.` esto reventaba antes de
+        // llegar a preguntar el permiso.
+        idNegocio: Number(req.body?.id_negocio ?? req.query?.id_negocio),
         codigo,
-        // El administrador NO lo hereda por ser administrador en el caso de los ajustes: el
-        // dueño puede querer dárselo a una sola persona. Se concede explícitamente.
-        adminSiempre: codigo !== SUB_AJUSTAR,
+        adminSiempre: !SUBNIVELES_A_DEDO.has(codigo),
     });
     if (!permitido) {
         Respuesta.error(res, 'No tienes permiso para esta acción.', 403, { code: 'SIN_PERMISO' });
@@ -209,6 +217,7 @@ async function abonar(req, res) {
             monto: req.body.monto,
             tiquetes: req.body.tiquetes,
             idProducto: req.body.id_producto || null,
+            descuento: req.body.descuento || 0,
             concepto: req.body.concepto || null,
         });
 
@@ -216,8 +225,10 @@ async function abonar(req, res) {
             modulo: 'clientes', accion: 'abono_registrado', idNegocio,
             detalle: {
                 id_cuenta: Number(req.params.id),
-                monto: Number(req.body.monto) || 0,
+                // En tiquetes el monto lo calcula el servidor: el que mandó el navegador no vale.
+                monto_enviado: Number(req.body.monto) || 0,
                 tiquetes: Number(req.body.tiquetes) || 0,
+                descuento: Number(req.body.descuento) || 0,
             },
         });
         return Respuesta.success(res, 'Abono registrado', cuenta, 201);
@@ -285,4 +296,34 @@ async function cobertura(req, res) {
     }
 }
 
-module.exports = { listar, detalle, movimientos, crear, actualizar, abonar, ajustar, cobertura };
+/**
+ * DELETE /restaurante/clientes/:id?id_negocio=N — quita la cuenta de la vista y del cobro.
+ *
+ * No borra el libro (ver `cuentaService.eliminarCuenta`). Lo que le quedaba al cliente va a la
+ * auditoría: si mañana alguien pregunta por esos 8 almuerzos, la respuesta está ahí.
+ */
+async function eliminar(req, res) {
+    if (!handleValidation(req, res)) return;
+    if (!(await exigirCuentasHabilitadas(req, res))) return;
+    if (!(await exigirSubnivel(req, res, SUB_ELIMINAR))) return;
+
+    try {
+        const idNegocio = Number(req.query.id_negocio);
+        setAuditNegocio(idNegocio);
+
+        const eliminada = await CuentaService.eliminarCuenta({
+            idNegocio,
+            idCuenta: Number(req.params.id),
+        });
+
+        await Audit.registrarEvento({
+            modulo: 'clientes', accion: 'cuenta_eliminada', idNegocio,
+            detalle: eliminada,
+        });
+        return Respuesta.success(res, 'Cuenta eliminada', eliminada);
+    } catch (err) {
+        return responderError(res, err, 'Error al eliminar la cuenta');
+    }
+}
+
+module.exports = { listar, detalle, movimientos, crear, actualizar, abonar, ajustar, cobertura, eliminar };

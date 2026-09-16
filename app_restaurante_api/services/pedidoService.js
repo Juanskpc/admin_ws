@@ -1086,8 +1086,8 @@ async function aplicarCobroConCuenta({ orden, idCuenta, importe, idCaja, idUsuar
         throw e;
     }
     if (!idCaja) {
-        // Sin turno abierto no hay dónde anotar el contrapeso, y sin él el arqueo quedaría
-        // descuadrado por el importe de la tiquetera.
+        // Sin turno abierto el pedido no queda en ninguna caja, y el consumo de la tiquetera
+        // tiene que salir en el turno donde se sirvió (su ingreso de la parte no cubierta, o de cero).
         const e = new Error('Para cobrar con la cuenta del cliente debe haber una caja abierta.');
         e.code = 'CAJA_CERRADA'; e.statusCode = 409;
         throw e;
@@ -1100,7 +1100,6 @@ async function aplicarCobroConCuenta({ orden, idCuenta, importe, idCaja, idUsuar
         numeroOrden: orden.numero_orden,
         monto: importe,
         idUsuario,
-        idCaja,
         transaction,
     });
 }
@@ -1226,6 +1225,16 @@ async function marcarPagado(idOrden, { idMetodoPago, pagos, origenCobro = 'CAJA'
             await Models.RestPagoOrden.destroy({ where: { id_orden: orden.id_orden }, transaction: t });
         }
 
+        // Lo que paga la cuenta del cliente se calcula ANTES de anotar el ingreso: esa parte no
+        // entra al cajón, y el ingreso tiene que nacer ya sin ella.
+        const contraCuenta = await importeContraCuenta({
+            idNegocio: orden.id_negocio,
+            idMetodoPago,
+            pagos,
+            total: orden.total,
+            transaction: t,
+        });
+
         const registraEnCaja = origenCobro !== 'DOMICILIARIO';
         const caja = registraEnCaja
             ? await cajaService.registrarIngresoOrden({
@@ -1235,17 +1244,11 @@ async function marcarPagado(idOrden, { idMetodoPago, pagos, origenCobro = 'CAJA'
                 monto:       orden.total,
                 numeroOrden: orden.numero_orden,
                 valorDomicilio: orden.valor_domicilio,
+                montoContraCuenta: contraCuenta,
                 transaction: t,
             })
             : null;
 
-        const contraCuenta = await importeContraCuenta({
-            idNegocio: orden.id_negocio,
-            idMetodoPago,
-            pagos,
-            total: orden.total,
-            transaction: t,
-        });
         if (contraCuenta > 0) {
             await aplicarCobroConCuenta({
                 orden,
@@ -1499,23 +1502,12 @@ async function cerrarOrden(idOrden, { idUsuario, idMetodoPago, pagos, idCuenta =
         // Si marcarPagado ya registró el ingreso en caja, reusar ese id_caja
         let idCaja = orden.id_caja || null;
         const yaEstabaCobrada = Boolean(idCaja);
-        if (!idCaja) {
-            const caja = await cajaService.registrarIngresoOrden({
-                idNegocio:   orden.id_negocio,
-                idOrden:     orden.id_orden,
-                idUsuario:   idUsuario || orden.id_usuario,
-                monto:       orden.total,
-                numeroOrden: orden.numero_orden,
-                valorDomicilio: orden.valor_domicilio,
-                transaction: t,
-            });
-            idCaja = caja.id_caja;
-        }
 
         // Solo si el ingreso se registra AHORA. Si la orden ya venía cobrada desde despacho, su
-        // consumo contra la cuenta se anotó entonces: repetirlo aquí le cobraría dos veces la
-        // misma comida al cliente, y eso solo se descubre cuando él reclama.
+        // ingreso y su consumo contra la cuenta se anotaron entonces: repetirlos aquí le cobraría
+        // dos veces la misma comida al cliente, y eso solo se descubre cuando él reclama.
         if (!yaEstabaCobrada) {
+            // Antes del ingreso: la parte que paga la cuenta del cliente no entra al cajón.
             const contraCuenta = await importeContraCuenta({
                 idNegocio: orden.id_negocio,
                 idMetodoPago: metodoPagoFinal,
@@ -1523,6 +1515,19 @@ async function cerrarOrden(idOrden, { idUsuario, idMetodoPago, pagos, idCuenta =
                 total: orden.total,
                 transaction: t,
             });
+
+            const caja = await cajaService.registrarIngresoOrden({
+                idNegocio:   orden.id_negocio,
+                idOrden:     orden.id_orden,
+                idUsuario:   idUsuario || orden.id_usuario,
+                monto:       orden.total,
+                numeroOrden: orden.numero_orden,
+                valorDomicilio: orden.valor_domicilio,
+                montoContraCuenta: contraCuenta,
+                transaction: t,
+            });
+            idCaja = caja.id_caja;
+
             if (contraCuenta > 0) {
                 await aplicarCobroConCuenta({
                     orden,

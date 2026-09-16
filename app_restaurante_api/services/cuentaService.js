@@ -28,12 +28,17 @@ const sequelize = Models.sequelize;
  * `rest_movimiento_caja`. La tiquetera rompe la equivalencia «pedido = venta = plata» porque el
  * dinero entra un día y la comida sale otro. El reparto, que es la decisión central del módulo:
  *
- *   Vender tiquetera / recibir abono → INGRESO en caja, SIN pedido   → entra plata, NO es venta
- *   Comer con la cuenta              → pedido normal + INGRESO/EGRESO → ES venta, NO mueve el cajón
+ *   Vender tiquetera / recibir abono → INGRESO en caja, SIN pedido       → entra plata, NO es venta
+ *   Comer con la cuenta              → pedido normal + INGRESO solo por lo
+ *                                      que NO paga la cuenta (cero si la
+ *                                      paga toda)                         → ES venta, NO mueve el cajón
  *
- * Lo segundo es el mismo truco que ya usa el cobro del domicilio: el ingreso y el egreso se
- * anulan, el pedido sigue saliendo en el turno y el arqueo no se entera. Sin eso, al cajero le
- * faltaría en el cuadre exactamente lo que comieron los de tiquetera, todos los días.
+ * Hasta el 2026-09-14 lo segundo era un INGRESO por el total más un EGRESO por la parte de la
+ * cuenta, el mismo truco del domicilio. El arqueo cuadraba, pero el EGRESO salía en Caja
+ * etiquetado como domicilio y, en un multipago, se repartía también contra el efectivo: el
+ * desglose por forma de pago mostraba menos efectivo del que había en el cajón. Ahora el ingreso
+ * nace ya sin la parte de la cuenta (`cajaService.registrarIngresoOrden`, `montoContraCuenta`).
+ * Sigue existiendo aunque sea de cero: sin él, el pedido desaparecería del listado del turno.
  */
 
 const MODO = Object.freeze({ DINERO: 'DINERO', TIQUETES: 'TIQUETES' });
@@ -128,17 +133,22 @@ async function getTiquetes(idCuenta, { transaction } = {}) {
  * núcleo.
  */
 async function listarCuentas({ idNegocio, busqueda = null, filtro = 'todos', limite = 100, offset = 0 }) {
-    const condiciones = ['c.id_negocio = :idNegocio'];
+    // Las eliminadas (`estado = 'E'`) no se listan: su libro sigue en la base, pero para el
+    // negocio ya no existen — ni aquí ni en el selector de cliente del cobro, que usa esta lista.
+    const condiciones = ['c.id_negocio = :idNegocio', `c.estado <> 'E'`];
     if (busqueda) condiciones.push(`(pn.nombre_mostrado ILIKE :busqueda OR pn.telefono_e164 ILIKE :busqueda)`);
 
     // `deben` y `a_favor` se filtran sobre el saldo ya calculado, así que van en el HAVING de
     // la subconsulta lateral, no aquí.
     const filtroSaldo = {
         deben: 'AND s.saldo < 0',
-        a_favor: 'AND (s.saldo > 0 OR t.total_tiquetes > 0)',
+        a_favor: 'AND (s.saldo > 0 OR t.restantes > 0)',
         todos: '',
     }[filtro] ?? '';
 
+    // Los tiquetes salen del libro con el mismo criterio que el saldo: los apuntes anulados y sus
+    // reversas no cuentan. «Comprados» son todos los que entraron (ventas y ajustes a favor);
+    // «restantes», los que le quedan por comer.
     const filas = await sequelize.query(
         `
         SELECT c.id_cuenta, c.modo, c.cupo::numeric AS cupo, c.estado, c.nota,
@@ -146,7 +156,9 @@ async function listarCuentas({ idNegocio, busqueda = null, filtro = 'todos', lim
                pn.nombre_mostrado AS cliente,
                pn.telefono_e164   AS telefono,
                s.saldo::numeric   AS saldo,
-               COALESCE(t.total_tiquetes, 0)::int AS total_tiquetes,
+               COALESCE(t.restantes, 0)::int AS tiquetes_restantes,
+               COALESCE(t.comprados, 0)::int AS tiquetes_comprados,
+               t.productos,
                m.ultimo_movimiento
         FROM restaurante.rest_cuenta c
         JOIN platform.persona_negocio pn
@@ -154,11 +166,18 @@ async function listarCuentas({ idNegocio, busqueda = null, filtro = 'todos', lim
          AND pn.id_negocio = c.id_negocio
         LEFT JOIN LATERAL (${SQL_SALDO.replace(':idCuenta', 'c.id_cuenta')}) s ON true
         LEFT JOIN LATERAL (
-            SELECT COALESCE(SUM(
-                CASE WHEN mm.tipo = 'ABONO' THEN mm.tiquetes ELSE -mm.tiquetes END
-            ), 0)::int AS total_tiquetes
+            SELECT SUM(CASE WHEN mm.tipo = 'ABONO' THEN mm.tiquetes ELSE -mm.tiquetes END) AS restantes,
+                   SUM(CASE WHEN mm.tipo = 'ABONO' THEN mm.tiquetes ELSE 0 END)            AS comprados,
+                   STRING_AGG(DISTINCT p.nombre, ', ')                                      AS productos
             FROM restaurante.rest_cuenta_movimiento mm
-            WHERE mm.id_cuenta = c.id_cuenta AND mm.tiquetes > 0
+            JOIN restaurante.carta_producto p ON p.id_producto = mm.id_producto
+            WHERE mm.id_cuenta = c.id_cuenta
+              AND mm.tiquetes > 0
+              AND mm.id_movimiento_anula IS NULL
+              AND NOT EXISTS (
+                  SELECT 1 FROM restaurante.rest_cuenta_movimiento a
+                  WHERE a.id_movimiento_anula = mm.id_movimiento
+              )
         ) t ON true
         LEFT JOIN LATERAL (
             SELECT MAX(mv.fecha) AS ultimo_movimiento
@@ -191,7 +210,11 @@ async function listarCuentas({ idNegocio, busqueda = null, filtro = 'todos', lim
         estado: f.estado,
         nota: f.nota,
         saldo: Number(f.saldo),
-        total_tiquetes: Number(f.total_tiquetes),
+        tiquetes_comprados: Number(f.tiquetes_comprados),
+        tiquetes_restantes: Number(f.tiquetes_restantes),
+        // Se conserva con su nombre de siempre: son los que le quedan, y hay pantallas que lo leen.
+        total_tiquetes: Number(f.tiquetes_restantes),
+        productos: f.productos || null,
         ultimo_movimiento: f.ultimo_movimiento,
     }));
 }
@@ -206,7 +229,7 @@ async function getCuenta({ idNegocio, idCuenta, transaction = null }) {
         FROM restaurante.rest_cuenta c
         JOIN platform.persona_negocio pn
           ON pn.id_persona_negocio = c.id_persona_negocio AND pn.id_negocio = c.id_negocio
-        WHERE c.id_cuenta = :idCuenta AND c.id_negocio = :idNegocio
+        WHERE c.id_cuenta = :idCuenta AND c.id_negocio = :idNegocio AND c.estado <> 'E'
         `,
         { replacements: { idCuenta, idNegocio }, type: sequelize.QueryTypes.SELECT, transaction },
     );
@@ -244,6 +267,9 @@ async function listarMovimientos({ idNegocio, idCuenta, limite = 100, offset = 0
                p.nombre AS producto,
                u.primer_nombre, u.primer_apellido,
                mp.nombre AS metodo_pago,
+               -- Lo que el cliente pagó en caja por este apunte. En una tiquetera de tiquetes el
+               -- libro cuenta unidades, así que el dinero solo se ve aquí.
+               mc.monto::numeric AS valor_pagado,
                EXISTS (
                    SELECT 1 FROM restaurante.rest_cuenta_movimiento a
                    WHERE a.id_movimiento_anula = m.id_movimiento
@@ -292,6 +318,7 @@ async function crearCuenta({ idNegocio, nombre, telefono = null, modo = MODO.DIN
     const t = await sequelize.transaction();
     try {
         let idPersonaNegocio = null;
+        let idCuentaEliminada = null;
 
         if (telefono) {
             idPersonaNegocio = await personaNegocioDao.resolverOCrear(
@@ -302,14 +329,18 @@ async function crearCuenta({ idNegocio, nombre, telefono = null, modo = MODO.DIN
                 throw error('El teléfono no es válido para el país del negocio.', 'TELEFONO_INVALIDO', 422);
             }
 
-            const yaTiene = await sequelize.query(
-                `SELECT id_cuenta FROM restaurante.rest_cuenta
+            const [yaTiene] = await sequelize.query(
+                `SELECT id_cuenta, estado FROM restaurante.rest_cuenta
                   WHERE id_negocio = :idNegocio AND id_persona_negocio = :idPersonaNegocio`,
                 { replacements: { idNegocio, idPersonaNegocio }, type: sequelize.QueryTypes.SELECT, transaction: t },
             );
-            if (yaTiene.length) {
+            if (yaTiene && yaTiene.estado !== 'E') {
                 throw error('Ese cliente ya tiene una cuenta.', 'CUENTA_DUPLICADA', 409);
             }
+            // Tenía una cuenta y se eliminó. Hay UNA cuenta por cliente
+            // (`uq_rest_cuenta_negocio_persona`) y su libro nunca se borra, así que se reactiva con
+            // su historia: lo que tuviera a favor o debiendo sigue siendo suyo.
+            if (yaTiene) idCuentaEliminada = Number(yaTiene.id_cuenta);
         } else {
             const [fila] = await sequelize.query(
                 `INSERT INTO platform.persona_negocio (id_negocio, nombre_mostrado)
@@ -320,14 +351,27 @@ async function crearCuenta({ idNegocio, nombre, telefono = null, modo = MODO.DIN
             idPersonaNegocio = fila.id_persona_negocio;
         }
 
-        const cuenta = await Models.RestCuenta.create({
-            id_negocio: idNegocio,
-            id_persona_negocio: idPersonaNegocio,
-            modo,
-            cupo: Number(cupo) || 0,
-            nota: nota || null,
-            estado: 'A',
-        }, { transaction: t });
+        let cuenta;
+        if (idCuentaEliminada) {
+            cuenta = await Models.RestCuenta.findByPk(idCuentaEliminada, { transaction: t });
+            if (modo !== cuenta.modo) await exigirSaldosEnCero(idCuentaEliminada, { transaction: t });
+            await cuenta.update({
+                estado: 'A',
+                modo,
+                cupo: Number(cupo) || 0,
+                nota: nota || null,
+                fecha_actualizacion: new Date(),
+            }, { transaction: t });
+        } else {
+            cuenta = await Models.RestCuenta.create({
+                id_negocio: idNegocio,
+                id_persona_negocio: idPersonaNegocio,
+                modo,
+                cupo: Number(cupo) || 0,
+                nota: nota || null,
+                estado: 'A',
+            }, { transaction: t });
+        }
 
         avisarTrasCommit(t, idNegocio, TEMAS.CLIENTES);
         await t.commit();
@@ -348,19 +392,9 @@ async function crearCuenta({ idNegocio, nombre, telefono = null, modo = MODO.DIN
  */
 async function actualizarCuenta({ idNegocio, idCuenta, modo, cupo, estado, nota }) {
     const cuenta = await Models.RestCuenta.findOne({ where: { id_cuenta: idCuenta, id_negocio: idNegocio } });
-    if (!cuenta) return null;
+    if (!cuenta || cuenta.estado === 'E') return null;
 
-    if (modo && modo !== cuenta.modo) {
-        const [saldo, tiquetes] = await Promise.all([getSaldo(idCuenta), getTiquetes(idCuenta)]);
-        const hayTiquetes = tiquetes.some((t) => t.disponibles !== 0);
-        if (saldo !== 0 || hayTiquetes) {
-            throw error(
-                'Para cambiar el tipo de cuenta, el saldo y los tiquetes deben estar en cero.',
-                'CUENTA_CON_SALDO',
-                409,
-            );
-        }
-    }
+    if (modo && modo !== cuenta.modo) await exigirSaldosEnCero(idCuenta);
 
     await cuenta.update({
         modo: modo ?? cuenta.modo,
@@ -387,10 +421,23 @@ async function actualizarCuenta({ idNegocio, idCuenta, modo, cupo, estado, nota 
  *
  * Exige caja abierta por el mismo motivo que cualquier cobro: es dinero físico que alguien
  * tiene que cuadrar al cerrar el turno.
+ *
+ * ## En tiquetes, el valor lo pone la carta (desde 2026-09-14)
+ *
+ * Una tiquetera se paga por adelantado: vale **precio del producto × cantidad**, menos el
+ * descuento que el negocio quiera hacer por comprarla entera. Ese valor se calcula AQUÍ, con el
+ * precio de la carta, y lo que mande el navegador como `monto` se ignora. Antes lo escribía el
+ * cajero a mano, y un error de dedo dejaba 20 almuerzos vendidos por lo que valen dos sin que
+ * nada lo advirtiera. El descuento sí es decisión del negocio, y por eso es lo único que se pide.
+ *
+ * En dinero no hay producto que valga nada: el monto es el que el cliente entrega.
+ *
+ * El concepto en caja es siempre «Tiquetera <cliente>»; la nota, si la hay, queda en el libro del
+ * cliente y no ensucia el listado del turno.
  */
 async function registrarAbono({
     idNegocio, idCuenta, idUsuario, idMetodoPago,
-    monto = 0, tiquetes = 0, idProducto = null, concepto = null,
+    monto = 0, tiquetes = 0, idProducto = null, descuento = 0, concepto = null,
 }) {
     const cajaService = require('./cajaService');
 
@@ -398,38 +445,62 @@ async function registrarAbono({
     try {
         const cuenta = await bloquearCuenta({ idNegocio, idCuenta, transaction: t });
 
-        const importe = Number(monto) || 0;
         const unidades = Number(tiquetes) || 0;
+        const rebaja = redondear(Number(descuento) || 0);
+        const nota = concepto ? String(concepto).trim() : '';
+
+        let dineroRecibido;
+        let detalle;
 
         if (cuenta.modo === MODO.TIQUETES) {
-            if (unidades <= 0) throw error('Indica cuántos tiquetes se compran.', 'TIQUETES_REQUERIDOS', 422);
+            if (!Number.isInteger(unidades) || unidades <= 0) {
+                throw error('Indica cuántos tiquetes se compran.', 'TIQUETES_REQUERIDOS', 422);
+            }
             if (!idProducto) throw error('Indica de qué producto son los tiquetes.', 'PRODUCTO_REQUERIDO', 422);
-        } else if (importe <= 0) {
-            throw error('El monto debe ser mayor a cero.', 'MONTO_INVALIDO', 422);
-        }
 
-        // Lo que entra al cajón. En modo tiquetes es lo que el cliente paga por el paquete: se
-        // pide explícito y no se calcula como unidades × precio, porque el negocio suele hacer
-        // descuento por comprar el mes entero y ese precio es una decisión suya, no una cuenta.
-        const dineroRecibido = importe;
-        if (dineroRecibido <= 0) {
-            throw error('El monto cobrado debe ser mayor a cero.', 'MONTO_INVALIDO', 422);
+            const producto = await Models.CartaProducto.findOne({
+                where: { id_producto: idProducto, id_negocio: idNegocio },
+                attributes: ['id_producto', 'nombre', 'precio'],
+                transaction: t,
+            });
+            if (!producto) {
+                throw error('Ese producto no está en la carta del negocio.', 'PRODUCTO_INVALIDO', 422);
+            }
+
+            const subtotal = redondear(Number(producto.precio) * unidades);
+            // El descuento no puede comerse la tiquetera entera: un ingreso de cero pesos en caja
+            // por 20 almuerzos es un regalo, y los regalos van por «Corregir saldo», que deja motivo.
+            if (rebaja < 0 || rebaja >= subtotal) {
+                throw error(
+                    'El descuento debe ser menor que el valor de la tiquetera.',
+                    'DESCUENTO_INVALIDO',
+                    422,
+                );
+            }
+            dineroRecibido = redondear(subtotal - rebaja);
+            detalle = `${unidades} x ${producto.nombre} a ${pesos(producto.precio)}`
+                + (rebaja > 0 ? ` — descuento ${pesos(rebaja)}` : '');
+        } else {
+            if (rebaja > 0) {
+                throw error('El descuento solo aplica a tiqueteras por producto.', 'DESCUENTO_INVALIDO', 422);
+            }
+            dineroRecibido = redondear(Number(monto) || 0);
+            if (dineroRecibido <= 0) throw error('El monto debe ser mayor a cero.', 'MONTO_INVALIDO', 422);
+            detalle = `Abono de ${pesos(dineroRecibido)}`;
         }
 
         const caja = await cajaService.requireCajaAbierta(idNegocio, { transaction: t });
 
         const mp = await validarMetodoPagoCobrable({ idMetodoPago, idNegocio, transaction: t });
 
-        const etiqueta = concepto
-            || (cuenta.modo === MODO.TIQUETES
-                ? `Tiquetera de ${cuenta.cliente} (${unidades} x ${cuenta.producto_nombre ?? 'producto'})`
-                : `Abono a la cuenta de ${cuenta.cliente}`);
+        const etiquetaCaja = `Tiquetera ${cuenta.nombre}`.slice(0, 255);
+        const etiqueta = (nota ? `${detalle} — ${nota}` : detalle).slice(0, 255);
 
         const movCaja = await cajaService.registrarMovimiento({
             idCaja: caja.id_caja,
             tipo: 'INGRESO',
             monto: dineroRecibido,
-            concepto: etiqueta,
+            concepto: etiquetaCaja,
             idUsuario,
             idMetodoPago: mp.id_metodo_pago,
             transaction: t,
@@ -598,19 +669,17 @@ async function calcularCobertura({ idNegocio, idCuenta, idOrden = null, total = 
 /**
  * Aplica el consumo de un pedido contra la cuenta. Se llama DENTRO de la transacción del cobro.
  *
- * Hace las dos anotaciones que mantienen la contabilidad derecha:
- *   1. CARGO en el libro del cliente (pesos o tiquetes).
- *   2. EGRESO en caja por el mismo importe, que anula el INGRESO que el cobro acaba de
- *      registrar. El pedido sigue contando como venta y el cajón no espera esa plata.
+ * Solo anota el CARGO en el libro del cliente (pesos o tiquetes). **No toca la caja**: el cobro
+ * ya registró su INGRESO sin la parte que paga la cuenta (`registrarIngresoOrden` con
+ * `montoContraCuenta`), así que no hay nada que compensar. Hasta el 2026-09-14 aquí se escribía un
+ * EGRESO por este importe, que la pantalla de Caja pintaba como un pago de domicilio.
  *
  * @param {number} monto — cuánto del pedido se carga a la cuenta (puede ser parte del total,
  *                         si el resto se pagó con otra forma de pago).
  */
 async function aplicarConsumo({
-    idNegocio, idCuenta, idOrden, numeroOrden, monto, idUsuario, idCaja, transaction,
+    idNegocio, idCuenta, idOrden, numeroOrden, monto, idUsuario, transaction,
 }) {
-    const cajaService = require('./cajaService');
-
     const cuenta = await bloquearCuenta({ idNegocio, idCuenta, transaction });
     const importe = Number(monto) || 0;
     if (importe <= 0) throw error('El importe a cargar debe ser mayor a cero.', 'MONTO_INVALIDO', 422);
@@ -657,18 +726,6 @@ async function aplicarConsumo({
         }, { transaction });
     }
 
-    // El contrapeso en caja. Sin esto, al cerrar el turno faltaría en el cajón exactamente lo
-    // que comieron los clientes de tiquetera.
-    await cajaService.registrarMovimiento({
-        idCaja,
-        tipo: 'EGRESO',
-        monto: importe,
-        concepto: etiqueta,
-        idUsuario,
-        idOrden,
-        transaction,
-    });
-
     avisarTrasCommit(transaction, idNegocio, TEMAS.CLIENTES);
     return { id_cuenta: idCuenta, monto: importe, modo: cuenta.modo };
 }
@@ -710,8 +767,88 @@ async function revertirConsumoDeOrden({ idNegocio, idOrden, idUsuario, transacti
 }
 
 // ============================================================
+// Eliminar
+// ============================================================
+
+/**
+ * Elimina la cuenta de un cliente. Detrás del subnivel `clientes_eliminar`, que nace denegado
+ * para todos —administrador incluido— y se concede en Usuarios → Roles y permisos.
+ *
+ * **No borra nada: marca `estado = 'E'`.** El libro cuelga de pedidos (`id_orden`) y de movimientos
+ * de caja (`id_movimiento_caja`) con `ON DELETE RESTRICT`, y aunque no colgara, borrarlo haría
+ * imposible explicarle a un cliente qué pasó con su tiquetera. La cuenta deja de salir en la
+ * pantalla y en el cobro, y si el cliente vuelve con el mismo teléfono se reactiva con su historia.
+ *
+ * **Tampoco devuelve plata.** Lo que el cliente pagó entró a una caja y quizá a un turno ya
+ * cerrado; si hay que devolverlo, es un egreso de caja con su propio responsable. Por eso se
+ * devuelve lo que le quedaba, para que la pantalla lo confirme antes y la auditoría lo guarde.
+ */
+async function eliminarCuenta({ idNegocio, idCuenta }) {
+    const t = await sequelize.transaction();
+    try {
+        const [fila] = await sequelize.query(
+            `SELECT c.id_cuenta, c.modo, pn.nombre_mostrado AS cliente
+               FROM restaurante.rest_cuenta c
+               JOIN platform.persona_negocio pn
+                 ON pn.id_persona_negocio = c.id_persona_negocio AND pn.id_negocio = c.id_negocio
+              WHERE c.id_cuenta = :idCuenta AND c.id_negocio = :idNegocio AND c.estado <> 'E'
+              FOR UPDATE OF c`,
+            { replacements: { idCuenta, idNegocio }, type: sequelize.QueryTypes.SELECT, transaction: t },
+        );
+        if (!fila) throw error('La cuenta no existe.', 'CUENTA_NO_EXISTE', 404);
+
+        const [saldo, tiquetes] = await Promise.all([
+            getSaldo(idCuenta, { transaction: t }),
+            getTiquetes(idCuenta, { transaction: t }),
+        ]);
+
+        await sequelize.query(
+            `UPDATE restaurante.rest_cuenta
+                SET estado = 'E', fecha_actualizacion = CURRENT_TIMESTAMP
+              WHERE id_cuenta = :idCuenta AND id_negocio = :idNegocio`,
+            { replacements: { idCuenta, idNegocio }, transaction: t },
+        );
+
+        avisarTrasCommit(t, idNegocio, TEMAS.CLIENTES);
+        await t.commit();
+        return {
+            id_cuenta: Number(fila.id_cuenta),
+            cliente: fila.cliente || 'Sin nombre',
+            modo: fila.modo,
+            saldo,
+            tiquetes_restantes: tiquetes.reduce((suma, x) => suma + x.disponibles, 0),
+        };
+    } catch (err) {
+        if (!t.finished) await t.rollback();
+        throw err;
+    }
+}
+
+// ============================================================
 // Internos
 // ============================================================
+
+const redondear = (valor) => Math.round(Number(valor) * 100) / 100;
+
+const pesos = (valor) => `$${Number(valor).toLocaleString('es-CO', { maximumFractionDigits: 2 })}`;
+
+/**
+ * Cambiar el modo con saldo vivo dejaría plata o tiquetes varados en una unidad que la cuenta ya
+ * no usa: el cliente pagó algo que no podría gastar.
+ */
+async function exigirSaldosEnCero(idCuenta, { transaction } = {}) {
+    const [saldo, tiquetes] = await Promise.all([
+        getSaldo(idCuenta, { transaction }),
+        getTiquetes(idCuenta, { transaction }),
+    ]);
+    if (saldo !== 0 || tiquetes.some((x) => x.disponibles !== 0)) {
+        throw error(
+            'Para cambiar el tipo de cuenta, el saldo y los tiquetes deben estar en cero.',
+            'CUENTA_CON_SALDO',
+            409,
+        );
+    }
+}
 
 /**
  * Lee la cuenta bloqueando su fila.
@@ -727,7 +864,7 @@ async function bloquearCuenta({ idNegocio, idCuenta, transaction }) {
            FROM restaurante.rest_cuenta c
            JOIN platform.persona_negocio pn
              ON pn.id_persona_negocio = c.id_persona_negocio AND pn.id_negocio = c.id_negocio
-          WHERE c.id_cuenta = :idCuenta AND c.id_negocio = :idNegocio
+          WHERE c.id_cuenta = :idCuenta AND c.id_negocio = :idNegocio AND c.estado <> 'E'
           FOR UPDATE OF c`,
         { replacements: { idCuenta, idNegocio }, type: sequelize.QueryTypes.SELECT, transaction },
     );
@@ -738,6 +875,8 @@ async function bloquearCuenta({ idNegocio, idCuenta, transaction }) {
     return {
         ...fila,
         cliente: fila.cliente || 'el cliente',
+        // Para etiquetas que empiezan por el nombre («Tiquetera Juan»): ahí «el cliente» no sirve.
+        nombre: fila.cliente || 'Sin nombre',
         cupo: Number(fila.cupo),
     };
 }
@@ -779,6 +918,7 @@ module.exports = {
     calcularCobertura,
     aplicarConsumo,
     revertirConsumoDeOrden,
+    eliminarCuenta,
     getMetodoPagoCuenta,
     getSaldo,
     getTiquetes,

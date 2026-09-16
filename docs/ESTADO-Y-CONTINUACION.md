@@ -1,6 +1,6 @@
 # EscalApp Intelligence — estado y cómo continuar
 
-**Última actualización:** 2026-09-10 (sesión del **App Review de Meta**; el resumen está en §4-0.8, que es por donde hay que empezar, y ahí está también **por dónde arranca la sesión de facturación electrónica**. Las anteriores: proveedor de facturación y precios en §4-0.7, facturación + políticas + landing en §4-0.6)
+**Última actualización:** 2026-09-15 (**Clientes/tiqueteras rehecho, sin commitear ni desplegar** — pendientes al inicio de §4-0.13. Antes, 2026-09-14: **reunión con Factus**: una cuenta por cliente, sin exclusividad y paquetes/bolsa combinables — FE-2 ya se puede diseñar; resumen en §4-0.12. Antes, 2026-09-13: sesión de **exploración de ser proveedor tecnológico**: una empresa socia cumple los requisitos de patrimonio, y con eso se reabre lo que ADR-026 había cerrado —sin detener Factus—; el resumen está en §4-0.11, **que empieza con la lista de lo que se está esperando**. Las anteriores: decisión del modelo de facturación en §4-0.10, volumen real y lista de precios de Factus en §4-0.9, App Review de Meta en §4-0.8, proveedor de facturación y precios en §4-0.7)
 **Propósito:** que retomar el trabajo no cueste una sesión de arqueología. Si vuelves a este
 proyecto después de semanas, **lee este documento primero** y sigue por donde diga.
 
@@ -564,6 +564,457 @@ en verde.** El roadmap original está agotado: todo lo que se hace ahora sale de
 >
 > **El 1 de octubre de 2026 Meta empieza a cobrar los mensajes de servicio.** Medir los salientes
 > por negocio antes de esa fecha sigue pendiente, y sigue sin depender de nadie.
+
+> ---
+>
+> ### 9. CIERRE DE LA SESIÓN DEL 2026-09-11 — el volumen real, y Factus deja de ser el favorito
+>
+> Sesión corta y de decisión, no de código. **Se cerraron las dos cosas que bloqueaban FE-0.**
+> Todo el detalle en [`facturacion-electronica.md`](facturacion-electronica.md) §8, rehecha entera.
+>
+> #### 1. El volumen real de facturación, medido (ya no es una hipótesis)
+>
+> Contado en producción con una consulta de **solo lectura** sobre `restaurante.pedid_orden`
+> (órdenes `CERRADA`). El cliente que más vende es **ZONA BURGER, `id_negocio` 6** — ojo, hay un
+> segundo negocio llamado `ZONA BURGER PR` (`id_negocio` 3) que es un piloto abandonado con 140
+> tiquetes y nada desde agosto: **no confundirlos**.
+>
+> | Mes | Tiquetes | Tiquetes/día | Ventas |
+> |---|---|---|---|
+> | 2026-05 | 1.226 | 40,9 | $39,5 M |
+> | 2026-06 | 1.192 | 39,7 | $38,1 M |
+> | 2026-07 | 1.494 | 49,8 | $49,9 M |
+> | 2026-08 | **1.730** | **57,7** | $56,3 M |
+>
+> **El análisis anterior suponía 900 documentos al mes. El real es casi el doble y sube todos los
+> meses**, con proyección anual de ~21.000 documentos. Ya está en el punto de quiebre de 1.800 que
+> el propio documento fijaba.
+>
+> #### 2. ⚠️ Factus NO tiene costo plano — la premisa anterior era falsa
+>
+> **Esto invalida la conclusión del 2026-09-02.** Se creía que Factus cobraba plano con documentos
+> ilimitados, y por eso era el favorito pese a no emitir tiquete POS. **Cobra por bolsa anual de
+> documentos, igual que casi todos.** El error vino de leer una frase de un correo comercial
+> —«rangos de numeración ilimitados… sin limitación por ventas»— como si hablara del cupo de
+> documentos: **habla de los rangos de numeración de las sucursales**, y aparece literalmente como
+> nota al pie de su lista de precios, justo debajo de la tabla de bolsas.
+>
+> Su lista real va de **$169.000/año por 150 documentos** a **$2.160.000/año por 120.000** ($18/doc
+> en el tramo alto). Para Zona Burger hace falta la bolsa de 35.000: **$820.000/año = $68.333/mes**,
+> contra un módulo pensado para venderse a $45.000. **Pérdida directa.**
+>
+> Confirmado además por la propia lista de precios: enumera qué incluye la bolsa —notas crédito y
+> débito, documento soporte, nota de ajuste— y **no menciona el documento equivalente ni el tiquete
+> POS**. Sigue en pie la salida legal de emitir factura de venta para todo.
+>
+> #### 3. Cuatro cláusulas de sus T&C que son requisitos de diseño, no letra pequeña
+>
+> 1. **§f.9 — bloqueo automático al vencer la suscripción.** Bolsa agotada = el cliente no puede
+>    facturar. Hay que vigilar el saldo igual que el rango de numeración.
+> 2. **§f.7 — sin respaldo si se elimina la cuenta, e irreversible.** **Guardamos nosotros el XML
+>    firmado, el CUFE y el PDF de cada documento.** Requisito de FE-2, no un "estaría bien".
+> 3. **§f.11 — 8 días para la documentación del certificado, y el plan corre igual.** El onboarding
+>    tiene fecha límite desde el día que se compra.
+> 4. **§g — se eximen de toda garantía.** Ellos no responden, el obligado es el cliente, y nosotros
+>    quedaríamos en el medio comercialmente.
+>
+> #### 4. La decisión que sale de todo esto, y se puede tomar sin cotizar a nadie más
+>
+> **Factus es una cuenta por NIT**, así que no se puede agrupar el volumen de varios clientes en
+> una bolsa barata. Ser intermediarios con él nos da todo el costo y ninguna ventaja de escala. La
+> recomendación, desarrollada en §8.7 del documento:
+>
+> **Que el cliente compre su propia bolsa.** Nosotros cobramos la integración, no la reventa. No es
+> por el margen: es que el cliente ya tiene que aportar su RUT, su cámara de comercio y su
+> certificado digital, o sea que **ya es el titular**. Y coincide con lo que
+> [`obligaciones-escalapp.md`](obligaciones-escalapp.md) §6 ya decía: no quedar en el medio de la
+> relación fiscal del cliente con la DIAN.
+>
+> Implicación de producto: `facturacion.fe_configuracion` guardaría **credenciales del cliente**, y
+> la pantalla necesita un paso donde el negocio pega su token. Menos cómodo, y es el precio de no
+> ser intermediarios.
+>
+> #### POR DÓNDE SEGUIR
+>
+> 1. **Un correo a Factus con cinco preguntas** (§8.5): certificado incluido o aparte, quién hace
+>    la habilitación ante la DIAN, quién entrega el correo al adquiriente, **precio del documento
+>    por encima de la bolsa** y —la que más puede cambiar las cuentas— **qué es exactamente el
+>    «programa de aliados»** que mencionan sus T&C. Si ese programa permite varios clientes bajo
+>    una integración con bolsa compartida, Factus vuelve a ser el favorito.
+> 2. **Cotizar Alegra, Dataico y The Factory HKA**, que son PT confirmados en el catálogo de la
+>    DIAN y sí emiten POS.
+> 3. **Decidir A/B/C de §8.7.** Es comercial, no técnico, y no espera a ninguna cotización.
+>
+> **Sin esperar a nadie, sigue en pie lo mismo de ayer:** aplicar `npm run migrate:facturacion` en
+> la base compartida (5433), donde todavía no está, y diseñar el puerto de FE-2.
+>
+> #### 5. La vara del mercado: Loggro, y el descubrimiento que ordena todo
+>
+> Añadido al final de la sesión, y es lo más útil que salió de ella.
+>
+> **«POS ilimitado» no significa «documentos ilimitados».** La palabra POS vale para dos cosas: el
+> *módulo de caja* (tu software, no cuesta por unidad) y el *documento equivalente electrónico* (va
+> a la DIAN, sí consume cupo). Todos los competidores anuncian lo primero. Ver §1.5-bis del
+> documento.
+>
+> **Loggro es proveedor tecnológico autorizado por la DIAN**, o sea que emite con infraestructura
+> propia y no le compra la bolsa a nadie. Y aun así:
+>
+> | Plan Restobar | Precio/mes | Facturas incluidas |
+> |---|---|---|
+> | Básico | $120.990 | 30/mes |
+> | Estándar | $175.990 | 30/mes |
+> | Premium | $219.990 | 30/mes |
+>
+> Con recargo aparte: **documentos ilimitados desde $45.990/mes «según tu facturación mensual»**, y
+> bolsa suelta **desde $92.400 por 50** ($1.848/documento).
+>
+> **Lo que enseña:** si el que tiene el costo marginal más bajo del mercado incluye 30 documentos y
+> cobra el resto aparte, escalando con el volumen del cliente, **nosotros tampoco podemos venderlo
+> plano**. Y un restaurante que factura de verdad le paga a Loggro **~$167.000/mes**, contra los
+> $59.999 de nuestro plan Avanzado, que además trae el asistente de WhatsApp que ellos no tienen.
+>
+> **Estamos a un tercio del precio del mercado.** El módulo de facturación nunca tuvo que valer
+> $45.000: a $99.000 el cliente sigue pagando menos que con Loggro y nos deja $30.667 de margen.
+> **Esto obliga a revisar [`precios-y-planes.md`](precios-y-planes.md).**
+>
+> Y corrige la recomendación del punto 4: **entre revender y no revender, el mercado ya votó por
+> revender**, escalando el precio con el volumen. La decisión ahora depende de una sola respuesta,
+> la del programa de aliados de Factus (§8.7).
+>
+> #### 6. La recomendación, con nombre propio: Alegra
+>
+> Verificado el 2026-09-11 en su documentación pública. **Alegra es el mejor candidato**, y por
+> razones de forma, no de precio (que sigue sin cotizar):
+>
+> - Tiene programa **«Proveedor Electrónico» con API para integradores** (`e-provider-docs.alegra.com`):
+>   **una integración, muchos clientes.** No es una cuenta por NIT, que es justo donde Factus falla.
+> - **Sí emite documento equivalente POS electrónico**, y acompaña la solicitud de resolución y la
+>   habilitación de rangos ante la DIAN. Eso es lo que le falta a Factus y es el cuello de botella
+>   del onboarding de cada cliente.
+> - Es el PT más grande de los confirmados. **Si la facturación se cae, el cliente no puede vender**:
+>   ahí el respaldo pesa más que $10 por documento.
+>
+> **Factus queda de respaldo**, y solo vuelve a la mesa si su programa de aliados permite bolsa
+> compartida. El correo con las 5 preguntas, listo para enviar, está en §8.9 del documento.
+>
+> **Y lo que no depende de ningún proveedor:** el módulo de facturación se cobra **por tramos de
+> volumen, ~$99.000 el tramo alto**, nunca plano.
+>
+> #### Y del App Review de Meta: sin novedad
+>
+> Enviado el 2026-09-10, «Revisión en curso», hasta 20 días. Nada que hacer salvo no tocarlo.
+
+> ---
+>
+> ### 10. CIERRE DE LA SESIÓN DEL 2026-09-12 — Factus contestó, y la decisión de §8.7 se cierra
+>
+> Sesión de análisis, sin código. **Llegaron las respuestas a las cinco preguntas del correo de
+> §8.9**, y con ellas se cierra a la vez el modelo de negocio, la estructura de precios y el
+> favorito. Todo el detalle en [`facturacion-electronica.md`](facturacion-electronica.md)
+> §8.2-quater (la respuesta), §8.7 (la decisión) y [`precios-y-planes.md`](precios-y-planes.md) §2
+> y §3 (rehechas).
+>
+> #### 1. Sí hay bolsa compartida — y eso invalida lo que se concluyó ayer
+>
+> *«Nuestro programa de aliados les permite tener varios clientes o NIT activos… paquetes para 1
+> solo NIT con certificado incluido y bolsas para dividir en varios NIT donde se adquiere el
+> certificado por cada uno por aparte.»*
+>
+> Son **dos productos**, y son exactamente las opciones A y B de §8.7 con precio:
+>
+> | | Paquete individual (A) | Bolsa repartida (B) |
+> |---|---|---|
+> | NIT | uno | varios |
+> | Certificado digital | **incluido** | **$130.000/año por cada NIT** |
+> | Quién compra | el cliente | nosotros |
+>
+> #### 2. La decisión: **B, y desde el primer cliente**
+>
+> Con **un** cliente, B cuesta exactamente $130.000/año más que A —el certificado, porque la bolsa
+> es la misma—. **Con el segundo ya gana**: $56.667/mes por cliente contra $65.000. Se elige B ya,
+> por tres razones:
+>
+> 1. **Construir el producto dos veces cuesta más de $130.000.** El modelo decide qué guarda
+>    `facturacion.fe_configuracion` (credenciales del cliente en A, nuestras en B) y cómo es la
+>    pantalla. Migrar después es rehacer la pantalla **y** hacer que el cliente compre un
+>    certificado que en A no necesitaba.
+> 2. **El cliente pequeño solo tiene sentido en B.** Una barbería paga **$1.127 por documento** en
+>    su propio paquete y **$18** dentro de la bolsa.
+> 3. **El argumento de A no protege lo que parecía.** Ante la DIAN el obligado es el cliente en los
+>    dos casos; el soporte nos llega en los dos casos; y **ya somos intermediarios en WhatsApp**
+>    (token y WABA nuestros, F8-C). B no introduce una categoría de riesgo nueva.
+>
+> Lo que sí obliga: guardar **XML firmado + CUFE + PDF** de cada documento, **vigilar el saldo** de
+> la bolsa (Factus bloquea automáticamente al agotarse) y **decirlo en el contrato**.
+>
+> #### 3. Lo que Factus resolvió de paso, y le quita la ventaja a Alegra
+>
+> - **Hace la habilitación ante la DIAN** él mismo; al cliente solo le queda el **rango de
+>   numeración**. Era *el* cuello de botella del onboarding y la razón principal para preferir
+>   Alegra.
+> - **Entrega el correo al adquiriente**, incluido en todos los planes.
+> - **Las bolsas se suman** (20.000 + 5.000 = $780.000 contra $820.000 de la de 35.000) y **lo que
+>   sobra caduca al año**: comprar «con margen para el crecimiento» es tirar dinero. Con eso, el
+>   costo real de Zona Burger baja de $68.333 a **$65.000/mes**.
+> - **Sigue sin emitir tiquete POS**, y confirma la salida: **factura electrónica de venta para
+>   todo**, válida en punto de venta y con adquiriente «consumidor final».
+>
+> #### 4. Precios rehechos: el módulo va por TRAMOS
+>
+> Costo = **$10.833/mes de certificado + $18 por documento**. De ahí salen los tramos:
+>
+> | Tramo | Doc/mes | Costo | Precio | Margen |
+> |---|---|---|---|---|
+> | S | ≤100 | ~$12.700 | $39.000 | $26.300 |
+> | M | ≤500 | ~$19.900 | $59.000 | $39.100 |
+> | L | ≤1.200 | ~$32.500 | $79.000 | $46.500 |
+> | **XL** | ≤2.500 | ~$55.900 | **$99.000** | $43.100 |
+>
+> **Zona Burger cae en XL**: cuesta $42.333 y deja $56.667. Un *Avanzado + Facturación XL* son
+> **$158.999**, todavía por debajo de Loggro (~$167.000) y con el asistente de WhatsApp que ellos
+> no tienen.
+>
+> **El hallazgo que ordena la tabla:** el suelo del costo es el **certificado**, no los documentos.
+> Un negocio pequeño cuesta $10.833/mes casi enteros de certificado — por eso no se puede regalar
+> el módulo en el plan Básico, ni siquiera a quien no factura nada.
+>
+> #### 5. ⚠️ La lección de método, que vale más que los números
+>
+> §8.2-ter **dedujo una postura de negocio a partir de un detalle de la API**: que `/v2/companies`
+> devuelva «la empresa del usuario» en singular se leyó como «Factus es una cuenta por NIT y
+> punto», y sobre esa deducción se construyó media sección y una recomendación a favor de Alegra.
+> **El programa de aliados existía todo el tiempo y bastaba con preguntar.** La sección se conserva
+> tachada en el documento, como aviso.
+>
+> #### POR DÓNDE SEGUIR
+>
+> 1. **⚠️ Enviar el correo de seguimiento (§8.9), y la pregunta 2 es la que bloquea código:**
+>    ¿el multi-NIT es **una sola credencial** o una cuenta por cliente con la bolsa en común? De eso
+>    depende si `fe_configuracion` guarda un identificador de empresa o credenciales por negocio —
+>    o sea, **el diseño del adaptador de FE-2**. Las otras tres (precio de aliado, qué pasa al
+>    agotarse la bolsa, requisitos del programa) son operativas.
+> 2. **Cotizar Alegra ya es contraste, no decisión.** Le queda una ventaja real: emite documento
+>    equivalente POS y es una empresa mucho más grande.
+> 3. **Aplicar `npm run migrate:facturacion` en la base compartida (5433)**, donde sigue sin estar.
+> 4. **Medir los mensajes salientes de WhatsApp por negocio** — es lo único de
+>    `precios-y-planes.md` que sigue siendo estimación, y el cobro de Meta empieza el 1 de octubre.
+
+> ---
+>
+> ### 11. CIERRE DE LA SESIÓN DEL 2026-09-13 — se abre la puerta de ser PT, sin cerrar la de Factus
+>
+> Sesión de análisis, sin código. **Nada está decidido: todo queda a la espera de dos respuestas.**
+>
+> #### ⏳ A LA ESPERA DE — leer esto primero al retomar
+>
+> | # | Qué se espera | De quién | Qué desbloquea |
+> |---|---|---|---|
+> | 1 | **Respuesta al correo de aliados** (6 preguntas, §8.9 de [`facturacion-electronica.md`](facturacion-electronica.md)) | **Factus** | La pregunta 1 (admisión) decide si seguimos con la opción B o volvemos a la A. La 3 (¿una credencial o una por NIT?) **bloquea el adaptador de FE-2**. La 6 (sandbox multi-NIT) bloquea poder construirlo sin clientes reales |
+> | 2 | **Estados financieros y postura sobre la ISO 27001** | **La empresa socia** | Si el PT pasa de exploración a proyecto — y con ello, si se escribe el **ADR-028** |
+>
+> **El usuario envía los dos.** Mientras no lleguen, no hay que escribir código de facturación: FE-1
+> se paró a propósito antes de `fe_configuracion` y `fe_documento`, cuya forma depende justo de la
+> pregunta 3.
+>
+> #### 1. Lo que se documentó de Factus (antes de que apareciera el otro hilo)
+>
+> - El correo de seguimiento **se reordenó**: la pregunta de **admisión al programa de aliados pasó
+>   de la 6 a la 1**. El borrador anterior abría afirmando *«nos quedamos con la modalidad de bolsa
+>   repartida»*, que es dar por concedido algo que no nos han concedido; y si hay un mínimo de
+>   clientes que no cumplimos, las otras cinco preguntas sobraban.
+> - Se añadieron cuatro cosas que faltaban: **costo de entrada**, **exclusividad**, **consumo por NIT
+>   dentro de la bolsa** y **sandbox con varios NIT**.
+> - ⚠️ **La de exclusividad importa más desde hoy**: si el acuerdo de aliado incluye no competencia,
+>   convertirse en PT más adelante podría incumplirlo. **Hay que leerla con lupa antes de firmar.**
+>   No hace falta contarle a Factus el plan del PT.
+>
+> #### 2. ⚠️ Tiquetes vendidos ≠ documentos emitidos
+>
+> Salió de una observación del usuario, y corrige una suposición que estaba en todas las cuentas:
+> **muchos negocios solo emiten cuando el cliente lo pide.** La prueba no es una opinión: **Loggro
+> incluye 30 documentos al mes** en planes de $120.990 a $219.990. Si el restaurante típico emitiera
+> 1.700, ese plan sería inservible y nadie lo compraría.
+>
+> **Qué se hizo con eso, y qué NO:** no se diseña el producto suponiendo que el cliente incumple —si
+> la DIAN aprieta, el volumen se multiplica y la bolsa se queda corta con el bloqueo automático
+> esperando al final. Lo que se hizo es más simple: **el tramo se cobra por documentos EMITIDOS,
+> contados por nosotros, no por tiquetes vendidos.** Cliente nuevo arranca en el tramo bajo, se mide
+> un mes real y se ajusta.
+>
+> Consecuencia: **los 1.730 tiquetes de Zona Burger son el TECHO, no lo que va a emitir.** Podría
+> caer en un tramo de $59.000 en vez de $99.000 — y entonces nuestro costo también baja. Todas las
+> cuentas de los documentos usan el techo a propósito: si emite menos, sale mejor, nunca peor.
+>
+> #### 3. El hilo nuevo: ser nosotros proveedor tecnológico
+>
+> Una empresa de software con la que ya se trabaja —**usa un sistema que desarrollamos nosotros** y
+> **le paga a Siigo** por su facturación electrónica interna— confirmó que **cumple el patrimonio
+> (≥$1.047 M) y la propiedad planta y equipo (≥$524 M)**.
+>
+> **⚠️ Lo que hay que entender antes de nada, y es lo que más se malinterpreta:**
+>
+> 1. **Los requisitos son de la persona jurídica que se habilita, no de sus socios.** Una **sociedad
+>    nueva nacería en cero** y habría que aportarle ~$524 M en activos físicos sacándolos del balance
+>    de ellos. Es la estructura más difícil, no la más natural. **Las viables son que se habilite SU
+>    empresa** y EscalApp aporte el producto (contrato de colaboración, o entrada al capital).
+> 2. **Ser PT no ahorra el trabajo técnico.** Da el permiso, no el software: el XML, la firma XAdES,
+>    el CUFE, el servicio web de la DIAN, la contingencia — todo hay que construirlo igual. Ser PT es
+>    la «puerta 2» **más** habilitación, **más** ISO, **más** responder ante la DIAN.
+> 3. **Pero sí resuelve un problema real:** el PT firma con **un solo certificado, el suyo**, en vez
+>    de custodiar la llave privada de cada cliente. Para un sistema en la nube eso es una
+>    simplificación grande.
+> 4. **El calendario manda:** emisor (400–600 h) + ISO (6–12 meses) + habilitación + abogados =
+>    **un año siendo optimistas**, y queremos poder vender facturación antes. **Los dos caminos conviven**,
+>    y el puerto de FE-2 existe justamente para poder cambiar el adaptador después.
+>
+> **EscalApp se encarga de la ISO 27001.** Lo decisivo ahí es el **alcance**, que lo define uno mismo:
+> acotado a la plataforma de facturación cuesta y tarda la mitad. Y no es un papel que se cuelga —hay
+> auditoría todos los años, y con la ISO suspendida la habilitación peligra.
+>
+> **Lo más importante de la negociación** es una asimetría: *lo que ellos aportan ya lo tienen; lo
+> que nosotros aportamos hay que hacerlo y mantenerlo para siempre.* Por eso el reparto tiene que
+> tener **dos piezas**: utilidades **y** remuneración por operación y mantenimiento. Y antes de
+> sentarse: **releer el contrato que ya existe entre las dos empresas**, porque puede ceder la
+> propiedad intelectual del software y eso decide el punto 1 sin negociarlo.
+>
+> Todo el detalle —tres puertas, requisitos explicados, ISO paso a paso, qué es propiedad planta y
+> equipo con sus cuatro trampas, cuatro estructuras societarias y nueve puntos de negociación— está
+> en **[`proveedor-tecnologico-dian.md`](proveedor-tecnologico-dian.md)**, documento nuevo de esta
+> sesión.
+>
+> #### POR DÓNDE SEGUIR
+>
+> 1. **Esperar las dos respuestas de la tabla de arriba.** No hay código que escribir hasta la
+>    respuesta 1.3.
+> 2. **Aplicar `npm run migrate:facturacion` en la base compartida (5433)**, que sigue sin aplicarse
+>    y no depende de nadie. Necesita el túnel: `ssh -N -L 5433:localhost:5432 escalapp`.
+>    *(Verificado el 2026-09-13: las 39 pruebas de `__tests__/facturacion/` pasan contra la local.)*
+> 3. ~~Recoger los datos fiscales de Zona Burger~~ — **corregido el 2026-09-14: Zona Burger no ha
+>    pedido facturación**, es solo la referencia de volumen. La pantalla de datos fiscales (FE-4) se
+>    prueba con un negocio de prueba o con los datos de la propia EscalApp.
+> 4. **Lo que no es de facturación y sigue esperando:** la plantilla `pedido_listo` en WhatsApp
+>    Manager (bloquea el aviso al cliente y el vídeo 2 del App Review), y **medir los mensajes
+>    salientes de WhatsApp por negocio** — lo único de `precios-y-planes.md` que sigue siendo
+>    estimación, y el cobro de Meta entra el **1 de octubre**.
+>
+> ### 12. CIERRE DEL 2026-09-14 — reunión con Factus: FE-2 ya se puede diseñar
+>
+> Factus contestó el correo de aliados con una reunión por Meet. Respuestas completas, pregunta por
+> pregunta, en §8.2-quinquies de [`facturacion-electronica.md`](facturacion-electronica.md). Lo que
+> importa:
+>
+> - ✅ **Una cuenta por cliente, con credencial propia**, también dentro de la bolsa. **Esto era lo
+>   que bloqueaba el adaptador de FE-2**: `fe_configuracion` guarda credenciales **por negocio**,
+>   cifradas en reposo. El límite de 80 peticiones/minuto es de cada cliente.
+> - ✅ **Sin exclusividad**, solo acuerdo de alianza y de confidencialidad. Deja libre el hilo del PT
+>   (§11).
+> - ✅ **Paquete individual y bolsa se pueden mezclar.** Como la integración es la misma en los dos,
+>   **cae la razón técnica de §8.7 para usar bolsa desde el primer cliente**. La modalidad se decide
+>   con el primer cliente real: paquete individual si es uno, bolsa cuando haya varios.
+> - ⚠️ **Aclarado por el usuario: hoy NINGÚN cliente ha pedido facturación.** Zona Burger es solo la
+>   referencia de cuánto vende un restaurante. El objetivo es **estar listos, fijar los planes y
+>   poder anunciarla** — o sea, no hay nada que comprar a Factus todavía.
+> - ✅ Sandbox: se puede probar todo el flujo, con la empresa de prueba de Factus. Basta para
+>   construir.
+> - ✅ Alta (por escrito, en el chat): RUT + certificado de existencia de menos de 30 días (no aplica
+>   a persona natural) + cédula del representante + **comprobante de compra** + logo + versión v2,
+>   a `activacion@factus.com.co` → **1 a 2 días hábiles**. Avisan antes de que se agote la bolsa y
+>   la recarga es inmediata.
+> - 📄 **Con el usuario de pruebas llegaron el Acuerdo de Nivel de Servicio y los T&C, pero NO el
+>   contrato de alianza ni el de confidencialidad**: hay que pedirlos (va en el correo de cierre).
+>   La «sin exclusividad» fue de palabra y solo el contrato la confirma.
+> - ⚠️ **Acuerdo de Nivel de Servicio**: soporte L-V 8 a. m.–8 p. m.; una falla crítica después de
+>   las 8 p. m. se atiende **al día siguiente**, y el **mantenimiento mensual es después de las
+>   8 p. m.** — la hora de la cena. La venta nunca puede esperar a la factura.
+> - ⚠️ **Impuesto al consumo**: los clientes actuales NO lo cobran (el POS manda
+>   `porcentaje_impuesto` 0). Si un negocio lo cobra depende de su régimen y lo dice su contador;
+>   el script de prueba lo trae como escenario (`--impuesto inc`), no por defecto.
+> - ✅ **Primeras 3 facturas emitidas y validadas en el sandbox** con `scripts/factus_factura_prueba.js`
+>   (sin impuesto, con INC 8%, y con precio de carta que ya incluye el INC): **los totales de Factus
+>   cuadran al centavo con los nuestros**, la propina va como recargo, y PDF + XML se descargan por
+>   la API. Detalle en §8.2-quinquies, apartado 7.
+> - 💡 **Para probar NO hace falta comprar**: el sandbox pasa por la habilitación de la DIAN. Si
+>   algún día EscalApp compra para sus propias mensualidades: **paquete individual de 400
+>   documentos/año, $190.000** (la bolsa cobra el certificado aparte y con un NIT no sirve). Antes:
+>   papeles listos, decidir la SAS (NIT nuevo = paquete perdido) y esperar si hay paquete mensual.
+>   §8.2-quinquies, apartado 8.
+> - ⚠️ En bolsa los documentos **se asignan por cliente** y el consumo por cliente **aún no se puede
+>   consultar** («en los próximos meses»). Pregunta nueva: qué pasa si un cliente gasta su parte con
+>   saldo en la bolsa.
+>
+> #### POR DÓNDE SEGUIR
+>
+> 0. **Pedir el contrato de alianza y el de confidencialidad** (no llegaron) y leerlos antes de
+>    firmar: pueden contestar varias preguntas del correo de cierre.
+> 1. **Enviar el correo de cierre** (al final de §8.2-quinquies): deja por escrito lo dicho y
+>    pregunta mínimos, precio de aliado, quién crea las cuentas, reasignación, compra del paquete
+>    individual a nombre del cliente, XML/PDF por API, anexo técnico y soporte.
+> 2. **Construir FE-2 contra el sandbox**, que ya no espera a Factus ni a ningún cliente:
+>    `fe_configuracion` (credencial por negocio, cifrada) y `fe_documento` (con copia propia de XML,
+>    CUFE y PDF). El contrato de alianza hace falta para **producción**, no para esto.
+> 3. **Antes de anunciar la facturación, decidir quién pone la plata del año**
+>    ([`precios-y-planes.md`](precios-y-planes.md) §3, «Quién pone la plata del año»): Factus se
+>    paga por adelantado y sin devolución, y el cliente paga mes a mes. Los tramos de precio ya
+>    están comprobados contra el paquete individual y aguantan.
+> 4. **Idea para la primera prueba en producción: la propia EscalApp.** Es persona jurídica y está
+>    obligada a facturar sus mensualidades ([`obligaciones-escalapp.md`](obligaciones-escalapp.md)),
+>    así que puede ser el primer cliente real sin esperar a nadie.
+> 5. Los puntos 2 y 4 de §11 siguen igual.
+>
+> ### 13. CIERRE DEL 2026-09-15 — Clientes (tiqueteras) rehecho, SIN commitear ni desplegar
+>
+> Sesión larga que empezó en Factus (§12) y terminó en el módulo de Clientes del restaurante, a
+> pedido del usuario. **Todo está en el árbol de trabajo, sin commit y sin desplegar.**
+>
+> #### ⏳ LO QUE QUEDÓ PENDIENTE — leer primero al retomar
+>
+> | # | Qué | Dónde |
+> |---|---|---|
+> | 1 | **Commitear** los dos repos (lista abajo) | `admin_ws` y `restaurante_app` |
+> | 2 | **Desplegar** backend + `restaurante_app`, y en el VPS **`npm run migrate:restaurante-clientes-eliminar` tras un backup** | Ya aplicada en local (5432) y compartida (5433), **no en producción** |
+> | 3 | **Conceder `clientes_eliminar`** a quien el dueño diga: nace denegado para todos, admin incluido | Usuarios → Roles y permisos |
+> | 4 | **Enviar el correo de cierre a Factus** (8.2-quinquies, «El correo de cierre») y pedir el contrato de alianza + confidencialidad, que no llegaron | [`facturacion-electronica.md`](facturacion-electronica.md) |
+> | 5 | Siguiente paso de facturación: **construir FE-2 contra el sandbox** | §12 |
+>
+> #### Facturación (continuación de §12)
+>
+> - ✅ **Primeras 3 facturas validadas en el sandbox** con `scripts/factus_factura_prueba.js`
+>   (`--impuesto inc`, `--redondeo`); totales al centavo. Credenciales en `admin_ws/.env` (`FACTUS_*`).
+> - Aclarado por el usuario: **ningún cliente ha pedido facturación** (Zona Burger = referencia de
+>   volumen). Si EscalApp compra para sí: paquete individual de 400 doc/año, $190.000 (apartado 8).
+> - Llegaron el **Acuerdo de Nivel de Servicio 2026** (soporte L-V 8–20 h; mantenimiento mensual
+>   después de las 8 p. m.) y los T&C; **el contrato y el NDA no**.
+>
+> #### Clientes / tiqueteras — detalle en [`tiqueteras-y-fiado.md`](tiqueteras-y-fiado.md)
+>
+> 1. **Contabilidad**: comer con tiquetera deja **un solo INGRESO** por lo que no paga la cuenta (de
+>    cero si la paga toda); **ya no hay EGRESO** (salía en Caja como «domicilio» y descuadraba el
+>    desglose de un multipago). `registrarIngresoOrden({ montoContraCuenta })`.
+> 2. **Tiquetera por producto**: valor = precio de carta × cantidad − descuento, calculado en el
+>    servidor; el `monto` del navegador se ignora.
+> 3. **Caja**: concepto «Tiquetera &lt;cliente&gt;» y Tipo pedido «Tiquetera».
+> 4. **Eliminar** = `estado='E'` (no borra ni devuelve plata; se reactiva con el mismo teléfono),
+>    detrás de `clientes_eliminar`.
+> 5. **Pantalla**: tabla sin tarjetas de resumen; el detalle del cliente es un modal y las acciones
+>    se abren encima de él.
+>
+> **Verificado**: `npx jest __tests__/restaurante/` en local → **56/56** (cuentas_tiquetera 20/20, con
+> pruebas nuevas de ingreso único, multipago efectivo + cuenta, precio de carta, descuento y permiso
+> de eliminar entrando por el controlador). `ng build` de `restaurante_app` sin errores. **No se
+> probó en el navegador.**
+>
+> ⚠️ **Deriva de la base local cazada de paso**: le faltaba `migrate:reserva-tiktok-telefono`
+> (columna `url_tiktok`) y por eso fallaban 8 pruebas de `configuracion_flags`. Aplicada en local.
+>
+> **Archivos sin commitear.** `admin_ws`: `app_restaurante_api/services/{cuentaService,cajaService,pedidoService}.js`,
+> `controllers/cuentaController.js`, `routes/index.js`, `app_core/dao/usuarioAdminDao.js`,
+> `migrations/migrate_restaurante_clientes_eliminar.js` (nuevo), `package.json`,
+> `__tests__/restaurante/cuentas_tiquetera.test.js`, `scripts/factus_factura_prueba.js` (nuevo),
+> `.env.example`, `.gitignore` (`tmp/`), y docs (`ESTADO-Y-CONTINUACION`, `facturacion-electronica`,
+> `precios-y-planes`, `tiqueteras-y-fiado`, `proveedor-tecnologico-dian` nuevo).
+> `restaurante_app`: `core/services/{clientes,caja}.service.ts`, `features/caja/caja.ts`,
+> `features/clientes/clientes.{ts,html,scss}`.
 
 ### Qué hay vivo, y dónde apunta
 

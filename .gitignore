@@ -47,3 +47,6 @@ backups/
 dist/
 coverage/
 *.log
+
+# Salidas locales de scripts (p. ej. facturas de prueba de Factus: JSON, PDF y XML)
+tmp/
