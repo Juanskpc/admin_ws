@@ -112,6 +112,7 @@ async function getConfiguracionNegocio(idUsuario, idNegocio = null) {
             'pregunta_cobro_envio',
             'permite_cuentas_cliente',
             'controla_inventario',
+            'permite_domicilio_personal',
             'fecha_registro',
         ],
         include: [
@@ -156,6 +157,7 @@ async function getConfiguracionNegocio(idUsuario, idNegocio = null) {
         pregunta_cobro_envio: !!negocio.pregunta_cobro_envio,
         permite_cuentas_cliente: !!negocio.permite_cuentas_cliente,
         controla_inventario: negocio.controla_inventario !== false,
+        permite_domicilio_personal: !!negocio.permite_domicilio_personal,
         fecha_registro: negocio.fecha_registro,
         roles: acceso.roles,
         can_edit: acceso.canEdit,
@@ -244,6 +246,11 @@ async function updateConfiguracionNegocio(idUsuario, payload = {}) {
     if (payload.controla_inventario !== undefined) {
         patch.controla_inventario =
             payload.controla_inventario === true || payload.controla_inventario === 'true';
+    }
+
+    if (payload.permite_domicilio_personal !== undefined) {
+        patch.permite_domicilio_personal =
+            payload.permite_domicilio_personal === true || payload.permite_domicilio_personal === 'true';
     }
 
     if (payload.id_paleta !== undefined) {

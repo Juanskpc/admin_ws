@@ -897,9 +897,37 @@ async function getOrdenesDespacho({ idNegocio, idUsuario }) {
 }
 
 /**
- * Lista usuarios con rol DOMICILIARIO en el negocio. Útil para asignación.
+ * Lista usuarios elegibles como domiciliario para un pedido.
+ *
+ * Por defecto, solo quienes tienen el rol DOMICILIARIO. Con `permite_domicilio_personal`
+ * encendido (negocios sin domiciliario dedicado, donde reparte el mesero, el cajero o el
+ * dueño), lista a TODO el personal activo del negocio en su lugar — no se mezclan las dos
+ * listas porque el personal ya las incluye a todas: quien tiene el rol también está en
+ * `gener_negocio_usuario`.
  */
 async function listarDomiciliarios(idNegocio) {
+    const negocio = await Models.GenerNegocio.findOne({
+        where: { id_negocio: idNegocio },
+        attributes: ['permite_domicilio_personal'],
+    });
+
+    if (negocio?.permite_domicilio_personal) {
+        const links = await Models.GenerNegocioUsuario.findAll({
+            where: { id_negocio: idNegocio, estado: 'A' },
+            include: [{
+                model: Models.GenerUsuario, as: 'usuario',
+                where: { estado: 'A' },
+                attributes: ['id_usuario', 'primer_nombre', 'primer_apellido', 'num_identificacion', 'telefono'],
+            }],
+        });
+        return links.map(l => ({
+            id_usuario: l.usuario.id_usuario,
+            nombre: `${l.usuario.primer_nombre} ${l.usuario.primer_apellido}`.trim(),
+            num_identificacion: l.usuario.num_identificacion,
+            telefono: l.usuario.telefono,
+        }));
+    }
+
     const rolDom = await Models.GenerRol.findOne({ where: { descripcion: 'DOMICILIARIO', id_tipo_negocio: 1 } });
     if (!rolDom) return [];
     const links = await Models.GenerUsuarioRol.findAll({

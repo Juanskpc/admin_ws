@@ -73,7 +73,8 @@
     "migrate:restaurante-cuentas": "node migrations/migrate_restaurante_cuentas.js",
     "migrate:restaurante-clientes-eliminar": "node migrations/migrate_restaurante_clientes_eliminar.js",
     "migrate:restaurante-control-inventario": "node migrations/migrate_restaurante_control_inventario.js",
-    "migrate:restaurante-carta-diseno": "node migrations/migrate_restaurante_carta_diseno.js"
+    "migrate:restaurante-carta-diseno": "node migrations/migrate_restaurante_carta_diseno.js",
+    "migrate:restaurante-domicilio-personal": "node migrations/migrate_restaurante_domicilio_personal.js"
   },
   "keywords": [],
   "author": "",

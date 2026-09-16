@@ -36,6 +36,12 @@ module.exports = (sequelize, DataTypes) => {
          * inventario — ver `consumirIngredientesPorItems` en pedidoService.
          */
         controla_inventario: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
+        /**
+         * Opt-in: ¿el propio personal del negocio (mesero, cajero, administrador) puede
+         * elegirse como domiciliario? Encendido, `listarDomiciliarios` lista a todo el
+         * personal activo del negocio en vez de solo a quien tenga el rol DOMICILIARIO.
+         */
+        permite_domicilio_personal: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
         /** Logo del negocio. Ruta relativa servida desde /uploads. */
         logo_url: DataTypes.STRING(500),
         /** Imagen ancha de cabecera del portal público (16:5). */

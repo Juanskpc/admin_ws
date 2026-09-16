@@ -40,6 +40,7 @@ const CAMPOS_EDITABLES = [
     'pregunta_cobro_envio',
     'permite_cuentas_cliente',
     'controla_inventario',
+    'permite_domicilio_personal',
     'id_paleta',
 ];
 
