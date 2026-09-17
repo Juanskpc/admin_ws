@@ -203,7 +203,12 @@ async function pagarFactura(req, res) {
             (await CobranzaService.usuarioAdministraNegocio(req.usuario.id_usuario, factura.id_negocio));
         if (!esSuyo) return Respuesta.error(res, 'No encontramos un cobro pendiente con esos datos', 404);
 
-        const resultado = await CobranzaService.iniciarPago(idFactura, { pasarela: req.body.pasarela });
+        // `origen: 'app'` hace que la pasarela devuelva a «Mis pagos» y no al portal público: el
+        // administrador que paga con sesión iniciada no tiene por qué acabar fuera de ella.
+        const resultado = await CobranzaService.iniciarPago(idFactura, {
+            pasarela: req.body.pasarela,
+            origen: 'app',
+        });
         return Respuesta.success(res, 'Pago iniciado', resultado);
     } catch (err) {
         return fallo(res, err, 'pagarFactura', 'Error al iniciar el pago.');

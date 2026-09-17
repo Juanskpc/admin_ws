@@ -619,7 +619,7 @@ async function registrarPagoManual(idFactura, datos) {
  * Un fallo de RED no es un rechazo: si la llamada revienta, la factura se queda pendiente y se
  * reintenta. Dar por rechazado lo que quizá se cobró es peor que esperar un día.
  */
-async function cobrarFactura(idFactura, { usarMetodoGuardado = true } = {}) {
+async function cobrarFactura(idFactura, { usarMetodoGuardado = true, urlRetorno = null } = {}) {
     const transaction = await sequelize.transaction();
     let factura;
     let suscripcion;
@@ -651,6 +651,7 @@ async function cobrarFactura(idFactura, { usarMetodoGuardado = true } = {}) {
         token: metodo?.token_externo ?? null,
         email: negocio?.email_contacto ?? undefined,
         descripcion: `EscalApp ${factura.referencia}`,
+        urlRetorno,
     });
 
     setAuditNegocio(factura.id_negocio);
@@ -697,6 +698,10 @@ async function cobrarFactura(idFactura, { usarMetodoGuardado = true } = {}) {
         estado: 'pendiente',
         factura,
         urlPago: resultado.urlPago ?? null,
+        // El id de la transacción viaja al frontend para poder confirmar la vuelta del checkout.
+        // Wompi devuelve `?id=` en la URL de retorno, pero dLocal NO devuelve nada: sin esto, el
+        // cliente vuelve y no hay forma de saber qué pago consultar.
+        idExterno: resultado.idExterno ?? null,
         mensaje: resultado.mensaje,
     };
 }
@@ -777,10 +782,46 @@ async function anularFactura(idFactura, { motivo }) {
  */
 async function pasarelasParaPagar(pais) {
     const activas = await Dao.listarPasarelas({ pais });
-    return activas.filter((p) => {
-        const adaptador = getAdaptador(p.codigo);
-        return adaptador.estaConfigurada ? adaptador.estaConfigurada() : true;
-    });
+    return activas
+        .filter((p) => {
+            const adaptador = getAdaptador(p.codigo);
+            return adaptador.estaConfigurada ? adaptador.estaConfigurada() : true;
+        })
+        .map((p) => ({ ...p, recomendada: p.codigo === pasarelaRecomendada(pais) }))
+        // La recomendada va PRIMERA: es la que debe encontrar el ojo, y en ambas vistas se pinta
+        // de izquierda a derecha. El orden se decide aquí y no en cada frontend para que las dos
+        // muestren lo mismo. `sort` es estable, así que el resto conserva el `orden` de la tabla.
+        .sort((a, b) => Number(b.recomendada) - Number(a.recomendada));
+}
+
+/**
+ * Cuál sugerir cuando hay más de una.
+ *
+ * En Colombia, Wompi: cobra en pesos, ofrece PSE y Nequi —que es como paga la mayoría de los
+ * negocios de aquí— y su comisión es la que ya conocemos. Fuera de Colombia, dLocal Go, que es la
+ * única que cobra en la moneda del país. La recomendación la calcula el BACKEND porque es el que
+ * sabe el país del negocio; el frontend solo la pinta, y así no hay dos reglas que mantener.
+ */
+function pasarelaRecomendada(pais) {
+    return pais === 'CO' ? 'wompi' : 'dlocal';
+}
+
+/**
+ * A dónde devuelve la pasarela al cliente cuando termina de pagar.
+ *
+ * Son dos sitios distintos y la diferencia importa: quien paga desde el portal público vuelve al
+ * portal, y quien paga con sesión iniciada vuelve a «Mis pagos» —**sin perder la sesión**, que es
+ * lo que pasaba cuando ambos caían en `/pagar`—.
+ *
+ * `APP_FRONTEND_URL` es la base de la app **incluyendo el baseHref**: en producción la consola se
+ * sirve bajo `/admin/` (Caddy la monta con `handle_path /admin/*`), así que vale
+ * `https://escalapp.cloud/admin`. De ahí que «Mis pagos» quede en `/admin/mis-pagos` colgando de
+ * esa base y termine en `…/admin/admin/mis-pagos`: feo, pero es la URL que de verdad resuelve.
+ */
+function urlRetornoDe(origen) {
+    const base = (process.env.APP_FRONTEND_URL || '').replace(/\/+$/, '');
+    if (!base) return process.env.COBRANZA_SUCCESS_URL || null;
+    return origen === 'app' ? `${base}/admin/mis-pagos` : `${base}/pagar`;
 }
 
 /**
@@ -891,7 +932,7 @@ async function cobrosDeUsuario(idUsuario) {
  * público —donde basta una cédula— y «Mis pagos»; si usara la tarjeta guardada, conocer la cédula
  * de un cliente bastaría para cargarle un cobro. El débito automático es cosa del cron, y solo.
  */
-async function iniciarPago(idFactura, { pasarela }) {
+async function iniciarPago(idFactura, { pasarela, origen = 'publico' }) {
     const factura = await Dao.getFactura(idFactura);
     if (!factura || factura.estado !== 'pendiente') {
         throw error('No encontramos un cobro pendiente con esos datos.', 'COBRO_NO_DISPONIBLE', 404);
@@ -925,8 +966,17 @@ async function iniciarPago(idFactura, { pasarela }) {
         };
     }
 
-    const r = await cobrarFactura(idFactura, { usarMetodoGuardado: false });
-    return { ...base, estado: r.estado, urlPago: r.urlPago ?? null, mensaje: r.mensaje ?? null };
+    const r = await cobrarFactura(idFactura, {
+        usarMetodoGuardado: false,
+        urlRetorno: urlRetornoDe(origen),
+    });
+    return {
+        ...base,
+        estado: r.estado,
+        urlPago: r.urlPago ?? null,
+        idExterno: r.idExterno ?? null,
+        mensaje: r.mensaje ?? null,
+    };
 }
 
 /** «RESTAURANTE CHAYANE» → «RES******** CHA****». El dueño lo reconoce; un curioso, no del todo. */
@@ -979,7 +1029,11 @@ async function consultarPublico(identificacion, { ip } = {}) {
             total: f.total,
             moneda: f.moneda,
         })),
-        pasarelas: c.pasarelas.map((p) => ({ codigo: p.codigo, nombre: p.nombre })),
+        pasarelas: c.pasarelas.map((p) => ({
+            codigo: p.codigo,
+            nombre: p.nombre,
+            recomendada: Boolean(p.recomendada),
+        })),
     }));
 }
 

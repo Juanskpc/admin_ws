@@ -243,7 +243,7 @@ function firmaIntegridad(referencia, centavos, moneda) {
  * sufijo (`EA-17-202609-lx3k9a`) y el webhook recorta hasta la referencia base para encontrar la
  * factura.
  */
-function linkCheckout({ referencia, monto, moneda, email }) {
+function linkCheckout({ referencia, monto, moneda, email, urlRetorno }) {
     const centavos = aCentavos(monto);
     const referenciaIntento = `${referencia}-${Date.now().toString(36)}`;
 
@@ -258,20 +258,29 @@ function linkCheckout({ referencia, monto, moneda, email }) {
     // `http://localhost` en desarrollo el checkout entero dejaba de cargar (2026-09-15). Solo se
     // envía si es https. Sin él, Wompi termina en su propia pantalla de resultado y la
     // confirmación llega por webhook o por «Verificar pago» en la consola.
-    const retorno = process.env.COBRANZA_SUCCESS_URL || '';
+    // `urlRetorno` lo decide el SERVIDOR según de dónde vino el pago (portal público o app con
+    // sesión). Nunca llega del navegador: aceptar una URL de vuelta del cliente sería un redirect
+    // abierto —cualquiera haría que Wompi devolviera a su sitio con aspecto de ser el nuestro—.
+    const retorno = urlRetorno || process.env.COBRANZA_SUCCESS_URL || '';
     if (retorno.startsWith('https://')) params.set('redirect-url', retorno);
     if (email) params.set('customer-data:email', email);
 
     return { url: `https://checkout.wompi.co/p/?${params.toString()}`, referenciaIntento };
 }
 
-async function cobrar({ referencia, monto, moneda = 'COP', token, email }) {
+async function cobrar({ referencia, monto, moneda = 'COP', token, email, urlRetorno }) {
     exigirConfiguracion();
 
     // Sin fuente de pago guardada no hay débito posible: se abre el checkout y el cliente paga
     // allí. Es el camino del portal de pagos, que por diseño NUNCA usa un medio guardado.
     if (!token) {
-        const { url, referenciaIntento } = linkCheckout({ referencia, monto, moneda, email });
+        const { url, referenciaIntento } = linkCheckout({
+            referencia,
+            monto,
+            moneda,
+            email,
+            urlRetorno,
+        });
         return {
             estado: 'pendiente',
             idExterno: null,
