@@ -318,6 +318,9 @@ router.patch('/mesas/:id/estado-servicio', [
 router.patch('/mesas/:id/liberar', [
 	param('id').isInt({ min: 1 }),
 ], MesaController.liberarMesa);
+router.delete('/mesas/:id', [
+	param('id').isInt({ min: 1 }),
+], MesaController.eliminarMesa);
 
 // --- Pedidos (POS) ---
 router.post('/pedidos',                                   PedidoController.crearOrdenValidators, PedidoController.crearOrden);

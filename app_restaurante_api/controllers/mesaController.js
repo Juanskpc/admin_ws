@@ -129,6 +129,22 @@ async function liberarMesa(req, res) {
     }
 }
 
+/** DELETE /mesas/:id */
+async function eliminarMesa(req, res) {
+    try {
+        const idMesa = Number(req.params.id);
+        const eliminada = await MesaService.eliminarMesa(idMesa);
+        if (!eliminada) return Respuesta.error(res, 'Mesa no encontrada', 404);
+        return Respuesta.success(res, 'Mesa eliminada', { id_mesa: idMesa });
+    } catch (err) {
+        if (err?.code === 'MESA_ACTIVA' || err?.code === 'MESA_CON_PEDIDO_ABIERTO') {
+            return Respuesta.error(res, err.message, err.statusCode || 409);
+        }
+        console.error('[Mesas] Error eliminarMesa:', err.message);
+        return Respuesta.error(res, 'No se pudo eliminar la mesa.');
+    }
+}
+
 module.exports = {
     getMesas,
     getMesasDashboard,
@@ -137,4 +153,5 @@ module.exports = {
     cambiarEstado,
     cambiarEstadoServicio,
     liberarMesa,
+    eliminarMesa,
 };

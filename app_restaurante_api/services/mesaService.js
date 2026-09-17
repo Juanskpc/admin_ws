@@ -272,6 +272,43 @@ async function liberarMesa(idMesa) {
     }
 }
 
+/**
+ * Elimina una mesa de forma permanente.
+ *
+ * Solo si está deshabilitada (estado 'I') y sin un pedido abierto: hacerlo desde
+ * 'A' o con una cuenta a medio cobrar es exactamente el tipo de "se me fue la mano"
+ * que este candado evita. El pedido histórico no se pierde — `pedid_orden.id_mesa`
+ * es ON DELETE SET NULL y la orden ya guarda el nombre de la mesa por separado
+ * (columna `mesa`), así que reportes y tickets viejos se siguen viendo igual.
+ */
+async function eliminarMesa(idMesa) {
+    const mesa = await Models.RestMesa.findByPk(idMesa);
+    if (!mesa) return null;
+
+    if (mesa.estado !== 'I') {
+        const error = new Error('Solo se puede eliminar una mesa deshabilitada.');
+        error.code = 'MESA_ACTIVA';
+        error.statusCode = 409;
+        throw error;
+    }
+
+    const ordenAbierta = await Models.PedidOrden.findOne({
+        where: { id_mesa: idMesa, estado: 'ABIERTA' },
+        attributes: ['id_orden'],
+    });
+    if (ordenAbierta) {
+        const error = new Error('La mesa tiene un pedido abierto. Ciérralo o cancélalo antes de eliminarla.');
+        error.code = 'MESA_CON_PEDIDO_ABIERTO';
+        error.statusCode = 409;
+        throw error;
+    }
+
+    const idNegocio = mesa.id_negocio;
+    await mesa.destroy();
+    avisar(idNegocio, TEMAS.MESAS);
+    return true;
+}
+
 module.exports = {
     getMesas,
     getMesasDashboard,
@@ -280,4 +317,5 @@ module.exports = {
     setMesaEstado,
     setMesaEstadoServicio,
     liberarMesa,
+    eliminarMesa,
 };
