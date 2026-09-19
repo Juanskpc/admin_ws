@@ -731,6 +731,109 @@ async function agregarItemsOrden({
 }
 
 /**
+ * Quita (reduce o borra) items de una orden ABIERTA existente.
+ *
+ * Simétrica de `agregarItemsOrden`: mismo flujo de edición desde Despacho/Mesas, pero
+ * para lo que el usuario retiró del pedido. Antes de esto no existía manera de que un
+ * producto quitado en el POS dejara de estar en la orden — el edit solo podía AGREGAR,
+ * así que quitar algo en pantalla no se reflejaba en el backend y volvía a aparecer.
+ *
+ * Empareja por la misma clave que agrupa en el frontend (producto + exclusiones + nota):
+ * reduce la cantidad del detalle que matchea, o lo borra si se queda en cero. Si piden
+ * quitar más de lo que hay, se quita lo que exista y se ignora el resto en silencio —no
+ * hay nada más que restar.
+ *
+ * Igual que `cancelarOrden`, el stock consumido NO se restaura: es la misma decisión ya
+ * tomada para pedidos cancelados, y automatizarlo contra la receta actual (que puede
+ * haber cambiado desde que se tomó el pedido) sería una cuenta aproximada sobre un
+ * negocio real.
+ */
+async function quitarItemsOrden({ idOrden, idNegocio, items, porcentajeImpuesto = 0 }) {
+    const t = await Models.sequelize.transaction();
+    try {
+        await cajaService.requireCajaAbierta(idNegocio, { transaction: t });
+
+        const orden = await Models.PedidOrden.findOne({
+            where: { id_orden: idOrden, id_negocio: idNegocio, estado: 'ABIERTA' },
+            transaction: t,
+            lock: t.LOCK.UPDATE,
+        });
+        if (!orden) {
+            throw new Error('ORDEN_NO_ENCONTRADA');
+        }
+
+        const detalles = await Models.PedidDetalle.findAll({
+            where: { id_orden: idOrden },
+            include: [{
+                model: Models.PedidDetalleExclu,
+                as: 'exclusiones',
+                attributes: ['id_detalle_exclu', 'id_ingrediente'],
+            }],
+            transaction: t,
+            lock: t.LOCK.UPDATE,
+        });
+
+        const claveDe = (idProducto, exclusiones, nota) => {
+            const excl = [...new Set(exclusiones || [])].sort((a, b) => a - b).join(',');
+            return `${idProducto}|${excl}|${String(nota || '').trim()}`;
+        };
+
+        const porClave = new Map();
+        for (const d of detalles) {
+            const clave = claveDe(
+                d.id_producto,
+                (d.exclusiones || []).map((e) => e.id_ingrediente),
+                d.nota,
+            );
+            if (!porClave.has(clave)) porClave.set(clave, []);
+            porClave.get(clave).push(d);
+        }
+
+        for (const item of items) {
+            let restante = Number(item.cantidad || 0);
+            if (restante <= 0) continue;
+
+            const clave = claveDe(item.id_producto, item.exclusiones, item.nota);
+            const candidatos = porClave.get(clave) || [];
+
+            for (const detalle of candidatos) {
+                if (restante <= 0) break;
+                const cantidadActual = Number(detalle.cantidad);
+                if (cantidadActual <= restante) {
+                    await Models.PedidDetalleExclu.destroy({
+                        where: { id_detalle: detalle.id_detalle },
+                        transaction: t,
+                    });
+                    await detalle.destroy({ transaction: t });
+                    restante -= cantidadActual;
+                } else {
+                    const nuevaCantidad = cantidadActual - restante;
+                    await detalle.update({
+                        cantidad: nuevaCantidad,
+                        subtotal: Number(detalle.precio_unitario) * nuevaCantidad,
+                    }, { transaction: t });
+                    restante = 0;
+                }
+            }
+        }
+
+        await recalcularTotalesOrden({
+            idOrden,
+            porcentajeImpuesto,
+            transaction: t,
+        });
+
+        avisarTrasCommit(t, idNegocio, TEMAS.PEDIDOS, TEMAS.MESAS, TEMAS.COCINA);
+
+        await t.commit();
+        return getOrdenById(idOrden);
+    } catch (err) {
+        if (!t.finished) await t.rollback();
+        throw err;
+    }
+}
+
+/**
  * Obtiene una orden por su ID, con detalles, exclusiones, producto e ingrediente.
  */
 /**
@@ -1601,6 +1704,7 @@ async function cerrarOrden(idOrden, { idUsuario, idMetodoPago, pagos, idCuenta =
 module.exports = {
     crearOrden,
     agregarItemsOrden,
+    quitarItemsOrden,
     getOrdenById,
     getOrdenesAbiertas,
     getOrdenesCocina,

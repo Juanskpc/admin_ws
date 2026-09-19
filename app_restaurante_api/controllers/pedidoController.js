@@ -56,6 +56,15 @@ const agregarItemsOrdenValidators = [
     body('descuento').optional({ nullable: true }).isFloat({ min: 0 }).withMessage('descuento inválido'),
 ];
 
+const quitarItemsOrdenValidators = [
+    body('id_negocio').isInt({ min: 1 }).withMessage('id_negocio inválido'),
+    body('items').isArray({ min: 1 }).withMessage('Debe haber al menos un item'),
+    body('items.*.id_producto').isInt({ min: 1 }).withMessage('id_producto inválido'),
+    body('items.*.cantidad').isInt({ min: 1 }).withMessage('Cantidad mínima: 1'),
+    body('items.*.exclusiones').optional().isArray(),
+    body('items.*.nota').optional({ nullable: true }).isString(),
+];
+
 const marcarPagadoValidators = [
     // Pago simple: id_metodo_pago. Multipago: arreglo pagos[]. Al menos uno.
     body('id_metodo_pago').optional({ nullable: true }).isInt({ min: 1 }).withMessage('id_metodo_pago inválido'),
@@ -199,6 +208,39 @@ async function agregarItemsOrden(req, res) {
         }
         console.error('[Pedidos] Error agregarItemsOrden:', err.message);
         return Respuesta.error(res, 'Error al agregar items a la orden.');
+    }
+}
+
+/** PATCH /restaurante/pedidos/:id/quitar-items */
+async function quitarItemsOrden(req, res) {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+        return Respuesta.error(res, 'Datos inválidos', 422, errors.array());
+    }
+
+    try {
+        const idOrden = Number(req.params.id);
+        const { id_negocio, items } = req.body;
+
+        const orden = await PedidoService.quitarItemsOrden({
+            idOrden,
+            idNegocio: id_negocio,
+            items,
+        });
+
+        return Respuesta.success(res, 'Items quitados de la orden', orden);
+    } catch (err) {
+        if (err.code === 'CAJA_CERRADA') {
+            return Respuesta.error(res, err.message, err.statusCode || 409, { code: err.code });
+        }
+        if (err.message === 'ORDEN_NO_ENCONTRADA') {
+            return Respuesta.error(res, 'Orden no encontrada o no está abierta', 404);
+        }
+        if (err.statusCode) {
+            return Respuesta.error(res, err.message, err.statusCode, { code: err.code });
+        }
+        console.error('[Pedidos] Error quitarItemsOrden:', err.message);
+        return Respuesta.error(res, 'Error al quitar items de la orden.');
     }
 }
 
@@ -471,6 +513,7 @@ async function getDomiciliarios(req, res) {
 module.exports = {
     crearOrden, crearOrdenValidators,
     agregarItemsOrden, agregarItemsOrdenValidators,
+    quitarItemsOrden, quitarItemsOrdenValidators,
     marcarPagadoValidators,
     cerrarOrdenValidators,
     getOrdenesAbiertas,

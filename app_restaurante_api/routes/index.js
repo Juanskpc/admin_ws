@@ -329,6 +329,10 @@ router.patch('/pedidos/:id/agregar-items', [
 	param('id').isInt({ min: 1 }),
 	...PedidoController.agregarItemsOrdenValidators,
 ], PedidoController.agregarItemsOrden);
+router.patch('/pedidos/:id/quitar-items', [
+	param('id').isInt({ min: 1 }),
+	...PedidoController.quitarItemsOrdenValidators,
+], PedidoController.quitarItemsOrden);
 router.patch('/pedidos/detalle/:id/completar',            PedidoController.marcarDetalleCompleto);
 router.get('/pedidos/:id',                                PedidoController.getOrdenById);
 router.patch('/pedidos/:id/enviar-cocina',                PedidoController.enviarACocina);
