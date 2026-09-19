@@ -18,16 +18,19 @@
  * despliegue sin migrar sigue funcionando igual— y que un entorno de desarrollo pueda apuntar un
  * número sin tocar la base. Cuando hay filas, mandan las filas.
  *
- * ## El token no está aquí, y es una decisión
+ * ## El token, desde Embedded Signup (F8-D)
  *
- * Un token de usuario de sistema **cubre la WABA entera**, no un número. Mientras todos los
- * números cuelguen de nuestra WABA, el mismo token sirve para todos y lo único que cambia es el
- * `phone_number_id`. Guardar un token por negocio sería guardar el mismo secreto N veces. Con
- * *Embedded Signup* —cada cliente con su WABA— eso cambia; hasta entonces, no.
+ * Un token de usuario de sistema **cubre la WABA entera**, no un número. Mientras un negocio
+ * cuelgue de NUESTRA WABA (`origen = 'manual'`), el token global sirve y no hace falta guardar
+ * nada por fila. Desde que existe Embedded Signup, un negocio puede traer su propia WABA
+ * (`origen = 'embedded_signup'`) con su propio token — ese sí se guarda aquí, cifrado en la base
+ * y descifrado solo al cargarlo en esta caché (nunca en cada envío: el TTL de 60s ya amortigua
+ * eso, igual que amortigua la lectura de `platform.numero_canal`).
  */
 'use strict';
 
 const Models = require('../../../app_core/models/conection');
+const { descifrar } = require('../../../app_core/helpers/credencialCifrada');
 
 const CANAL = 'whatsapp';
 
@@ -66,9 +69,26 @@ function reconstruir(filas) {
         // El primero gana. El único parcial de la tabla ya impide que haya dos activos por
         // negocio, así que esto solo importa con el respaldo del entorno.
         if (!porNegocio.has(Number(f.id_negocio))) {
+            // Descifrar aquí, no en cada envío: esta función solo se llama una vez por TTL
+            // (60s), igual que ya se acepta que el token global viva en claro todo el proceso.
+            // Un token corrupto o con la clave equivocada no debe tumbar la carga de TODOS los
+            // negocios — se cae a "sin token propio" (usará el global si lo hay) y se loguea.
+            let token = null;
+            if (f.origen === 'embedded_signup' && f.token_cifrado) {
+                try {
+                    token = descifrar(f.token_cifrado);
+                } catch (error) {
+                    console.error(
+                        `[whatsapp] no se pudo descifrar el token del negocio ${f.id_negocio}:`,
+                        error.message
+                    );
+                }
+            }
             porNegocio.set(Number(f.id_negocio), {
                 idExterno: String(f.id_externo),
                 numeroE164: f.numero_e164 || null,
+                origen: f.origen || 'manual',
+                token,
             });
         }
     }
@@ -100,7 +120,7 @@ async function asegurarCargado({ forzar = false } = {}) {
     try {
         if (await hayTabla()) {
             const filas = await Models.sequelize.query(
-                `SELECT id_externo, id_negocio, numero_e164
+                `SELECT id_externo, id_negocio, numero_e164, origen, token_cifrado
                    FROM platform.numero_canal
                   WHERE canal = :canal AND estado = 'A'
                   ORDER BY id_negocio;`,
@@ -147,6 +167,22 @@ function numeroDe(idNegocio) {
     return porNegocio.get(Number(idNegocio))?.idExterno ?? null;
 }
 
+/**
+ * El token propio del negocio, si conectó su número por Embedded Signup. `null` si no tiene uno
+ * (alta manual, o no cargó bien) — quien llama debe caer al token global en ese caso, nunca
+ * fallar por esto solo.
+ */
+function tokenDeNegocio(idNegocio) {
+    if (!idNegocio) return null;
+    return porNegocio.get(Number(idNegocio))?.token ?? null;
+}
+
+/** `'manual'` o `'embedded_signup'` — `null` si el negocio no tiene número cargado. */
+function origenDeNegocio(idNegocio) {
+    if (!idNegocio) return null;
+    return porNegocio.get(Number(idNegocio))?.origen ?? null;
+}
+
 /** Lo que hay cargado, para el log de arranque y el diagnóstico. */
 function listar() {
     return {
@@ -155,6 +191,7 @@ function listar() {
             id_negocio: idNegocio,
             id_externo: n.idExterno,
             numero_e164: n.numeroE164,
+            conexion: n.origen,
         })),
     };
 }
@@ -167,4 +204,14 @@ function _reiniciar() {
     deLaTabla = false;
 }
 
-module.exports = { asegurarCargado, negocioDe, numeroDe, listar, CANAL, TTL_MS, _reiniciar };
+module.exports = {
+    asegurarCargado,
+    negocioDe,
+    numeroDe,
+    tokenDeNegocio,
+    origenDeNegocio,
+    listar,
+    CANAL,
+    TTL_MS,
+    _reiniciar,
+};

@@ -42,6 +42,7 @@ const ventanaReal = require('./ventana');
 const repositorio = require('../../engine/repositorio');
 const plantillas = require('../../core/plantillas');
 const Audit = require('../../../app_core/helpers/auditHelper');
+const canalEmbeddedSignup = require('../../../app_core/whatsapp/canalEmbeddedSignup');
 
 const NOMBRE = 'whatsapp';
 const MODULO_AUDITORIA = 'canal_whatsapp';
@@ -356,6 +357,19 @@ async function silenciarPorHumano({ idNegocio, idExterno, wamid }) {
  *
  * Se audita y se grita por consola: un negocio cuyo número se desconectó **parece** funcionando
  * —el backend arranca, la app va— y lo único que ocurre es que nadie recibe respuesta.
+ *
+ * ## Desde F8-D: revocar la fila si es Embedded Signup
+ *
+ * Para un negocio de alta manual (`origen='manual'`), `PARTNER_REMOVED` casi siempre es el corte
+ * por inactividad (~14 días) y el número sigue siendo nuestro — lo correcto sigue siendo solo
+ * avisar, como hasta hoy: cambiar `estado` aquí borraría la conexión del único cliente real que
+ * ya está en producción, sin que nadie lo haya pedido.
+ *
+ * Para un negocio de Embedded Signup (`origen='embedded_signup'`), en cambio, `PARTNER_REMOVED`
+ * significa que el CLIENTE desconectó su WABA desde su lado — el token guardado ya no sirve para
+ * nada y dejarlo en la base es guardar un secreto muerto. Aquí sí se marca `estado='I'` y se
+ * limpia el token, y se invalida la caché de `numeros.js` de inmediato (llamada intra-módulo, sin
+ * cruzar hacia `app_core`) para no seguir intentando enviar con un token ya revocado.
  */
 async function registrarAviso({ idNegocio, evento, motivo, iniciadoPor, numero }) {
     const critico = evento === 'PARTNER_REMOVED';
@@ -368,12 +382,24 @@ async function registrarAviso({ idNegocio, evento, motivo, iniciadoPor, numero }
                 'Business (Meta corta a los ~14 días sin abrirla) y volver a conectar.'
         );
     }
-    await auditar(critico ? 'cuenta_desconectada' : 'aviso_de_cuenta', idNegocio, {
-        evento,
-        motivo,
-        iniciado_por: iniciadoPor,
-        numero,
-    });
+
+    let accion = critico ? 'cuenta_desconectada' : 'aviso_de_cuenta';
+    if (critico && numeros.origenDeNegocio(idNegocio) === 'embedded_signup') {
+        try {
+            await canalEmbeddedSignup.desconectar({ idNegocio, motivo });
+            numeros._reiniciar();
+            accion = 'canal_revocado';
+        } catch (error) {
+            // No tumbar el procesamiento del webhook por esto: el aviso ya se logueó arriba, y
+            // la fila queda 'A' con un token que ya no sirve — se corrige a mano si hace falta.
+            console.error(
+                `[whatsapp] no se pudo revocar la fila de Embedded Signup del negocio ${idNegocio}:`,
+                error.message
+            );
+        }
+    }
+
+    await auditar(accion, idNegocio, { evento, motivo, iniciado_por: iniciadoPor, numero });
 }
 
 // ── Salida: Mensaje Canónico → WhatsApp ─────────────────────────────────────────────────

@@ -25,6 +25,7 @@ const MetricasController = require('../controllers/metricasController');
 const FichaPersonaController = require('../controllers/fichaPersonaController');
 const AuditoriaController = require('../controllers/auditoriaController');
 const DatosFiscalesController = require('../controllers/datosFiscalesController');
+const CanalWhatsappController = require('../controllers/canalWhatsappController');
 const CobranzaController = require('../controllers/cobranzaController');
 const { verificarToken, requireSuperAdmin } = require('../../app_core/middleware/auth');
 const rateLimit = require('express-rate-limit');
@@ -346,6 +347,29 @@ router.put(
             .isBoolean().withMessage('«Obligado a facturar» debe ser verdadero o falso'),
     ],
     DatosFiscalesController.putDeclaracion
+);
+
+// --- Canal de WhatsApp propio (F8-D, Embedded Signup — Opción B del panel) ---
+//
+// Mismo motivo que datos-fiscales para nombrar el parámetro `id_negocio`: por aquí pasa el
+// estado de conexión de un negocio y, al canjear, un secreto de Meta. Montada tras
+// `verificarToken` (línea 136) — no es pública: el JWT del admin ya autentica, y el `code` de
+// Meta caduca en 30s pero no reemplaza la sesión.
+router.get(
+    '/negocios/:id_negocio/canal-whatsapp',
+    idNegocioValidator,
+    CanalWhatsappController.getEstado
+);
+
+router.post(
+    '/negocios/:id_negocio/canal-whatsapp/embedded-signup/canjear',
+    [
+        ...idNegocioValidator,
+        body('code').trim().notEmpty().withMessage('Falta el code de Embedded Signup'),
+        body('phoneNumberId').trim().notEmpty().withMessage('Falta el phoneNumberId'),
+        body('numeroE164').optional({ nullable: true }).trim().isLength({ max: 20 }),
+    ],
+    CanalWhatsappController.postCanjear
 );
 
 router.post('/negocios/registrar-cliente', requireSuperAdmin, [
