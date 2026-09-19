@@ -126,18 +126,34 @@ function limpiar(datos) {
  *
  * `order_id` es NUESTRA referencia (`EA-<negocio>-<AAAAMM>`): así, si algo se cruza, la
  * conciliación con dLocal se hace por un identificador que significa algo para las dos partes.
+ *
+ * ## Por qué lleva sufijo por intento
+ *
+ * dLocal exige `order_id` único por comercio: reusarlo devuelve `400 Order id is duplicated`
+ * (visto el 2026-09-15 en sandbox). Sin sufijo, un cliente que abre el checkout y no termina de
+ * pagar **no puede volver a intentarlo nunca** — la factura queda impagable. Es el mismo motivo
+ * por el que los links de Wompi lo llevan, y el webhook ya recorta hasta la referencia base
+ * (`cobranzaWebhookService.buscarFactura`), así que el pago sigue encontrando su factura.
  */
-async function cobrar({ referencia, monto, moneda, pais = 'CO', descripcion = null }) {
+async function cobrar({
+    referencia,
+    monto,
+    moneda,
+    pais = 'CO',
+    descripcion = null,
+    urlRetorno = null,
+}) {
     const datos = await llamar('/v1/payments', {
         metodo: 'POST',
         cuerpo: {
             amount: Number(monto),
             currency: moneda,
             country: pais,
-            order_id: referencia,
+            order_id: `${referencia}-${Date.now().toString(36)}`,
             description: (descripcion || `EscalApp ${referencia}`).slice(0, 100),
             notification_url: `${process.env.APP_PUBLIC_URL || ''}/admin/cobranza/webhook/dlocal`,
-            success_url: process.env.COBRANZA_SUCCESS_URL || undefined,
+            // La decide el servidor según el origen del pago; nunca el navegador (redirect abierto).
+            success_url: urlRetorno || process.env.COBRANZA_SUCCESS_URL || undefined,
             back_url: process.env.COBRANZA_BACK_URL || undefined,
         },
     });

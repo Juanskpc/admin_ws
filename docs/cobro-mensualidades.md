@@ -361,8 +361,54 @@ respuesta real (`403 Invalid Credentials`, con llaves de mentira), que es justo 
    la API real, y esa diferencia se paga con dinero de clientes.
 3. `UPDATE cobranza.cob_pasarela SET estado = 'A' WHERE codigo = 'dlocal';` — activar es una
    decisión aparte de configurar (§ el registro de adaptadores).
-4. `APP_PUBLIC_URL` correcto y el webhook registrado en el panel de dLocal. Si esa URL está mal,
-   los pagos entran y nadie se entera.
+4. `APP_PUBLIC_URL` correcto. Si esa URL está mal, los pagos entran y nadie se entera.
+   ⚠️ **En dLocal NO hay que registrar el webhook en su panel** —esa pantalla no existe—: el
+   `notification_url` viaja dentro de cada cobro. Wompi sí lo exige registrado.
+
+### dLocal Go probado de punta a punta (2026-09-15)
+
+Sandbox real, con cuenta propia (`dashboard-sbx.dlocalgo.com`, que es un **registro aparte** del
+panel de producción: no es un interruptor como en Wompi). Pago completo de la factura `EA-5-202609`
+de Spa Aurora: checkout → webhook firmado (`dlocal:DP-259389`, `firma_valida = true`) → factura
+**pagada** → plan extendido del 12 de septiembre al **12 de octubre**, anclado al vencimiento y no
+a la fecha de pago. La API respondió al primer intento en CLP/CL y COP/CO.
+
+Tres cosas que salieron de probarlo, y que el código escrito «contra la documentación» no tenía:
+
+1. **`order_id` debe ser único por comercio.** Reusar la referencia devuelve `400 Order id is
+   duplicated`, y el efecto es peor que el error: un cliente que abre el checkout y no termina de
+   pagar **deja su factura impagable para siempre**. Ahora lleva sufijo por intento, igual que
+   Wompi, y el webhook ya recortaba hasta la referencia base.
+2. **dLocal no devuelve identificador al volver.** Wompi vuelve con `?id=<transacción>`; dLocal no
+   vuelve con nada. El frontend guarda el `idExterno` en `sessionStorage` antes de salir al
+   checkout y con eso confirma la vuelta (`core/utils/pasarelas.ts`).
+3. **Liquida en COP aunque cobre en CLP** (`balance_currency: "COP"`). El cliente chileno paga en
+   su moneda y el dinero entra en pesos colombianos: no hace falta cuenta en Chile.
+
+Pendiente antes de cobrarle a alguien de verdad: **no hay precio en CLP** en `cob_precio_plan`, así
+que `getPrecio` lanzaría `PRECIO_NO_CONFIGURADO` para el único negocio de Chile (id 16, D'ALEX
+BARBERIA), cuya suscripción además sigue en `manual`/COP. Y ojo al cambiarla: **las facturas ya
+emitidas conservan la pasarela con la que nacieron** (`cobrarFactura` lee `factura.pasarela`), así
+que hay que actualizar también las pendientes.
+
+### A dónde vuelve el cliente después de pagar (2026-09-16)
+
+Antes toda vuelta caía en `COBRANZA_SUCCESS_URL` —una URL global— y eso sacaba de la sesión al
+administrador que pagaba desde «Mis pagos»: acababa en el portal público. Ahora la URL de retorno
+**la decide el backend según de dónde salió el pago** (`urlRetornoDe(origen)`), y se la pasa al
+adaptador como `urlRetorno`:
+
+| Origen | Vuelve a |
+|---|---|
+| Portal público `/pagar` | `APP_FRONTEND_URL/pagar` |
+| «Mis pagos» (con sesión) | `APP_FRONTEND_URL/admin/mis-pagos` |
+
+`APP_FRONTEND_URL` incluye el baseHref: en producción vale `https://escalapp.cloud/admin`, porque
+Caddy monta la consola con `handle_path /admin/*` (que **recorta** el prefijo). De ahí que «Mis
+pagos» quede en `…/admin/admin/mis-pagos`: parece un error y no lo es, es la URL que resuelve.
+
+**La URL de retorno nunca llega del navegador**, solo del servidor: aceptarla del cliente sería un
+redirect abierto —cualquiera haría que la pasarela devolviera a su sitio con aspecto del nuestro—.
 
 ### Portal de pagos del cliente (2026-09-13)
 

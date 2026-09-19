@@ -117,12 +117,23 @@ async function procesarEvento(pasarela, verificado) {
     // Un pago aprobado por MENOS de lo facturado no extiende nada. Con Wompi la firma de
     // integridad ya lo impide en el checkout, pero esa firma depende de un secreto bien
     // configurado: si algún día se cruza con el de eventos, esta es la guarda que queda.
-    const centavos = estadoReal.payload?.amount_in_cents;
-    const moneda = estadoReal.payload?.currency;
+    //
+    // Cada pasarela expresa el monto a su manera y hay que normalizar: Wompi manda
+    // `amount_in_cents` (centavos) y dLocal manda `amount` en unidades. Antes solo se miraba el
+    // campo de Wompi, así que en un pago por dLocal esta guarda no comprobaba **nada** y se
+    // limitaba a la moneda (2026-09-16).
+    const p = estadoReal.payload ?? {};
+    const centavos =
+        p.amount_in_cents != null
+            ? Number(p.amount_in_cents)
+            : p.amount != null
+              ? Math.round(Number(p.amount) * 100)
+              : null;
+    const moneda = p.currency;
     const esperado = Math.round(Number(factura.total) * 100);
     if (
         estadoReal.estado === 'aprobada' &&
-        ((centavos != null && Number(centavos) !== esperado) || (moneda && moneda !== factura.moneda))
+        ((centavos != null && centavos !== esperado) || (moneda && moneda !== factura.moneda))
     ) {
         console.error(
             `[Cobranza/${pasarela}] monto no coincide en ${factura.referencia}: ` +
