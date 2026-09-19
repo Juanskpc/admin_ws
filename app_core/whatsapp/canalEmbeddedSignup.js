@@ -45,10 +45,24 @@ function fallo(mensaje, { code, statusCode }) {
  * @param {number} opciones.idNegocio
  * @param {string} opciones.code — el code de corta vida que entregó el SDK de Embedded Signup.
  * @param {string} opciones.phoneNumberId — del evento `WA_EMBEDDED_SIGNUP` en el navegador.
- * @param {string|null} [opciones.numeroE164] — idem, si el evento lo trae.
+ * @param {string|null} [opciones.numeroE164] — respaldo si el frontend lo manda; el evento del
+ *        navegador **no** trae este dato (probado 2026-09-19), así que el número real se resuelve
+ *        aparte con `api.resolverNumero()` una vez hay `accessToken`. Cosmético: si esa llamada
+ *        falla, la conexión sigue con lo que haya aquí (o `null`), nunca se aborta por esto.
+ * @param {string|null} [opciones.businessId] — del mismo evento `WA_EMBEDDED_SIGNUP`, que sí lo
+ *        trae (a diferencia del número). No es un dato de seguridad — el `wabaId` real lo prueba
+ *        `resolverWaba()` inspeccionando el token, nunca se toma del frontend — así que confiar
+ *        en lo que manda el panel para este campo es aceptable.
  * @returns {Promise<{idExterno: string, numeroE164: string|null, wabaId: string}>}
  */
-async function conectar({ idNegocio, code, phoneNumberId, numeroE164 = null, api = embeddedSignupApi }) {
+async function conectar({
+    idNegocio,
+    code,
+    phoneNumberId,
+    numeroE164 = null,
+    businessId = null,
+    api = embeddedSignupApi,
+}) {
     if (!idNegocio || !code || !phoneNumberId) {
         throw fallo('Faltan idNegocio, code o phoneNumberId.', {
             code: 'CANAL_DATOS_INCOMPLETOS',
@@ -72,8 +86,19 @@ async function conectar({ idNegocio, code, phoneNumberId, numeroE164 = null, api
     }
 
     const { accessToken } = await api.canjearCodigo({ code });
-    const { wabaId, businessId } = await api.resolverWaba({ accessToken });
+    const { wabaId } = await api.resolverWaba({ accessToken });
     await api.suscribirApp({ wabaId, accessToken });
+
+    // El evento del navegador NO trae el número legible (probado en producción el 2026-09-19,
+    // ver embeddedSignupApi.js#resolverNumero) — se pide aparte. Es cosmético: si falla, seguimos
+    // con lo que haya mandado el frontend (o null) en vez de tumbar la conexión completa por esto.
+    let numeroResuelto = numeroE164;
+    try {
+        const resultado = await api.resolverNumero({ phoneNumberId, accessToken });
+        if (resultado.numeroE164) numeroResuelto = resultado.numeroE164;
+    } catch (error) {
+        // No se re-lanza a propósito — ver el comentario de arriba.
+    }
 
     const idExterno = String(phoneNumberId);
     const tokenCifrado = cifrar(accessToken);
@@ -97,7 +122,7 @@ async function conectar({ idNegocio, code, phoneNumberId, numeroE164 = null, api
                     canal: CANAL,
                     idExterno,
                     idNegocio,
-                    numeroE164,
+                    numeroE164: numeroResuelto,
                     tokenCifrado,
                     wabaId,
                     businessId,
@@ -123,26 +148,36 @@ async function conectar({ idNegocio, code, phoneNumberId, numeroE164 = null, api
     // La caché de `numeros.js` tiene un TTL de 60s y se acepta tal cual (ver la Capa 4 del plan):
     // no se invalida desde aquí para no cruzar hacia `intelligence/` desde `app_core`.
 
-    return { idExterno, numeroE164, wabaId };
+    return { idExterno, numeroE164: numeroResuelto, wabaId };
 }
 
 /**
- * Marca inactiva la conexión de un negocio y borra el token guardado — usado por
- * `intelligence/channels/whatsapp/adaptador.js` cuando Meta avisa que el cliente desconectó su
- * número desde su lado (`account_update`, evento `PARTNER_REMOVED`), solo para filas
- * `origen = 'embedded_signup'`.
+ * Marca inactiva la conexión de un negocio y borra el token guardado. Dos llamadores:
+ *   - `intelligence/channels/whatsapp/adaptador.js`, cuando Meta avisa que el cliente desconectó
+ *     su número desde su lado (`account_update`, evento `PARTNER_REMOVED`).
+ *   - `canalWhatsappController.js`, cuando el propio negocio pide desconectarse desde el panel
+ *     (botón "Desconectar" — self-service, solo para `origen = 'embedded_signup'`).
+ *
+ * Los dos casos comparten la misma regla: solo toca filas `origen = 'embedded_signup'`, nunca las
+ * de alta manual — desconectar el número de un negocio gestionado por EscalApp no es algo que
+ * dispare ni un webhook de Meta ni un botón del panel del negocio.
+ *
+ * @returns {Promise<{desconectado: boolean}>} `false` si no había ninguna fila activa que tocar
+ *          (ya estaba desconectado, o el negocio nunca conectó por Embedded Signup) — quien llama
+ *          decide si eso es un error o un no-op silencioso.
  */
 async function desconectar({ idNegocio, motivo = null }) {
     if (!idNegocio) {
         throw fallo('Falta idNegocio.', { code: 'CANAL_DATOS_INCOMPLETOS', statusCode: 400 });
     }
-    await Models.sequelize.query(
+    const [, metadata] = await Models.sequelize.query(
         `UPDATE platform.numero_canal
             SET estado = 'I', token_cifrado = NULL
           WHERE canal = :canal AND id_negocio = :idNegocio AND estado = 'A'
             AND origen = 'embedded_signup';`,
         { replacements: { canal: CANAL, idNegocio } }
     );
+    return { desconectado: (metadata?.rowCount ?? 0) > 0 };
 }
 
 /**

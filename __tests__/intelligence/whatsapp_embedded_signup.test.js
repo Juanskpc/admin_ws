@@ -88,7 +88,7 @@ describe('embeddedSignupApi', () => {
                 data: { granular_scopes: [{ scope: 'whatsapp_business_management', target_ids: ['WABA789'] }] },
             }),
         });
-        expect(r.wabaId).toBe('WABA789');
+        expect(r).toEqual({ wabaId: 'WABA789' });
     });
 
     test('resolverWaba() sin ningún activo concedido falla — tener el permiso no es tener el activo', async () => {
@@ -110,6 +110,23 @@ describe('embeddedSignupApi', () => {
         });
         expect(r).toEqual({ suscrito: true });
     });
+
+    // El evento WA_EMBEDDED_SIGNUP/FINISH del navegador no trae display_phone_number (probado en
+    // producción el 2026-09-19) — resolverNumero() es la llamada aparte que lo consigue de verdad.
+    test('resolverNumero() devuelve el número legible a partir del phone_number_id', async () => {
+        const r = await embeddedSignupApi.resolverNumero({
+            phoneNumberId: 'PHONE-1',
+            accessToken: 'TOKEN123',
+            fetchImpl: fetchOk({ display_phone_number: '+57 315 281 2484' }),
+        });
+        expect(r).toEqual({ numeroE164: '+57 315 281 2484' });
+    });
+
+    test('resolverNumero() sin phoneNumberId o accessToken falla sin llamar a Meta', async () => {
+        await expect(
+            embeddedSignupApi.resolverNumero({ phoneNumberId: null, accessToken: 'TOKEN123' })
+        ).rejects.toMatchObject({ code: 'META_RESOLVER_NUMERO_DATOS_INCOMPLETOS' });
+    });
 });
 
 // ── canalEmbeddedSignup + numeros.js/config.js: contra la base de verdad ───────────────
@@ -126,7 +143,8 @@ describe('canalEmbeddedSignup — conecta, y el canal lo lee de verdad', () => {
 
     const apiFalsa = (over = {}) => ({
         canjearCodigo: async () => ({ accessToken: 'TOKEN-DE-PRUEBA' }),
-        resolverWaba: async () => ({ wabaId: 'WABA-DE-PRUEBA', businessId: 'BIZ-DE-PRUEBA' }),
+        resolverWaba: async () => ({ wabaId: 'WABA-DE-PRUEBA' }),
+        resolverNumero: async () => ({ numeroE164: '+57 300 000 0000' }),
         suscribirApp: async () => ({ suscrito: true }),
         ...over,
     });
@@ -159,7 +177,11 @@ describe('canalEmbeddedSignup — conecta, y el canal lo lee de verdad', () => {
             phoneNumberId: 'PHONE-1',
             api: apiFalsa(),
         });
-        expect(resultado).toEqual({ idExterno: 'PHONE-1', numeroE164: null, wabaId: 'WABA-DE-PRUEBA' });
+        expect(resultado).toEqual({
+            idExterno: 'PHONE-1',
+            numeroE164: '+57 300 000 0000',
+            wabaId: 'WABA-DE-PRUEBA',
+        });
 
         await numeros.asegurarCargado({ forzar: true });
         expect(numeros.negocioDe('PHONE-1')).toBe(idNegocio);
@@ -167,6 +189,36 @@ describe('canalEmbeddedSignup — conecta, y el canal lo lee de verdad', () => {
         expect(numeros.origenDeNegocio(idNegocio)).toBe('embedded_signup');
         expect(numeros.tokenDeNegocio(idNegocio)).toBe('TOKEN-DE-PRUEBA');
         expect(config.tokenDeNegocio(idNegocio)).toBe('TOKEN-DE-PRUEBA');
+    });
+
+    test('conectar() guarda el businessId que manda el frontend — resolverWaba() ya no lo inventa', async () => {
+        await canalEmbeddedSignup.conectar({
+            idNegocio,
+            code: 'code-1',
+            phoneNumberId: 'PHONE-1C',
+            businessId: 'BIZ-DEL-EVENTO-DEL-NAVEGADOR',
+            api: apiFalsa(),
+        });
+
+        const fila = await sequelize.query(
+            `SELECT waba_id, business_id FROM platform.numero_canal WHERE id_negocio = :idNegocio;`,
+            { replacements: { idNegocio }, type: sequelize.QueryTypes.SELECT }
+        );
+        expect(fila[0]).toEqual({ waba_id: 'WABA-DE-PRUEBA', business_id: 'BIZ-DEL-EVENTO-DEL-NAVEGADOR' });
+    });
+
+    test('conectar() no se aborta si resolverNumero() falla — sigue con numeroE164 en null', async () => {
+        const resultado = await canalEmbeddedSignup.conectar({
+            idNegocio,
+            code: 'code-1',
+            phoneNumberId: 'PHONE-1B',
+            api: apiFalsa({
+                resolverNumero: async () => {
+                    throw new Error('Meta caído, o lo que sea');
+                },
+            }),
+        });
+        expect(resultado).toEqual({ idExterno: 'PHONE-1B', numeroE164: null, wabaId: 'WABA-DE-PRUEBA' });
     });
 
     test('conectar() dos veces para el mismo negocio rechaza con CANAL_YA_CONECTADO (409)', async () => {
@@ -182,10 +234,16 @@ describe('canalEmbeddedSignup — conecta, y el canal lo lee de verdad', () => {
         let estado = await canalEmbeddedSignup.obtenerEstado({ idNegocio });
         expect(estado).toMatchObject({ conectado: true, origen: 'embedded_signup' });
 
-        await canalEmbeddedSignup.desconectar({ idNegocio, motivo: 'PRIMARY_INACTIVITY' });
+        const resultado = await canalEmbeddedSignup.desconectar({ idNegocio, motivo: 'PRIMARY_INACTIVITY' });
+        expect(resultado).toEqual({ desconectado: true });
 
         estado = await canalEmbeddedSignup.obtenerEstado({ idNegocio });
         expect(estado.conectado).toBe(false);
+    });
+
+    test('desconectar() sin nada que desconectar devuelve desconectado:false — para el 409 del botón del panel', async () => {
+        const resultado = await canalEmbeddedSignup.desconectar({ idNegocio, motivo: 'sin conexión' });
+        expect(resultado).toEqual({ desconectado: false });
     });
 
     test(

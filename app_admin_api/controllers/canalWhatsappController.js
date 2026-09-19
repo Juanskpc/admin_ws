@@ -68,12 +68,13 @@ async function postCanjear(req, res) {
         const idNegocio = Number(req.params.id_negocio);
         if (!(await autorizar(req, res, idNegocio))) return;
 
-        const { code, phoneNumberId, numeroE164 } = req.body;
+        const { code, phoneNumberId, numeroE164, businessId } = req.body;
         const resultado = await canalEmbeddedSignup.conectar({
             idNegocio,
             code,
             phoneNumberId,
             numeroE164: numeroE164 || null,
+            businessId: businessId || null,
         });
         return Respuesta.success(res, 'WhatsApp conectado', resultado);
     } catch (error) {
@@ -88,4 +89,40 @@ async function postCanjear(req, res) {
     }
 }
 
-module.exports = { getEstado, postCanjear };
+/**
+ * POST /admin/negocios/:id_negocio/canal-whatsapp/desconectar
+ *
+ * Autoservicio: el propio negocio se desconecta de su número (Opción B). Nunca toca una conexión
+ * gestionada por EscalApp (alta manual) — `canalEmbeddedSignup.desconectar()` solo actúa sobre
+ * filas `origen = 'embedded_signup'`, así que llamar esto sobre un negocio de alta manual no hace
+ * nada, y se lo decimos con un 409 en vez de fingir éxito.
+ */
+async function postDesconectar(req, res) {
+    try {
+        if (!validar(req, res)) return;
+        const idNegocio = Number(req.params.id_negocio);
+        if (!(await autorizar(req, res, idNegocio))) return;
+
+        const { desconectado } = await canalEmbeddedSignup.desconectar({
+            idNegocio,
+            motivo: 'Desconectado manualmente desde el panel por el negocio',
+        });
+        if (!desconectado) {
+            return Respuesta.error(
+                res,
+                'Este negocio no tiene un número propio conectado por Embedded Signup.',
+                409
+            );
+        }
+        return Respuesta.success(res, 'WhatsApp desconectado', { desconectado: true });
+    } catch (error) {
+        if (!error.statusCode) console.error('Error en postDesconectar (canal-whatsapp):', error);
+        return Respuesta.error(
+            res,
+            error.message || 'Error al desconectar el canal de WhatsApp',
+            error.statusCode || 500
+        );
+    }
+}
+
+module.exports = { getEstado, postCanjear, postDesconectar };

@@ -112,10 +112,24 @@ async function canjearCodigo({
 }
 
 /**
- * Resuelve qué WABA y qué número concedió el cliente durante el flujo, inspeccionando el propio
- * token con `debug_token` — el mismo mecanismo que ya usa `scripts/whatsapp_diagnostico.js`.
+ * Resuelve qué WABA concedió el cliente, inspeccionando el propio token con `debug_token` — el
+ * mismo mecanismo que ya usa `scripts/whatsapp_diagnostico.js`. Es la fuente **autoritativa** del
+ * `wabaId`: sale de lo que el token realmente concedió, no de lo que el navegador diga — un
+ * cliente no puede mentir sobre a qué WABA tiene acceso, porque esto lo verifica del lado del
+ * servidor contra Meta.
  *
- * @returns {Promise<{wabaId: string|null, businessId: string|null}>}
+ * ## Por qué esto ya NO devuelve `businessId`
+ *
+ * La primera versión sacaba `businessId` del primer `target_ids` de `granular_scopes`, sin
+ * comprobar el `scope` — en la práctica, el mismo valor que `wabaId` casi siempre (coincidieron
+ * los dos en la prueba real del 2026-09-19, y no era casualidad buena: es el bug). El Business
+ * Manager y la WABA son conceptos distintos en Meta, y `debug_token` no da un `scope` separado
+ * para el negocio. El `business_id` real sale del propio evento `WA_EMBEDDED_SIGNUP`/`FINISH` del
+ * navegador (`canalWhatsappController.js` lo recibe del panel) — no es un dato de seguridad como
+ * el `wabaId` (no gobierna a qué se tiene acceso), así que confiar en lo que manda el frontend
+ * para esto es aceptable.
+ *
+ * @returns {Promise<{wabaId: string}>}
  */
 async function resolverWaba({
     accessToken,
@@ -153,7 +167,6 @@ async function resolverWaba({
     const granular = datos?.data?.granular_scopes || [];
     const wabaScope = granular.find((s) => s.scope === 'whatsapp_business_management');
     const wabaId = wabaScope?.target_ids?.[0] ?? null;
-    const businessId = datos?.data?.granular_scopes?.[0]?.target_ids?.[0] ?? null;
 
     if (!wabaId) {
         throw fallo(
@@ -162,7 +175,58 @@ async function resolverWaba({
         );
     }
 
-    return { wabaId, businessId };
+    return { wabaId };
+}
+
+/**
+ * El número en formato legible (`+57 315 281 2484`), a partir del `phone_number_id`.
+ *
+ * ## Por qué esto es una llamada aparte, y no algo que lea el evento del navegador
+ *
+ * La primera versión de este código asumía que el evento `WA_EMBEDDED_SIGNUP`/`FINISH` traía
+ * `display_phone_number` — no es así: probado en producción el 2026-09-19 (`numero_e164` quedó
+ * vacío en la primera conexión real) y confirmado después contra la documentación de Meta: ese
+ * evento solo trae `phone_number_id`, `waba_id` y `business_id`. El número legible hay que
+ * pedirlo aparte, por servidor, con el mismo token que ya se tiene.
+ *
+ * Es cosmético, no funcional — `phoneNumberId` ya es suficiente para enviar mensajes — así que
+ * quien llama a esto puede seguir adelante si falla; no vale la pena tumbar una conexión por no
+ * poder mostrar el número en la pantalla del panel.
+ *
+ * @returns {Promise<{numeroE164: string|null}>}
+ */
+async function resolverNumero({
+    phoneNumberId,
+    accessToken,
+    fetchImpl = globalThis.fetch,
+    baseUrl = BASE_URL,
+    versionApi = VERSION_API,
+}) {
+    if (!phoneNumberId || !accessToken) {
+        throw fallo('Faltan datos para resolver el número (phoneNumberId o accessToken).', {
+            code: 'META_RESOLVER_NUMERO_DATOS_INCOMPLETOS',
+            statusCode: 400,
+            reintentable: false,
+        });
+    }
+
+    const url =
+        `${baseUrl}/${versionApi}/${phoneNumberId}` +
+        `?fields=display_phone_number` +
+        `&access_token=${encodeURIComponent(accessToken)}`;
+
+    const { ok, status, datos } = await llamar(url, { fetchImpl });
+
+    if (!ok) {
+        throw fallo(`Meta rechazó la consulta del número (${status}).`, {
+            code: 'META_RESOLVER_NUMERO_FALLIDO',
+            statusCode: 502,
+            reintentable: false,
+            detalle: datos?.error,
+        });
+    }
+
+    return { numeroE164: datos?.display_phone_number ?? null };
 }
 
 /**
@@ -203,4 +267,4 @@ async function suscribirApp({
     return { suscrito: Boolean(datos?.success) };
 }
 
-module.exports = { canjearCodigo, resolverWaba, suscribirApp };
+module.exports = { canjearCodigo, resolverWaba, resolverNumero, suscribirApp };

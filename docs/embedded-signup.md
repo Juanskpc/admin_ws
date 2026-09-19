@@ -1,9 +1,12 @@
-# Embedded Signup (F8-D) — terreno preparado, sin implementar
+# Embedded Signup (F8-D) — implementado y probado en producción
 
-> Estado: **borrador de diseño**, 2026-09-18. Nace el mismo día en que se aprobó el App Review
-> (`meta-app-review.md`). Aprobar no conecta a ningún cliente todavía — sigue faltando código, y
-> este documento es el paso previo a escribirlo, siguiendo la misma costumbre que
-> `facturacion-electronica.md`: documento antes que migración.
+> Estado: **implementado, probado en producción y con autoservicio completo**, 2026-09-19. Nació
+> como borrador el 2026-09-18, el mismo día en que se aprobó el App Review (`meta-app-review.md`).
+> El código se escribió al día siguiente (capas 1-8 del plan: migración, cifrado, cliente de la
+> Graph API, servicio, endpoint, token por negocio, pantalla del panel), **el 2026-09-19 se hizo la
+> primera conexión real de punta a punta** contra la cuenta de Meta de verdad (§9), y ese mismo día
+> se cerraron los dos cabos sueltos que dejó (§9.3) y se agregó el botón de desconectar (§9.4). Lo
+> único que sigue sin hacerse es conectar a un cliente real — ya no es una cuestión de código.
 
 ## 0. Qué dispara esto y qué NO resuelve solo
 
@@ -136,12 +139,11 @@ la compartida.
 Aunque el código de arriba se termine, encender esto en producción no depende solo de eso. Tres
 decisiones siguen abiertas y las marcó `meta-app-review.md` §5:
 
-1. **Quién paga la factura de Meta.** Con Embedded Signup el cliente pone su propio método de pago
-   y ve su propia factura de Meta — hoy la pagamos nosotros y ese costo (hoy bajo, con mensajes de
-   servicio gratis hasta el 1 de octubre de 2026) es margen nuestro. `ESTADO-Y-CONTINUACION.md`
-   §4-0.3 la marca como *"a tomar ANTES de gastar en anuncios"*, y es la más urgente: sin resolver
-   esto no tiene sentido poner el botón de conexión frente a un cliente real, aunque el código ya
-   funcione.
+1. ~~**Quién paga la factura de Meta.**~~ **Resuelto y medido el 2026-09-19 — ver §9.1.** Con
+   Embedded Signup el cliente pone su propio método de pago en una cuenta y una WABA que Meta crea
+   **separadas** de la de EscalApp — no hay ningún momento del flujo en que se nos pida tarjeta a
+   nosotros, y no hay ningún camino por el que ese costo se mezcle con el de otro negocio. Dejó de
+   ser una decisión de negocio abierta.
 2. **El techo de clientes nuevos.** 10 cada 7 días hoy, sube a 200 con Access Verification — que
    ya está hecha según el panel de Meta (2026-09-17). Con Embedded Signup en producción, este techo
    empieza a importar de verdad.
@@ -151,3 +153,103 @@ decisiones siguen abiertas y las marcó `meta-app-review.md` §5:
 
 Ver [[project-escala-numeros-ads]] y [[project-f8c-multinumero]] en la memoria del proyecto para el
 hilo completo de esta conversación.
+
+---
+
+## 9. F8-D EN PRODUCCIÓN — primera conexión real (2026-09-19)
+
+El código de las capas 1-8 se escribió, se desplegó y **se probó de punta a punta contra la cuenta
+de Meta de verdad**, no contra un doble: número `3172782715`, negocio de prueba "Salón Demo
+EscalApp" (`id_negocio` 10, no confundir con el `16`, que es la clienta real D'Alex Barbería — los
+dos comparten nombre por casualidad, se verificó por NIT/teléfono antes de tocar nada). La fila
+quedó en `platform.numero_canal` con `origen='embedded_signup'`, token cifrado de 500 caracteres, y
+se desconectó después con `canalEmbeddedSignup.desconectar()` para dejar todo limpio.
+
+### 9.1 La pregunta que llevaba semanas abierta: ¿quién paga?
+
+**Contestada con evidencia, no con documentación de terceros.** El diálogo de Embedded Signup se
+recorrió pantalla por pantalla hasta el final, y en ningún momento pidió una tarjeta **a nosotros**:
+
+1. Pantalla de consentimiento (términos, qué va a poder hacer Escalapp) — sin pago.
+2. Número de teléfono (elegir uno o crear uno) — sin pago.
+3. Selección de activos a compartir (Portfolio + WABA, "crear uno nuevo" porque el número no
+   tenía nada) — sin pago.
+4. Datos del negocio (nombre, correo, categoría, país, franja horaria) — sin pago.
+5. Pantalla final, **"Tu cuenta está conectada a Escalapp"**, con dos botones al mismo nivel:
+   **"Añadir método de pago"** y **"Finalizar"**. El pago es una oferta, no un requisito — se
+   puede terminar la conexión sin tocarlo.
+
+Y lo más importante: cuando se exploró qué había detrás de "Añadir método de pago", la pantalla de
+facturación que apareció era de **"Salón Demo EscalApp"** — la empresa que el propio flujo acababa
+de crear, con su saldo en cero, sin ningún método de pago, y con la divisa por defecto en
+**Dírham de los Emiratos Árabes** (la prueba de que es una cuenta nueva, sin nada heredado de nuestro
+portafolio real, que por supuesto factura en pesos colombianos). Es decir: **el activo que se crea
+al conectar un número es una empresa y una WABA separadas de la de EscalApp**, administradas por
+quien hizo el registro (en la prueba, nosotros mismos, jugando el papel del cliente) — nunca
+absorbidas dentro del portafolio `1115123864174893`.
+
+Esto confirma, con evidencia de primera mano, lo que ya habían dicho tres fuentes de terceros
+independientes (Telnyx, Whautomate, Wuseller): como **Tech Provider**, el cliente paga con su
+propia tarjeta, en su propia cuenta — nunca la nuestra. La frase de "los socios de soluciones deben
+usar su línea de crédito" que aparecía en el asistente de "Hazte socio" del panel de Meta era
+boilerplate genérico para varios niveles de socio a la vez; no aplica a Tech Provider.
+
+**Lo que queda sin verificar**: en toda la prueba nunca se envió un mensaje real desde el número
+recién conectado. Es posible — y coherente con el patrón ya visto en `canal-whatsapp.md` con el
+número original de EscalApp — que el pago solo se exija más adelante, al primer mensaje que lo
+requiera (una plantilla, un mensaje iniciado por el negocio), no durante la conexión. Confirmarlo
+necesita mandar un mensaje de verdad desde una cuenta conectada por Embedded Signup, cosa que no se
+ha hecho todavía.
+
+### 9.2 Un número "reciclado" se pudo usar sin problema
+
+El número de prueba había dado antes un error de "ya está activo" al intentar registrarlo — sin que
+quien lo tenía en el celular recordara haberlo activado nunca. Coincide con el patrón conocido de
+números reciclados: un operador reasigna una SIM y la cuenta de WhatsApp de quien la tuvo antes
+sigue viva hasta que alguien la reclama. Como quien hacía la prueba sí tenía la SIM en la mano,
+Meta pudo mandarle el código de verificación por SMS, y verificarlo **resetea** la cuenta anterior
+(sin importar de quién fuera) y deja el número libre para la cuenta nueva. No hizo falta ningún
+paso adicional ni contactar a Meta.
+
+### 9.3 Los dos cabos sueltos que dejó la prueba — arreglados el mismo día
+
+- ~~**`numero_e164` quedó vacío**~~ **Arreglado.** Se confirmó por búsqueda contra la documentación
+  de Meta: el evento `WA_EMBEDDED_SIGNUP`/`FINISH` **nunca** trae `display_phone_number` — no fue
+  una particularidad de esta prueba. `embeddedSignupApi.js` ahora tiene `resolverNumero()`, que lo
+  pide aparte del lado del servidor (`GET /{phone_number_id}?fields=display_phone_number`) con el
+  mismo `accessToken`. Es cosmético — si falla, `conectar()` sigue con lo que haya, nunca se aborta
+  la conexión por esto.
+- ~~**`waba_id` y `business_id` salieron idénticos**~~ **Arreglado, y era un bug de verdad, no una
+  coincidencia inofensiva.** `resolverWaba()` sacaba `businessId` del primer `target_id` de
+  `granular_scopes` sin fijarse en el `scope` — daba el mismo valor que `wabaId` casi siempre,
+  porque casi siempre solo hay una entrada. Confirmado por búsqueda: el Business Manager y la WABA
+  son conceptos distintos en Meta, y `debug_token` no expone el `business_id` con su propio
+  `scope`. La fuente correcta es el propio evento `WA_EMBEDDED_SIGNUP`/`FINISH`, que sí lo trae —
+  ahora `conectar()` recibe `businessId` como parámetro (del panel, igual que `phoneNumberId`) en
+  vez de inventarlo. No es un dato de seguridad: el `wabaId` que de verdad importa lo sigue
+  verificando `resolverWaba()` contra el token, nunca contra lo que diga el navegador.
+
+### 9.4 El botón de "Desconectar" — ya existe
+
+Ya no hace falta el script de abajo para lo normal: `GET/POST .../canal-whatsapp/desconectar` deja
+que el propio negocio se desconecte desde el panel (self-service, solo para `origen =
+'embedded_signup'` — sobre un negocio de alta manual responde 409, no hace nada). Usa el mismo
+`canalEmbeddedSignup.desconectar()` de siempre.
+
+Lo de abajo sigue sirviendo para casos que el botón no cubre — por ejemplo, limpiar sin pasar por
+el panel, o cuando `desconectar()` devuelve `{desconectado: false}` y hay que investigar por qué:
+
+```bash
+cd /var/www/admin_ws
+node -e "
+require('dotenv').config();
+const canal = require('./app_core/whatsapp/canalEmbeddedSignup');
+canal.desconectar({ idNegocio: <id>, motivo: '<por qué>' })
+  .then(() => canal.obtenerEstado({ idNegocio: <id> }))
+  .then((e) => console.log(e));
+"
+sudo systemctl restart escalapp-api   # limpia la caché en memoria de numeros.js
+```
+
+Usa el mismo servicio que usaría el webhook de desconexión automática — no es un `UPDATE` a mano,
+así que deja el token realmente borrado y el estado consistente.

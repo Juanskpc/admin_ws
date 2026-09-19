@@ -368,8 +368,15 @@ router.post(
         body('code').trim().notEmpty().withMessage('Falta el code de Embedded Signup'),
         body('phoneNumberId').trim().notEmpty().withMessage('Falta el phoneNumberId'),
         body('numeroE164').optional({ nullable: true }).trim().isLength({ max: 20 }),
+        body('businessId').optional({ nullable: true }).trim().isLength({ max: 100 }),
     ],
     CanalWhatsappController.postCanjear
+);
+
+router.post(
+    '/negocios/:id_negocio/canal-whatsapp/desconectar',
+    idNegocioValidator,
+    CanalWhatsappController.postDesconectar
 );
 
 router.post('/negocios/registrar-cliente', requireSuperAdmin, [
