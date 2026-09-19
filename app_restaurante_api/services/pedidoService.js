@@ -762,16 +762,25 @@ async function quitarItemsOrden({ idOrden, idNegocio, items, porcentajeImpuesto 
             throw new Error('ORDEN_NO_ENCONTRADA');
         }
 
+        // Sin `include` a propósito: Postgres no deja aplicar FOR UPDATE del lado nulo de
+        // un LEFT JOIN, y `exclusiones` es opcional (no todo detalle tiene ingredientes
+        // excluidos), así que el join lo generaba OUTER y el lock fallaba siempre.
         const detalles = await Models.PedidDetalle.findAll({
             where: { id_orden: idOrden },
-            include: [{
-                model: Models.PedidDetalleExclu,
-                as: 'exclusiones',
-                attributes: ['id_detalle_exclu', 'id_ingrediente'],
-            }],
             transaction: t,
             lock: t.LOCK.UPDATE,
         });
+
+        const exclusionesPorDetalle = await Models.PedidDetalleExclu.findAll({
+            where: { id_detalle: detalles.map((d) => d.id_detalle) },
+            attributes: ['id_detalle', 'id_ingrediente'],
+            transaction: t,
+        });
+        const exclusionesMap = new Map();
+        for (const e of exclusionesPorDetalle) {
+            if (!exclusionesMap.has(e.id_detalle)) exclusionesMap.set(e.id_detalle, []);
+            exclusionesMap.get(e.id_detalle).push(e.id_ingrediente);
+        }
 
         const claveDe = (idProducto, exclusiones, nota) => {
             const excl = [...new Set(exclusiones || [])].sort((a, b) => a - b).join(',');
@@ -782,7 +791,7 @@ async function quitarItemsOrden({ idOrden, idNegocio, items, porcentajeImpuesto 
         for (const d of detalles) {
             const clave = claveDe(
                 d.id_producto,
-                (d.exclusiones || []).map((e) => e.id_ingrediente),
+                exclusionesMap.get(d.id_detalle) || [],
                 d.nota,
             );
             if (!porClave.has(clave)) porClave.set(clave, []);
