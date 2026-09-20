@@ -26,6 +26,7 @@ const FichaPersonaController = require('../controllers/fichaPersonaController');
 const AuditoriaController = require('../controllers/auditoriaController');
 const DatosFiscalesController = require('../controllers/datosFiscalesController');
 const CobranzaController = require('../controllers/cobranzaController');
+const AdquirirController = require('../controllers/adquirirController');
 const { verificarToken, requireSuperAdmin } = require('../../app_core/middleware/auth');
 const rateLimit = require('express-rate-limit');
 
@@ -121,6 +122,45 @@ router.post('/publico/cobranza/pagar', limitePortalPagos, [
     body('referencia').trim().matches(/^EA-\d+-\d{6}$/).withMessage('Referencia inválida'),
     body('pasarela').isIn(['manual', 'dlocal', 'wompi']).withMessage('Medio de pago inválido'),
 ], CobranzaController.pagarPublico);
+
+// ── Adquirir plan: comprar sin tener cuenta ──────────────────────────────────────────────
+//
+// Público por necesidad: quien compra todavía no es cliente y no tiene token. El límite es más
+// estrecho que el del portal de pagos porque cada POST aquí **crea un usuario y un negocio**:
+// cinco por cuarto de hora es de sobra para una persona comprando y poco para un script.
+const limiteAdquirir = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 5,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { success: false, message: 'Demasiados intentos. Espera unos minutos e inténtalo de nuevo.' },
+});
+
+router.get('/publico/adquirir/catalogo', limitePortalPagos, AdquirirController.getCatalogo);
+
+router.post('/publico/adquirir', limiteAdquirir, [
+    body('nombres').trim().isLength({ min: 2, max: 60 }).withMessage('Nombres inválidos'),
+    body('apellidos').trim().isLength({ min: 2, max: 60 }).withMessage('Apellidos inválidos'),
+    body('num_identificacion').trim()
+        .isLength({ min: 5, max: 20 }).withMessage('Número de identificación inválido')
+        .matches(/^[0-9A-Za-z-]+$/).withMessage('Número de identificación inválido'),
+    body('email').trim().isEmail().normalizeEmail().withMessage('Correo inválido'),
+    body('telefono').optional({ values: 'falsy' }).trim()
+        .isLength({ min: 7, max: 20 }).withMessage('Teléfono inválido'),
+    body('rubro').trim().isLength({ min: 2, max: 60 }).withMessage('Tipo de negocio inválido'),
+    body('nombre_negocio').trim().isLength({ min: 2, max: 100 }).withMessage('Nombre del negocio inválido'),
+    body('plan').trim().isLength({ min: 3, max: 60 }).withMessage('Plan inválido'),
+    body('pasarela').isIn(['dlocal', 'wompi']).withMessage('Medio de pago inválido'),
+], AdquirirController.postCompra);
+
+router.post('/publico/adquirir/reintentar', limitePortalPagos, [
+    body('referencia').trim().matches(/^EA-\d+-\d{6}$/).withMessage('Referencia inválida'),
+    body('pasarela').optional().isIn(['dlocal', 'wompi']).withMessage('Medio de pago inválido'),
+], AdquirirController.postReintentar);
+
+router.get('/publico/adquirir/estado/:referencia', limitePortalPagos, [
+    param('referencia').trim().matches(/^EA-\d+-\d{6}$/).withMessage('Referencia inválida'),
+], AdquirirController.getEstado);
 
 // Vuelta desde el checkout con `?id=<transacción>`. El estado lo pregunta el backend a la
 // pasarela; del navegador solo se acepta el id. Mismo límite que el resto del portal.

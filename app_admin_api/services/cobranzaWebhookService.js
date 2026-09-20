@@ -23,6 +23,7 @@
 const Models = require('../../app_core/models/conection');
 const Dao = require('../../app_core/dao/cobranzaDao');
 const CobranzaService = require('./cobranzaService');
+const AdquirirService = require('./adquirirService');
 const { getAdaptador } = require('../../app_core/cobranza');
 const Audit = require('../../app_core/helpers/auditHelper');
 const { setAuditNegocio } = require('../../app_core/middleware/auditContext');
@@ -162,6 +163,15 @@ async function procesarEvento(pasarela, verificado) {
                 transaction
             );
             await transaction.commit();
+
+            // Si esta es la primera factura pagada del negocio, el pago no renueva nada: es un
+            // alta desde «Adquirir plan», y el dueño todavía no sabe con qué entrar. Va fuera de
+            // la transacción y sin await encadenado: un correo que falle no puede deshacer un
+            // pago que ya está aplicado.
+            AdquirirService.notificarAltaPagada(bloqueada.id_negocio, bloqueada.referencia).catch((e) =>
+                console.error('[Cobranza] No se pudo avisar del alta pagada:', e.message)
+            );
+
             return { accion: 'pago_aplicado', referencia: bloqueada.referencia };
         } catch (err) {
             await transaction.rollback();
