@@ -60,7 +60,8 @@ async function procesarAvisosDeVencimiento(dias) {
             const emailsDestino = new Set();
 
             for (const usuarioRel of usuariosNegocio) {
-                if (usuarioRel.email) emailsDestino.add(usuarioRel.email);
+                const email = usuarioRel.usuario?.email;
+                if (email) emailsDestino.add(email);
             }
             if (negocio.email_contacto) emailsDestino.add(negocio.email_contacto);
 

@@ -143,7 +143,13 @@ async function getPlanesQueVencenEn(dias) {
         include: [
             {
                 model: Models.GenerNegocio,
-                include: [{ model: Models.GenerUsuario, as: 'usuarios' }]
+                include: [{
+                    model: Models.GenerNegocioUsuario,
+                    as: 'usuarios',
+                    where: { estado: 'A' },
+                    required: false,
+                    include: [{ model: Models.GenerUsuario, as: 'usuario' }]
+                }]
             },
             { model: Models.GenerPlan }
         ]
