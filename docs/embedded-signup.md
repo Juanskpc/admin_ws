@@ -253,3 +253,28 @@ sudo systemctl restart escalapp-api   # limpia la caché en memoria de numeros.j
 
 Usa el mismo servicio que usaría el webhook de desconexión automática — no es un `UPDATE` a mano,
 así que deja el token realmente borrado y el estado consistente.
+
+### 9.5 La trampa que costó más tiempo ese día no fue de Meta — fue de despliegue
+
+Dos veces la misma sesión, el mismo patrón: **subir a GitHub no es desplegar**, y nada avisa
+cuando se olvida el segundo paso.
+
+**Primera vez (backend).** Se arregló `numero_e164`/`business_id` en local, pasó la suite
+(601/601), se commiteó y se subió a `origin/master`. Al crear una conexión de prueba en producción
+para probar el botón de desconectar, el backend falló con `Named replacement ":businessId" has no
+entry in the replacement map` — un error que **ya no existía en el código del repo**. El VPS
+seguía en el commit anterior: nunca se le había hecho `git pull`. `git log --oneline -1` en el
+servidor lo confirmó en un segundo.
+
+**Segunda vez, minutos después (frontend).** El botón de desconectar no aparecía en el panel pese
+a que el código lo tenía. `ls -la /var/www/html/admin/index.html` mostró la hora exacta: ese
+archivo era de **antes** de haber escrito el botón. Se había compilado, commiteado y subido a
+GitHub — nunca se había vuelto a `scp`+extraer el build a `/var/www/html/admin`.
+
+**La lección, para no repetirla:** "commitear y subir a GitHub" y "compilar/migrar y desplegar al
+VPS" son dos pasos distintos, y el primero **no implica** el segundo — ni avisa cuando falta. La
+forma de no tropezar dos veces con esto no es acordarse más fuerte, es **verificar el mismo minuto
+en que se cree haber terminado**: `git log --oneline -1` en el servidor tras cualquier `pull`, y
+la fecha de `index.html` (o un `grep` del texto nuevo en los `.js` servidos) tras cualquier
+despliegue de frontend. Es la misma disciplina que ya pedía §7 de este documento para el `pull` del
+backend — solo que aquí mordió también del lado del frontend, que no la tenía anotada todavía.

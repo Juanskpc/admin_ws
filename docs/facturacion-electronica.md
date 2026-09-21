@@ -1,6 +1,6 @@
 # Facturación electrónica: qué es, qué exige la DIAN y cómo la va a hacer EscalApp
 
-**Estado:** documentación previa a la implementación · **Decisión que la gobierna:** [ADR-026](adr/ADR-026-facturacion-electronica.md) · **Fecha:** 2026-09-01 · **Última revisión:** 2026-09-14 (§8.2-quinquies: reunión con Factus — una cuenta por cliente, sin exclusividad, paquetes y bolsa combinables; §8.7 matizada) · **Backlog:** ESC-067 a ESC-071
+**Estado:** documentación previa a la implementación · **Decisión que la gobierna:** [ADR-026](adr/ADR-026-facturacion-electronica.md) · **Fecha:** 2026-09-01 · **Última revisión:** 2026-09-15 (§8.2-sexies: llegan el Contrato de Alianza y el Acuerdo de Confidencialidad; no existe paquete mensual) · **Backlog:** ESC-067 a ESC-071
 
 > Este documento cierra ESC-067 («investigar y documentar requisitos DIAN»). Está escrito para
 > leerse de arriba abajo la primera vez y consultarse por secciones después. La §1 no tiene
@@ -1388,6 +1388,112 @@ Nos quedan algunas preguntas:
 Quedamos atentos para recibir los acuerdos de alianza y confidencialidad.
 
 Gracias,
+
+---
+
+### 8.2-sexies Llegan el Contrato de Alianza y la Confidencialidad (2026-09-15): se cierra el correo, y se cae la esperanza del paquete mensual
+
+El mismo asesor (+57 316 133 1234) contestó el correo de cierre de §8.9, mitad por WhatsApp mitad
+por correo. Por correo llegaron por fin los **dos documentos que faltaban** (§8.2-quinquies, punto
+6): el **Acuerdo de Confidencialidad y No Divulgación** y el **Contrato de Alianza Comercial**
+(«CONTRATO DE SOFTWARE (API) – ALIANZA COMERCIAL»). Los dos ya se leyeron completos, no solo el
+resumen.
+
+#### 1. Las 6 preguntas del correo de cierre, contra la respuesta
+
+| # | Pregunta (§8.9) | Respuesta (WhatsApp, 2026-09-15) | Estado |
+|---|---|---|---|
+| 1 | ¿Firmar obliga a comprar en una fecha? | **No.** *«Los documentos se envían en PDF firmados para quedar en pie como ALIADOS y ya puedas proceder cuando lo desees con las activaciones que desees realizar.»* Coincide con la cláusula CUARTA del contrato: el pago es **«de forma anticipada para la activación o renovación»**, no al firmar | ✅ **Se puede firmar ya, sin comprar nada** |
+| 2 | Paso a paso del alta, ¿quién crea la cuenta? | Parcial: al activar el panel mandan videos guía; la asociación de **rangos de numeración** la hace el aliado o su contador. No dice explícitamente quién genera las credenciales | ⚠️ sigue sin ser el paso a paso completo que se pidió |
+| 3 | En bolsa, ¿se puede reasignar entre clientes? | **Sí, a solicitud**: *«tú nos indicas cuántos documentos le asignamos a cada cliente y si deseas agregarle más documentos, lo realizamos según tu solicitud».* No es autoservicio ni instantáneo, pero confirma que se puede | ✅ resuelto, manual |
+| 4 | ¿Podemos comprar un paquete a nombre de un cliente? | Confirmado, y por escrito en el contrato — cláusula PRIMERA.B: *«El ALIADO podrá hacer uso propio o si así lo desea comercializar con los usuarios de su software»* | ✅ |
+| 5 | Producto sin IVA ni impoconsumo, ¿`is_excluded` es correcto? | **No contestada.** Ni por WhatsApp ni en los documentos nuevos | ❌ sigue abierta |
+| 6 | ¿Existe paquete mensual? | **No.** *«Nuestros paquetes son anuales, tanto en individuales como en bolsas.»* | ❌ **cierra la esperanza de §8.2-quinquies sobre el T&C §f.2** |
+
+**Consecuencia de la 6:** §8.2-quinquies apuntaba que un paquete mensual *«resuelve buena parte de
+quién pone la plata del año»* (`precios-y-planes.md` §3). Queda descartado: la mención de «mensual o
+anual» en los T&C (§f.2) no se traduce en un producto real. **La pregunta de quién paga el año sigue
+abierta, sin la salida fácil**, y las tres opciones de `precios-y-planes.md` §3 —permanencia de 12
+meses, cobro de activación, o que el cliente compre su propio paquete— siguen siendo las únicas
+sobre la mesa. La buena noticia es que la respuesta 1 dice que **no hay prisa por decidirlo para
+firmar la alianza**: eso solo hace falta el día que exista un cliente real.
+
+#### 2. Lo que trae el Contrato de Alianza, leído completo por primera vez
+
+- **Reparto de responsabilidad, tal como ya se había diseñado** (cláusula SEGUNDA.K y PARÁGRAFO
+  PRIMERO de la QUINTA): Factus responde por la infraestructura y el funcionamiento del API y por
+  la habilitación ante la DIAN; EscalApp responde por la integración y por los datos que envía, y
+  es **el único responsable comercial y de soporte frente a sus propios clientes** — Factus no
+  asume ninguna obligación directa con ellos. Coincide exactamente con la postura de
+  [`obligaciones-escalapp.md`](obligaciones-escalapp.md) §6: no quedar en el medio.
+- **Garantía si Factus pierde la habilitación ante la DIAN** (PARÁGRAFO SEGUNDO de la cláusula
+  PRIMERA): si no la restablece en **3 días hábiles**, debe devolver proporcionalmente lo pagado por
+  los paquetes no ejecutados, **y asume la responsabilidad frente a EscalApp** por las consecuencias
+  administrativas o económicas que eso le genere a los usuarios finales. Es una protección real, no
+  cosmética.
+- **Continuidad del servicio si la alianza termina** (PARÁGRAFO de la cláusula NOVENA): los paquetes
+  ya activos siguen operando **hasta su vencimiento anual**, pase lo que pase con la relación
+  comercial. Si el motivo de la terminación es un incumplimiento de Factus, EscalApp además puede
+  exigir la devolución proporcional de lo pagado por paquetes no ejecutados, en 30 días hábiles.
+- **Terminación unilateral sin penalidad**, con 60 días calendario de preaviso (cláusula NOVENA.5).
+  Vigencia de 1 año, con renovación automática salvo aviso de 60 días antes del vencimiento.
+- **Autorización de marca** (DÉCIMA SEGUNDA): se puede usar el nombre «FACTUS» para promocionar el
+  servicio a nuestros clientes, respetando sus lineamientos gráficos, mientras dure el contrato.
+- **Cesión y subcontratación** (DÉCIMA TERCERA): Factus puede ceder el contrato en una fusión o
+  venta sin pedirnos autorización previa, si el nuevo operador acredita capacidad equivalente
+  (avisando en 15 días). Si subcontrata algo que toque nuestros datos o los de nuestros clientes,
+  sí necesita autorización previa nuestra, y el subcontratista debe firmar las mismas obligaciones
+  de confidencialidad y protección de datos que Factus.
+- **Domicilio contractual: San Gil, Santander.** Arreglo directo → conciliación → justicia ordinaria
+  colombiana, en ese orden (cláusula DÉCIMA).
+
+#### 3. Lo que trae el Acuerdo de Confidencialidad
+
+- **Recíproco**, y sobrevive **5 años** después de terminada la relación comercial (cláusula QUINTA).
+- **Fija por escrito el reparto de datos personales que hasta ahora era solo un diseño nuestro**
+  (cláusula PRIMERA y SÉPTIMA): **EscalApp (ALIADO) es RESPONSABLE del tratamiento** de los datos de
+  sus usuarios finales; **Factus es ENCARGADO del tratamiento**, obligación que le sobrevive aunque
+  termine la relación. Esto cierra por contrato lo que `obligaciones-escalapp.md` §6 ya asumía como
+  diseño — conviene citarlo ahí cuando se actualice ese documento.
+- Mismo domicilio de controversias: San Gil, Santander.
+
+#### 4. Requisitos documentales, ya confirmados y con quién
+
+| Para quién | Documentos | Cuándo |
+|---|---|---|
+| **EscalApp, como ALIADO** (una sola vez) | Cámara de Comercio (**≤30 días**) + RUT actualizado | Antes de firmar |
+| **Cada cliente que se active** | RUT, certificado de existencia y representación legal (≤30 días; no aplica a persona natural), cédula del representante legal, comprobante de pago del paquete, logo PNG/JPG, versión de integración (**v2**, la nuestra) | Al comprar su paquete, a `activacion@factus.com.co` |
+
+**Pago:** transferencia a la cuenta de ahorros Bancolombia **322-000053-83** (Llave
+**0090582804**), a nombre de **FACTUS S.A.S., NIT 901724254-1**.
+
+⚠️ **EscalApp está registrada como Sociedad Unipersonal a nombre personal de Nicolás** (matrícula
+renovada el 2026-08-28) — la Cámara de Comercio caduca en 30 días, así que conviene sacarla **justo
+antes de enviar los documentos firmados**, no antes.
+
+#### 5. Qué falta, en orden
+
+1. **Diligenciar y firmar** el Acuerdo de Confidencialidad y el Contrato de Alianza, con los datos
+   de EscalApp / Nicolás como representante legal. **Firmarlos no obliga a comprar nada** (P1): se
+   puede hacer ya, sin esperar al primer cliente.
+2. **Sacar la Cámara de Comercio actualizada (≤30 días) y el RUT** de EscalApp para adjuntarlos.
+3. **Insistir por escrito en la pregunta 5** (productos sin IVA ni impoconsumo) antes de facturar a
+   un cliente que no sea responsable de ningún impuesto — sigue siendo el único punto legal sin
+   resolver de toda la integración.
+4. **Retomar «quién pone la plata del año»** en `precios-y-planes.md` §3 el día que haya un cliente
+   real, ya sin la salida del paquete mensual.
+
+#### 6. ⚠️ Contradicción sin resolver: ¿hay o no precio de aliado?
+
+La reunión del 2026-09-14 contestó **P6** con un «no»: *«No hay precios de aliado: aplica la misma
+lista pública»* (§8.2-quinquies), y `precios-y-planes.md` ya calculó los tramos con esa lista. El
+mensaje de WhatsApp del 2026-09-15 dice lo contrario, aunque de pasada: *«Los valores que te
+brindamos son especiales para ti como ALIADO»*.
+
+**No se sabe si es una lista de precios real que no han mandado, o solo una forma de hablar** (el
+asesor podría referirse a que la relación comercial es directa, no a un descuento). No conviene
+asumir ninguna de las dos. **Pendiente: preguntarlo por escrito y, si existe, pedir la lista** —
+cambiaría los márgenes por tramos de `precios-y-planes.md` §3.
 
 ---
 
