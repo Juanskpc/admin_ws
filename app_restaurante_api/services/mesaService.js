@@ -101,6 +101,13 @@ async function getMesasDashboard(idNegocio) {
                 as: 'pagos',
                 attributes: ['id_pago', 'id_metodo_pago', 'valor'],
                 required: false,
+            }, {
+                // Quien tomó el pedido — la factura impresa desde Mesas lo mostraba como
+                // "Atiende", pero con el nombre de quien la imprimía, no de quien atendió.
+                model: Models.GenerUsuario,
+                as: 'usuario',
+                attributes: ['id_usuario', 'primer_nombre', 'primer_apellido'],
+                required: false,
             }],
         }],
     });
@@ -155,6 +162,11 @@ async function getMesasDashboard(idNegocio) {
                     valor: Number(p.valor ?? 0),
                 })),
                 nota: ordenActiva.nota ?? null,
+                usuario: ordenActiva.usuario ? {
+                    id_usuario: ordenActiva.usuario.id_usuario,
+                    primer_nombre: ordenActiva.usuario.primer_nombre,
+                    primer_apellido: ordenActiva.usuario.primer_apellido,
+                } : null,
                 items,
             } : { total: 0, items: [], pagos: [], descuento: 0 },
         };
