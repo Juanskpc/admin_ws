@@ -18,6 +18,12 @@ module.exports = (sequelize, DataTypes) => {
         // Solo se acepta si el negocio tiene permite_descuento = true.
         descuento:      { type: DataTypes.DECIMAL(12, 2), allowNull: false, defaultValue: 0 },
         estado:         { type: DataTypes.STRING(20), defaultValue: 'ABIERTA' },
+        // Quién disparó la cancelación: 'cliente' (bot de WhatsApp, `cancelarPorCliente`) o
+        // 'negocio' (panel, `cancelarOrden`). NULL en cualquier orden que no esté cancelada.
+        // Sin esto una orden cancelada por el cliente y una cancelada por el propio negocio
+        // se veían exactamente igual — o sea que no se veían nada, las dos desaparecían de
+        // Despacho sin dejar ningún rastro de qué pasó.
+        cancelado_por:  { type: DataTypes.STRING(10), allowNull: true },
         estado_cocina:  { type: DataTypes.STRING(20), allowNull: true },
         fecha_creacion: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
         fecha_cierre:   { type: DataTypes.DATE },

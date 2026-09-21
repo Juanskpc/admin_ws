@@ -362,6 +362,9 @@ router.get('/cocina', PedidoController.getOrdenesCocina);
 router.get('/despacho', [
 	query('id_negocio').isInt({ min: 1 }),
 ], PedidoController.getOrdenesDespacho);
+router.get('/despacho/cancelados', [
+	query('id_negocio').isInt({ min: 1 }),
+], PedidoController.getOrdenesCanceladasRecientes);
 router.post('/despacho/:id/avisar-listo', [
 	param('id').isInt({ min: 1 }),
 	...PedidoController.avisarPedidoListoValidators,

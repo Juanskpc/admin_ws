@@ -1112,3 +1112,141 @@ basta que dos de ellos discrepen sobre si el teléfono hace falta.
 - **El arnés de evaluación no tiene ni una conversación de restaurante.** Sus tres suites son
   todas de `reserva`, así que un cambio de prompt como el de la `v3` no se puede medir donde
   más se nota. `enrutado` es gratis; `respuestas` cuesta unos centavos por tanda.
+
+---
+
+## `cancelar_pedido` y `consultar_cuenta` (2026-09-21)
+
+Barrido de qué le falta al bot frente a lo que un cliente le pediría a un restaurante por
+WhatsApp. De la lista completa, estas dos eran las únicas que no necesitaban construir nada
+nuevo en el dominio — el resto (repetir pedido, modificar uno ya hecho, horario de atención,
+promociones) sí lo necesita, y no se tocó. La tercera candidata, **consultar métodos de pago**,
+se descartó a propósito: ver más abajo.
+
+| Capacidad | Tipo | Qué hace |
+|---|---|---|
+| `cancelar_pedido` | **mutación** | Cancela un pedido del cliente, con confirmación |
+| `consultar_cuenta` | consulta | Saldo de su tiquetera o de su cuenta fiada |
+
+### `cancelar_pedido` no reutiliza `cancelarOrden`
+
+`pedidoService.cancelarOrden` —la que usa Despacho— exige un `idUsuario` con permiso de rol
+(`usuarioPuedeCancelarPedidoNoPagado`): la comprobación correcta para un empleado, sin sentido
+para un cliente por WhatsApp, que no tiene ningún rol que darle. Tampoco acepta `{ transaction }`,
+así que un dry-run del Gate la habría confirmado igual — el mismo obstáculo #1 que ya tuvo
+`tomar_pedido`.
+
+Se escribió `pedidoService.cancelarPorCliente(idOrden, { idNegocio, transaction })` aparte, con su
+propia ventana de negocio: **la cocina no puede haber empezado a prepararlo**
+(`estado_cocina IN (NULL, 'PENDIENTE')`). Pasado ese punto se rechaza con `ORDEN_EN_PREPARACION` y
+el mensaje remite al restaurante — cancelar solo no debe poder tirar comida ya hecha. La
+pertenencia se comprueba en el adaptador, igual que en `consultar_estado_pedido`, antes de llamar
+al servicio.
+
+### `consultar_cuenta` busca por teléfono, no por `id_cuenta`
+
+El cliente no sabe su `id_cuenta`; lo único que tiene es su número. `cuentaService.buscarCuentaPorTelefono`
+resuelve la fila de `platform.persona_negocio` por `telefono_e164` y de ahí la cuenta — el
+mismo principio que `personaNegocioDao`, aplicado a un caso nuevo. Es opt-in por
+`gener_negocio.permite_cuentas_cliente`, comprobado dentro de la capacidad y no solo con la
+habilitación del Registry: son dos apagadores distintos (uno de dominio/Gate, otro del propio
+negocio) que se pueden accionar en momentos distintos.
+
+### Lo que se descartó: `consultar_metodos_pago`
+
+Ya existió una capacidad con ese nombre exacto, retirada el 2026-08-27 (ver más abajo) porque
+preguntar el método de pago dentro del flujo de pedido no convencía. Se construyó una versión
+distinta —pasiva, sin tocar `tomar_pedido`, solo para cuando el cliente pregunta suelto— pero el
+dueño prefirió no reabrir el tema todavía: el domiciliario cobra en la puerta, y así se queda por
+ahora. Se retiró antes de desplegar; queda anotado por si alguna vez se retoma, para no repetir la
+pregunta desde cero.
+
+### Falta antes de que sirvan en producción
+
+Como con toda capacidad nueva, `platform.capacidad_habilitada` no trae fila para negocios
+existentes (por diseño: la ausencia deniega). Hace falta, por negocio real:
+
+```bash
+node scripts/capacidad.js habilitar cancelar_pedido --negocio <id>
+node scripts/capacidad.js habilitar consultar_cuenta --negocio <id>
+```
+
+`consultar_cuenta` además solo sirve donde `permite_cuentas_cliente` esté encendido en
+Configuración — hoy eso es un negocio a la vez, a mano.
+
+### Seguimiento (mismo día): la cancelación dejó de ser muda
+
+Un compañero preguntó, sin haber visto el código: *«si se cancela un pedido, ¿cómo aparece al
+negocio?»*. La respuesta era: no aparece — la orden simplemente desaparece de Despacho, Cocina y
+Mesas en tiempo real (el mismo aviso SSE que ya existía), sin dejar ningún rastro visible en
+ninguna pantalla ni reporte. Para uno que cancela el propio empleado desde el panel, mirando la
+pantalla, es correcto. Para uno que cancela **el cliente** por WhatsApp sin que nadie del negocio
+tocara nada, es un hueco: el negocio solo nota que ya no está, nunca que pasó ni por qué.
+
+Se cerró en tres piezas:
+
+- **`pedid_orden.cancelado_por`** (`'cliente' | 'negocio'`, migración `restaurante-cancelado-por`).
+  `cancelarOrden` (panel) escribe `'negocio'`; `cancelarPorCliente` (bot) escribe `'cliente'`.
+- **`pedidoService.getOrdenesCanceladasRecientes`** — los cancelados de LLEVAR/DOMICILIO de
+  **hoy**, con el mismo filtro de visibilidad por domiciliario que `getOrdenesDespacho`. Aparte
+  y no mezclado con los activos: esto es una alerta de lo que acaba de pasar en el turno, no un
+  historial — el historial ya existe, es la fila que nunca se borra.
+- **`GET /despacho/cancelados`**, endpoint nuevo y no un campo más del `/despacho` de siempre,
+  para no cambiarle la forma de la respuesta a quien ya lo consume. En `restaurante_app`, un
+  chip «Cancelados hoy (N)» —mismo patrón que el chip de WhatsApp, solo aparece si hay
+  alguno— abre un panel chico con quién lo canceló.
+
+No se tocó nada de lo que ya existía: `getOrdenesDespacho` sigue devolviendo exactamente lo mismo
+que devolvía, y un pedido cancelado sigue desapareciendo de la vista principal al instante — eso
+seguía siendo correcto. Lo que cambió es que ahora hay un sitio, aparte, donde no se pierde.
+
+### El resto de la lista del compañero (2026-09-21)
+
+Las otras tres preguntas que hizo por WhatsApp, en el mismo hilo, con lo que se encontró y lo
+que se cerró de cada una:
+
+**«¿El sistema valida los domiciliarios?»** No, casi nada: `id_domiciliario` solo pasaba por
+`isInt({ min: 1 })` en el controlador y por la FK a `gener_usuario` en la base — que exista un
+usuario con ese id EN CUALQUIER PARTE del sistema, nunca que sea domiciliario **de este
+negocio**. `pedidoService.esDomiciliarioValido` cierra el hueco: reutiliza la misma regla de dos
+caminos de `listarDomiciliarios` (personal propio o rol DOMICILIARIO) pero comprobando un
+candidato, y `crearOrden` la exige antes de crear la orden (`DOMICILIARIO_INVALIDO`, 422).
+
+**«¿Cómo el negocio puede bloquear un número?»** No existía — solo el cliente podía llegar a
+`estado = 'bloqueada'`, escribiendo STOP/BAJA, y eso es irrevocable salvo por un super admin
+desde la Consola (ADR-023). Ahora la Bandeja (`/admin/bandeja`, la del propio negocio, no la
+Consola) tiene `bloquear`/`desbloquear`. La pieza que lo hace seguro:
+`intelligence.conversacion.bloqueada_por` (`'cliente' | 'negocio'`, migración
+`intelligence-bloqueada-por`) distingue quién lo puso, para que el negocio pueda deshacer **su
+propio** bloqueo sin que eso le abra una puerta trasera a deshacer la baja legal de un STOP real
+— `desbloquear` se niega en seco si `bloqueada_por` no es `'negocio'`.
+
+**«¿Se puede editar un pedido ya realizado?»** Desde el panel (POS), sí, desde siempre
+(`agregarItemsOrden`/`quitarItemsOrden`). Desde WhatsApp, no podía — el cliente solo podía
+cancelar. Se cerró la mitad que pedía el compañero: **`agregar_items_pedido`**, para un
+"también quiero..." sobre un pedido que ya puso. No reutiliza `agregarItemsOrden` — esa conoce
+método de pago, cuenta, multipago, descuento y domicilio, y nada de eso es una decisión que el
+cliente deba tocar por WhatsApp, y tampoco acepta transacción externa (el mismo obstáculo #1 de
+siempre) — sino `pedidoService.agregarItemsPorCliente`, con la MISMA ventana que
+`cancelar_pedido`: la cocina no puede haber empezado a prepararlo. **Quitar** ítems por WhatsApp
+se dejó fuera a propósito: `quitarItemsOrden` empareja por producto + exclusiones + nota para
+decidir qué detalle reducir, y exponer esa ambigüedad a un modelo que interpreta lenguaje
+natural — "quítame la hamburguesa" ¿cuál, si pidió dos distintas? — es más riesgo del que vale
+la pena para la primera tanda. Se puede añadir después si hace falta de verdad.
+
+Las tres, con sus tests, corridas contra la base local: 1020 pruebas en verde.
+
+### Falta antes de que sirvan en producción (actualizado)
+
+```bash
+node scripts/capacidad.js habilitar cancelar_pedido --negocio <id>
+node scripts/capacidad.js habilitar consultar_cuenta --negocio <id>
+node scripts/capacidad.js habilitar agregar_items_pedido --negocio <id>
+```
+
+Y las migraciones nuevas, en cualquier entorno donde no se hayan corrido:
+
+```bash
+npm run migrate:restaurante-cancelado-por
+npm run migrate:intelligence-bloqueada-por
+```

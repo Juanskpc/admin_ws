@@ -460,6 +460,27 @@ async function getOrdenesDespacho(req, res) {
 }
 
 /**
+ * GET /restaurante/despacho/cancelados
+ *
+ * Endpoint aparte —no un campo más de `getOrdenesDespacho`— para no cambiarle la forma de la
+ * respuesta a quien ya consume ese endpoint tal como es hoy: un array plano de pedidos activos.
+ */
+async function getOrdenesCanceladasRecientes(req, res) {
+    try {
+        const idNegocio = Number(req.query.id_negocio);
+        if (!idNegocio) return Respuesta.error(res, 'id_negocio requerido', 400);
+        const ordenes = await PedidoService.getOrdenesCanceladasRecientes({
+            idNegocio,
+            idUsuario: req.usuario.id_usuario,
+        });
+        return Respuesta.success(res, 'Pedidos cancelados recientes', ordenes);
+    } catch (err) {
+        console.error('[Despacho] Error getOrdenesCanceladasRecientes:', err.message);
+        return Respuesta.error(res, 'Error al obtener los pedidos cancelados.');
+    }
+}
+
+/**
  * POST /restaurante/despacho/:id/avisar-listo
  *
  * Le avisa al cliente por WhatsApp que su pedido está listo para recoger.
@@ -520,6 +541,7 @@ module.exports = {
     getOrdenById,
     getOrdenesCocina,
     getOrdenesDespacho,
+    getOrdenesCanceladasRecientes,
     avisarPedidoListo, avisarPedidoListoValidators,
     getDomiciliarios,
     enviarACocina,

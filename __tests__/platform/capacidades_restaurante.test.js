@@ -20,10 +20,19 @@ const { resolverPrincipalUsuario } = require('../../app_core/authz/principal');
 const { principalDeContacto } = require('../../intelligence/engine/identidad');
 const intelligence = require('../../intelligence');
 const policyGate = require('../../intelligence/core/policyGate');
+const personaNegocioDao = require('../../app_core/dao/personaNegocioDao');
 
 const sequelize = Models.sequelize;
 
-const CAPACIDADES = ['consultar_carta', 'buscar_producto', 'consultar_estado_pedido', 'tomar_pedido'];
+const CAPACIDADES = [
+    'consultar_carta',
+    'buscar_producto',
+    'consultar_estado_pedido',
+    'tomar_pedido',
+    'consultar_cuenta',
+    'cancelar_pedido',
+    'agregar_items_pedido',
+];
 const TEL_DUENO = '+573001112233';
 const TEL_INTRUSO = '+573009998877';
 
@@ -79,6 +88,20 @@ afterAll(async () => {
     await sequelize.query(
         `DELETE FROM restaurante.pedid_orden WHERE numero_orden LIKE 'ORD-99%'
             OR (id_negocio = :n AND contacto_nombre LIKE 'BOT %');`,
+        { replacements: { n: idNegocio } }
+    );
+    await sequelize.query(
+        `DELETE FROM restaurante.rest_cuenta_movimiento WHERE id_negocio = :n AND concepto LIKE 'BOT %';`,
+        { replacements: { n: idNegocio } }
+    );
+    await sequelize.query(
+        `DELETE FROM restaurante.rest_cuenta c USING platform.persona_negocio pn
+          WHERE c.id_persona_negocio = pn.id_persona_negocio
+            AND c.id_negocio = :n AND pn.nombre_mostrado LIKE 'BOT %';`,
+        { replacements: { n: idNegocio } }
+    );
+    await sequelize.query(
+        `DELETE FROM platform.persona_negocio WHERE id_negocio = :n AND nombre_mostrado LIKE 'BOT %';`,
         { replacements: { n: idNegocio } }
     );
     intelligence._reiniciar();
@@ -451,5 +474,330 @@ describe('tomar_pedido — la mutación', () => {
         await expect(pedir([{ producto: 'hamburguesa' }])).rejects.toMatchObject({
             code: 'ARGUMENTOS_INVALIDOS',
         });
+    });
+});
+
+describe('consultar_cuenta — tiquetera y fiado', () => {
+    const TEL_CUENTA = '+573007776655';
+    const TEL_SIN_CUENTA = '+573001110000';
+    let permiteOriginal;
+
+    beforeAll(async () => {
+        permiteOriginal = (await unaFila(
+            `SELECT permite_cuentas_cliente FROM general.gener_negocio WHERE id_negocio = :n;`,
+            { n: idNegocio }
+        ))?.permite_cuentas_cliente;
+        await sequelize.query(
+            `UPDATE general.gener_negocio SET permite_cuentas_cliente = true WHERE id_negocio = :n;`,
+            { replacements: { n: idNegocio } }
+        );
+    });
+
+    afterAll(async () => {
+        await sequelize.query(
+            `UPDATE general.gener_negocio SET permite_cuentas_cliente = :v WHERE id_negocio = :n;`,
+            { replacements: { n: idNegocio, v: Boolean(permiteOriginal) } }
+        );
+    });
+
+    async function crearCuentaConSaldo(telefono, montoAbono) {
+        const idPersona = await personaNegocioDao.resolverOCrear({
+            idNegocio,
+            telefono,
+            nombre: 'BOT Cliente Cuenta',
+        });
+        const [cuenta] = await sequelize.query(
+            `INSERT INTO restaurante.rest_cuenta (id_negocio, id_persona_negocio, modo, cupo, estado)
+             VALUES (:n, :p, 'DINERO', 0, 'A') RETURNING id_cuenta;`,
+            { replacements: { n: idNegocio, p: idPersona }, type: sequelize.QueryTypes.SELECT }
+        );
+        await sequelize.query(
+            `INSERT INTO restaurante.rest_cuenta_movimiento (id_cuenta, id_negocio, tipo, monto, id_usuario, concepto)
+             VALUES (:c, :n, 'ABONO', :monto, :u, 'BOT test abono');`,
+            { replacements: { c: cuenta.id_cuenta, n: idNegocio, monto: montoAbono, u: principal.id_usuario } }
+        );
+    }
+
+    it('el cliente ve su propio saldo a favor', async () => {
+        await crearCuentaConSaldo(TEL_CUENTA, 50000);
+
+        const { resultado } = await policyGate.ejecutar({
+            capacidad: 'consultar_cuenta',
+            principal: principalDeContacto(idNegocio, { telefonoVerificado: TEL_CUENTA }),
+            idNegocio,
+            args: {},
+        });
+        expect(resultado.modo).toBe('DINERO');
+        expect(resultado.saldo).toBe(50000);
+    });
+
+    it('sin cuenta dice que no encuentra ninguna, no inventa un saldo en cero', async () => {
+        await expect(
+            policyGate.ejecutar({
+                capacidad: 'consultar_cuenta',
+                principal: principalDeContacto(idNegocio, { telefonoVerificado: TEL_SIN_CUENTA }),
+                idNegocio,
+                args: {},
+            })
+        ).rejects.toMatchObject({ code: 'CUENTA_NO_ENCONTRADA' });
+    });
+
+    it('si el negocio no maneja cuentas de cliente, lo dice y no llega a buscar nada', async () => {
+        await sequelize.query(
+            `UPDATE general.gener_negocio SET permite_cuentas_cliente = false WHERE id_negocio = :n;`,
+            { replacements: { n: idNegocio } }
+        );
+        try {
+            await expect(
+                policyGate.ejecutar({
+                    capacidad: 'consultar_cuenta',
+                    principal: principalDeContacto(idNegocio, { telefonoVerificado: TEL_CUENTA }),
+                    idNegocio,
+                    args: {},
+                })
+            ).rejects.toMatchObject({ code: 'CUENTAS_NO_HABILITADAS' });
+        } finally {
+            await sequelize.query(
+                `UPDATE general.gener_negocio SET permite_cuentas_cliente = true WHERE id_negocio = :n;`,
+                { replacements: { n: idNegocio } }
+            );
+        }
+    });
+
+    it('sin teléfono probado por el canal (WebChat) no se puede saber de quién es', async () => {
+        await expect(
+            policyGate.ejecutar({
+                capacidad: 'consultar_cuenta',
+                principal: principalDeContacto(idNegocio, { telefonoVerificado: null }),
+                idNegocio,
+                args: {},
+            })
+        ).rejects.toMatchObject({ code: 'TELEFONO_NO_VERIFICADO' });
+    });
+});
+
+describe('cancelar_pedido', () => {
+    const TEL_CLIENTE = '+573005556677';
+
+    async function crearOrdenCancelable(
+        numero,
+        { telefono = TEL_CLIENTE, estadoCocina = null, estadoPago = 'pendiente_pago', estado = 'ABIERTA' } = {}
+    ) {
+        await sequelize.query(
+            `
+            INSERT INTO restaurante.pedid_orden
+                (id_negocio, numero_orden, id_usuario, estado, estado_cocina, estado_pago,
+                 tipo_pedido, contacto_telefono, contacto_nombre, total)
+            VALUES (:n, :num, :u, :estado, :cocina, :pago, 'DOMICILIO', :tel, 'BOT Cliente Cancelar', 30000);
+            `,
+            {
+                replacements: {
+                    n: idNegocio, num: numero, u: principal.id_usuario,
+                    estado, cocina: estadoCocina, pago: estadoPago, tel: telefono,
+                },
+            }
+        );
+    }
+
+    function cancelar(numeroOrden, { telefono = TEL_CLIENTE, confirmado = true } = {}) {
+        return policyGate.ejecutar({
+            capacidad: 'cancelar_pedido',
+            principal: principalDeContacto(idNegocio, { telefonoVerificado: telefono }),
+            idNegocio,
+            args: { numero_orden: numeroOrden },
+            ...(confirmado ? { confirmadoPor: { origen: 'test', texto: 'sí' } } : {}),
+        });
+    }
+
+    it('el dueño cancela un pedido que la cocina todavía no ha tocado', async () => {
+        await crearOrdenCancelable('ORD-9910');
+        const { resultado } = await cancelar('ORD-9910');
+        expect(resultado.estado).toBe('CANCELADA');
+
+        const fila = await unaFila(
+            `SELECT estado FROM restaurante.pedid_orden WHERE numero_orden = 'ORD-9910' AND id_negocio = :n;`,
+            { n: idNegocio }
+        );
+        expect(fila.estado).toBe('CANCELADA');
+    });
+
+    it('otro número no lo puede cancelar, aunque acierte el número de orden', async () => {
+        await crearOrdenCancelable('ORD-9911');
+        await expect(cancelar('ORD-9911', { telefono: TEL_INTRUSO }))
+            .rejects.toMatchObject({ code: 'PEDIDO_NO_ES_DE_QUIEN_PIDE' });
+    });
+
+    it('con la cocina ya preparándolo, no se cancela por aquí', async () => {
+        await crearOrdenCancelable('ORD-9912', { estadoCocina: 'EN_PREPARACION' });
+        await expect(cancelar('ORD-9912')).rejects.toMatchObject({ code: 'ORDEN_EN_PREPARACION' });
+    });
+
+    it('ya cobrado, no se cancela por aquí', async () => {
+        await crearOrdenCancelable('ORD-9913', { estadoPago: 'pagado' });
+        await expect(cancelar('ORD-9913')).rejects.toMatchObject({ code: 'ORDEN_NO_CANCELABLE' });
+    });
+
+    it('sin el sí explícito del cliente, el Gate no lo ejecuta', async () => {
+        await crearOrdenCancelable('ORD-9914');
+        await expect(cancelar('ORD-9914', { confirmado: false })).rejects.toBeDefined();
+
+        const fila = await unaFila(
+            `SELECT estado FROM restaurante.pedid_orden WHERE numero_orden = 'ORD-9914' AND id_negocio = :n;`,
+            { n: idNegocio }
+        );
+        expect(fila.estado).toBe('ABIERTA');
+    });
+
+    it('cancelarlo dos veces no lo cancela dos veces: la segunda se rechaza', async () => {
+        await crearOrdenCancelable('ORD-9915');
+        await cancelar('ORD-9915');
+        await expect(cancelar('ORD-9915')).rejects.toMatchObject({ code: 'ORDEN_YA_CANCELADA' });
+    });
+});
+
+describe('agregar_items_pedido', () => {
+    const TEL_CLIENTE = '+573005556688';
+    let idProducto;
+    let precioProducto;
+
+    async function abrirCaja() {
+        await sequelize.query(
+            `INSERT INTO restaurante.rest_caja (id_negocio, id_usuario, monto_apertura, estado, fecha_apertura)
+             SELECT :n, :u, 0, 'A', now()
+              WHERE NOT EXISTS (SELECT 1 FROM restaurante.rest_caja WHERE id_negocio = :n AND estado = 'A');`,
+            { replacements: { n: idNegocio, u: principal.id_usuario } }
+        );
+    }
+
+    async function cerrarCaja() {
+        await sequelize.query(
+            `UPDATE restaurante.rest_caja SET estado = 'C' WHERE id_negocio = :n AND estado = 'A';`,
+            { replacements: { n: idNegocio } }
+        );
+    }
+
+    async function crearOrdenEditable(
+        numero,
+        { telefono = TEL_CLIENTE, estadoCocina = null, estadoPago = 'pendiente_pago', estado = 'ABIERTA' } = {}
+    ) {
+        await sequelize.query(
+            `
+            INSERT INTO restaurante.pedid_orden
+                (id_negocio, numero_orden, id_usuario, estado, estado_cocina, estado_pago,
+                 tipo_pedido, contacto_telefono, contacto_nombre, total)
+            VALUES (:n, :num, :u, :estado, :cocina, :pago, 'DOMICILIO', :tel, 'BOT Cliente Agregar', 0);
+            `,
+            {
+                replacements: {
+                    n: idNegocio, num: numero, u: principal.id_usuario,
+                    estado, cocina: estadoCocina, pago: estadoPago, tel: telefono,
+                },
+            }
+        );
+    }
+
+    function agregar(numeroOrden, items, { telefono = TEL_CLIENTE, confirmado = true } = {}) {
+        return policyGate.ejecutar({
+            capacidad: 'agregar_items_pedido',
+            principal: principalDeContacto(idNegocio, { telefonoVerificado: telefono }),
+            idNegocio,
+            args: { numero_orden: numeroOrden, items },
+            ...(confirmado ? { confirmadoPor: { origen: 'test', texto: 'sí' } } : {}),
+        });
+    }
+
+    beforeAll(async () => {
+        const prod = await unaFila(
+            `SELECT id_producto, precio FROM restaurante.carta_producto
+              WHERE id_negocio = :n AND estado = 'A' AND disponible = true AND visible = true AND precio > 0
+              LIMIT 1;`,
+            { n: idNegocio }
+        );
+        idProducto = prod.id_producto;
+        precioProducto = Number(prod.precio);
+    });
+
+    afterEach(cerrarCaja);
+
+    it('agrega el producto y recalcula el total', async () => {
+        await abrirCaja();
+        await crearOrdenEditable('ORD-9920');
+
+        const { resultado } = await agregar('ORD-9920', [{ id_producto: idProducto, cantidad: 2 }]);
+        expect(resultado.items_agregados).toBe(1);
+        expect(resultado.total).toBe(precioProducto * 2);
+
+        const detalle = await unaFila(
+            `SELECT COUNT(*)::int AS n FROM restaurante.pedid_detalle d
+               JOIN restaurante.pedid_orden o USING (id_orden)
+              WHERE o.numero_orden = 'ORD-9920' AND o.id_negocio = :neg AND d.id_producto = :p;`,
+            { neg: idNegocio, p: idProducto }
+        );
+        expect(detalle.n).toBe(1);
+    });
+
+    it('otro número no le puede agregar nada, aunque acierte el número de orden', async () => {
+        await abrirCaja();
+        await crearOrdenEditable('ORD-9921');
+
+        await expect(agregar('ORD-9921', [{ id_producto: idProducto, cantidad: 1 }], { telefono: TEL_INTRUSO }))
+            .rejects.toMatchObject({ code: 'PEDIDO_NO_ES_DE_QUIEN_PIDE' });
+    });
+
+    it('un pedido que no existe dice que no existe', async () => {
+        await abrirCaja();
+        await expect(agregar('NO-EXISTE-9922', [{ id_producto: idProducto, cantidad: 1 }]))
+            .rejects.toMatchObject({ code: 'PEDIDO_NO_ENCONTRADO' });
+    });
+
+    it('con la cocina ya preparándolo, no se le agrega nada', async () => {
+        await abrirCaja();
+        await crearOrdenEditable('ORD-9923', { estadoCocina: 'EN_PREPARACION' });
+        await expect(agregar('ORD-9923', [{ id_producto: idProducto, cantidad: 1 }]))
+            .rejects.toMatchObject({ code: 'ORDEN_EN_PREPARACION' });
+    });
+
+    it('ya cobrado, no se le agrega nada', async () => {
+        await abrirCaja();
+        await crearOrdenEditable('ORD-9924', { estadoPago: 'pagado' });
+        await expect(agregar('ORD-9924', [{ id_producto: idProducto, cantidad: 1 }]))
+            .rejects.toMatchObject({ code: 'ORDEN_NO_EDITABLE' });
+    });
+
+    it('con la caja cerrada, no se le agrega nada', async () => {
+        await cerrarCaja();
+        await crearOrdenEditable('ORD-9925');
+        await expect(agregar('ORD-9925', [{ id_producto: idProducto, cantidad: 1 }]))
+            .rejects.toMatchObject({ code: 'RESTAURANTE_CERRADO' });
+    });
+
+    it('un producto que ya no está en la carta se rechaza sin tocar el pedido', async () => {
+        await abrirCaja();
+        await crearOrdenEditable('ORD-9926');
+        await expect(agregar('ORD-9926', [{ id_producto: 999999999, cantidad: 1 }]))
+            .rejects.toMatchObject({ code: 'PRODUCTO_NO_DISPONIBLE' });
+
+        const detalle = await unaFila(
+            `SELECT COUNT(*)::int AS n FROM restaurante.pedid_detalle d
+               JOIN restaurante.pedid_orden o USING (id_orden)
+              WHERE o.numero_orden = 'ORD-9926' AND o.id_negocio = :neg;`,
+            { neg: idNegocio }
+        );
+        expect(detalle.n).toBe(0);
+    });
+
+    it('sin el sí explícito del cliente, el Gate no lo ejecuta', async () => {
+        await abrirCaja();
+        await crearOrdenEditable('ORD-9927');
+        await expect(agregar('ORD-9927', [{ id_producto: idProducto, cantidad: 1 }], { confirmado: false }))
+            .rejects.toBeDefined();
+
+        const detalle = await unaFila(
+            `SELECT COUNT(*)::int AS n FROM restaurante.pedid_detalle d
+               JOIN restaurante.pedid_orden o USING (id_orden)
+              WHERE o.numero_orden = 'ORD-9927' AND o.id_negocio = :neg;`,
+            { neg: idNegocio }
+        );
+        expect(detalle.n).toBe(0);
     });
 });

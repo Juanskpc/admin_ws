@@ -720,4 +720,17 @@ router.post('/intelligence/bandeja/conversaciones/:id/devolver-al-asistente', [
     param('id').isUUID().withMessage('ID de conversación inválido'),
 ], IntelligenceBandejaController.devolverAlAsistente);
 
+// «Este número abusa del sistema»: el negocio le cierra la puerta al asistente sin que el
+// cliente haya escrito STOP. Distinto de la baja legal —ver el comentario del controlador—,
+// por eso el negocio SÍ puede deshacer su propio bloqueo con `desbloquear`, cosa que no puede
+// hacer con un STOP real.
+router.post('/intelligence/bandeja/conversaciones/:id/bloquear', [
+    param('id').isUUID().withMessage('ID de conversación inválido'),
+    body('motivo').optional().isString().trim().isLength({ max: 300 }),
+], IntelligenceBandejaController.bloquear);
+
+router.post('/intelligence/bandeja/conversaciones/:id/desbloquear', [
+    param('id').isUUID().withMessage('ID de conversación inválido'),
+], IntelligenceBandejaController.desbloquear);
+
 module.exports = router;

@@ -245,7 +245,13 @@ async function guardarEstado(
                tarea_actual = :tareaActual,
                tarea_datos  = CAST(:tareaDatos AS jsonb),
                estado       = :estado,
-               cerrado_en   = CASE WHEN :estado = 'cerrada' THEN now() ELSE NULL END
+               cerrado_en   = CASE WHEN :estado = 'cerrada' THEN now() ELSE NULL END,
+               -- El único camino que llega aquí con estado = bloqueada es un turno que acaba
+               -- de leer STOP/BAJA (optout.js): el motor ni abre turno sobre una conversación
+               -- ya bloqueada (no está en ESTADOS_PROCESABLES), así que esto siempre es el
+               -- cliente bloqueándose a sí mismo, nunca el negocio — el negocio bloquea aparte,
+               -- desde la Bandeja, sin pasar por un turno.
+               bloqueada_por = CASE WHEN :estado = 'bloqueada' THEN 'cliente' ELSE bloqueada_por END
          WHERE id_conversacion = :idConversacion;
         `,
         {
