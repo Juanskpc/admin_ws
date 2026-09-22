@@ -88,6 +88,11 @@ const actualizarDescuentoValidators = [
     body('descuento').isFloat({ min: 0 }).withMessage('descuento inválido'),
 ];
 
+const asignarDomiciliarioValidators = [
+    body('id_negocio').isInt({ min: 1 }).withMessage('id_negocio inválido'),
+    body('id_domiciliario').isInt({ min: 1 }).withMessage('id_domiciliario inválido'),
+];
+
 /**
  * El aviso de «tu pedido está listo» no lleva más datos que el negocio.
  *
@@ -376,6 +381,28 @@ async function actualizarValorDomicilio(req, res) {
     }
 }
 
+/** PATCH /restaurante/pedidos/:id/domiciliario */
+async function asignarDomiciliario(req, res) {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+        return Respuesta.error(res, 'Datos inválidos', 422, errors.array());
+    }
+
+    try {
+        const orden = await PedidoService.asignarDomiciliario(Number(req.params.id), {
+            idNegocio: Number(req.body.id_negocio),
+            idDomiciliario: Number(req.body.id_domiciliario),
+        });
+        return Respuesta.success(res, 'Domiciliario asignado', orden);
+    } catch (err) {
+        if (['ORDEN_NO_ENCONTRADA', 'ORDEN_NO_ABIERTA', 'ORDEN_NO_ES_DOMICILIO', 'DOMICILIARIO_INVALIDO'].includes(err.code)) {
+            return Respuesta.error(res, err.message, err.statusCode || 409, { code: err.code });
+        }
+        console.error('[Pedidos] Error asignarDomiciliario:', err.message);
+        return Respuesta.error(res, 'Error al asignar el domiciliario.');
+    }
+}
+
 /** PATCH /restaurante/pedidos/:id/descuento */
 async function actualizarDescuento(req, res) {
     const errors = validationResult(req);
@@ -549,6 +576,7 @@ module.exports = {
     marcarDetalleCompleto,
     marcarPagado,
     actualizarValorDomicilio, actualizarValorDomicilioValidators,
+    asignarDomiciliario, asignarDomiciliarioValidators,
     actualizarDescuento, actualizarDescuentoValidators,
     cancelarOrden,
     cerrarOrden,

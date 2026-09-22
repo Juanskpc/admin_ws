@@ -1250,3 +1250,61 @@ Y las migraciones nuevas, en cualquier entorno donde no se hayan corrido:
 npm run migrate:restaurante-cancelado-por
 npm run migrate:intelligence-bloqueada-por
 ```
+
+### Cuatro ajustes pedidos tras el primer uso real (2026-09-21, tarde)
+
+- **Domicilio del bot sin nadie que lo lleve.** `tomar_pedido` ahora elige un domiciliario AL
+  AZAR (`pedidoService.elegirDomiciliarioAlAzar`, mismo criterio arbitrario que
+  `elegirProfesional` en `reserva`) antes de crear un pedido a DOMICILIO. Si el negocio no tiene
+  ningún domiciliario registrado, se rechaza (`SIN_DOMICILIARIO_DISPONIBLE`) en vez de crear un
+  domicilio que nadie va a llevar. **Ojo con esto al habilitar en un negocio nuevo**: sin
+  domiciliarios cargados, ese negocio no podrá tomar NINGÚN pedido a domicilio por WhatsApp
+  hasta que registre al menos uno.
+- **El error crudo de stock llegaba después de que el cliente ya había pedido.** Ahora
+  `consumirIngredientesPorItems` apaga solo (`disponible = false`) cualquier producto —no solo
+  el que se acaba de pedir, cualquiera que comparta el ingrediente que se quedó sin stock— cuya
+  receta ya no alcance para una unidad más. Es de una sola vía a propósito: no vuelve a
+  encenderse solo al reabastecer, eso lo decide el negocio a mano desde la carta, por si lo
+  había apagado por otra razón.
+- **Los textos de cancelar y agregar, reescritos a pedido del dueño**: la confirmación de
+  `cancelar_pedido` ahora nombra los productos del pedido, no el número («¿Estás seguro de
+  cancelar tu pedido de: 2 Hamburguesa doble?»); el aviso de hecho es «Tu pedido fue
+  cancelado.», sin el número. `agregar_items_pedido` avisa en el mismo mensaje que el precio
+  puede variar por empaques y domicilio.
+
+1034 tests en verde contra la base local.
+
+### El resto de la petición: horarios, reasignar domiciliario, y el aviso de domicilio (2026-09-22)
+
+- **El Policy Gate ahora prueba en seco ANTES de preguntar.** El fallo real: el cliente decía
+  que sí a "¿confirmo tu pedido?" y ahí se enteraba de que el restaurante estaba cerrado —
+  `requireCajaAbierta` vive dentro de `ejecutar`, y sin confirmación el Gate nunca llegaba a
+  llamarlo. Ahora, cuando `dryRun: true` y falta confirmar, el Gate deja seguir la ejecución en
+  seco (se deshace siempre) y solo AL FINAL, si todo iría bien, deniega por falta de
+  confirmación. `manejadorLlm.js` ya hacía esa llamada de prueba antes de preguntar; solo hacía
+  falta que el Gate la dejara llegar hasta el dominio.
+- **`restaurante.rest_horario`** (`migrate:restaurante-horario`): mismo patrón que
+  `reserva.reserva_horario` pero en tabla propia (ADR-005). `id_usuario NULL` = horario del
+  negocio; con valor = de ese domiciliario. Sin nada cargado, no restringe nada — ni al negocio
+  ni a la asignación de domiciliarios.
+  - `tomar_pedido` ahora comprueba el horario ANTES que la caja, con tres mensajes distintos:
+    fuera de horario (invita a mirar la carta mientras tanto), en horario pero caja cerrada
+    ("aún no abre"), y normal.
+  - `elegirDomiciliarioAlAzar` ahora prefiere a quien esté EN TURNO ahora mismo
+    (`horarioService.usuariosEnTurnoAhora`); si nadie lo está, cae al azar entre todos, como
+    antes.
+  - Pantalla nueva `/horarios` en `restaurante_app` (`ADMINISTRADOR` únicamente por ahora):
+    mismo editor semanal que ya existía en `reserva_app`, sin los bloqueos puntuales — no se
+    pidieron, y un restaurante que cierra un día concreto simplemente no abre la caja ese día.
+- **`pedidoService.asignarDomiciliario`** — `PATCH /pedidos/:id/domiciliario`: hasta ahora
+  `id_domiciliario` solo se podía fijar al CREAR la orden. Reutiliza `esDomiciliarioValido`.
+  Botón nuevo en el detalle de un pedido en Despacho (selector, solo para DOMICILIO).
+- **`pedido_en_camino`**, plantilla nueva para el aviso de domicilio («el domiciliario va en
+  camino», en vez de «puedes pasar a recogerlo»). `avisoPedido.plantillaParaTipo` elige la
+  correcta según `tipo_pedido`; `puede_avisar_listo` ahora es cierto para LLEVAR y DOMICILIO,
+  antes solo para LLEVAR. **⚠️ Esta plantilla NO está aprobada en Meta todavía** — hace falta
+  someterla al WhatsApp Manager antes de que el envío funcione en producción, exactamente como
+  pasó con `pedido_listo` el 2026-09-10. Hasta entonces, un intento de avisar un domicilio
+  fallará en el envío (`dead letter`), no en el código.
+
+1061 tests en verde contra la base local (más los que ya había).

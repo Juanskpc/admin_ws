@@ -78,6 +78,7 @@
     "migrate:restaurante-carta-diseno": "node migrations/migrate_restaurante_carta_diseno.js",
     "migrate:restaurante-domicilio-personal": "node migrations/migrate_restaurante_domicilio_personal.js",
     "migrate:restaurante-cancelado-por": "node migrations/migrate_restaurante_cancelado_por.js",
+    "migrate:restaurante-horario": "node migrations/migrate_restaurante_horario.js",
     "migrate:cobranza": "node migrations/migrate_cobranza.js",
     "migrate:cobranza-solo-wompi": "node migrations/migrate_cobranza_solo_wompi.js",
     "migrate:cobranza-plan-solicitado": "node migrations/migrate_cobranza_plan_solicitado.js"

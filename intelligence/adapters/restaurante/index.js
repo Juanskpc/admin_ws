@@ -57,6 +57,7 @@ const cartaService = require('../../../app_restaurante_api/services/cartaService
 const pedidoService = require('../../../app_restaurante_api/services/pedidoService');
 const cajaService = require('../../../app_restaurante_api/services/cajaService');
 const cuentaService = require('../../../app_restaurante_api/services/cuentaService');
+const horarioService = require('../../../app_restaurante_api/services/horarioService');
 const usuarioAsistenteDao = require('../../../app_core/dao/usuarioAsistenteDao');
 const Models = require('../../../app_core/models/conection');
 const { enPesos } = require('./flujo');
@@ -580,6 +581,29 @@ function registrarCapacidades() {
         },
 
         async ejecutar({ idNegocio, args, contexto }) {
+            // ── 0. El horario de atención del negocio ─────────────────────────────────────
+            //
+            // Va ANTES que la caja porque son dos preguntas distintas y el cliente necesita
+            // saber cuál de las dos es: «estamos cerrados por hoy» no es «ya es hora, pero
+            // todavía no hemos abierto la caja» — la primera dice que vuelva otro día o más
+            // tarde, la segunda que espere un momento. `estaAbierto` devuelve `configurado:
+            // false` cuando el negocio nunca cargó un horario propio, y entonces no hay nada
+            // que comprobar aquí — sin horario cargado, esto no restringe nada (ver
+            // `migrate_restaurante_horario.js`).
+            const horario = await horarioService.estaAbierto({
+                idNegocio,
+                transaction: contexto.transaction,
+            });
+            if (horario.configurado && !horario.abierto) {
+                const e = new Error(
+                    'Ahora mismo estamos fuera de nuestro horario de atención. Te atendemos ' +
+                        'apenas sea posible. Si quieres, puedes ir mirando la carta mientras tanto.'
+                );
+                e.code = 'FUERA_DE_HORARIO_ATENCION';
+                e.statusCode = 409;
+                throw e;
+            }
+
             // ── 1. La caja tiene que estar abierta ────────────────────────────────────────
             //
             // Es una regla del negocio, no un obstáculo que rodear: una orden no existe fuera
@@ -591,11 +615,20 @@ function registrarCapacidades() {
             // entre esta comprobación y la creación de la orden. Su error se traduce a uno que
             // un cliente entienda: el suyo habla de turnos de caja, que no significa nada para
             // quien solo quiere una hamburguesa.
+            //
+            // El mensaje cambia si YA sabemos que estamos en horario de atención: «cerrado»
+            // a secas confundiría a alguien que está viendo el horario publicado y ve que
+            // debería estar abierto — lo que pasa es que nadie ha abierto la caja todavía.
             try {
                 await cajaService.requireCajaAbierta(idNegocio, { transaction: contexto.transaction });
             } catch (_) {
-                const e = new Error('El restaurante está cerrado ahora mismo y no puedo tomar pedidos.');
-                e.code = 'RESTAURANTE_CERRADO';
+                const e = new Error(
+                    horario.configurado
+                        ? 'Ya estamos en nuestro horario de atención, pero el restaurante todavía ' +
+                              'no ha abierto. Danos un momento y vuelve a escribir.'
+                        : 'El restaurante está cerrado ahora mismo y no puedo tomar pedidos.'
+                );
+                e.code = horario.configurado ? 'NEGOCIO_AUN_NO_ABRE' : 'RESTAURANTE_CERRADO';
                 e.statusCode = 409;
                 throw e;
             }
@@ -673,6 +706,33 @@ function registrarCapacidades() {
                 throw e;
             }
 
+            // ── El domiciliario, al azar ──────────────────────────────────────────────────
+            //
+            // Un pedido a domicilio tomado por el bot no tiene a nadie del negocio decidiendo
+            // quién lo lleva — a diferencia del POS, donde un humano lo asigna a mano o lo deja
+            // para después. Sin esto, el pedido llegaba a Despacho sin domiciliario y alguien
+            // tenía que asignarlo ahí, a mano, cada vez. El reparto es arbitrario a propósito
+            // (ver `elegirDomiciliarioAlAzar`): repartir la carga de verdad es una decisión de
+            // negocio que nadie ha tomado todavía.
+            //
+            // Si el negocio no tiene NINGÚN domiciliario registrado, se rechaza en vez de crear
+            // un domicilio que nadie va a llevar — el mismo criterio que `SIN_PROFESIONAL` en
+            // `reserva`.
+            let idDomiciliario = null;
+            if (esDomicilio) {
+                idDomiciliario = await pedidoService.elegirDomiciliarioAlAzar(idNegocio, {
+                    transaction: contexto.transaction,
+                });
+                if (!idDomiciliario) {
+                    const e = new Error(
+                        'No tengo domiciliarios disponibles ahora mismo. Llama al restaurante para tu domicilio.'
+                    );
+                    e.code = 'SIN_DOMICILIARIO_DISPONIBLE';
+                    e.statusCode = 409;
+                    throw e;
+                }
+            }
+
             // ── El método de pago ────────────────────────────────────────────────────────
             //
             // **No se valida aquí a propósito.** `pedidoService.validarMetodoPagoParaNegocio` ya
@@ -694,6 +754,8 @@ function registrarCapacidades() {
                     contactoTelefono: telefono,
                     // Nula en un pedido para recoger: no hay a dónde llevarlo.
                     direccionDomicilio: esDomicilio ? direccion : null,
+                    // Al azar, y solo para domicilio — ver el bloque de arriba.
+                    idDomiciliario,
                     // La nota SÍ va en los dos casos, aunque la columna se llame «de
                     // domicilio»: es el campo que la pantalla de despacho pinta como «Nota»
                     // para cualquier tipo de pedido. Mandarla al `nota` de la orden sería más
@@ -740,8 +802,39 @@ function registrarCapacidades() {
         // `cancelarPorCliente` rechaza con ORDEN_YA_CANCELADA en vez de repetir el efecto.
         idempotente: true,
         confirmacion: {
-            pregunta: ({ args }) => `¿Confirmo que cancelo tu pedido ${args.numero_orden}?`,
-            hecho: ({ resultado }) => `Tu pedido ${resultado.numero_orden} quedó cancelado.`,
+            // Se nombran los PRODUCTOS y no solo el número de orden — pedido del dueño: un
+            // número no le dice nada al cliente en el momento de decidir, lo que compra es lo
+            // que pidió. Si por lo que sea no se puede leer el detalle (pedido raro, fallo de
+            // consulta), se cae al número — degradar el detalle, nunca tumbar la confirmación
+            // (ADR-010 no la negocia).
+            pregunta: async ({ args, idNegocio }) => {
+                const numero = String(args.numero_orden || '').trim();
+                try {
+                    const orden = await Models.PedidOrden.findOne({
+                        where: { id_negocio: idNegocio, numero_orden: numero },
+                        attributes: ['id_orden'],
+                    });
+                    if (!orden) throw new Error('pedido no encontrado');
+
+                    const detalles = await Models.PedidDetalle.findAll({
+                        where: { id_orden: orden.id_orden },
+                        attributes: ['cantidad'],
+                        include: [{ model: Models.CartaProducto, as: 'producto', attributes: ['nombre'] }],
+                    });
+                    const nombres = detalles
+                        .filter((d) => d.producto?.nombre)
+                        .map((d) => (Number(d.cantidad) > 1 ? `${d.cantidad} ${d.producto.nombre}` : d.producto.nombre));
+                    if (nombres.length === 0) throw new Error('sin detalle que mostrar');
+
+                    return `¿Estás seguro de cancelar tu pedido de: ${nombres.join(', ')}?`;
+                } catch (error) {
+                    console.warn(
+                        `[cancelar_pedido] no se pudo detallar en la confirmación: ${error.message}`
+                    );
+                    return `¿Estás seguro de cancelar tu pedido ${numero}?`;
+                }
+            },
+            hecho: () => 'Tu pedido fue cancelado.',
         },
         feature: FEATURE.ASISTENTE_IA,
         parametros: {
@@ -844,7 +937,7 @@ function registrarCapacidades() {
             },
             hecho: ({ resultado }) =>
                 `¡Listo! Se lo agregué a tu pedido ${resultado.numero_orden}. ` +
-                `Nuevo total: ${enPesos(resultado.total)}.`,
+                `Nuevo total: ${enPesos(resultado.total)} (el precio puede variar por empaques y domicilio).`,
         },
         feature: FEATURE.ASISTENTE_IA,
         parametros: {

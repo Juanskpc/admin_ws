@@ -173,6 +173,30 @@ describe('la plantilla pedido_listo', () => {
     });
 });
 
+describe('la plantilla pedido_en_camino', () => {
+    test('NO termina en variable — misma regla de Meta que pedido_listo', () => {
+        expect(plantillas.obtener('pedido_en_camino').texto.trim()).not.toMatch(/\{\{\d+\}\}$/);
+    });
+
+    test('es UTILITY, no MARKETING', () => {
+        expect(plantillas.obtener('pedido_en_camino').categoria).toBe('UTILITY');
+    });
+
+    test('un hueco sin valor no escribe «undefined»', () => {
+        const texto = plantillas.renderizarTexto('pedido_en_camino', { cliente: 'Ana' });
+        expect(texto).not.toMatch(/undefined/);
+        expect(texto).toContain('Ana');
+    });
+});
+
+describe('plantillaParaTipo', () => {
+    test('LLEVAR usa pedido_listo, DOMICILIO usa pedido_en_camino, y MESA ninguna', () => {
+        expect(avisoPedido.plantillaParaTipo('LLEVAR')).toBe('pedido_listo');
+        expect(avisoPedido.plantillaParaTipo('DOMICILIO')).toBe('pedido_en_camino');
+        expect(avisoPedido.plantillaParaTipo('MESA')).toBeNull();
+    });
+});
+
 // ── El aviso ────────────────────────────────────────────────────────────────────────────────
 
 describe('avisarListo', () => {
@@ -242,13 +266,27 @@ describe('avisarListo', () => {
         expect(await salientesDe(conv.id_conversacion)).toHaveLength(0);
     });
 
-    test('un domicilio no lleva este aviso', async () => {
-        // Lo que le llega a un domicilio es el domiciliario. El «va en camino» será otra
-        // plantilla el día que alguien la pida, no ésta con otro texto.
-        await crearConversacion({ idExterno: idExternoDe(5) });
+    test('un domicilio SÍ lleva aviso, pero con la plantilla de "va en camino"', async () => {
+        // Distinto texto para una situación distinta: a este no se le dice que puede pasar a
+        // recoger, se le dice que el domiciliario ya salió (2026-09-22).
+        const conv = await crearConversacion({ idExterno: idExternoDe(5) });
         const orden = await crearOrden({ tipo: 'DOMICILIO', telefono: tel(5) });
 
-        await expect(avisar(orden)).rejects.toMatchObject({ code: 'PEDIDO_NO_ES_PARA_RECOGER' });
+        const r = await avisar(orden);
+
+        expect(r.id_mensaje).toBeTruthy();
+        const salientes = await salientesDe(conv.id_conversacion);
+        expect(salientes[0].plantilla.nombre).toBe('pedido_en_camino');
+        expect(salientes[0].contenido).toContain(orden.numero_orden);
+        expect(salientes[0].contenido).toMatch(/camino/i);
+    });
+
+    test('una MESA no lleva ninguno de los dos avisos', async () => {
+        // A una mesa no hay a quién avisarle por WhatsApp: el cliente está sentado ahí.
+        await crearConversacion({ idExterno: idExternoDe(10) });
+        const orden = await crearOrden({ tipo: 'MESA', telefono: tel(10) });
+
+        await expect(avisar(orden)).rejects.toMatchObject({ code: 'PEDIDO_NO_ADMITE_AVISO' });
     });
 
     test('un pedido sin teléfono lo dice, en vez de fallar más abajo', async () => {

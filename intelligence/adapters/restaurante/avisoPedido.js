@@ -45,10 +45,26 @@ const features = require('../../core/features');
 const { normalizarE164Colombia } = require('../../../app_core/helpers/telefono');
 
 const PLANTILLA = 'pedido_listo';
+const PLANTILLA_DOMICILIO = 'pedido_en_camino';
 const CANAL = 'whatsapp';
 
 /** Los tipos de pedido a los que este aviso les sirve de algo. */
 const TIPO_RECOGER = 'LLEVAR';
+const TIPO_DOMICILIO = 'DOMICILIO';
+
+/**
+ * Qué plantilla le toca a este pedido — son dos mensajes distintos porque son dos situaciones
+ * distintas: al que recoge se le dice que YA puede venir; al de domicilio, que el domiciliario
+ * YA salió. Contarle al que recoge que «alguien va en camino» sería confuso, y al revés,
+ * decirle al de domicilio que «puede pasar a recogerlo» sería pedirle que vaya al local.
+ *
+ * `null` para cualquier otro tipo (MESA): a una mesa no se le avisa nada por WhatsApp.
+ */
+function plantillaParaTipo(tipoPedido) {
+    if (tipoPedido === TIPO_RECOGER) return PLANTILLA;
+    if (tipoPedido === TIPO_DOMICILIO) return PLANTILLA_DOMICILIO;
+    return null;
+}
 
 /**
  * El número, como lo escribe el canal: `573001234567`, **sin el `+`**.
@@ -168,12 +184,13 @@ async function avisarListo({ idNegocio, idOrden }, { transaction = null } = {}) 
         if (orden.estado !== 'ABIERTA') {
             rechazar('Ese pedido ya está cerrado.', 'PEDIDO_CERRADO');
         }
-        if (orden.tipo_pedido !== TIPO_RECOGER) {
-            // Un domicilio no necesita este aviso: lo que llega es el domiciliario. El día que
-            // se quiera un «va en camino» será otra plantilla, no ésta con otro texto.
+        const nombrePlantilla = plantillaParaTipo(orden.tipo_pedido);
+        if (!nombrePlantilla) {
+            // Una MESA no tiene número al que avisarle nada por WhatsApp — es lo único que
+            // queda fuera; LLEVAR y DOMICILIO ya tienen su propia plantilla cada uno.
             rechazar(
-                'Este aviso es solo para los pedidos que el cliente pasa a recoger.',
-                'PEDIDO_NO_ES_PARA_RECOGER'
+                'Este aviso es solo para pedidos a domicilio o para recoger.',
+                'PEDIDO_NO_ADMITE_AVISO'
             );
         }
 
@@ -220,8 +237,8 @@ async function avisarListo({ idNegocio, idOrden }, { transaction = null } = {}) 
             orden: orden.numero_orden,
             negocio: negocio.tratamiento,
         };
-        const definicion = plantillas.obtener(PLANTILLA);
-        const contenido = plantillas.renderizarTexto(PLANTILLA, parametros);
+        const definicion = plantillas.obtener(nombrePlantilla);
+        const contenido = plantillas.renderizarTexto(nombrePlantilla, parametros);
 
         const fila = await repositorio.insertarMensajeSaliente(
             {
@@ -262,8 +279,11 @@ async function avisarListo({ idNegocio, idOrden }, { transaction = null } = {}) 
 
 module.exports = {
     PLANTILLA,
+    PLANTILLA_DOMICILIO,
     CANAL,
     TIPO_RECOGER,
+    TIPO_DOMICILIO,
+    plantillaParaTipo,
     avisarListo,
     estadoDelAviso,
     comoLoEscribeElCanal,

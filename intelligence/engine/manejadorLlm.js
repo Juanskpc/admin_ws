@@ -440,6 +440,13 @@ async function ejecutarSolicitud({
     //
     // Sin esto, lo que fallaría es peor que un error: se le preguntaría al cliente «¿confirmo que
     // cancelo tu cita XYZ?» para descubrir un turno después que ese código no existe.
+    //
+    // `dryRun: true` a la fuerza, no el de la configuración — el Gate ahora deja seguir esta
+    // llamada en seco hasta dentro de `ejecutar` (ver policyGate.js, paso 5), así que esto ya no
+    // se queda solo en «argumentos válidos y capacidad encendida»: también descubre aquí, ANTES
+    // de preguntar, que el restaurante está cerrado o que no hay domiciliario — en vez de que el
+    // cliente lo descubra después de haber dicho que sí. Es en seco de verdad pase lo que pase
+    // dentro: la transacción se deshace siempre, así que no hay nada que perder por intentarlo.
     if (exigenConfirmacion.has(solicitada.capacidad)) {
         try {
             await gate.ejecutar({
@@ -447,7 +454,7 @@ async function ejecutarSolicitud({
                 principal,
                 idNegocio,
                 args: solicitada.argumentos,
-                dryRun,
+                dryRun: true,
             });
             // Inalcanzable: el Gate y este manejador leen `requiere_confirmacion` del mismo
             // Registry. Si se llega aquí, la capacidad se ejecutó sin que nadie la confirmara y

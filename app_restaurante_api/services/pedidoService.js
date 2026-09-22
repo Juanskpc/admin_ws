@@ -2,6 +2,7 @@ const Models = require('../../app_core/models/conection');
 const cajaService = require('./cajaService');
 const { avisar, avisarTrasCommit, TEMAS } = require('./avisoService');
 const cuentaService = require('./cuentaService');
+const horarioService = require('./horarioService');
 const personaNegocioDao = require('../../app_core/dao/personaNegocioDao');
 const usuarioAsistenteDao = require('../../app_core/dao/usuarioAsistenteDao');
 // La costura de entitlements (ADR-021). Es lo único que este servicio sabe de lo comercial, y
@@ -322,6 +323,84 @@ async function consumirIngredientesPorItems({ idNegocio, items, permitirStockNeg
 
         const nuevoStock = Number(ing.stock_actual ?? 0) - consumo;
         await ing.update({ stock_actual: nuevoStock }, { transaction });
+    }
+
+    // El pedido que se acaba de tomar pudo dejar sin stock un ingrediente que usan OTROS
+    // productos, no solo los de esta orden — dos platos que comparten una papa, por ejemplo.
+    // Sin esto, el bot seguía ofreciendo algo que ya no se puede preparar, y el cliente se
+    // enteraba de que no había hasta después de pedirlo y confirmarlo: la peor forma posible
+    // de decir que no hay.
+    await desactivarProductosSinStock({
+        idNegocio,
+        idsIngredientes: Array.from(ingredientesNecesarios.keys()),
+        transaction,
+    });
+}
+
+/**
+ * Apaga `disponible` en cualquier producto ACTIVO cuya receta ya no se pueda preparar con el
+ * stock que quedó tras un consumo.
+ *
+ * ## Por qué mira TODOS los productos que usan estos ingredientes, no solo los del pedido
+ *
+ * Un ingrediente compartido —la misma papa en dos platos distintos— puede dejar sin stock a un
+ * producto que ni siquiera estaba en esta orden. Revisar solo lo que se acaba de pedir dejaría
+ * ese otro plato ofreciéndose igual, con cero unidades posibles.
+ *
+ * ## Por qué NO vuelve a encender nada
+ *
+ * Es deliberadamente de una sola vía. Si se reabasteciera el ingrediente y esto reactivara el
+ * producto solo, un negocio que lo apagó por otra razón —cambió la receta, es de temporada, lo
+ * retiró de la carta— lo vería reaparecer sin haberlo decidido. Volver a activarlo es una
+ * decisión del negocio, a mano, desde Configuración de la carta — igual que hoy.
+ */
+async function desactivarProductosSinStock({ idNegocio, idsIngredientes, transaction }) {
+    if (!idsIngredientes || idsIngredientes.length === 0) return;
+
+    const candidatos = await Models.CartaProducto.findAll({
+        where: { id_negocio: idNegocio, estado: 'A', disponible: true },
+        attributes: ['id_producto', 'nombre'],
+        include: [{
+            model: Models.CartaProductoIngred,
+            as: 'ingredientes',
+            where: { estado: 'A', id_ingrediente: idsIngredientes },
+            required: true,
+            attributes: ['id_producto'],
+        }],
+        transaction,
+    });
+    if (candidatos.length === 0) return;
+
+    for (const producto of candidatos) {
+        const receta = await Models.CartaProductoIngred.findAll({
+            where: { id_producto: producto.id_producto, estado: 'A' },
+            attributes: ['id_ingrediente', 'porcion'],
+            include: [{
+                model: Models.CartaIngrediente,
+                as: 'ingrediente',
+                where: { id_negocio: idNegocio, estado: 'A' },
+                required: true,
+                attributes: ['stock_actual'],
+            }],
+            transaction,
+        });
+
+        const alcanzaParaUno = receta.every((r) => {
+            const porcion = Number(r.porcion || 0);
+            if (porcion <= 0) return true;
+            return Number(r.ingrediente?.stock_actual ?? 0) >= porcion;
+        });
+
+        if (!alcanzaParaUno) {
+            await Models.CartaProducto.update(
+                { disponible: false },
+                { where: { id_producto: producto.id_producto }, transaction }
+            );
+            console.log(
+                `[inventario] "${producto.nombre}" (id ${producto.id_producto}) se apagó solo: ` +
+                    'ya no hay stock para preparar uno más.'
+            );
+        }
     }
 }
 
@@ -1085,8 +1164,12 @@ async function getOrdenesDespacho({ idNegocio, idUsuario }) {
         // discrepe sería el que ofrece un botón que el backend rechaza. Allí se vuelven a
         // comprobar de todos modos — esto decide qué se ENSEÑA, no qué se permite.
         const avisoVivo = plano.aviso_listo_en && plano.aviso_listo_estado !== 'fallido';
+        // LLEVAR y DOMICILIO llevan aviso, cada uno con su plantilla («puedes recogerlo» /
+        // «el domiciliario va en camino» — ver `avisoPedido.plantillaParaTipo`); MESA no.
         plano.puede_avisar_listo =
-            plano.de_whatsapp && plano.tipo_pedido === 'LLEVAR' && !avisoVivo;
+            plano.de_whatsapp
+            && (plano.tipo_pedido === 'LLEVAR' || plano.tipo_pedido === 'DOMICILIO')
+            && !avisoVivo;
         return plano;
     });
 }
@@ -1149,10 +1232,11 @@ async function esDomiciliarioValido({ idNegocio, idDomiciliario, transaction }) 
     return Boolean(link);
 }
 
-async function listarDomiciliarios(idNegocio) {
+async function listarDomiciliarios(idNegocio, { transaction } = {}) {
     const negocio = await Models.GenerNegocio.findOne({
         where: { id_negocio: idNegocio },
         attributes: ['permite_domicilio_personal'],
+        transaction,
     });
 
     if (negocio?.permite_domicilio_personal) {
@@ -1163,6 +1247,7 @@ async function listarDomiciliarios(idNegocio) {
                 where: { estado: 'A' },
                 attributes: ['id_usuario', 'primer_nombre', 'primer_apellido', 'num_identificacion', 'telefono'],
             }],
+            transaction,
         });
         return links.map(l => ({
             id_usuario: l.usuario.id_usuario,
@@ -1172,7 +1257,10 @@ async function listarDomiciliarios(idNegocio) {
         }));
     }
 
-    const rolDom = await Models.GenerRol.findOne({ where: { descripcion: 'DOMICILIARIO', id_tipo_negocio: 1 } });
+    const rolDom = await Models.GenerRol.findOne({
+        where: { descripcion: 'DOMICILIARIO', id_tipo_negocio: 1 },
+        transaction,
+    });
     if (!rolDom) return [];
     const links = await Models.GenerUsuarioRol.findAll({
         where: { id_negocio: idNegocio, id_rol: rolDom.id_rol, estado: 'A' },
@@ -1181,6 +1269,7 @@ async function listarDomiciliarios(idNegocio) {
             where: { estado: 'A' },
             attributes: ['id_usuario', 'primer_nombre', 'primer_apellido', 'num_identificacion', 'telefono'],
         }],
+        transaction,
     });
     return links.map(l => ({
         id_usuario: l.usuario.id_usuario,
@@ -1188,6 +1277,44 @@ async function listarDomiciliarios(idNegocio) {
         num_identificacion: l.usuario.num_identificacion,
         telefono: l.usuario.telefono,
     }));
+}
+
+/**
+ * Elige un domiciliario para un pedido a domicilio que toma el asistente de WhatsApp, para que
+ * nunca llegue a Despacho sin nadie asignado.
+ *
+ * ## Dos pasos, y el segundo es el que ya existía
+ *
+ * 1. **Quien esté EN TURNO ahora, según `rest_horario`.** Si el negocio cargó horarios de sus
+ *    domiciliarios, lo natural es asignarle el pedido a quien dice estar trabajando a esta
+ *    hora, no a cualquiera. Al azar entre los que están en turno si hay más de uno — repartir
+ *    la carga de verdad (quién anda más cerca, quién lleva menos pedidos hoy) sigue siendo una
+ *    decisión de negocio que nadie ha tomado todavía.
+ * 2. **Si nadie está en turno —o el negocio no cargó horarios de domiciliarios—, al azar entre
+ *    TODOS los que tiene.** Es el comportamiento con el que nació esta función: un negocio sin
+ *    horarios cargados no debe quedarse sin poder asignar a nadie.
+ *
+ * Mismo criterio arbitrario que `elegirProfesional` en el adaptador de `reserva`: no hay «el
+ * primero» razonable entre domiciliarios, así que un orden fijo repartiría siempre a favor del
+ * mismo.
+ *
+ * @returns {Promise<number|null>} `id_usuario` del domiciliario elegido, o `null` si el
+ *   negocio no tiene ninguno — quien llama decide qué hacer con eso.
+ */
+async function elegirDomiciliarioAlAzar(idNegocio, { transaction, ahora = new Date() } = {}) {
+    const domiciliarios = await listarDomiciliarios(idNegocio, { transaction });
+    if (domiciliarios.length === 0) return null;
+
+    const enTurno = await horarioService.usuariosEnTurnoAhora({ idNegocio, ahora, transaction });
+    if (enTurno.length > 0) {
+        const idsEnTurno = new Set(enTurno);
+        const candidatos = domiciliarios.filter((d) => idsEnTurno.has(d.id_usuario));
+        if (candidatos.length > 0) {
+            return candidatos[Math.floor(Math.random() * candidatos.length)].id_usuario;
+        }
+    }
+
+    return domiciliarios[Math.floor(Math.random() * domiciliarios.length)].id_usuario;
 }
 
 /**
@@ -1616,6 +1743,59 @@ async function actualizarValorDomicilio(idOrden, { idNegocio, valorDomicilio }) 
 }
 
 /**
+ * Asigna o cambia el domiciliario de un pedido a domicilio ya creado.
+ *
+ * Hasta ahora `id_domiciliario` solo se podía poner AL CREAR la orden — no existía forma de
+ * corregirlo después. Hacía falta para dos casos reales: el bot lo asigna al azar (o por
+ * turno) y el negocio quiere cambiarlo por el que de verdad va a salir, o un domiciliario se
+ * reporta enfermo a mitad de turno y hay que repartir sus pedidos pendientes entre los demás.
+ *
+ * Reutiliza `esDomiciliarioValido` — la misma comprobación que ya evita que `crearOrden`
+ * acepte un id de cualquier usuario del sistema que no sea domiciliario de ESTE negocio.
+ */
+async function asignarDomiciliario(idOrden, { idNegocio, idDomiciliario }) {
+    const t = await Models.sequelize.transaction();
+    try {
+        const orden = await Models.PedidOrden.findOne({
+            where: { id_orden: idOrden, id_negocio: idNegocio },
+            transaction: t,
+            lock: t.LOCK.UPDATE,
+        });
+        if (!orden) {
+            const e = new Error('Orden no encontrada.');
+            e.code = 'ORDEN_NO_ENCONTRADA'; e.statusCode = 404;
+            throw e;
+        }
+        if (orden.estado !== 'ABIERTA') {
+            const e = new Error('Solo se puede asignar domiciliario a una orden abierta.');
+            e.code = 'ORDEN_NO_ABIERTA'; e.statusCode = 409;
+            throw e;
+        }
+        if (orden.tipo_pedido !== 'DOMICILIO') {
+            const e = new Error('Solo los pedidos a domicilio llevan domiciliario.');
+            e.code = 'ORDEN_NO_ES_DOMICILIO'; e.statusCode = 409;
+            throw e;
+        }
+
+        const valido = await esDomiciliarioValido({ idNegocio, idDomiciliario, transaction: t });
+        if (!valido) {
+            const e = new Error('Ese domiciliario no existe o no está activo en este negocio.');
+            e.code = 'DOMICILIARIO_INVALIDO'; e.statusCode = 422;
+            throw e;
+        }
+
+        await orden.update({ id_domiciliario: idDomiciliario }, { transaction: t });
+
+        avisarTrasCommit(t, idNegocio, TEMAS.PEDIDOS, TEMAS.MESAS);
+        await t.commit();
+        return getOrdenById(idOrden);
+    } catch (err) {
+        if (!t.finished) await t.rollback();
+        throw err;
+    }
+}
+
+/**
  * Actualiza SOLO el descuento de una orden abierta y recalcula su total.
  *
  * Existe aparte de `agregarItemsOrden` por el mismo motivo que el del domicilio:
@@ -1964,11 +2144,13 @@ module.exports = {
     getOrdenesDespacho,
     listarDomiciliarios,
     esDomiciliarioValido,
+    elegirDomiciliarioAlAzar,
     enviarACocina,
     cambiarEstadoCocina,
     marcarDetalleCompleto,
     marcarPagado,
     actualizarValorDomicilio,
+    asignarDomiciliario,
     actualizarDescuento,
     cancelarOrden,
     cancelarPorCliente,

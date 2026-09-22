@@ -20,6 +20,8 @@ const { resolverPrincipalUsuario } = require('../../app_core/authz/principal');
 const { principalDeContacto } = require('../../intelligence/engine/identidad');
 const intelligence = require('../../intelligence');
 const policyGate = require('../../intelligence/core/policyGate');
+const registry = require('../../intelligence/core/registry');
+const horarioService = require('../../app_restaurante_api/services/horarioService');
 const personaNegocioDao = require('../../app_core/dao/personaNegocioDao');
 
 const sequelize = Models.sequelize;
@@ -43,6 +45,11 @@ let principal;
 async function unaFila(sql, replacements = {}) {
     const [[fila]] = await sequelize.query(sql, { replacements });
     return fila ?? null;
+}
+
+/** `dia_semana` de HOY en hora de Bogotá (0=Dom..6=Sáb), sin depender del TZ del proceso. */
+function diaBogotaAhora() {
+    return new Date(Date.now() - 5 * 3600 * 1000).getUTCDay();
 }
 
 async function habilitar(negocio, capacidad) {
@@ -326,6 +333,30 @@ describe('tomar_pedido — la mutación', () => {
         );
     }
 
+    // Un domicilio del bot ahora exige al menos un domiciliario registrado (para que nunca
+    // llegue a Despacho sin nadie asignado) — sin esto, todas las pruebas de esta suite que
+    // piden DOMICILIO fallarían con SIN_DOMICILIARIO_DISPONIBLE por algo que no están probando.
+    beforeAll(async () => {
+        const rolDom = await unaFila(
+            `SELECT id_rol FROM general.gener_rol WHERE descripcion = 'DOMICILIARIO' AND id_tipo_negocio = 1;`
+        );
+        await sequelize.query(
+            `INSERT INTO general.gener_usuario_rol (id_usuario, id_rol, id_negocio, estado)
+             VALUES (:u, :r, :n, 'A')
+             ON CONFLICT DO NOTHING;`,
+            { replacements: { u: principal.id_usuario, r: rolDom.id_rol, n: idNegocio } }
+        );
+    });
+
+    afterAll(async () => {
+        await sequelize.query(
+            `DELETE FROM general.gener_usuario_rol
+              WHERE id_usuario = :u AND id_negocio = :n
+                AND id_rol = (SELECT id_rol FROM general.gener_rol WHERE descripcion = 'DOMICILIARIO' AND id_tipo_negocio = 1);`,
+            { replacements: { u: principal.id_usuario, n: idNegocio } }
+        );
+    });
+
     function pedir(items, extra = {}) {
         return policyGate.ejecutar({
             capacidad: 'tomar_pedido',
@@ -350,6 +381,103 @@ describe('tomar_pedido — la mutación', () => {
 
         await expect(pedir([{ id_producto: prod.id_producto, cantidad: 1 }]))
             .rejects.toMatchObject({ code: 'RESTAURANTE_CERRADO' });
+    });
+
+    describe('el horario de atención (2026-09-21)', () => {
+        afterEach(() => horarioService.reemplazar({ idNegocio, idUsuario: null, bloques: [] }));
+
+        it('fuera del horario configurado, no toma el pedido y no llega a mirar la caja', async () => {
+            await abrirCaja(); // la caja SÍ está abierta: lo que tiene que cortar es el horario
+            const [prod] = await idsDeCarta();
+            const otroDia = (diaBogotaAhora() + 1) % 7; // nunca hoy, sea la hora que sea
+
+            await horarioService.reemplazar({
+                idNegocio, idUsuario: null,
+                bloques: [{ dia_semana: otroDia, hora_inicio: '00:00', hora_fin: '23:59:59' }],
+            });
+
+            await expect(pedir([{ id_producto: prod.id_producto, cantidad: 1 }]))
+                .rejects.toMatchObject({ code: 'FUERA_DE_HORARIO_ATENCION' });
+        });
+
+        it('dentro del horario pero con la caja cerrada, avisa que el negocio aún no abre', async () => {
+            await cerrarCaja();
+            const [prod] = await idsDeCarta();
+
+            await horarioService.reemplazar({
+                idNegocio, idUsuario: null,
+                bloques: [{ dia_semana: diaBogotaAhora(), hora_inicio: '00:00', hora_fin: '23:59:59' }],
+            });
+
+            await expect(pedir([{ id_producto: prod.id_producto, cantidad: 1 }]))
+                .rejects.toMatchObject({ code: 'NEGOCIO_AUN_NO_ABRE' });
+        });
+
+        it('dentro del horario y con la caja abierta, toma el pedido normal', async () => {
+            await abrirCaja();
+            const [prod] = await idsDeCarta();
+
+            await horarioService.reemplazar({
+                idNegocio, idUsuario: null,
+                bloques: [{ dia_semana: diaBogotaAhora(), hora_inicio: '00:00', hora_fin: '23:59:59' }],
+            });
+
+            const { resultado } = await pedir([{ id_producto: prod.id_producto, cantidad: 1 }]);
+            expect(resultado.numero_orden).toBeTruthy();
+        });
+    });
+
+    describe('la llamada de prueba antes de preguntar (2026-09-21)', () => {
+        // El fallo real: el cliente llegaba hasta «¿confirmo tu pedido?», decía que sí, y AHÍ
+        // se enteraba de que el restaurante estaba cerrado — porque `requireCajaAbierta` vive
+        // dentro de `ejecutar`, y sin confirmación el Gate nunca llegaba a llamarlo. El
+        // manejador de modelo ya hace una llamada `dryRun: true` sin confirmar antes de
+        // preguntar (intelligence/engine/manejadorLlm.js); esto prueba que el Gate la deja
+        // llegar hasta el dominio en vez de cortarla antes.
+        it('en seco y sin confirmar: si la caja está cerrada, se entera ANTES de preguntar', async () => {
+            await cerrarCaja();
+            const [prod] = await idsDeCarta();
+
+            await expect(policyGate.ejecutar({
+                capacidad: 'tomar_pedido',
+                principal: contacto(),
+                idNegocio,
+                args: {
+                    items: [{ id_producto: prod.id_producto, cantidad: 1 }],
+                    cliente_nombre: 'BOT Preview Cerrado',
+                    tipo_entrega: 'DOMICILIO',
+                    direccion: 'Calle 10 # 5-30',
+                },
+                dryRun: true,
+                // Sin confirmadoPor a propósito: es justo la llamada que se hace antes de
+                // preguntar, cuando todavía no hay ningún sí que confirmar.
+            })).rejects.toMatchObject({ code: 'RESTAURANTE_CERRADO' });
+        });
+
+        it('en seco y sin confirmar: si todo iría bien, deniega por falta de confirmación y no deja rastro', async () => {
+            await abrirCaja();
+            const [prod] = await idsDeCarta();
+
+            await expect(policyGate.ejecutar({
+                capacidad: 'tomar_pedido',
+                principal: contacto(),
+                idNegocio,
+                args: {
+                    items: [{ id_producto: prod.id_producto, cantidad: 1 }],
+                    cliente_nombre: 'BOT Preview Ok',
+                    tipo_entrega: 'DOMICILIO',
+                    direccion: 'Calle 10 # 5-30',
+                },
+                dryRun: true,
+            })).rejects.toMatchObject({ code: 'CONFIRMACION_REQUERIDA' });
+
+            const fila = await unaFila(
+                `SELECT 1 AS existe FROM restaurante.pedid_orden
+                  WHERE id_negocio = :n AND contacto_nombre = 'BOT Preview Ok';`,
+                { n: idNegocio },
+            );
+            expect(fila).toBeNull();
+        });
     });
 
     it('crea la orden, a nombre del usuario Asistente y con el teléfono del CANAL', async () => {
@@ -444,6 +572,56 @@ describe('tomar_pedido — la mutación', () => {
 
         await expect(pedir([{ id_producto: oculto.id_producto, cantidad: 1 }]))
             .rejects.toMatchObject({ code: 'PRODUCTO_NO_DISPONIBLE' });
+    });
+
+    it('un domicilio nace con un domiciliario asignado, sin que nadie del negocio lo haga a mano', async () => {
+        await abrirCaja();
+        const [prod] = await idsDeCarta();
+        const { resultado } = await pedir([{ id_producto: prod.id_producto, cantidad: 1 }]);
+
+        const fila = await unaFila(
+            `SELECT id_domiciliario FROM restaurante.pedid_orden WHERE numero_orden = :num AND id_negocio = :n;`,
+            { num: resultado.numero_orden, n: idNegocio }
+        );
+        expect(fila.id_domiciliario).toBe(principal.id_usuario);
+    });
+
+    it('un pedido para RECOGER no necesita domiciliario', async () => {
+        await abrirCaja();
+        const [prod] = await idsDeCarta();
+        const { resultado } = await pedir([{ id_producto: prod.id_producto, cantidad: 1 }], {
+            tipo_entrega: 'LLEVAR',
+        });
+
+        const fila = await unaFila(
+            `SELECT id_domiciliario, tipo_pedido FROM restaurante.pedid_orden WHERE numero_orden = :num AND id_negocio = :n;`,
+            { num: resultado.numero_orden, n: idNegocio }
+        );
+        expect(fila.tipo_pedido).toBe('LLEVAR');
+        expect(fila.id_domiciliario).toBeNull();
+    });
+
+    it('sin ningún domiciliario, un domicilio se rechaza en vez de crear uno sin nadie asignado', async () => {
+        await abrirCaja();
+        const [prod] = await idsDeCarta();
+
+        await sequelize.query(
+            `UPDATE general.gener_usuario_rol SET estado = 'I'
+              WHERE id_usuario = :u AND id_negocio = :n
+                AND id_rol = (SELECT id_rol FROM general.gener_rol WHERE descripcion = 'DOMICILIARIO' AND id_tipo_negocio = 1);`,
+            { replacements: { u: principal.id_usuario, n: idNegocio } }
+        );
+        try {
+            await expect(pedir([{ id_producto: prod.id_producto, cantidad: 1 }]))
+                .rejects.toMatchObject({ code: 'SIN_DOMICILIARIO_DISPONIBLE' });
+        } finally {
+            await sequelize.query(
+                `UPDATE general.gener_usuario_rol SET estado = 'A'
+                  WHERE id_usuario = :u AND id_negocio = :n
+                    AND id_rol = (SELECT id_rol FROM general.gener_rol WHERE descripcion = 'DOMICILIARIO' AND id_tipo_negocio = 1);`,
+                { replacements: { u: principal.id_usuario, n: idNegocio } }
+            );
+        }
     });
 
     it('sin confirmación del cliente NO se ejecuta', async () => {
@@ -610,48 +788,48 @@ describe('cancelar_pedido', () => {
     }
 
     it('el dueño cancela un pedido que la cocina todavía no ha tocado', async () => {
-        await crearOrdenCancelable('ORD-9910');
-        const { resultado } = await cancelar('ORD-9910');
+        await crearOrdenCancelable('ORD-9950');
+        const { resultado } = await cancelar('ORD-9950');
         expect(resultado.estado).toBe('CANCELADA');
 
         const fila = await unaFila(
-            `SELECT estado FROM restaurante.pedid_orden WHERE numero_orden = 'ORD-9910' AND id_negocio = :n;`,
+            `SELECT estado FROM restaurante.pedid_orden WHERE numero_orden = 'ORD-9950' AND id_negocio = :n;`,
             { n: idNegocio }
         );
         expect(fila.estado).toBe('CANCELADA');
     });
 
     it('otro número no lo puede cancelar, aunque acierte el número de orden', async () => {
-        await crearOrdenCancelable('ORD-9911');
-        await expect(cancelar('ORD-9911', { telefono: TEL_INTRUSO }))
+        await crearOrdenCancelable('ORD-9951');
+        await expect(cancelar('ORD-9951', { telefono: TEL_INTRUSO }))
             .rejects.toMatchObject({ code: 'PEDIDO_NO_ES_DE_QUIEN_PIDE' });
     });
 
     it('con la cocina ya preparándolo, no se cancela por aquí', async () => {
-        await crearOrdenCancelable('ORD-9912', { estadoCocina: 'EN_PREPARACION' });
-        await expect(cancelar('ORD-9912')).rejects.toMatchObject({ code: 'ORDEN_EN_PREPARACION' });
+        await crearOrdenCancelable('ORD-9952', { estadoCocina: 'EN_PREPARACION' });
+        await expect(cancelar('ORD-9952')).rejects.toMatchObject({ code: 'ORDEN_EN_PREPARACION' });
     });
 
     it('ya cobrado, no se cancela por aquí', async () => {
-        await crearOrdenCancelable('ORD-9913', { estadoPago: 'pagado' });
-        await expect(cancelar('ORD-9913')).rejects.toMatchObject({ code: 'ORDEN_NO_CANCELABLE' });
+        await crearOrdenCancelable('ORD-9953', { estadoPago: 'pagado' });
+        await expect(cancelar('ORD-9953')).rejects.toMatchObject({ code: 'ORDEN_NO_CANCELABLE' });
     });
 
     it('sin el sí explícito del cliente, el Gate no lo ejecuta', async () => {
-        await crearOrdenCancelable('ORD-9914');
-        await expect(cancelar('ORD-9914', { confirmado: false })).rejects.toBeDefined();
+        await crearOrdenCancelable('ORD-9954');
+        await expect(cancelar('ORD-9954', { confirmado: false })).rejects.toBeDefined();
 
         const fila = await unaFila(
-            `SELECT estado FROM restaurante.pedid_orden WHERE numero_orden = 'ORD-9914' AND id_negocio = :n;`,
+            `SELECT estado FROM restaurante.pedid_orden WHERE numero_orden = 'ORD-9954' AND id_negocio = :n;`,
             { n: idNegocio }
         );
         expect(fila.estado).toBe('ABIERTA');
     });
 
     it('cancelarlo dos veces no lo cancela dos veces: la segunda se rechaza', async () => {
-        await crearOrdenCancelable('ORD-9915');
-        await cancelar('ORD-9915');
-        await expect(cancelar('ORD-9915')).rejects.toMatchObject({ code: 'ORDEN_YA_CANCELADA' });
+        await crearOrdenCancelable('ORD-9955');
+        await cancelar('ORD-9955');
+        await expect(cancelar('ORD-9955')).rejects.toMatchObject({ code: 'ORDEN_YA_CANCELADA' });
     });
 });
 
@@ -721,16 +899,16 @@ describe('agregar_items_pedido', () => {
 
     it('agrega el producto y recalcula el total', async () => {
         await abrirCaja();
-        await crearOrdenEditable('ORD-9920');
+        await crearOrdenEditable('ORD-9970');
 
-        const { resultado } = await agregar('ORD-9920', [{ id_producto: idProducto, cantidad: 2 }]);
+        const { resultado } = await agregar('ORD-9970', [{ id_producto: idProducto, cantidad: 2 }]);
         expect(resultado.items_agregados).toBe(1);
         expect(resultado.total).toBe(precioProducto * 2);
 
         const detalle = await unaFila(
             `SELECT COUNT(*)::int AS n FROM restaurante.pedid_detalle d
                JOIN restaurante.pedid_orden o USING (id_orden)
-              WHERE o.numero_orden = 'ORD-9920' AND o.id_negocio = :neg AND d.id_producto = :p;`,
+              WHERE o.numero_orden = 'ORD-9970' AND o.id_negocio = :neg AND d.id_producto = :p;`,
             { neg: idNegocio, p: idProducto }
         );
         expect(detalle.n).toBe(1);
@@ -738,9 +916,9 @@ describe('agregar_items_pedido', () => {
 
     it('otro número no le puede agregar nada, aunque acierte el número de orden', async () => {
         await abrirCaja();
-        await crearOrdenEditable('ORD-9921');
+        await crearOrdenEditable('ORD-9971');
 
-        await expect(agregar('ORD-9921', [{ id_producto: idProducto, cantidad: 1 }], { telefono: TEL_INTRUSO }))
+        await expect(agregar('ORD-9971', [{ id_producto: idProducto, cantidad: 1 }], { telefono: TEL_INTRUSO }))
             .rejects.toMatchObject({ code: 'PEDIDO_NO_ES_DE_QUIEN_PIDE' });
     });
 
@@ -752,35 +930,35 @@ describe('agregar_items_pedido', () => {
 
     it('con la cocina ya preparándolo, no se le agrega nada', async () => {
         await abrirCaja();
-        await crearOrdenEditable('ORD-9923', { estadoCocina: 'EN_PREPARACION' });
-        await expect(agregar('ORD-9923', [{ id_producto: idProducto, cantidad: 1 }]))
+        await crearOrdenEditable('ORD-9973', { estadoCocina: 'EN_PREPARACION' });
+        await expect(agregar('ORD-9973', [{ id_producto: idProducto, cantidad: 1 }]))
             .rejects.toMatchObject({ code: 'ORDEN_EN_PREPARACION' });
     });
 
     it('ya cobrado, no se le agrega nada', async () => {
         await abrirCaja();
-        await crearOrdenEditable('ORD-9924', { estadoPago: 'pagado' });
-        await expect(agregar('ORD-9924', [{ id_producto: idProducto, cantidad: 1 }]))
+        await crearOrdenEditable('ORD-9974', { estadoPago: 'pagado' });
+        await expect(agregar('ORD-9974', [{ id_producto: idProducto, cantidad: 1 }]))
             .rejects.toMatchObject({ code: 'ORDEN_NO_EDITABLE' });
     });
 
     it('con la caja cerrada, no se le agrega nada', async () => {
         await cerrarCaja();
-        await crearOrdenEditable('ORD-9925');
-        await expect(agregar('ORD-9925', [{ id_producto: idProducto, cantidad: 1 }]))
+        await crearOrdenEditable('ORD-9975');
+        await expect(agregar('ORD-9975', [{ id_producto: idProducto, cantidad: 1 }]))
             .rejects.toMatchObject({ code: 'RESTAURANTE_CERRADO' });
     });
 
     it('un producto que ya no está en la carta se rechaza sin tocar el pedido', async () => {
         await abrirCaja();
-        await crearOrdenEditable('ORD-9926');
-        await expect(agregar('ORD-9926', [{ id_producto: 999999999, cantidad: 1 }]))
+        await crearOrdenEditable('ORD-9976');
+        await expect(agregar('ORD-9976', [{ id_producto: 999999999, cantidad: 1 }]))
             .rejects.toMatchObject({ code: 'PRODUCTO_NO_DISPONIBLE' });
 
         const detalle = await unaFila(
             `SELECT COUNT(*)::int AS n FROM restaurante.pedid_detalle d
                JOIN restaurante.pedid_orden o USING (id_orden)
-              WHERE o.numero_orden = 'ORD-9926' AND o.id_negocio = :neg;`,
+              WHERE o.numero_orden = 'ORD-9976' AND o.id_negocio = :neg;`,
             { neg: idNegocio }
         );
         expect(detalle.n).toBe(0);
@@ -788,16 +966,92 @@ describe('agregar_items_pedido', () => {
 
     it('sin el sí explícito del cliente, el Gate no lo ejecuta', async () => {
         await abrirCaja();
-        await crearOrdenEditable('ORD-9927');
-        await expect(agregar('ORD-9927', [{ id_producto: idProducto, cantidad: 1 }], { confirmado: false }))
+        await crearOrdenEditable('ORD-9977');
+        await expect(agregar('ORD-9977', [{ id_producto: idProducto, cantidad: 1 }], { confirmado: false }))
             .rejects.toBeDefined();
 
         const detalle = await unaFila(
             `SELECT COUNT(*)::int AS n FROM restaurante.pedid_detalle d
                JOIN restaurante.pedid_orden o USING (id_orden)
-              WHERE o.numero_orden = 'ORD-9927' AND o.id_negocio = :neg;`,
+              WHERE o.numero_orden = 'ORD-9977' AND o.id_negocio = :neg;`,
             { neg: idNegocio }
         );
         expect(detalle.n).toBe(0);
+    });
+});
+
+describe('los textos que pidió el dueño (2026-09-21)', () => {
+    const TEL_CLIENTE = '+573005556699';
+
+    async function abrirCaja() {
+        await sequelize.query(
+            `INSERT INTO restaurante.rest_caja (id_negocio, id_usuario, monto_apertura, estado, fecha_apertura)
+             SELECT :n, :u, 0, 'A', now()
+              WHERE NOT EXISTS (SELECT 1 FROM restaurante.rest_caja WHERE id_negocio = :n AND estado = 'A');`,
+            { replacements: { n: idNegocio, u: principal.id_usuario } }
+        );
+    }
+
+    async function cerrarCaja() {
+        await sequelize.query(
+            `UPDATE restaurante.rest_caja SET estado = 'C' WHERE id_negocio = :n AND estado = 'A';`,
+            { replacements: { n: idNegocio } }
+        );
+    }
+
+    /** Un pedido REAL, con detalle de verdad — para leer los productos en la confirmación. */
+    async function crearPedidoReal() {
+        const { resultado: carta } = await ejecutar('buscar_producto', { termino: 'hamburguesa' });
+        const prod = carta.productos[0];
+
+        const { resultado } = await policyGate.ejecutar({
+            capacidad: 'tomar_pedido',
+            principal: principalDeContacto(idNegocio, { telefonoVerificado: TEL_CLIENTE }),
+            idNegocio,
+            args: {
+                items: [{ id_producto: prod.id_producto, cantidad: 2 }],
+                cliente_nombre: 'BOT Texto Confirmacion',
+                tipo_entrega: 'LLEVAR',
+            },
+            confirmadoPor: { origen: 'test', texto: 'sí' },
+        });
+        return { numeroOrden: resultado.numero_orden, nombreProducto: prod.nombre };
+    }
+
+    afterEach(cerrarCaja);
+
+    it('cancelar_pedido: la pregunta nombra los PRODUCTOS, no solo el número', async () => {
+        await abrirCaja();
+        const { numeroOrden, nombreProducto } = await crearPedidoReal();
+
+        const texto = await registry.obtener('cancelar_pedido').confirmacion.pregunta({
+            args: { numero_orden: numeroOrden },
+            idNegocio,
+        });
+        expect(texto).toContain(nombreProducto);
+        expect(texto).toMatch(/¿Estás seguro/i);
+    });
+
+    it('cancelar_pedido: sin detalle que mostrar, cae al número en vez de romperse', async () => {
+        const texto = await registry.obtener('cancelar_pedido').confirmacion.pregunta({
+            args: { numero_orden: 'ORD-NO-EXISTE-9999' },
+            idNegocio,
+        });
+        expect(texto).toContain('ORD-NO-EXISTE-9999');
+    });
+
+    it('cancelar_pedido: el "hecho" es exactamente el texto pedido, sin el número', () => {
+        const texto = registry.obtener('cancelar_pedido').confirmacion.hecho({
+            resultado: { numero_orden: 'ORD-0043', estado: 'CANCELADA' },
+        });
+        expect(texto).toBe('Tu pedido fue cancelado.');
+    });
+
+    it('agregar_items_pedido: el "hecho" avisa que el precio puede variar', () => {
+        const texto = registry.obtener('agregar_items_pedido').confirmacion.hecho({
+            resultado: { numero_orden: 'ORD-0044', total: 45000 },
+        });
+        expect(texto).toContain('$45.000');
+        expect(texto).toContain('empaques y domicilio');
     });
 });

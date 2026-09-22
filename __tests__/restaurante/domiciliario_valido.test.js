@@ -173,3 +173,76 @@ describe('crearOrden rechaza un domiciliario inválido', () => {
         expect(orden.numero_orden).toBeTruthy();
     });
 });
+
+describe('asignarDomiciliario — cambiarlo en un pedido ya creado', () => {
+    let idOrdenDomicilio;
+    let idOrdenLlevar;
+    let idSegundoDomiciliario;
+    let idRolDomiciliario;
+
+    beforeAll(async () => {
+        idRolDomiciliario = (await unaFila(
+            `SELECT id_rol FROM general.gener_rol WHERE descripcion = 'DOMICILIARIO' AND id_tipo_negocio = 1;`,
+        ))?.id_rol;
+        // idUsuarioSinRol se vuelve domiciliario TAMBIÉN, para poder probar el cambio de uno a
+        // otro — antes solo servía para probar que NO lo era.
+        idSegundoDomiciliario = idUsuarioSinRol;
+        await sequelize.query(
+            `INSERT INTO general.gener_usuario_rol (id_usuario, id_rol, id_negocio, estado)
+             VALUES (:u, :r, :n, 'A') ON CONFLICT DO NOTHING;`,
+            { replacements: { u: idSegundoDomiciliario, r: idRolDomiciliario, n: idNegocio } },
+        );
+
+        const orden = await pedir(idDomiciliarioValido);
+        idOrdenDomicilio = orden.id_orden;
+        ordenesCreadas.push(idOrdenDomicilio);
+
+        const paraLlevar = await pedidoService.crearOrden({
+            idNegocio, idUsuario, idMesa: null,
+            tipoPedido: 'LLEVAR',
+            contactoNombre: 'TEST llevar',
+            items: [{ id_producto: idProducto, cantidad: 1, precio_unitario: 10000 }],
+        });
+        idOrdenLlevar = paraLlevar.id_orden;
+        ordenesCreadas.push(idOrdenLlevar);
+    });
+
+    afterAll(async () => {
+        await sequelize.query(
+            `DELETE FROM general.gener_usuario_rol
+              WHERE id_usuario = :u AND id_negocio = :n AND id_rol = :r;`,
+            { replacements: { u: idSegundoDomiciliario, n: idNegocio, r: idRolDomiciliario } },
+        );
+    });
+
+    it('cambia el domiciliario a otro válido', async () => {
+        const orden = await pedidoService.asignarDomiciliario(idOrdenDomicilio, {
+            idNegocio, idDomiciliario: idSegundoDomiciliario,
+        });
+        expect(orden.id_domiciliario).toBe(idSegundoDomiciliario);
+
+        const fila = await unaFila(
+            `SELECT id_domiciliario FROM restaurante.pedid_orden WHERE id_orden = :o;`,
+            { o: idOrdenDomicilio },
+        );
+        expect(fila.id_domiciliario).toBe(idSegundoDomiciliario);
+    });
+
+    it('rechaza un domiciliario que no existe o no es de este negocio', async () => {
+        await expect(
+            pedidoService.asignarDomiciliario(idOrdenDomicilio, { idNegocio, idDomiciliario: 999999999 }),
+        ).rejects.toMatchObject({ code: 'DOMICILIARIO_INVALIDO' });
+    });
+
+    it('rechaza asignar domiciliario a un pedido que no es de domicilio', async () => {
+        await expect(
+            pedidoService.asignarDomiciliario(idOrdenLlevar, { idNegocio, idDomiciliario: idDomiciliarioValido }),
+        ).rejects.toMatchObject({ code: 'ORDEN_NO_ES_DOMICILIO' });
+    });
+
+    it('un pedido que no existe en este negocio, no se toca', async () => {
+        await expect(
+            pedidoService.asignarDomiciliario(999999999, { idNegocio, idDomiciliario: idDomiciliarioValido }),
+        ).rejects.toMatchObject({ code: 'ORDEN_NO_ENCONTRADA' });
+    });
+});
