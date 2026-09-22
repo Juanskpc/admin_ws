@@ -1106,9 +1106,11 @@ basta que dos de ellos discrepen sobre si el teléfono hace falta.
   `estado_cocina`, y el KDS filtra por `PENDIENTE|EN_PREPARACION|LISTO`: la orden queda `ABIERTA`
   y visible en el POS, pero **nadie en la cocina la ve** hasta que alguien le da a «enviar a
   cocina». Mientras eso no se decida, el seguimiento que consulta el cliente no se mueve.
-- **No existe endpoint para asignar un domiciliario a un pedido ya creado.** `id_domiciliario`
-  solo se puede poner **al crear** la orden (y el pedido del bot nace sin él). Lo único que hay
-  para domiciliarios es la liquidación de caja (`/caja/domiciliarios/transferir`).
+- ~~No existe endpoint para asignar un domiciliario a un pedido ya creado.~~ **Resuelto
+  2026-09-22**: `PATCH /pedidos/:id/domiciliario` (`pedidoService.asignarDomiciliario`), botón en
+  el detalle del pedido en Despacho. Y desde el mismo día el pedido del bot **ya no nace sin
+  domiciliario**: `tomar_pedido` lo asigna siempre (en turno primero, al azar si no hay nadie en
+  turno) — ver "El resto de la petición" más abajo.
 - **El arnés de evaluación no tiene ni una conversación de restaurante.** Sus tres suites son
   todas de `reserva`, así que un cambio de prompt como el de la `v3` no se puede medir donde
   más se nota. `enrutado` es gratis; `respuestas` cuesta unos centavos por tanda.
@@ -1376,3 +1378,25 @@ el cliente solo se enteraba después de escribir.
   cerrados.
 
 1079 tests en verde contra la base local (más los que ya había).
+
+---
+
+## Cierre de la sesión del 2026-09-22
+
+Todo lo de esta fecha (horarios de atención, domiciliario siempre asignado, reasignarlo desde
+Despacho, saludo consciente del horario, "qué dice", menú público sin transcribir la carta, y
+el menú digital respetando el horario) quedó **desplegado y verificado en producción**, no solo
+commiteado: commit real confirmado con `git log` en el VPS después de cada `pull` (nunca el
+mensaje del comando), servicio reiniciado sin errores en los logs, y para el frontend los
+hashes de los chunks comparados byte a byte entre el build local y `/var/www/html/restaurante`.
+
+**Lo único que sigue bloqueado por fuera del código:**
+
+- **La plantilla de WhatsApp `pedido_en_camino` no está aprobada por Meta.** El botón de avisar
+  "va en camino" ya aparece en Despacho para pedidos a domicilio, pero el envío real fallará
+  (controladamente, no revienta nada) hasta que se someta esa plantilla al WhatsApp Manager —
+  mismo trámite pendiente que `pedido_listo` en su momento.
+
+**Para retomar:** este archivo tiene la historia completa en orden; la sección "Lo que queda
+pendiente" (arriba) es la lista viva de deuda técnica conocida y no específica de una sola
+sesión — conviene revisarla antes de tocar el bot de restaurante otra vez.
