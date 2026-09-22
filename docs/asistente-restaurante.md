@@ -1357,3 +1357,22 @@ tenía que llegar hasta intentar confirmar un pedido para enterarse de que estab
   nunca la leía.
 
 1076 tests en verde contra la base local (más los que ya había).
+
+### El menú digital también respeta el horario (2026-09-22, mismo día)
+
+Reportado por el dueño: la carta pública seguía dejando armar un carrito y abrir el modal de
+WhatsApp aunque el negocio estuviera fuera de horario — el bot era el único que lo comprobaba, y
+el cliente solo se enteraba después de escribir.
+
+- `GET /restaurante/public/negocios/:id` ahora incluye `atencion: { estado }`, la misma
+  clasificación que ya usa el saludo (`horarioService.estadoDeAtencion`). Si falla la lectura,
+  se responde `abierto` (falla abierto): es un gesto de la carta, no la comprobación que de
+  verdad protege la creación de la orden — esa sigue siendo `requireCajaAbierta` dentro de
+  `tomar_pedido`, con su transacción y su lock.
+- `menu-publico.ts`: `puedePedir` ahora exige también `atendiendoAhora()`. Un solo computed
+  gobierna todos los botones de "agregar" y el FAB de "ver mi pedido" — no hubo que tocarlos uno
+  a uno. La carta se sigue viendo entera; solo se avisa con una franja (`avisoAtencion`) que
+  ahora mismo no se puede pedir, con un texto distinto para cada uno de los tres estados
+  cerrados.
+
+1079 tests en verde contra la base local (más los que ya había).

@@ -1,6 +1,7 @@
 const CartaService = require('../services/cartaService');
 const PublicoService = require('../services/publicoService');
 const CartaDisenoService = require('../services/cartaDisenoService');
+const horarioService = require('../services/horarioService');
 const Respuesta = require('../../app_core/helpers/respuesta');
 const { tienePlanActivo } = require('../../app_core/helpers/planHelper');
 
@@ -40,10 +41,24 @@ async function getNegocio(req, res) {
         const { colores: _colores, id_paleta: _idPaleta, paletaColor: _paleta, ...datos } =
             negocio.toJSON();
 
+        // Mismo estado que lee el saludo de WhatsApp (`horarioService.estadoDeAtencion`): si el
+        // negocio no está atendiendo, el menú digital tiene que decirlo también, o el cliente
+        // arma un carrito y abre WhatsApp para que el bot le diga que no puede tomarlo. Si esto
+        // falla, se sale con "abierto" (falla abierto): es un gesto de la carta, no la comprobación
+        // que de verdad protege la creación de la orden — esa sigue siendo `requireCajaAbierta`.
+        let atencion;
+        try {
+            atencion = await horarioService.estadoDeAtencion({ idNegocio });
+        } catch (err) {
+            console.error('[Publico] Error estado de atención:', err.message);
+            atencion = { estado: 'abierto' };
+        }
+
         return Respuesta.success(res, 'Negocio obtenido', {
             ...datos,
             plan_activo: planActivo,
             carta,
+            atencion,
         });
     } catch (err) {
         console.error('[Publico] Error getNegocio:', err.message);
