@@ -117,20 +117,20 @@ afterAll(async () => {
 
 // ────────────────────────────────────────────────────────────────────────────────────────
 describe('consultar_carta', () => {
-    it('sin categoría devuelve los PRODUCTOS con su precio, no un índice de categorías', async () => {
-        // El cambio del 2026-08-26. Antes esto devolvía solo la lista de categorías, y el bot
-        // hacía lo que la forma del dato le pedía: «tenemos Hamburguesas, Bebidas y Postres,
-        // ¿cuál quieres ver?». A quien pide comida no le importa cómo ordena su carta el
-        // restaurante — quiere saber qué hay y cuánto vale.
+    it('sin categoría devuelve el ENLACE y un ÍNDICE de categorías, no los productos', async () => {
+        // El cambio del 2026-09-22. Antes esto devolvía la carta entera —todas las categorías
+        // con todos sus productos y precios— y el modelo la transcribía tal cual en el chat: un
+        // mensaje larguísimo que duplica, peor, lo que ya existe con fotos en el menú digital.
+        // Visto en producción el 2026-09-21. Ahora, sin categoría, se lleva al cliente al
+        // enlace; el índice solo trae nombre, id y cuántos productos por categoría.
         const { resultado } = await ejecutar('consultar_carta');
 
-        const categorias = resultado.carta.map((c) => c.categoria);
-        expect(categorias).toEqual(expect.arrayContaining(['Hamburguesas', 'Bebidas', 'Postres']));
+        expect(typeof resultado.enlace).toBe('string');
+        expect(resultado.enlace).toContain(String(idNegocio));
 
-        const todos = resultado.carta.flatMap((c) => c.productos);
-        const doble = todos.find((p) => p.nombre === 'Hamburguesa doble');
-        expect(doble.precio).toBe(32000);
-        expect(typeof doble.precio).toBe('number');
+        const categorias = resultado.categorias.map((c) => c.categoria);
+        expect(categorias).toEqual(expect.arrayContaining(['Hamburguesas', 'Bebidas', 'Postres']));
+        expect(resultado.categorias.every((c) => 'productos' in c)).toBe(false);
     });
 
     it('los ids de categoría siguen viajando: son los que hacen falta para acotar', async () => {
@@ -138,12 +138,12 @@ describe('consultar_carta', () => {
         // «¿qué bebidas tienen?» obligaría a adivinar un id — que es exactamente el fallo del
         // 2026-08-24.
         const { resultado } = await ejecutar('consultar_carta');
-        expect(resultado.carta.every((c) => Number.isInteger(c.id_categoria))).toBe(true);
+        expect(resultado.categorias.every((c) => Number.isInteger(c.id_categoria))).toBe(true);
     });
 
     it('con categoría devuelve sus productos con precio', async () => {
-        const { resultado: carta } = await ejecutar('consultar_carta');
-        const hamburguesas = carta.carta.find((c) => c.categoria === 'Hamburguesas');
+        const { resultado: indice } = await ejecutar('consultar_carta');
+        const hamburguesas = indice.categorias.find((c) => c.categoria === 'Hamburguesas');
 
         const { resultado } = await ejecutar('consultar_carta', { id_categoria: hamburguesas.id_categoria });
         const doble = resultado.productos.find((p) => p.nombre === 'Hamburguesa doble');
@@ -181,13 +181,26 @@ describe('consultar_carta', () => {
     it('NO enseña lo que el negocio oculta ni lo que está agotado', async () => {
         // Son dos filtros distintos de la vertical —`visible` y `disponible`— y el que se
         // olvida es siempre el segundo. Un bot que ofrece algo agotado hace que el negocio
-        // quede mal con su cliente.
-        const { resultado } = await ejecutar('consultar_carta');
-        const todos = resultado.carta.flatMap((c) => c.productos.map((p) => p.nombre));
+        // quede mal con su cliente. Se comprueba por categoría: el índice ya no trae productos,
+        // así que el filtro se ve en el conteo (2 hamburguesas visibles, no 3) y confirmado al
+        // pedir el detalle de esa categoría.
+        const { resultado: indice } = await ejecutar('consultar_carta');
+        const hamburguesas = indice.categorias.find((c) => c.categoria === 'Hamburguesas');
+        const postres = indice.categorias.find((c) => c.categoria === 'Postres');
+        expect(hamburguesas.cuantos_productos).toBe(2); // no cuenta 'Menú del personal'
+        expect(postres.cuantos_productos).toBe(1); // no cuenta 'Malteada de mora'
 
-        expect(todos).toContain('Hamburguesa clásica');
-        expect(todos).not.toContain('Menú del personal');  // visible = false
-        expect(todos).not.toContain('Malteada de mora');   // disponible = false
+        const { resultado: conHamburguesas } = await ejecutar('consultar_carta', {
+            id_categoria: hamburguesas.id_categoria,
+        });
+        const nombres = conHamburguesas.productos.map((p) => p.nombre);
+        expect(nombres).toContain('Hamburguesa clásica');
+        expect(nombres).not.toContain('Menú del personal'); // visible = false
+
+        const { resultado: conPostres } = await ejecutar('consultar_carta', {
+            id_categoria: postres.id_categoria,
+        });
+        expect(conPostres.productos.map((p) => p.nombre)).not.toContain('Malteada de mora'); // disponible = false
     });
 });
 

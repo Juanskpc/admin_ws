@@ -148,10 +148,14 @@ describe('el flujo de restaurante', () => {
     /** Las 15:00 en Bogotá. El saludo depende de la hora y una prueba no puede esperar. */
     const LAS_TRES = () => new Date('2026-08-26T20:00:00Z');
 
+    /** El negocio está atendiendo normal: es lo que casi toda prueba de aquí necesita. */
+    const ABIERTO = async () => ({ estado: 'abierto' });
+
     const flujo = crearFlujoRestaurante({
         contextoNegocio: negocioFalso,
         leerCarta: async () => CARTA,
         ahora: LAS_TRES,
+        estadoAtencion: ABIERTO,
     });
 
     /** Una conversación que ya lleva turnos: no es alguien que acaba de llegar. */
@@ -178,11 +182,13 @@ describe('el flujo de restaurante', () => {
             contextoNegocio: negocioFalso,
             leerCarta: async () => CARTA,
             ahora: () => new Date('2026-08-26T14:00:00Z'), // 09:00 en Bogotá
+            estadoAtencion: ABIERTO,
         });
         const alas8 = crearFlujoRestaurante({
             contextoNegocio: negocioFalso,
             leerCarta: async () => CARTA,
             ahora: () => new Date('2026-08-27T01:00:00Z'), // 20:00 en Bogotá
+            estadoAtencion: ABIERTO,
         });
 
         expect((await alas9(entrada('hola', 12))).respuestas[0].texto).toContain('Buenos días');
@@ -196,18 +202,63 @@ describe('el flujo de restaurante', () => {
         expect(d.respuestas[0].texto).not.toContain('**Pregonchos**');
     });
 
-    it('el saludo deja UN botón, para pedir por chat', async () => {
+    it('el saludo NO deja botones: las dos rutas van en el texto', async () => {
+        // Hasta el 2026-09-22 había un botón «Pedir por aquí» al lado de una frase que ya decía
+        // lo mismo. El camino de texto libre sigue abierto igual — se prueba más abajo.
         const d = await flujo(entrada('hola', 12));
-        expect(d.respuestas[0].opciones.map((o) => o.id)).toEqual([OPCION.CHAT]);
+        expect(d.respuestas[0].opciones).toBeUndefined();
     });
 
-    it('esa única opción NO lleva detalle: con detalle el canal pinta una lista', async () => {
-        // `channels/whatsapp/adaptador.js` decide botón vs lista con `<= LIMITES.botones &&
-        // !conDetalle`. Una lista de una sola entrada obliga a desplegar un menú para pulsar lo
-        // único que hay dentro.
-        const d = await flujo(entrada('hola', 12));
-        expect(d.respuestas[0].opciones[0].detalle).toBeUndefined();
-        expect(Object.keys(d.respuestas[0].opciones[0])).toEqual(['id', 'etiqueta']);
+    describe('el saludo ya dice si el negocio está atendiendo (2026-09-22)', () => {
+        // Pedido explícito del dueño: hasta ahora esto solo se sabía si se llegaba a intentar
+        // confirmar un pedido (`tomar_pedido` es quien comprobaba horario y caja). Un «hola» a
+        // las 3 de la tarde recibía «arma tu pedido» aunque el negocio abriera a las 5.
+
+        it('fuera de horario: invita a mirar la carta y avisa que atenderá apenas pueda', async () => {
+            const cerrado = crearFlujoRestaurante({
+                contextoNegocio: negocioFalso,
+                leerCarta: async () => CARTA,
+                ahora: LAS_TRES,
+                estadoAtencion: async () => ({ estado: 'fuera_de_horario' }),
+            });
+            const d = await cerrado(entrada('hola', 12));
+
+            expect(d.respuestas[0].texto).toMatch(/fuera de nuestro horario/i);
+            expect(d.respuestas[0].texto).toContain(enlaceDelMenu(12));
+            // No es el saludo normal: no debe invitar a armar el pedido, que fallaría.
+            expect(d.respuestas[0].texto).not.toMatch(/armas tu pedido/i);
+        });
+
+        it('en horario pero sin caja abierta: dice que aún no abre, no que está cerrado', async () => {
+            const sinCaja = crearFlujoRestaurante({
+                contextoNegocio: negocioFalso,
+                leerCarta: async () => CARTA,
+                ahora: LAS_TRES,
+                estadoAtencion: async () => ({ estado: 'aun_no_abre' }),
+            });
+            const d = await sinCaja(entrada('hola', 12));
+
+            expect(d.respuestas[0].texto).toMatch(/todavía no ha abierto/i);
+            expect(d.respuestas[0].texto).toContain(enlaceDelMenu(12));
+        });
+
+        it('cerrado y sin horario cargado: un mensaje genérico, no "aún no abre"', async () => {
+            const sinHorario = crearFlujoRestaurante({
+                contextoNegocio: negocioFalso,
+                leerCarta: async () => CARTA,
+                ahora: LAS_TRES,
+                estadoAtencion: async () => ({ estado: 'cerrado_sin_horario' }),
+            });
+            const d = await sinHorario(entrada('hola', 12));
+
+            expect(d.respuestas[0].texto).toMatch(/cerrado ahora mismo/i);
+            expect(d.respuestas[0].texto).not.toMatch(/todavía no ha abierto/i);
+        });
+
+        it('abierto: es el saludo de siempre', async () => {
+            const d = await flujo(entrada('hola', 12));
+            expect(d.respuestas[0].texto).toMatch(/armas tu pedido/i);
+        });
     });
 
     it('«ver el menú» manda el enlace de ESE negocio', async () => {

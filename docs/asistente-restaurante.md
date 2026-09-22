@@ -1308,3 +1308,52 @@ npm run migrate:intelligence-bloqueada-por
   fallará en el envío (`dead letter`), no en el código.
 
 1061 tests en verde contra la base local (más los que ya había).
+
+### El primer mensaje y la carta escrita (2026-09-22)
+
+Tres ajustes chicos, vistos en una conversación real de producción (`Restaurante pregonchos`):
+
+- **«Qué dice»** —un saludo colombiano tan corriente como «qué más» o «qué tal», que ya
+  funcionaban— no abría la bienvenida: `esSaludo` exige que TODAS las palabras sean de saludar,
+  y «dice» no estaba en la lista (`intelligence/engine/texto.js`). Se agregó.
+- **El botón «Pedir por aquí» del saludo se quitó.** El propio texto del saludo ya dice «dime
+  por aquí qué se te antoja»; el botón repetía la misma oferta al lado. El camino de texto
+  libre sigue abierto igual (`pedir por aquí` / `por chat` se reconocen sueltos).
+- **`consultar_carta` sin argumentos ya NO devuelve el catálogo completo — devuelve el enlace y
+  un índice de categorías (nombre, id, cuántos productos), sin productos.** Antes el modelo se
+  llevaba la carta entera y la transcribía en el chat como una lista de "Entradas / Platos /
+  Bebidas" con precio por línea: literalmente peor que el menú digital, que ya tiene fotos.
+  El fallo del 2026-08-24 que motivó devolver el catálogo completo —el modelo adivinando un
+  id_categoria para no tener que preguntar— sigue resuelto por otra vía: el índice le sigue
+  dando los ids reales, y ahora hay un tercer camino que entonces no existía (el enlace), así
+  que ya no hace falta preguntarle al cliente «¿cuál categoría?» para evitar inventar un id.
+  Preguntar por una categoría o un producto concreto (`id_categoria`, `buscar_producto`) sigue
+  devolviendo el detalle completo de esa parte — eso no es "el menú escrito", es contestar lo
+  que se preguntó.
+
+1068 tests en verde contra la base local (más los que ya había).
+
+### El saludo ya dice si el negocio está atendiendo (2026-09-22, mismo día)
+
+Reportado en producción: el bot seguía conversando normal aunque el negocio estuviera fuera de
+horario. La causa: el horario y la caja solo se comprobaban DENTRO de `tomar_pedido` —el cliente
+tenía que llegar hasta intentar confirmar un pedido para enterarse de que estaba cerrado, y un
+«hola» a las 3 de la tarde recibía «arma tu pedido» aunque el negocio abriera a las 5.
+
+- **`horarioService.estadoDeAtencion({ idNegocio, ahora })`** — nueva función que cruza horario y
+  caja en un solo sitio, devolviendo uno de cuatro estados: `fuera_de_horario`, `aun_no_abre`,
+  `cerrado_sin_horario`, `abierto`. Vive en `horarioService` (no en el adaptador) para que
+  `tomar_pedido` y el saludo lean la misma clasificación — dos copias de esta decisión son
+  exactamente la clase de cosa que diverge (ver `gener_rol_nivel` en `CLAUDE.md`).
+  - **No** reemplaza el chequeo de `tomar_pedido`: ese sigue usando
+    `cajaService.requireCajaAbierta` con su transacción y su lock, porque ahí sí importa que la
+    caja no pueda cerrarse entre la comprobación y la creación de la orden. `estadoDeAtencion` es
+    una lectura informativa sin transacción — para decidir qué DECIR, no para crear nada.
+- **`bienvenida()` en `flujo.js` ahora es async** y llama a `estadoAtencion` (inyectable, como
+  `gate`/`identidad`) antes de saludar. Cuatro variantes de texto, una por estado — la de
+  `abierto` es la de siempre.
+- Confirmado contra producción: `Restaurante pregonchos` (id 12) sí tenía el horario cargado
+  (17:00–23:59 casi todos los días); el bug no era falta de configuración, era que el saludo
+  nunca la leía.
+
+1076 tests en verde contra la base local (más los que ya había).

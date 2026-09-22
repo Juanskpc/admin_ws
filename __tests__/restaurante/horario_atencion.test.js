@@ -98,6 +98,68 @@ describe('estaAbierto', () => {
     });
 });
 
+describe('estadoDeAtencion — cruza horario y caja en un solo sitio', () => {
+    // Lo que ahora lee también el saludo (`flujo.js`), no solo `tomar_pedido`: el pedido del
+    // dueño era que el PRIMER mensaje ya dijera en cuál de los tres estados está el negocio, en
+    // vez de que el cliente solo se enterara al intentar confirmar un pedido.
+    async function abrirCaja() {
+        await sequelize.query(
+            `INSERT INTO restaurante.rest_caja (id_negocio, id_usuario, monto_apertura, estado, fecha_apertura)
+             SELECT :n, :u, 0, 'A', now()
+              WHERE NOT EXISTS (SELECT 1 FROM restaurante.rest_caja WHERE id_negocio = :n AND estado = 'A');`,
+            { replacements: { n: idNegocio, u: idUsuario1 } },
+        );
+    }
+
+    async function cerrarCaja() {
+        await sequelize.query(
+            `UPDATE restaurante.rest_caja SET estado = 'C' WHERE id_negocio = :n AND estado = 'A';`,
+            { replacements: { n: idNegocio } },
+        );
+    }
+
+    afterEach(async () => {
+        await cerrarCaja();
+        await limpiarHorarios(null);
+    });
+
+    it('fuera de horario: "fuera_de_horario", así la caja esté abierta', async () => {
+        await horarioService.reemplazar({
+            idNegocio, idUsuario: null,
+            bloques: [{ dia_semana: DIA_MIERCOLES, hora_inicio: '17:00', hora_fin: '23:00' }],
+        });
+        await abrirCaja(); // la caja SÍ está abierta: lo que tiene que cortar es el horario
+        const r = await horarioService.estadoDeAtencion({ idNegocio, ahora: MIERCOLES_10AM });
+        expect(r).toEqual({ estado: 'fuera_de_horario' });
+    });
+
+    it('en horario pero sin caja abierta: "aun_no_abre", no "cerrado_sin_horario"', async () => {
+        await horarioService.reemplazar({
+            idNegocio, idUsuario: null,
+            bloques: [{ dia_semana: DIA_MIERCOLES, hora_inicio: '08:00', hora_fin: '20:00' }],
+        });
+        await cerrarCaja();
+        const r = await horarioService.estadoDeAtencion({ idNegocio, ahora: MIERCOLES_10AM });
+        expect(r).toEqual({ estado: 'aun_no_abre' });
+    });
+
+    it('sin horario configurado y sin caja: "cerrado_sin_horario"', async () => {
+        await cerrarCaja();
+        const r = await horarioService.estadoDeAtencion({ idNegocio, ahora: MIERCOLES_10AM });
+        expect(r).toEqual({ estado: 'cerrado_sin_horario' });
+    });
+
+    it('en horario y con caja abierta: "abierto"', async () => {
+        await horarioService.reemplazar({
+            idNegocio, idUsuario: null,
+            bloques: [{ dia_semana: DIA_MIERCOLES, hora_inicio: '08:00', hora_fin: '20:00' }],
+        });
+        await abrirCaja();
+        const r = await horarioService.estadoDeAtencion({ idNegocio, ahora: MIERCOLES_10AM });
+        expect(r).toEqual({ estado: 'abierto' });
+    });
+});
+
 describe('listar / reemplazar', () => {
     afterEach(async () => {
         await limpiarHorarios(null);

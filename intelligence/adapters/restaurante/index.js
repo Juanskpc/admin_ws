@@ -60,23 +60,12 @@ const cuentaService = require('../../../app_restaurante_api/services/cuentaServi
 const horarioService = require('../../../app_restaurante_api/services/horarioService');
 const usuarioAsistenteDao = require('../../../app_core/dao/usuarioAsistenteDao');
 const Models = require('../../../app_core/models/conection');
-const { enPesos } = require('./flujo');
+const { enPesos, enlaceDelMenu } = require('./flujo');
 
 const VERTICAL = 'restaurante';
 
 /** Cuántos productos se devuelven como mucho. Una lista de WhatsApp son 10 filas. */
 const MAX_PRODUCTOS = 10;
-
-/**
- * Cuántos productos caben en la carta entera, sumando todas las categorías.
- *
- * No es un límite de WhatsApp —el bot no vuelca esto tal cual, lo lee y contesta— sino del
- * prompt: la carta viaja **después** del corte de caché, así que cada producto se paga entero en
- * cada vuelta del turno. Treinta es el orden de magnitud de una carta de barrio completa; una
- * carta más grande se recorta y el modelo lo sabe (`hay_mas`), con `buscar_producto` para lo que
- * falte.
- */
-const MAX_CARTA = 30;
 
 function precio(valor) {
     return valor != null ? Number(valor) : null;
@@ -154,14 +143,15 @@ function registrarCapacidades() {
     registry.registrar({
         nombre: 'consultar_carta',
         descripcion:
-            'Devuelve los productos de la carta con su precio, agrupados por categoría. Úsala ' +
-            'cuando el cliente pregunte qué venden, qué hay de comer, o pida ver el menú. ' +
-            'Sin argumentos devuelve la carta entera: eso es lo normal, porque lo que el ' +
-            'cliente quiere saber es QUÉ HAY y CUÁNTO VALE. **Nunca le preguntes de qué ' +
-            'categoría quiere ver**: las categorías son la forma en que el restaurante ordena ' +
-            'su carta, no una pregunta que se le hace a nadie. Pásale id_categoria solo si el ' +
-            'propio cliente nombró una parte de la carta ("¿qué bebidas tienen?"), y usa ' +
-            'entonces el id exacto que devolvió esta misma capacidad: NO son 1, 2, 3.',
+            'Sin argumentos, devuelve el ENLACE de la carta digital (con fotos y precios) y un ' +
+            'índice de categorías —nombre, id y cuántos productos tiene cada una—, pero NO la ' +
+            'lista de productos. Úsala cuando el cliente pida ver el menú, la carta, o ' +
+            'pregunte qué venden EN GENERAL: la respuesta correcta es darle el enlace y decirle ' +
+            'que ahí ve todo con fotos y precios, **nunca transcribir el catálogo en el chat**. ' +
+            'Si en cambio el cliente pregunta por una parte concreta de la carta ("¿qué bebidas ' +
+            'tienen?", "¿qué hay de postre?"), ahí sí contesta en el chat: vuelve a llamar a ' +
+            'esta misma capacidad con el id_categoria exacto que salió en el índice (NO son ' +
+            '1, 2, 3). Para un plato suelto ("¿cuánto vale la limonada?") usa buscar_producto.',
         vertical: VERTICAL,
         tipo: registry.TIPO.CONSULTA,
         feature: FEATURE.ASISTENTE_IA,
@@ -175,39 +165,36 @@ function registrarCapacidades() {
             // es justo la diferencia entre lo que el negocio gestiona y lo que le enseña a un
             // cliente. Un producto oculto a propósito no debe salir por el bot.
 
-            // ⚠️ Sin categoría se devuelve la CARTA, no el índice.
+            // ⚠️ Sin categoría se devuelve el ENLACE y un ÍNDICE, no el catálogo entero.
             //
-            // Antes esto devolvía solo la lista de categorías, y el bot hacía lo que la forma
-            // del dato le pedía: contestar «tenemos Entradas, Platos y Bebidas, ¿cuál quieres
-            // ver?». Un cliente no escribe a un restaurante para navegar un índice; escribe
-            // para saber qué hay y cuánto vale. Cada pregunta intermedia es un turno más, y en
-            // un chat cada turno es una oportunidad de que se vaya.
+            // Hasta el 2026-09-22 esto devolvía la carta completa —todas las categorías con
+            // todos sus productos y precios— y el modelo la transcribía en el chat tal cual:
+            // un mensaje larguísimo de "Entradas / Platos / Bebidas" con precio por línea,
+            // justo lo que ya existe —mejor hecho, con fotos— en el menú digital. Visto en
+            // producción el 2026-09-21.
             //
-            // De paso desaparece la ronda que causó el fallo del 2026-08-24: si el modelo nunca
-            // tiene que elegir una categoría, tampoco puede inventarse su id.
+            // El índice (sin productos) sostiene lo mismo que ya resolvió el fallo del
+            // 2026-08-24: el modelo sigue sin tener que ADIVINAR un id_categoria, porque aquí
+            // se lo llevamos. La diferencia es que ya no hace falta preguntarle al cliente «¿cuál
+            // categoría?» —el fallo que motivó devolver el catálogo completo— porque ahora hay
+            // un tercer camino que no existía entonces: el enlace. Ver el catálogo completo
+            // sigue disponible, con id_categoria, para cuando el cliente SÍ pregunta por una
+            // parte concreta.
             if (!args.id_categoria) {
                 const carta = await cartaService.getCartaPublica(idNegocio);
 
-                let quedan = MAX_CARTA;
-                const grupos = [];
-                for (const c of carta) {
-                    const productos = (c.productos || []).slice(0, Math.max(quedan, 0));
-                    if (productos.length === 0) continue;
-                    quedan -= productos.length;
-                    grupos.push({
+                const categorias = carta
+                    .map((c) => ({
                         id_categoria: c.id_categoria,
                         categoria: c.nombre,
-                        productos: productos.map(producto),
-                    });
-                }
+                        cuantos_productos: (c.productos || []).length,
+                    }))
+                    .filter((c) => c.cuantos_productos > 0);
 
-                const total = carta.reduce((n, c) => n + (c.productos || []).length, 0);
                 return {
-                    carta: grupos,
-                    // `hay_mas` no es cosmética: sin él, una carta recortada le enseña al modelo
-                    // a decir «esto es todo lo que tenemos», que es mentira.
-                    hay_mas: total > MAX_CARTA,
-                    cuantos_productos: total,
+                    enlace: enlaceDelMenu(idNegocio),
+                    cuantos_productos: categorias.reduce((n, c) => n + c.cuantos_productos, 0),
+                    categorias,
                 };
             }
 

@@ -1,6 +1,7 @@
 'use strict';
 const { Op } = require('sequelize');
 const Models = require('../../app_core/models/conection');
+const cajaService = require('./cajaService');
 
 /**
  * horarioService — franjas semanales, del negocio o de un domiciliario.
@@ -90,6 +91,32 @@ async function estaAbierto({ idNegocio, ahora = new Date(), transaction = null }
 }
 
 /**
+ * En qué estado de atención está el negocio AHORA MISMO, cruzando horario y caja.
+ *
+ * Son dos preguntas distintas y el cliente necesita saber cuál de las dos es: «cerrado por
+ * hoy» no es lo mismo que «ya es la hora, pero todavía no hemos abierto la caja» — la primera
+ * dice que vuelva otro día o más tarde, la segunda que espere un momento.
+ *
+ * Vive aquí, en un solo sitio, para que `tomar_pedido` (que además necesita el lock de
+ * `requireCajaAbierta` porque va a crear una orden) y el saludo (que solo necesita SABER, sin
+ * bloquear nada) lean la misma clasificación. Copiarla dos veces es la clase de cosa que
+ * diverge — ver `gener_rol_nivel` en `CLAUDE.md`.
+ *
+ * No toma transacción ni lock a propósito: es una lectura informativa para decidir qué decir,
+ * no el paso que va a crear el pedido. Ese paso sigue usando `cajaService.requireCajaAbierta`
+ * con su propia transacción, sin pasar por aquí.
+ */
+async function estadoDeAtencion({ idNegocio, ahora = new Date() } = {}) {
+    const horario = await estaAbierto({ idNegocio, ahora });
+    if (horario.configurado && !horario.abierto) return { estado: 'fuera_de_horario' };
+
+    const caja = await cajaService.getCajaAbierta(idNegocio);
+    if (!caja) return { estado: horario.configurado ? 'aun_no_abre' : 'cerrado_sin_horario' };
+
+    return { estado: 'abierto' };
+}
+
+/**
  * Los usuarios (domiciliarios) cuyo horario cubre este instante.
  *
  * Devuelve `id_usuario`, no objetos completos: quien llama (`elegirDomiciliarioAlAzar`) ya sabe
@@ -111,4 +138,4 @@ async function usuariosEnTurnoAhora({ idNegocio, ahora = new Date(), transaction
     return [...idsEnTurno];
 }
 
-module.exports = { listar, reemplazar, estaAbierto, usuariosEnTurnoAhora };
+module.exports = { listar, reemplazar, estaAbierto, usuariosEnTurnoAhora, estadoDeAtencion };

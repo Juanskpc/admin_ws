@@ -105,9 +105,13 @@ function esAlgunComando(texto) {
  *
  * Las repeticiones de letra se admiten a propósito (`h+o+l+a+`): «holaaa» y «buenaas» son la
  * forma normal de escribir en un chat, no una falta que haya que castigar con un menú equivocado.
+ *
+ * `dice` se sumó el 2026-09-22: sin ella, «qué dice» —un saludo colombiano tan corriente como
+ * «qué más» o «qué tal», que ya estaban— no se reconocía como saludo por la sola palabra «dice»,
+ * y el mensaje se iba al modelo en vez de abrir la bienvenida.
  */
 const PALABRA_DE_SALUDO =
-    /^(?:h+o+l+a*s?|o+l+a+s?|h+o+l+i+s?|b+u+e+n+[oa]*s?|d+i+a+s?|t+a+r+d+e+s?|n+o+c+h+e+s?|h+e+y+|e+y+|epa|ola|alo+|hi|hello|saludo?s?|que|q|k|mas|tal|buenass?)$/;
+    /^(?:h+o+l+a*s?|o+l+a+s?|h+o+l+i+s?|b+u+e+n+[oa]*s?|d+i+a+s?|t+a+r+d+e+s?|n+o+c+h+e+s?|h+e+y+|e+y+|epa|ola|alo+|hi|hello|saludo?s?|que|q|k|mas|tal|dice|buenass?)$/;
 
 function esSaludo(texto) {
     const palabras = normalizar(ultimaLinea(texto))

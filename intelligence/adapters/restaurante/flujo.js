@@ -44,6 +44,7 @@ const codigoPedido = require('./codigoPedido');
 const confirmacion = require('../../engine/confirmacion');
 const policyGate = require('../../core/policyGate');
 const identidadReal = require('../../engine/identidad');
+const horarioService = require('../../../app_restaurante_api/services/horarioService');
 
 const VERTICAL = 'restaurante';
 
@@ -133,11 +134,66 @@ function conMemoria(conversacion, extra = {}) {
  * mensajes a mano y quiere recibirlo todo de una vez. Aquí no hay nadie leyendo: pedirle al
  * cliente que rellene un formulario, cuando el asistente puede preguntar lo que falte justo
  * cuando falte, sería añadirle trabajo para no usar lo único que tenemos de más.
+ *
+ * ## Por qué también pregunta si el negocio está atendiendo (2026-09-22)
+ *
+ * Hasta hoy esto saludaba igual sin importar la hora: un cliente que escribía a las 3 de la
+ * tarde recibía «arma tu pedido» aunque el negocio abriera a las 5, y solo se enteraba de que
+ * estaba cerrado si llegaba hasta intentar confirmar un pedido (`tomar_pedido` es quien más
+ * comprobaba esto, no el saludo). Pedido explícito del dueño: que el PRIMER mensaje ya diga en
+ * cuál de los tres estados está el negocio — mismo estado que usa `tomar_pedido`
+ * (`horarioService.estadoDeAtencion`), para que la respuesta no contradiga lo que pasaría si el
+ * cliente insistiera en pedir.
  */
-function bienvenida(ctx, pasosPrevios = []) {
+async function bienvenida(ctx, pasosPrevios = [], { estadoAtencion = horarioService.estadoDeAtencion } = {}) {
     const enlace = enlaceDelMenu(ctx.idNegocio);
+    const encabezado = `👋 ${saludoPorLaHora(ctx.ahora())} Te saluda *${ctx.negocio.tratamiento}*.`;
+    const { estado } = await estadoAtencion({ idNegocio: ctx.idNegocio, ahora: ctx.ahora() });
+
+    const textosPorEstado = {
+        fuera_de_horario: [
+            encabezado,
+            '',
+            'Ahora mismo estamos fuera de nuestro horario de atención. Te atendemos apenas ' +
+                'sea posible 🙏',
+            '',
+            'Si quieres, mientras tanto puedes ir mirando la carta, con fotos y precios 👇',
+            enlace,
+        ],
+        aun_no_abre: [
+            encabezado,
+            '',
+            'Ya estamos en nuestro horario de atención, pero el restaurante todavía no ha ' +
+                'abierto. Danos un momento y vuelve a escribir 🙏',
+            '',
+            'Mientras tanto puedes ir mirando la carta, con fotos y precios 👇',
+            enlace,
+        ],
+        cerrado_sin_horario: [
+            encabezado,
+            '',
+            'El restaurante está cerrado ahora mismo. Vuelve a escribirme más tarde 🙏',
+            '',
+            'Mientras tanto puedes ir mirando la carta, con fotos y precios 👇',
+            enlace,
+        ],
+        // El texto de siempre: en horario y con caja abierta (o sin horario configurado y con
+        // caja abierta — un negocio que nunca cargó horario no queda restringido por eso).
+        abierto: [
+            encabezado,
+            '',
+            'Aquí tienes la carta completa, con fotos y precios 👇',
+            enlace,
+            '',
+            'Armas tu pedido ahí y vuelves a este chat con todo listo 🛵',
+            '',
+            'O si prefieres, dime por aquí qué se te antoja y yo te lo anoto. ' +
+                'También te digo precios o en qué va un pedido que ya hiciste.',
+        ],
+    };
+
     return {
-        pasos: [...pasosPrevios, paso('menu_entrada_restaurante')],
+        pasos: [...pasosPrevios, paso('menu_entrada_restaurante', { estado })],
         respuestas: [
             {
                 // ⚠️ El enlace va DENTRO del texto, no como opción.
@@ -146,21 +202,12 @@ function bienvenida(ctx, pasosPrevios = []) {
                 // menú» como opción obligaba a un turno de ida y vuelta —el cliente pulsa, el
                 // bot contesta con el enlace— para algo que debería ser un toque. En el texto,
                 // WhatsApp lo hace pulsable solo.
-                texto: [
-                    `👋 ${saludoPorLaHora(ctx.ahora())} Te saluda *${ctx.negocio.tratamiento}*.`,
-                    '',
-                    'Aquí tienes la carta completa, con fotos y precios 👇',
-                    enlace,
-                    '',
-                    'Armas tu pedido ahí y vuelves a este chat con todo listo 🛵',
-                    '',
-                    'O si prefieres, dime por aquí qué se te antoja y yo te lo anoto. ' +
-                        'También te digo precios o en qué va un pedido que ya hiciste.',
-                ].join('\n'),
-                // Una sola opción y sin `detalle`: con detalle, el canal la pinta como una
-                // LISTA —un menú que hay que desplegar para ver una única entrada—, y eso es
-                // un toque de más para nada. Sin detalle cabe en un botón, que se pulsa directo.
-                opciones: [{ id: OPCION.CHAT, etiqueta: 'Pedir por aquí' }],
+                //
+                // Sin botón a propósito (2026-09-22): el texto ya ofrece las dos rutas —el
+                // enlace y "dime por aquí qué se te antoja"— y un botón «Pedir por aquí» sobraba
+                // al lado de esa misma frase. El camino de texto libre sigue abierto igual:
+                // `pedir por aquí` / `por chat` se reconocen más abajo como palabras sueltas.
+                texto: textosPorEstado[estado].join('\n'),
             },
         ],
         variables: conMemoria(ctx.conversacion, { enlace_menu: enlace }),
@@ -1047,6 +1094,10 @@ function crearFlujoRestaurante({
     // test del flujo no necesite Postgres.
     gate = policyGate,
     identidad = identidadReal,
+    // Mismo motivo: el saludo lee esto para saber en cuál de los tres estados está el negocio,
+    // y sin poder sustituirlo un test del saludo necesitaría Postgres para algo que no es su
+    // dominio (ver `bienvenida`).
+    estadoAtencion = horarioService.estadoDeAtencion,
 } = {}) {
     /**
      * Rellena el contexto con quién es el cliente.
@@ -1136,7 +1187,7 @@ function crearFlujoRestaurante({
         // `esSaludo`, que tolera signos, vocales repetidas y faltas —«Buenas!», «holaa»,
         // «buens»—, que era por donde se escapaba al modelo.
         if (esSaludo(texto) || esComando(texto, COMANDO.MENU) || !conversacion.variables?.turnos) {
-            return bienvenida(ctx, [paso('inicio_conversacion')]);
+            return bienvenida(ctx, [paso('inicio_conversacion')], { estadoAtencion });
         }
         return delegar(ctx);
     };

@@ -15,7 +15,7 @@
  */
 'use strict';
 
-const { COMANDO, esComando, ultimaLinea, normalizar } = require('../../intelligence/engine/texto');
+const { COMANDO, esComando, esSaludo, ultimaLinea, normalizar } = require('../../intelligence/engine/texto');
 
 describe('saludos', () => {
     // La lista de la que salió el fallo: así saluda la gente de verdad.
@@ -45,6 +45,25 @@ describe('saludos', () => {
         'a qué hora cierran',
     ])('«%s» NO reabre la bienvenida: lo contesta el modelo', (texto) => {
         expect(esComando(texto, COMANDO.MENU)).toBe(false);
+    });
+});
+
+describe('esSaludo — expresiones colombianas de saludo', () => {
+    // «qué dice» se sumó el 2026-09-22: junto con «qué más» y «qué tal», que ya funcionaban, es
+    // una de las formas más comunes de saludar en Colombia y no se reconocía por faltar «dice».
+    test.each(['que dice', 'Qué dice', '¿Qué dice?', 'que mas', 'qué tal'])(
+        '«%s» sí es un saludo',
+        (texto) => {
+            expect(esSaludo(texto)).toBe(true);
+        }
+    );
+
+    test.each([
+        'que dice el menu de hoy',
+        'que dice tu jefe',
+        'dice que no hay stock',
+    ])('«%s» NO es un saludo: es una pregunta con esas mismas palabras', (texto) => {
+        expect(esSaludo(texto)).toBe(false);
     });
 });
 
