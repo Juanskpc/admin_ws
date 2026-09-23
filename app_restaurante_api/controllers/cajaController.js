@@ -39,6 +39,25 @@ function puedeVerIngresos(req, idNegocio) {
     });
 }
 
+/**
+ * Traduce los errores de caja conservando lo que el frontend necesita para reaccionar:
+ * la lista de cajas cuando hay que elegir, y cuál estaba cerrada cuando no hay turno.
+ */
+function responderErrorCaja(res, err, mensajeGenerico) {
+    if (err.code === 'PUNTO_CAJA_REQUERIDO') {
+        return Respuesta.error(res, err.message, 409, { code: err.code, puntos: err.puntos || [] });
+    }
+    if (err.statusCode) {
+        return Respuesta.error(res, err.message, err.statusCode, {
+            code: err.code,
+            ...(err.punto ? { punto: err.punto } : {}),
+            ...(err.pendientes ? { pendientes: err.pendientes } : {}),
+        });
+    }
+    console.error('[Caja] ' + mensajeGenerico + ':', err.message);
+    return Respuesta.error(res, mensajeGenerico);
+}
+
 /** Deja la caja sin cifras, conservando lo que identifica el turno. */
 function ocultarImportesCaja(caja) {
     if (!caja) return caja;
@@ -80,7 +99,10 @@ async function getCajaAbierta(req, res) {
         const idNegocio = Number(req.query.id_negocio);
         if (!idNegocio) return Respuesta.error(res, 'id_negocio requerido', 400);
 
-        const caja = await CajaService.getCajaAbierta(idNegocio);
+        const caja = await CajaService.getCajaAbierta(idNegocio, {
+            idPuntoCaja: req.query.id_punto_caja ?? null,
+            idUsuario: req.usuario?.id_usuario,
+        });
         const visible = caja ? await puedeVerIngresos(req, idNegocio) : true;
 
         return Respuesta.success(
@@ -89,8 +111,7 @@ async function getCajaAbierta(req, res) {
             visible ? caja : ocultarImportesCaja(caja),
         );
     } catch (err) {
-        console.error('[Caja] Error getCajaAbierta:', err.message);
-        return Respuesta.error(res, 'Error al consultar la caja.');
+        return responderErrorCaja(res, err, 'Error al consultar la caja.');
     }
 }
 
@@ -103,6 +124,7 @@ async function abrirCaja(req, res) {
         const caja = await CajaService.abrirCaja({
             idNegocio: id_negocio,
             idUsuario: req.usuario.id_usuario,
+            idPuntoCaja: req.body.id_punto_caja ?? null,
             montoApertura: Number(monto_apertura) || 0,
             observaciones,
         });
@@ -112,11 +134,7 @@ async function abrirCaja(req, res) {
         });
         return Respuesta.success(res, 'Caja abierta', caja, 201);
     } catch (err) {
-        if (err.code === 'CAJA_YA_ABIERTA') {
-            return Respuesta.error(res, err.message, err.statusCode || 409, { code: err.code });
-        }
-        console.error('[Caja] Error abrirCaja:', err.message);
-        return Respuesta.error(res, 'Error al abrir la caja.');
+        return responderErrorCaja(res, err, 'Error al abrir la caja.');
     }
 }
 
@@ -242,6 +260,7 @@ async function getHistorial(req, res) {
 
         const historial = await CajaService.listarHistorialCajas({
             idNegocio,
+            idPuntoCaja: req.query.id_punto_caja ?? null,
             desde: req.query.desde || null,
             hasta: req.query.hasta || null,
             limite: Math.min(Number(req.query.limite) || 20, 100),
@@ -306,7 +325,10 @@ async function getResumenDomiciliarios(req, res) {
     try {
         const idNegocio = Number(req.query.id_negocio);
         if (!idNegocio) return Respuesta.error(res, 'id_negocio requerido', 400);
-        const resumen = await CajaService.getResumenDomiciliarios(idNegocio);
+        const resumen = await CajaService.getResumenDomiciliarios(idNegocio, {
+            idPuntoCaja: req.query.id_punto_caja ?? null,
+            idUsuario: req.usuario?.id_usuario,
+        });
         if (await puedeVerIngresos(req, idNegocio)) {
             return Respuesta.success(res, 'Resumen de domiciliarios obtenido', resumen);
         }
@@ -327,8 +349,7 @@ async function getResumenDomiciliarios(req, res) {
             rows: (resumen?.rows || []).map(sinMontos),
         });
     } catch (err) {
-        console.error('[Caja] Error getResumenDomiciliarios:', err.message);
-        return Respuesta.error(res, 'Error al obtener el resumen de domiciliarios.');
+        return responderErrorCaja(res, err, 'Error al obtener el resumen de domiciliarios.');
     }
 }
 
@@ -381,6 +402,7 @@ async function transferirDomiciliario(req, res) {
         const result = await CajaService.transferirDomiciliarioACaja({
             idNegocio: Number(id_negocio),
             idDomiciliario: Number(id_domiciliario),
+            idPuntoCaja: req.body.id_punto_caja ?? null,
             idUsuario: req.usuario?.id_usuario,
         });
         await Audit.registrarEvento({
@@ -389,8 +411,7 @@ async function transferirDomiciliario(req, res) {
         });
         return Respuesta.success(res, 'Pedidos transferidos a caja', result);
     } catch (err) {
-        console.error('[Caja] Error transferirDomiciliario:', err.message);
-        return Respuesta.error(res, 'Error al transferir pedidos a caja.');
+        return responderErrorCaja(res, err, 'Error al transferir pedidos a caja.');
     }
 }
 

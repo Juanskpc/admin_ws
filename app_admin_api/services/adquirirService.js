@@ -38,6 +38,7 @@ const Models = require('../../app_core/models/conection');
 const { initTransaction } = require('../../app_core/helpers/funcionesAdicionales');
 const { syncUsuarioRolActivo, rebuildNivelesUsuario } = require('../../app_core/dao/usuarioAdminDao');
 const datosFiscales = require('../../app_core/facturacion/datosFiscales');
+const { asegurarCajaPrincipal } = require('../../app_core/helpers/cajaPrincipal');
 const Dao = require('../../app_core/dao/cobranzaDao');
 const CobranzaService = require('./cobranzaService');
 const MailService = require('./mailService');
@@ -126,32 +127,102 @@ async function resolverPlan(nombrePlan, moneda = 'COP', ciclo = 'mensual') {
  * cuáles puede cobrar de verdad para no enseñar un botón que va a fallar en el último paso.
  */
 async function catalogoCompra({ moneda = 'COP', ciclo = 'mensual' } = {}) {
-    const planes = await Models.GenerPlan.findAll({
-        where: { estado: 'A', nombre: { [Op.in]: ['Plan Básico', 'Plan Avanzado'] } },
-        attributes: ['id_plan', 'nombre', 'descripcion'],
-        order: [['id_plan', 'ASC']],
-    });
+    const planes = await sequelize.query(
+        `SELECT id_plan, nombre, descripcion, usuarios_incluidos, cajas_incluidas
+           FROM general.gener_plan
+          WHERE estado = 'A' AND nombre IN ('Plan Básico', 'Plan Avanzado')
+          ORDER BY id_plan;`,
+        { type: sequelize.QueryTypes.SELECT }
+    );
 
     const vendibles = [];
     for (const plan of planes) {
-        const precio = await Dao.getPrecio({ idPlan: plan.id_plan, moneda, ciclo });
-        if (precio && Number(precio) > 0) {
-            vendibles.push({
-                id_plan: plan.id_plan,
-                nombre: plan.nombre,
-                descripcion: plan.descripcion ?? null,
-                precio: Number(precio),
-                moneda,
-                ciclo,
-            });
+        // `getPrecio` lanza si no hay precio: un plan sin precio en esta moneda simplemente no
+        // se ofrece, en vez de tumbar el catálogo entero.
+        let precio = null;
+        try {
+            precio = await Dao.getPrecio({ idPlan: plan.id_plan, moneda, ciclo });
+        } catch {
+            continue;
         }
+        if (!precio || Number(precio) <= 0) continue;
+
+        vendibles.push({
+            id_plan: plan.id_plan,
+            nombre: plan.nombre,
+            descripcion: plan.descripcion ?? null,
+            precio: Number(precio),
+            moneda,
+            ciclo,
+            usuarios_incluidos: plan.usuarios_incluidos ?? null,
+            cajas_incluidas: plan.cajas_incluidas ?? null,
+        });
     }
 
-    const pasarelas = await Dao.listarPasarelas({ pais: 'CO' });
+    const [pasarelas, complementos] = await Promise.all([
+        Dao.listarPasarelas({ pais: 'CO' }),
+        Dao.listarComplementosCatalogo({ moneda, ciclo }),
+    ]);
+
     return {
         planes: vendibles,
+        complementos: complementos.map((c) => ({
+            codigo: c.codigo,
+            nombre: c.nombre,
+            descripcion: c.descripcion,
+            amplia: c.amplia,
+            cantidad_maxima: c.cantidad_maxima,
+            precio: c.precio,
+        })),
         pasarelas: pasarelas.map((p) => ({ codigo: p.codigo, nombre: p.nombre })),
     };
+}
+
+/**
+ * Traduce la elección del comprador (`[{ codigo, cantidad }]`) a filas del catálogo.
+ *
+ * Todo lo que decide dinero se valida aquí y no en el navegador: el código tiene que existir y
+ * tener precio en la moneda, la cantidad tiene que ser entera y no pasar del tope del
+ * complemento. Cantidad 0 es «no lo quiero» y se descarta sin error — es lo que manda la
+ * pantalla cuando alguien sube y vuelve a bajar el contador.
+ */
+async function resolverComplementos(lista, moneda, ciclo) {
+    if (!Array.isArray(lista) || lista.length === 0) return [];
+
+    const catalogo = await Dao.listarComplementosCatalogo({ moneda, ciclo });
+    const vistos = new Set();
+    const resueltos = [];
+
+    for (const item of lista) {
+        const codigo = String(item?.codigo ?? '').trim().toUpperCase();
+        const cantidad = Number(item?.cantidad ?? 0);
+
+        if (vistos.has(codigo)) {
+            throw error(`El complemento ${codigo} viene repetido.`, 'COMPLEMENTO_REPETIDO', 422);
+        }
+        vistos.add(codigo);
+
+        if (!Number.isInteger(cantidad) || cantidad < 0) {
+            throw error('La cantidad de un complemento no es válida.', 'COMPLEMENTO_CANTIDAD', 422);
+        }
+        if (cantidad === 0) continue;
+
+        const c = catalogo.find((x) => x.codigo === codigo);
+        if (!c) {
+            throw error('Ese complemento no está disponible.', 'COMPLEMENTO_NO_DISPONIBLE', 422);
+        }
+        if (cantidad > c.cantidad_maxima) {
+            throw error(
+                `Puedes añadir hasta ${c.cantidad_maxima} de «${c.nombre}».`,
+                'COMPLEMENTO_CANTIDAD',
+                422
+            );
+        }
+
+        resueltos.push({ id_complemento: c.id_complemento, cantidad, codigo: c.codigo });
+    }
+
+    return resueltos;
 }
 
 /**
@@ -195,13 +266,18 @@ async function compraSinTerminar(idUsuario) {
 }
 
 /**
- * Paso 1 de la compra: crear la cuenta apagada y devolver el enlace de pago.
+ * Crea la cuenta del comprador y le deja su primer cobro esperando. **No toca la pasarela.**
  *
- * Todo lo que crea cuenta va en una sola transacción. El cobro se arma después, fuera de ella,
- * porque hablar con la pasarela es una llamada de red: si falla, la cuenta ya existe y el
- * comprador puede reintentar el pago sin volver a llenar el formulario (`reintentarPago`).
+ * Es el paso «Crear y continuar» de la compra. Separarlo del pago no es un capricho de pantalla:
+ * describe lo que de verdad pasa. Antes los cuatro pasos parecían un trámite único que o salía
+ * entero o no valía, y no era cierto — si el pago fallaba, la cuenta ya estaba creada y nadie se
+ * lo decía al comprador, que volvía a empezar y chocaba con «ya existe una cuenta con ese
+ * correo». Ahora la cuenta se confirma cuando se crea, y el pago es el paso siguiente.
+ *
+ * Todo lo que crea cuenta va en una sola transacción. La suscripción y la factura se arman
+ * después, fuera de ella: si algo falla ahí, la cuenta ya existe y el comprador puede seguir.
  */
-async function iniciarCompra(datos) {
+async function crearCuenta(datos) {
     const {
         nombres,
         apellidos,
@@ -214,13 +290,16 @@ async function iniciarCompra(datos) {
         pasarela = 'wompi',
         moneda = 'COP',
         ciclo = 'mensual',
+        complementos: complementosPedidos = [],
+        password = null,
     } = datos;
 
     const correo = String(email).toLowerCase().trim();
     const cedula = String(num_identificacion).trim();
 
-    // 1. Lo que se va a cobrar, antes de tocar nada.
+    // 1. Lo que se va a cobrar, antes de tocar nada: el plan y lo que se le añade.
     const plan = await resolverPlan(nombrePlan, moneda, ciclo);
+    const complementos = await resolverComplementos(complementosPedidos, moneda, ciclo);
 
     // 2. El oficio elegido y el módulo que lo atiende — de ahí salen los roles del negocio.
     const rubroElegido = await resolverRubroElegido(rubro);
@@ -263,13 +342,25 @@ async function iniciarCompra(datos) {
             console.info(
                 `[Adquirir] Compra retomada: usuario=${porEmail.id_usuario} negocio=${aMedias.id_negocio}`
             );
-            const cobro = await prepararCobro({
+            const cobro = await prepararFactura({
                 idNegocio: aMedias.id_negocio,
                 plan,
+                complementos,
                 pasarela,
-                origen: 'adquirir',
             });
-            return { id_negocio: aMedias.id_negocio, plan: plan.nombre, retomada: true, ...cobro };
+            return {
+                id_negocio: aMedias.id_negocio,
+                id_usuario: porEmail.id_usuario,
+                email: correo,
+                plan: plan.nombre,
+                retomada: true,
+                referencia: cobro.referencia,
+                lineas: cobro.lineas,
+                total: cobro.total,
+                moneda: cobro.moneda,
+                periodo_inicio: cobro.periodo_inicio,
+                periodo_fin: cobro.periodo_fin,
+            };
         }
 
         // No se retoma: decir **qué** dato choca es lo que permite corregirlo. «Esos datos» obliga
@@ -300,8 +391,11 @@ async function iniciarCompra(datos) {
                 primer_apellido,
                 num_identificacion: cedula,
                 email: correo,
-                password: cedula, // el hook beforeCreate aplica bcrypt
-                debe_cambiar_password: true,
+                // La elige el comprador en el paso de crear la cuenta. Si no llega (la ruta
+                // antigua, que no la pedía) se cae a la cédula y se le obliga a cambiarla al
+                // entrar, que es como funcionaba el alta web hasta 2026-09-23.
+                password: password || cedula, // el hook beforeCreate aplica bcrypt
+                debe_cambiar_password: !password,
                 estado: 'A',
             },
             { transaction }
@@ -322,6 +416,11 @@ async function iniciarCompra(datos) {
         idNegocio = negocio.id_negocio;
 
         await datosFiscales.asegurarFicha(idNegocio, { transaction });
+
+        // Caja principal: sin ninguna, el restaurante no puede tomar pedidos ni cobrar.
+        if (Number(idTipoNegocio) === 1) {
+            await asegurarCajaPrincipal(idNegocio, { transaction });
+        }
 
         await Models.GenerNegocioUsuario.create(
             { id_usuario: idUsuario, id_negocio: idNegocio, estado: 'A' },
@@ -364,14 +463,35 @@ async function iniciarCompra(datos) {
         detalle: { id_usuario: idUsuario, plan: plan.nombre, rubro: rubroElegido.nombre, pasarela },
     });
 
-    // 5. Suscripción + primera factura + checkout. Fuera de la transacción a propósito.
-    const cobro = await prepararCobro({ idNegocio, plan, pasarela, origen: 'adquirir' });
+    // 5. Suscripción + primera factura. Fuera de la transacción a propósito.
+    const cobro = await prepararFactura({ idNegocio, plan, complementos, pasarela });
 
     return {
         id_negocio: idNegocio,
+        id_usuario: idUsuario,
+        email: correo,
         plan: plan.nombre,
-        ...cobro,
+        retomada: false,
+        referencia: cobro.referencia,
+        lineas: cobro.lineas,
+        total: cobro.total,
+        moneda: cobro.moneda,
+        periodo_inicio: cobro.periodo_inicio,
+        periodo_fin: cobro.periodo_fin,
     };
+}
+
+/**
+ * El alta completa en una sola llamada: cuenta + checkout.
+ *
+ * Es la ruta original (`POST /publico/adquirir`), que se conserva para no romper a nadie que la
+ * esté llamando. La pantalla de compra ya no la usa: crea la cuenta y pide el checkout aparte,
+ * para poder confirmarle al comprador que su cuenta quedó hecha aunque el pago falle después.
+ */
+async function iniciarCompra(datos) {
+    const cuenta = await crearCuenta(datos);
+    const pago = await reintentarPago(cuenta.referencia, { pasarela: datos.pasarela });
+    return { ...cuenta, ...pago, id_negocio: cuenta.id_negocio, plan: cuenta.plan };
 }
 
 /**
@@ -380,8 +500,16 @@ async function iniciarCompra(datos) {
  * Vive aparte porque se repite tal cual cuando alguien cierra el checkout sin pagar y vuelve:
  * `generarFacturaPeriodo` es idempotente por referencia, así que reintentar no crea cobros nuevos.
  */
-async function prepararCobro({ idNegocio, plan, pasarela, origen }) {
-    await CobranzaService.configurarSuscripcion(idNegocio, {
+/**
+ * Deja la cuenta con su suscripción y su primera factura pendiente, **sin hablar con la pasarela**.
+ *
+ * Es la mitad del antiguo `prepararCobro`, separada porque el alta ya no es un trámite único que
+ * termina pagando: la cuenta se crea y se confirma en su propio paso, y el pago viene después.
+ * Quien no pague se queda con su cuenta y su cobro esperando, que es lo que de verdad ocurría
+ * antes aunque la pantalla diera a entender lo contrario.
+ */
+async function prepararFactura({ idNegocio, plan, complementos = [], pasarela }) {
+    const suscripcion = await CobranzaService.configurarSuscripcion(idNegocio, {
         id_plan: plan.id_plan,
         ciclo: plan.ciclo,
         moneda: plan.moneda,
@@ -389,19 +517,51 @@ async function prepararCobro({ idNegocio, plan, pasarela, origen }) {
         notas: MARCA_ALTA_WEB,
     });
 
+    // Los complementos se guardan en la suscripción ANTES de facturar: así la primera factura ya
+    // los cobra, y cada renovación futura también, porque `generarFacturaPeriodo` suma lo que la
+    // suscripción tenga contratado. Es la misma fila que después responde cuántos usuarios y
+    // cajas puede tener el negocio (`limitesNegocio`).
+    await Dao.fijarComplementosSuscripcion(suscripcion.id_suscripcion, idNegocio, complementos);
+
     // `desde: hoy` salta las guardas pensadas para la renovación —aquí no hay plan que vencer—
     // y factura el primer ciclo a partir de hoy.
-    const { factura } = await CobranzaService.generarFacturaPeriodo(idNegocio, { desde: hoyBogota() });
+    let { factura, ya_existia } = await CobranzaService.generarFacturaPeriodo(idNegocio, {
+        desde: hoyBogota(),
+    });
 
-    const pago = await CobranzaService.iniciarPago(factura.id_factura, { pasarela, origen });
+    // Quien vuelve a una compra a medias recibe su factura pendiente de antes (la referencia es
+    // la misma). Si entretanto cambió de plan o de complementos, el total de esa factura ya no es
+    // verdad: se recalcula antes de abrir el checkout, que cobra exactamente `factura.total`.
+    if (ya_existia && factura.estado === 'pendiente') {
+        factura = await CobranzaService.recalcularFacturaPendiente(factura.id_factura);
+    }
 
     return {
+        factura,
         referencia: factura.referencia,
+        lineas: await Dao.listarDetalleFactura(factura.id_factura),
         total: Number(factura.total),
         moneda: factura.moneda,
         periodo_inicio: factura.periodo_inicio,
         periodo_fin: factura.periodo_fin,
+    };
+}
+
+async function prepararCobro({ idNegocio, plan, complementos = [], pasarela, origen }) {
+    const cobro = await prepararFactura({ idNegocio, plan, complementos, pasarela });
+    const pago = await CobranzaService.iniciarPago(cobro.factura.id_factura, { pasarela, origen });
+
+    return {
+        referencia: cobro.referencia,
+        lineas: cobro.lineas,
+        total: cobro.total,
+        moneda: cobro.moneda,
+        periodo_inicio: cobro.periodo_inicio,
+        periodo_fin: cobro.periodo_fin,
         url_pago: pago.urlPago ?? null,
+        // dLocal no devuelve ningún id al volver del checkout: el navegador lo guarda antes de
+        // salir para poder pedir la confirmación a la vuelta (igual que hace /pagar).
+        id_externo: pago.idExterno ?? null,
         estado_pago: pago.estado,
         instrucciones: pago.instrucciones ?? null,
     };
@@ -435,6 +595,7 @@ async function reintentarPago(referencia, { pasarela } = {}) {
         total: Number(factura.total),
         moneda: factura.moneda,
         url_pago: pago.urlPago ?? null,
+        id_externo: pago.idExterno ?? null,
         estado_pago: pago.estado,
     };
 }
@@ -536,6 +697,7 @@ async function notificarAltaPagada(idNegocio, referencia) {
 
 module.exports = {
     catalogoCompra,
+    crearCuenta,
     iniciarCompra,
     reintentarPago,
     estadoCompra,

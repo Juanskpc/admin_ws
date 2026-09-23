@@ -139,6 +139,32 @@ const limiteAdquirir = rateLimit({
 
 router.get('/publico/adquirir/catalogo', limitePortalPagos, AdquirirController.getCatalogo);
 
+// Crear la cuenta, sin pagar todavía. La contraseña la elige el comprador y se valida como en
+// el resto del sistema (8 caracteres, una mayúscula y un número).
+router.post('/publico/adquirir/cuenta', limiteAdquirir, [
+    body('nombres').trim().isLength({ min: 2, max: 60 }).withMessage('Nombres inválidos'),
+    body('apellidos').trim().isLength({ min: 2, max: 60 }).withMessage('Apellidos inválidos'),
+    body('num_identificacion').trim()
+        .isLength({ min: 5, max: 20 }).withMessage('Número de identificación inválido')
+        .matches(/^[0-9A-Za-z-]+$/).withMessage('Número de identificación inválido'),
+    body('email').trim().isEmail().normalizeEmail().withMessage('Correo inválido'),
+    body('password')
+        .isLength({ min: 8 }).withMessage('La contraseña debe tener mínimo 8 caracteres')
+        .matches(/(?=.*[A-Z])/).withMessage('La contraseña debe tener al menos una mayúscula')
+        .matches(/(?=.*\d)/).withMessage('La contraseña debe tener al menos un número'),
+    body('telefono').optional({ values: 'falsy' }).trim()
+        .isLength({ min: 7, max: 20 }).withMessage('Teléfono inválido'),
+    body('rubro').trim().isLength({ min: 2, max: 60 }).withMessage('Tipo de negocio inválido'),
+    body('nombre_negocio').trim().isLength({ min: 2, max: 100 }).withMessage('Nombre del negocio inválido'),
+    body('plan').trim().isLength({ min: 3, max: 60 }).withMessage('Plan inválido'),
+    body('pasarela').optional().isIn(['dlocal', 'wompi']).withMessage('Medio de pago inválido'),
+    body('complementos').optional().isArray({ max: 10 }).withMessage('Complementos inválidos'),
+    body('complementos.*.codigo').isString().trim().isLength({ min: 2, max: 40 })
+        .withMessage('Complemento inválido'),
+    body('complementos.*.cantidad').isInt({ min: 0, max: 50 }).toInt()
+        .withMessage('Cantidad de complemento inválida'),
+], AdquirirController.postCuenta);
+
 router.post('/publico/adquirir', limiteAdquirir, [
     body('nombres').trim().isLength({ min: 2, max: 60 }).withMessage('Nombres inválidos'),
     body('apellidos').trim().isLength({ min: 2, max: 60 }).withMessage('Apellidos inválidos'),
@@ -152,6 +178,13 @@ router.post('/publico/adquirir', limiteAdquirir, [
     body('nombre_negocio').trim().isLength({ min: 2, max: 100 }).withMessage('Nombre del negocio inválido'),
     body('plan').trim().isLength({ min: 3, max: 60 }).withMessage('Plan inválido'),
     body('pasarela').isIn(['dlocal', 'wompi']).withMessage('Medio de pago inválido'),
+    // Los complementos son opcionales. Aquí solo se valida la forma; qué existe, cuánto cuesta y
+    // el tope de cada uno lo decide el servicio contra el catálogo de la base.
+    body('complementos').optional().isArray({ max: 10 }).withMessage('Complementos inválidos'),
+    body('complementos.*.codigo').isString().trim().isLength({ min: 2, max: 40 })
+        .withMessage('Complemento inválido'),
+    body('complementos.*.cantidad').isInt({ min: 0, max: 50 }).toInt()
+        .withMessage('Cantidad de complemento inválida'),
 ], AdquirirController.postCompra);
 
 router.post('/publico/adquirir/reintentar', limitePortalPagos, [
@@ -506,11 +539,27 @@ router.get('/cobranza/mi-suscripcion', [
 
 router.get('/cobranza/mis-cobros', CobranzaController.getMisCobros);
 
-// Elegir plan: lo hace el administrador del negocio desde «Mis pagos». La validación de que el
-// plan existe, está activo y no es gratuito vive en el servicio; aquí solo la forma.
+// Lo que el negocio tiene contratado, en solo lectura, para el administrador del propio negocio.
+router.get('/cobranza/mi-plan', [
+    query('id_negocio').isInt({ min: 1 }).withMessage('id_negocio inválido'),
+], CobranzaController.getMiPlan);
+
+// Cambiar plan y/o complementos: lo hace el administrador del negocio desde «Mis pagos». Los dos
+// campos son opcionales por separado —se puede cambiar solo el plan, solo los complementos, o
+// ambos— pero al menos uno tiene que venir. La validación de qué existe y qué cuesta vive en el
+// servicio; aquí solo la forma.
 router.post('/cobranza/mi-plan', [
     body('id_negocio').isInt({ min: 1 }).withMessage('id_negocio inválido'),
-    body('id_plan').isInt({ min: 1 }).withMessage('Plan inválido'),
+    body('id_plan').optional({ nullable: true }).isInt({ min: 1 }).withMessage('Plan inválido'),
+    body('complementos').optional({ nullable: true }).isArray().withMessage('Complementos inválidos'),
+    body('complementos.*.codigo').isString().trim().isLength({ min: 2, max: 40 }),
+    body('complementos.*.cantidad').isInt({ min: 0, max: 99 }),
+    body().custom((cuerpo) => {
+        if (cuerpo.id_plan == null && !Array.isArray(cuerpo.complementos)) {
+            throw new Error('Indica un plan, unos complementos, o los dos.');
+        }
+        return true;
+    }),
 ], CobranzaController.elegirPlan);
 
 router.post('/cobranza/facturas/:id/pagar', [
@@ -527,6 +576,23 @@ router.get('/cobranza/cartera', requireSuperAdmin, [
 router.get('/cobranza/ingresos', requireSuperAdmin, [
     query('meses').optional().isInt({ min: 1, max: 36 }).withMessage('Rango de meses inválido'),
 ], CobranzaController.getIngresos);
+
+// Complementos de un negocio: cuántos tiene y cuántos se le cobran. Solo super-admin — es
+// quien decide una cortesía, y cambia lo que el cliente paga cada mes.
+router.get('/cobranza/negocios/:id_negocio/complementos', requireSuperAdmin, [
+    param('id_negocio').isInt({ min: 1 }).withMessage('ID de negocio inválido'),
+], CobranzaController.getComplementos);
+
+router.put('/cobranza/negocios/:id_negocio/complementos', requireSuperAdmin, [
+    param('id_negocio').isInt({ min: 1 }).withMessage('ID de negocio inválido'),
+    body('complementos').isArray({ max: 20 }).withMessage('Complementos inválidos'),
+    body('complementos.*.codigo').isString().trim().isLength({ min: 2, max: 40 })
+        .withMessage('Complemento inválido'),
+    body('complementos.*.cantidad').isInt({ min: 0, max: 100 }).toInt()
+        .withMessage('Cantidad inválida'),
+    body('complementos.*.cantidad_facturable').optional().isInt({ min: 0, max: 100 }).toInt()
+        .withMessage('Cantidad a cobrar inválida'),
+], CobranzaController.putComplementos);
 
 router.put('/cobranza/negocios/:id_negocio/suscripcion', requireSuperAdmin, [
     param('id_negocio').isInt({ min: 1 }).withMessage('ID de negocio inválido'),

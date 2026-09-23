@@ -1,4 +1,5 @@
 const Models = require('../models/conection');
+const { asegurarCajaPrincipal } = require('../helpers/cajaPrincipal');
 const { initTransaction } = require('../helpers/funcionesAdicionales');
 const planHelper = require('../helpers/planHelper');
 const usuarioAdminDao = require('./usuarioAdminDao');
@@ -32,6 +33,9 @@ function getNegocioById(idNegocio) {
  * @param {Object} negocio Datos del negocio
  * @param {Object} t Transacción (opcional)
  */
+// El módulo del que cuelga el vertical restaurante. Es el único que necesita caja.
+const MODULO_RESTAURANTE = 1;
+
 async function createNegocio(negocio, t) {
     const options = t ? { transaction: t } : {};
     // Lo que llega es el OFICIO del cliente (heladería, barbería…). De ahí salen las dos cosas
@@ -48,6 +52,10 @@ async function createNegocio(negocio, t) {
     // Todo negocio nace con su ficha fiscal, en modo NINGUNO: no le pide nada al cliente, pero
     // evita que existan negocios sin ficha, que es un segundo estado posible para lo mismo.
     await datosFiscales.asegurarFicha(creado.id_negocio, { transaction: t });
+    // Y con su caja, si es de restaurante: sin ninguna no se puede tomar un pedido.
+    if (Number(datos.id_tipo_negocio) === MODULO_RESTAURANTE) {
+        await asegurarCajaPrincipal(creado.id_negocio, { transaction: t });
+    }
     return creado;
 }
 
@@ -452,6 +460,11 @@ async function registrarCliente({ negocio, plan, admin, id_usuario_existente }) 
 
         // 1b. Ficha fiscal (modo NINGUNO: no se le pide nada todavía)
         await datosFiscales.asegurarFicha(idNegocio, { transaction });
+
+        // 1c. Caja principal del restaurante
+        if (Number(idModulo) === MODULO_RESTAURANTE) {
+            await asegurarCajaPrincipal(idNegocio, { transaction });
+        }
 
         // 2. Vigencia: plan pagado o prueba (ver resolverVigencia)
         if (vigencia) {

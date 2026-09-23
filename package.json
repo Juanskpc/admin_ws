@@ -66,6 +66,8 @@
     "migrate:reserva-categorias": "node migrations/migrate_reserva_categorias.js",
     "migrate:reserva-clientes": "node migrations/migrate_reserva_clientes.js",
     "migrate:reserva-codigo-corto": "node migrations/migrate_reserva_codigo_corto.js",
+    "migrate:reserva-perfiles": "node migrations/migrate_reserva_perfiles.js",
+    "migrate:reserva-estancias": "node migrations/migrate_reserva_estancias.js",
     "migrate:restaurante-pago-domicilio": "node migrations/migrate_restaurante_pago_domicilio.js",
     "migrate:restaurante-subniveles-tipo-pedido": "node migrations/migrate_restaurante_subniveles_tipo_pedido.js",
     "migrate:restaurante-caja-anular-pedido": "node migrations/migrate_restaurante_caja_anular_pedido.js",
@@ -81,7 +83,11 @@
     "migrate:restaurante-horario": "node migrations/migrate_restaurante_horario.js",
     "migrate:cobranza": "node migrations/migrate_cobranza.js",
     "migrate:cobranza-solo-wompi": "node migrations/migrate_cobranza_solo_wompi.js",
-    "migrate:cobranza-plan-solicitado": "node migrations/migrate_cobranza_plan_solicitado.js"
+    "migrate:cobranza-plan-solicitado": "node migrations/migrate_cobranza_plan_solicitado.js",
+    "migrate:cobranza-complementos": "node migrations/migrate_cobranza_complementos.js",
+    "migrate:cobranza-cambios-plan": "node migrations/migrate_cobranza_cambios_plan.js",
+    "migrate:usuario-eliminado": "node migrations/migrate_usuario_eliminado.js",
+    "migrate:restaurante-cajas": "node migrations/migrate_restaurante_cajas.js"
   },
   "keywords": [],
   "author": "",

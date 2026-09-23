@@ -464,7 +464,9 @@ async function actualizarCuenta({ idNegocio, idCuenta, modo, cupo, estado, nota 
  */
 async function registrarAbono({
     idNegocio, idCuenta, idUsuario, idMetodoPago,
-    monto = 0, tiquetes = 0, idProducto = null, descuento = 0, concepto = null,
+    // La caja en la que entra el dinero. Opcional por la misma razón que en los pedidos: con
+    // una sola caja se resuelve sola.
+    monto = 0, tiquetes = 0, idProducto = null, descuento = 0, idPuntoCaja = null, concepto = null,
 }) {
     const cajaService = require('./cajaService');
 
@@ -516,7 +518,9 @@ async function registrarAbono({
             detalle = `Abono de ${pesos(dineroRecibido)}`;
         }
 
-        const caja = await cajaService.requireCajaAbierta(idNegocio, { transaction: t });
+        const caja = await cajaService.requireCajaAbierta(idNegocio, {
+            idUsuario, idPuntoCaja, transaction: t,
+        });
 
         const mp = await validarMetodoPagoCobrable({ idMetodoPago, idNegocio, transaction: t });
 

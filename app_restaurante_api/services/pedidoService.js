@@ -1,5 +1,6 @@
 const Models = require('../../app_core/models/conection');
 const cajaService = require('./cajaService');
+const puntoCajaService = require('./puntoCajaService');
 const { avisar, avisarTrasCommit, TEMAS } = require('./avisoService');
 const cuentaService = require('./cuentaService');
 const horarioService = require('./horarioService');
@@ -479,6 +480,10 @@ async function recalcularTotalesOrden({ idOrden, porcentajeImpuesto = 0, valorDo
  */
 async function crearOrden({
     idNegocio, idMetodoPago = null, idCuenta = null, pagos = null, idUsuario, idMesa, nota, items, porcentajeImpuesto = 0, permitirStockNegativo = false,
+    // En qué caja (rubro) va el pedido. Opcional: con una sola caja —o una sola asignada al
+    // usuario— se resuelve sola y el POS no pregunta nada. Con varias sin elegir, el servicio
+    // devuelve PUNTO_CAJA_REQUERIDO con la lista para que el POS muestre el selector.
+    idPuntoCaja = null,
     tipoPedido = 'MESA', contactoNombre = null, contactoTelefono = null,
     direccionDomicilio = null, notaDomicilio = null, idDomiciliario = null,
     valorDomicilio = 0, descuento = 0,
@@ -496,7 +501,10 @@ async function crearOrden({
     const transaccionPropia = !transaction;
     const t = transaction || (await Models.sequelize.transaction());
     try {
-        await cajaService.requireCajaAbierta(idNegocio, { transaction: t });
+        const punto = await puntoCajaService.resolverPuntoCaja({
+            idNegocio, idUsuario, idPuntoCaja, transaction: t,
+        });
+        await cajaService.requireCajaAbierta(idNegocio, { punto, transaction: t });
 
         if (tipoPedido === 'DOMICILIO' && idDomiciliario) {
             const valido = await esDomiciliarioValido({ idNegocio, idDomiciliario, transaction: t });
@@ -567,6 +575,7 @@ async function crearOrden({
         // 1. Crear la orden
         const orden = await Models.PedidOrden.create({
             id_negocio: idNegocio,
+            id_punto_caja: punto.id_punto_caja,
             id_usuario: idUsuario,
             numero_orden: numeroOrden,
             id_mesa: tipoPedido === 'MESA' ? (idMesa || null) : null,
@@ -651,7 +660,11 @@ async function agregarItemsOrden({
 }) {
     const t = await Models.sequelize.transaction();
     try {
-        await cajaService.requireCajaAbierta(idNegocio, { transaction: t });
+        // La caja la manda el pedido, no quien añade los productos.
+        await cajaService.requireCajaAbierta(idNegocio, {
+            punto: await cajaService.puntoDeOrden({ idOrden, transaction: t }),
+            transaction: t,
+        });
 
         const orden = await Models.PedidOrden.findOne({
             where: {

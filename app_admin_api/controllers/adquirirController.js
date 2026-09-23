@@ -41,6 +41,35 @@ async function getCatalogo(req, res) {
     }
 }
 
+/**
+ * POST /admin/publico/adquirir/cuenta — crea la cuenta y deja su primer cobro esperando.
+ *
+ * No abre el checkout: eso es el paso siguiente. Así el comprador recibe la confirmación de que
+ * su cuenta existe antes de pagar, que es lo que de verdad ocurre — si el pago falla, la cuenta
+ * sigue ahí.
+ */
+async function postCuenta(req, res) {
+    if (!check(req, res)) return;
+    try {
+        const cuenta = await AdquirirService.crearCuenta({
+            nombres: req.body.nombres,
+            apellidos: req.body.apellidos,
+            num_identificacion: req.body.num_identificacion,
+            email: req.body.email,
+            password: req.body.password,
+            telefono: req.body.telefono ?? null,
+            rubro: req.body.rubro,
+            nombre_negocio: req.body.nombre_negocio,
+            plan: req.body.plan,
+            pasarela: req.body.pasarela,
+            complementos: req.body.complementos ?? [],
+        });
+        return Respuesta.success(res, 'Cuenta creada', cuenta, 201);
+    } catch (err) {
+        return fallo(res, err, 'postCuenta', 'No pudimos crear tu cuenta. Inténtalo de nuevo.');
+    }
+}
+
 /** POST /admin/publico/adquirir — crea la cuenta apagada y devuelve el enlace de pago. */
 async function postCompra(req, res) {
     if (!check(req, res)) return;
@@ -55,6 +84,7 @@ async function postCompra(req, res) {
             nombre_negocio: req.body.nombre_negocio,
             plan: req.body.plan,
             pasarela: req.body.pasarela,
+            complementos: req.body.complementos ?? [],
         });
         return Respuesta.success(res, 'Compra iniciada', compra, 201);
     } catch (err) {
@@ -86,4 +116,4 @@ async function getEstado(req, res) {
     }
 }
 
-module.exports = { getCatalogo, postCompra, postReintentar, getEstado };
+module.exports = { getCatalogo, postCuenta, postCompra, postReintentar, getEstado };

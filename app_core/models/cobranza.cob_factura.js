@@ -35,6 +35,13 @@ module.exports = (sequelize, DataTypes) => {
              */
             id_plan: DataTypes.INTEGER,
 
+            /**
+             * `renovacion` compra un ciclo y mueve el vencimiento. `ajuste` cobra la diferencia
+             * prorrateada de subir de plan (o añadir complementos) a mitad de ciclo y **no toca la
+             * fecha de vencimiento**: el cliente no compra otro mes, mejora el que ya pagó.
+             */
+            tipo: { type: DataTypes.STRING(12), allowNull: false, defaultValue: 'renovacion' },
+
             periodo_inicio: { type: DataTypes.DATEONLY, allowNull: false },
             periodo_fin: { type: DataTypes.DATEONLY, allowNull: false },
 

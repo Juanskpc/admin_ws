@@ -29,6 +29,7 @@ const { setAuditNegocio } = require('../../app_core/middleware/auditContext');
 // fiscal: ese vale 'CO' por defecto y solo se llena al activar facturación. Leerlo de ahí le
 // ofrecía Wompi —que solo cobra en Colombia— a un negocio chileno.
 const { paisDeNegocio } = require('../../app_core/helpers/paisNegocio');
+const { getLimitesNegocio } = require('../../app_core/helpers/limitesNegocio');
 
 const sequelize = Models.sequelize;
 
@@ -228,6 +229,127 @@ async function configurarSuscripcion(idNegocio, datos) {
     return creada;
 }
 
+/**
+ * Los complementos de un negocio para la consola: **todo el catálogo**, con lo que tenga
+ * contratado puesto encima.
+ *
+ * Se devuelve el catálogo entero y no solo lo contratado porque la pantalla es un editor: quien
+ * mira tiene que poder añadir lo que aún no tiene sin adivinar qué existe. Lo no contratado
+ * viene en cero.
+ */
+async function getComplementosNegocio(idNegocio) {
+    const suscripcion = await Dao.getSuscripcionPorNegocio(idNegocio);
+    const moneda = suscripcion?.moneda || 'COP';
+    const ciclo = suscripcion?.ciclo || 'mensual';
+
+    const catalogo = await Dao.listarComplementosCatalogo({ moneda, ciclo });
+    const contratados = suscripcion
+        ? await Dao.listarComplementosSuscripcion(suscripcion.id_suscripcion, { moneda, ciclo })
+        : [];
+
+    const items = catalogo.map((c) => {
+        const mio = contratados.find((x) => x.id_complemento === c.id_complemento);
+        const cantidad = mio?.cantidad ?? 0;
+        const facturable = mio ? Number(mio.cantidad_facturable ?? mio.cantidad) : 0;
+        // Lo pedido y sin pagar: `null` cuando no hay nada pendiente. La pantalla lo usa para
+        // decir «tienes 2, pediste 4» en vez de mentir con uno de los dos números.
+        const solicitada = mio?.cantidad_solicitada ?? null;
+        return {
+            id_complemento: c.id_complemento,
+            codigo: c.codigo,
+            nombre: c.nombre,
+            descripcion: c.descripcion,
+            amplia: c.amplia,
+            cantidad_maxima: c.cantidad_maxima,
+            precio: c.precio,
+            cantidad,
+            cantidad_facturable: facturable,
+            cantidad_solicitada: solicitada == null ? null : Number(solicitada),
+            cortesia: Math.max(0, cantidad - facturable),
+            subtotal: facturable * c.precio,
+        };
+    });
+
+    return {
+        moneda,
+        ciclo,
+        tiene_suscripcion: Boolean(suscripcion),
+        complementos: items,
+        total_mensual: items.reduce((suma, i) => suma + i.subtotal, 0),
+        limites: await getLimitesNegocio(idNegocio),
+    };
+}
+
+/**
+ * Fija los complementos de un negocio desde la consola de super-admin.
+ *
+ * Dos cantidades por complemento: lo que el negocio **puede usar** y lo que se le **cobra**. La
+ * diferencia es cortesía y es la forma de regularizar a quien ya venía usando más de lo que su
+ * plan incluye sin cobrarle de golpe algo que nunca pactó.
+ *
+ * Si hay una factura pendiente, se recalcula aquí mismo: si no, el cambio no se vería hasta el
+ * mes siguiente y el cobro que el cliente tiene delante seguiría diciendo otra cosa.
+ */
+async function fijarComplementosNegocio(idNegocio, lista) {
+    const suscripcion = await Dao.exigirSuscripcion(idNegocio);
+    const catalogo = await Dao.listarComplementosCatalogo({
+        moneda: suscripcion.moneda,
+        ciclo: suscripcion.ciclo,
+    });
+
+    const resueltos = [];
+    for (const item of lista || []) {
+        const codigo = String(item?.codigo ?? '').trim().toUpperCase();
+        const c = catalogo.find((x) => x.codigo === codigo);
+        if (!c) throw error(`El complemento ${codigo} no existe o no tiene precio.`, 'COMPLEMENTO_NO_DISPONIBLE', 422);
+
+        const cantidad = Number(item.cantidad ?? 0);
+        const facturable = Number(item.cantidad_facturable ?? cantidad);
+
+        if (!Number.isInteger(cantidad) || cantidad < 0 || cantidad > c.cantidad_maxima) {
+            throw error(
+                `«${c.nombre}»: la cantidad debe estar entre 0 y ${c.cantidad_maxima}.`,
+                'COMPLEMENTO_CANTIDAD',
+                422
+            );
+        }
+        if (!Number.isInteger(facturable) || facturable < 0 || facturable > cantidad) {
+            throw error(
+                `«${c.nombre}»: lo que se cobra no puede ser más que lo asignado.`,
+                'COMPLEMENTO_FACTURABLE',
+                422
+            );
+        }
+        if (cantidad === 0) continue;
+        resueltos.push({ id_complemento: c.id_complemento, cantidad, cantidad_facturable: facturable });
+    }
+
+    setAuditNegocio(idNegocio);
+    await Dao.fijarComplementosSuscripcion(suscripcion.id_suscripcion, idNegocio, resueltos);
+
+    const pendiente = await Models.CobFactura.findOne({
+        where: { id_negocio: idNegocio, estado: 'pendiente' },
+        order: [['periodo_inicio', 'DESC']],
+    });
+    if (pendiente) await recalcularFacturaPendiente(pendiente.id_factura);
+
+    await Audit.registrarEvento({
+        modulo: 'cobranza',
+        accion: 'complementos_actualizados',
+        idNegocio,
+        detalle: {
+            complementos: resueltos.map((r) => ({
+                id_complemento: r.id_complemento,
+                cantidad: r.cantidad,
+                cobrados: r.cantidad_facturable,
+            })),
+            factura_recalculada: pendiente?.referencia ?? null,
+        },
+    });
+
+    return getComplementosNegocio(idNegocio);
+}
+
 // ── Facturación ─────────────────────────────────────────────────────────────────────────
 
 /**
@@ -373,11 +495,9 @@ async function generarFacturaPeriodo(idNegocio, { desde = null } = {}) {
     // `id_plan` de la suscripción sigue siendo el que tiene contratado hoy: cambiarlo antes de
     // cobrar sería regalarle el plan nuevo.
     const idPlanACobrar = suscripcion.id_plan_solicitado || suscripcion.id_plan;
-    const precio = await Dao.getPrecio({
-        idPlan: idPlanACobrar,
-        moneda: suscripcion.moneda,
-        ciclo: suscripcion.ciclo,
-    });
+    // Plan + complementos contratados, a precio de hoy. Es lo que hace que una renovación cobre
+    // lo mismo que el alta: el cliente no eligió «un plan», eligió un plan con dos usuarios más.
+    const cobro = await calcularCobro(suscripcion, idPlanACobrar);
 
     setAuditNegocio(idNegocio);
 
@@ -389,31 +509,186 @@ async function generarFacturaPeriodo(idNegocio, { desde = null } = {}) {
         periodo_inicio: periodoInicio,
         periodo_fin: periodoFin,
         moneda: suscripcion.moneda,
-        subtotal: precio,
+        subtotal: cobro.total,
         impuestos: 0, // Sin IVA: no somos responsables. Ver cabecera y obligaciones §2.
-        total: precio,
+        total: cobro.total,
         estado: 'pendiente',
         pasarela: suscripcion.pasarela,
     };
-    const factura = yaExiste
-        ? await Dao.actualizarFactura(yaExiste.id_factura, {
-              ...campos,
-              fecha_pago: null,
-              comision_pasarela: 0,
-              retencion_declarada: 0,
-              neto_recibido: null,
-              nota: null,
-          })
-        : await Dao.crearFactura(campos);
+
+    // Factura y detalle juntos: un total sin sus líneas no se puede explicar al cliente.
+    const transaction = await sequelize.transaction();
+    let factura;
+    try {
+        factura = yaExiste
+            ? await Dao.actualizarFactura(
+                  yaExiste.id_factura,
+                  {
+                      ...campos,
+                      fecha_pago: null,
+                      comision_pasarela: 0,
+                      retencion_declarada: 0,
+                      neto_recibido: null,
+                      nota: null,
+                  },
+                  { transaction }
+              )
+            : await Dao.crearFactura(campos, { transaction });
+        await Dao.reemplazarDetalleFactura(factura.id_factura, cobro.lineas, { transaction });
+        await transaction.commit();
+    } catch (err) {
+        await transaction.rollback();
+        throw err;
+    }
 
     await Audit.registrarEvento({
         modulo: 'cobranza',
         accion: 'factura_generada',
         idNegocio,
-        detalle: { referencia, periodo_inicio: periodoInicio, periodo_fin: periodoFin, total: precio },
+        detalle: {
+            referencia,
+            periodo_inicio: periodoInicio,
+            periodo_fin: periodoFin,
+            total: cobro.total,
+            lineas: cobro.lineas.length,
+        },
     });
 
     return { factura, ya_existia: false };
+}
+
+/**
+ * Lo que se cobra en un período: el plan más cada complemento contratado, con sus líneas.
+ *
+ * **Único sitio donde se decide un total.** Lo usan la generación de facturas (alta y
+ * renovación) y el recálculo de una factura pendiente; si cada uno sumara por su lado, el día
+ * que se añada un complemento nuevo uno lo cobraría y el otro no.
+ *
+ * Todo a precio de hoy, igual que el plan siempre se ha cobrado. Un complemento contratado que
+ * perdió su precio en la moneda de la suscripción NO se cobra a cero ni se omite en silencio:
+ * falla, porque cualquiera de las dos cosas es regalar o esconder algo.
+ */
+/** Unidades regaladas por el super-admin. Se conservan cuando el cliente sube o baja cantidad. */
+function cortesiaDe(complemento) {
+    return Math.max(
+        0,
+        Number(complemento.cantidad ?? 0) - Number(complemento.cantidad_facturable ?? complemento.cantidad ?? 0)
+    );
+}
+
+/** Lo contratado de un complemento contando lo pedido y aún no pagado. */
+function cantidadObjetivo(complemento) {
+    return complemento.cantidad_solicitada == null
+        ? Number(complemento.cantidad ?? 0)
+        : Number(complemento.cantidad_solicitada);
+}
+
+/** Lo que se cobraría de un complemento con lo pedido aplicado, respetando la cortesía. */
+function facturableObjetivo(complemento) {
+    return Math.max(0, cantidadObjetivo(complemento) - cortesiaDe(complemento));
+}
+
+async function calcularCobro(suscripcion, idPlan, { transaction } = {}) {
+    const moneda = suscripcion.moneda;
+    const ciclo = suscripcion.ciclo;
+
+    const precioPlan = await Dao.getPrecio({ idPlan, moneda, ciclo }, { transaction });
+    const plan = await Models.GenerPlan.findByPk(idPlan, { attributes: ['nombre'], transaction });
+    const complementos = await Dao.listarComplementosSuscripcion(
+        suscripcion.id_suscripcion,
+        { moneda, ciclo },
+        { transaction }
+    );
+
+    const lineas = [
+        {
+            tipo: 'plan',
+            id_plan: idPlan,
+            descripcion: plan?.nombre ?? 'Plan',
+            cantidad: 1,
+            precio_unitario: precioPlan,
+            subtotal: precioPlan,
+        },
+    ];
+
+    for (const c of complementos) {
+        // Lo que se cobra es `cantidad_facturable`, no lo contratado: la diferencia es cortesía
+        // del super-admin y el cliente la usa sin pagarla. Un complemento entero de cortesía no
+        // genera línea — una línea de cero en la factura solo invita a preguntar por qué está.
+        //
+        // Y si hay un cambio pedido y no pagado, la renovación cobra LO PEDIDO: el período que
+        // se está cobrando es justo aquel en el que ese cambio entra en vigor. La cortesía se
+        // conserva en unidades, así que quien tenía 5 gratis de 8 y pide 10 sigue con 5 gratis.
+        const facturable = facturableObjetivo(c);
+        if (facturable <= 0) continue;
+
+        if (c.precio == null) {
+            throw error(
+                `El complemento «${c.nombre}» no tiene precio en ${moneda}/${ciclo}.`,
+                'PRECIO_COMPLEMENTO_NO_CONFIGURADO',
+                409
+            );
+        }
+        lineas.push({
+            tipo: 'complemento',
+            id_complemento: c.id_complemento,
+            descripcion: c.nombre,
+            cantidad: facturable,
+            precio_unitario: c.precio,
+            subtotal: c.precio * facturable,
+        });
+    }
+
+    const total = lineas.reduce((suma, l) => suma + l.subtotal, 0);
+    return { lineas, total };
+}
+
+/**
+ * Vuelve a calcular una factura **pendiente** con lo que la suscripción tiene hoy.
+ *
+ * Existe por la compra desde la web: quien abandona el checkout y vuelve puede haber cambiado de
+ * plan o de complementos, pero `generarFacturaPeriodo` es idempotente por referencia y le
+ * devolvería la factura vieja con el total viejo. Una factura pagada, fallida o anulada no se
+ * toca nunca: es un documento cerrado.
+ */
+async function recalcularFacturaPendiente(idFactura) {
+    const transaction = await sequelize.transaction();
+    try {
+        const factura = await Models.CobFactura.findByPk(idFactura, {
+            transaction,
+            lock: transaction.LOCK.UPDATE,
+        });
+        if (!factura || factura.estado !== 'pendiente') {
+            await transaction.rollback();
+            return factura;
+        }
+
+        const suscripcion = await Dao.exigirSuscripcion(factura.id_negocio, { transaction });
+        const idPlan = suscripcion.id_plan_solicitado || suscripcion.id_plan;
+        const cobro = await calcularCobro(suscripcion, idPlan, { transaction });
+
+        setAuditNegocio(factura.id_negocio);
+        const actualizada = await Dao.actualizarFactura(
+            idFactura,
+            { id_plan: idPlan, subtotal: cobro.total, total: cobro.total, pasarela: suscripcion.pasarela },
+            { transaction }
+        );
+        await Dao.reemplazarDetalleFactura(idFactura, cobro.lineas, { transaction });
+        await transaction.commit();
+
+        if (Number(factura.total) !== cobro.total) {
+            await Audit.registrarEvento({
+                modulo: 'cobranza',
+                accion: 'factura_recalculada',
+                idNegocio: factura.id_negocio,
+                detalle: { referencia: factura.referencia, antes: Number(factura.total), ahora: cobro.total },
+            });
+        }
+        return actualizada;
+    } catch (err) {
+        await transaction.rollback();
+        throw err;
+    }
 }
 
 /**
@@ -453,10 +728,29 @@ async function aplicarPagoAprobado(factura, suscripcion, datos, transaction) {
     // pagaba tarde quedaba con un período que ya no correspondía. La factura guarda abajo el
     // período que de verdad compró. Detalle de la regla en `calcularRenovacion`.
     const plan = await Dao.planParaRenovar(factura.id_negocio, { transaction });
+
+    // Un AJUSTE no compra tiempo: cobra la diferencia por subir de plan a mitad de ciclo. Sumarle
+    // un ciclo sería regalar un mes por pagar unos pocos miles de pesos. La vigencia se queda
+    // exactamente donde está; lo que cambia es QUÉ plan se disfruta hasta esa fecha.
+    const esAjuste = factura.tipo === 'ajuste';
     const renovacion =
-        plan && !plan.fin
+        esAjuste || (plan && !plan.fin)
             ? null // plan sin fecha de fin: no vence, y un pago no debe ponerle fecha de corte
             : calcularRenovacion({ fin: plan?.fin ?? null, hoy: hoyBogota(), ciclo: suscripcion.ciclo });
+
+    // El ajuste sí cambia el plan del negocio, aunque no mueva la fecha: se pagó por estrenarlo hoy.
+    if (esAjuste && factura.id_plan && Number(factura.id_plan) !== Number(suscripcion.id_plan)) {
+        await Dao.fijarVencimientoPlan(
+            {
+                idNegocio: factura.id_negocio,
+                idNegocioPlan: plan?.id_negocio_plan ?? null,
+                idPlan: Number(factura.id_plan),
+                inicio: plan?.inicio ?? hoyBogota(),
+                hasta: plan?.fin ? finDeDiaBogota(plan.fin) : null,
+            },
+            { transaction }
+        );
+    }
 
     if (renovacion) {
         await Dao.fijarVencimientoPlan(
@@ -530,6 +824,11 @@ async function aplicarPagoAprobado(factura, suscripcion, datos, transaction) {
         },
         { transaction }
     );
+
+    // Y los complementos que estaban pedidos y sin pagar entran ahora, por el mismo motivo que el
+    // plan: el pago es lo que los hace efectivos. Vale para los dos tipos de factura — el ajuste
+    // los estrena a mitad de ciclo y la renovación los estrena con el período nuevo.
+    await Dao.aplicarComplementosSolicitados(suscripcion.id_suscripcion, { transaction });
 
     await Audit.registrarEvento({
         modulo: 'cobranza',
@@ -821,7 +1120,12 @@ function pasarelaRecomendada(pais) {
 function urlRetornoDe(origen) {
     const base = (process.env.APP_FRONTEND_URL || '').replace(/\/+$/, '');
     if (!base) return process.env.COBRANZA_SUCCESS_URL || null;
-    return origen === 'app' ? `${base}/admin/mis-pagos` : `${base}/pagar`;
+    if (origen === 'app') return `${base}/admin/mis-pagos`;
+    // La compra desde la web vuelve a su propia pantalla, que es la que confirma el pago y
+    // enseña las credenciales. Mandarla a /pagar dejaba al comprador en el portal de cobros de
+    // los clientes que ya existen, con un «pago confirmado» genérico y sin saber cómo entrar.
+    if (origen === 'adquirir') return `${base}/adquirir`;
+    return `${base}/pagar`;
 }
 
 /**
@@ -910,12 +1214,36 @@ async function cobrosDeUsuario(idUsuario) {
 
         const facturas = await Models.CobFactura.findAll({
             where: { id_negocio: n.id_negocio, estado: 'pendiente' },
-            attributes: ['id_factura', 'referencia', 'periodo_inicio', 'periodo_fin', 'total', 'moneda'],
+            attributes: [
+                'id_factura', 'referencia', 'periodo_inicio', 'periodo_fin', 'total', 'moneda',
+                'tipo', 'id_plan',
+            ],
             order: [['periodo_inicio', 'ASC']],
         });
+
+        // Cada cobro dice QUÉ plan cobra y con qué líneas. Sin esto la pantalla titulaba el cobro
+        // con el plan actual de la suscripción, y un cliente que acababa de pedir el Avanzado veía
+        // «Plan Básico · $59.999»: el nombre de un plan con el precio de otro.
+        const detalladas = [];
+        for (const f of facturas) {
+            const json = f.toJSON();
+            const plan = json.id_plan
+                ? await Models.GenerPlan.findByPk(json.id_plan, { attributes: ['nombre'] })
+                : null;
+            detalladas.push({
+                ...json,
+                total: Number(json.total),
+                plan: plan?.nombre ?? n.plan,
+                lineas: await Dao.listarDetalleFactura(json.id_factura),
+            });
+        }
+
         resultado.push({
             ...n,
-            facturas: facturas.map((f) => ({ ...f.toJSON(), total: Number(f.total) })),
+            facturas: detalladas,
+            // Lo que tiene contratado y lo que dejó pedido, para que la pantalla pueda pintar el
+            // estado real («tienes 2 usuarios extra, pediste 4») sin una segunda consulta.
+            complementos: await getComplementosNegocio(n.id_negocio),
             pasarelas: await pasarelasParaPagar(await paisDeNegocio(n.id_negocio)),
             // Los planes entre los que puede elegir, con su precio en su moneda. La prueba de
             // 7 días no está: no se elige ni se paga, se asigna al registrar el negocio.
@@ -1306,22 +1634,93 @@ function calcularRenovacion({ fin, hoy, ciclo }) {
     return { inicio: hoy, fin: sumarCiclo(hoy, ciclo) };
 }
 
+// ── Cambios de plan y complementos ──────────────────────────────────────────────────────
+//
+// La regla, en una línea: **subir se paga y entra hoy; bajar no se cobra y entra al renovar.**
+//
+// Subir a mitad de ciclo no cobra un mes entero —el cliente ya pagó el suyo— sino la diferencia
+// por los días que le quedan. Y no mueve el vencimiento: no compró otro mes, mejoró el actual.
+// Bajar no devuelve dinero: ese mes está pagado y lo sigue usando hasta el final.
+//
+// Lo elegido NUNCA se aplica al elegirlo: vive en `id_plan_solicitado` y `cantidad_solicitada`
+// hasta que un pago lo confirma. Aplicarlo antes sería regalarlo.
+
+/** Referencia de un cobro de ajuste: `EA-<negocio>-<AAAAMM>-A<n>`. La de renovación es sin `-A`. */
+function construirReferenciaAjuste(idNegocio, hoy, intento) {
+    return `${construirReferencia(idNegocio, hoy)}-A${intento}`;
+}
+
 /**
- * El administrador del negocio elige su plan.
+ * Lo que vale al mes una configuración concreta: un plan más unos complementos.
  *
- * Dos casos, y el resultado dice cuál fue:
- *   - **`ahora`**: hay un cobro pendiente (plan vencido, o la renovación ya generada). Ese cobro
- *     pasa a valer el plan nuevo, así que pagarlo estrena plan.
- *   - **`proximo_cobro`**: está al día y no debe nada. El plan nuevo se cobrará en la próxima
- *     mensualidad; hasta entonces conserva el que pagó.
- *
- * **Elegir no cambia el plan del negocio**: se guarda como `id_plan_solicitado` y solo se hace
- * efectivo al pagar (`aplicarPagoAprobado`). Cambiarlo aquí sería dárselo gratis.
- *
- * Los planes gratuitos no se pueden elegir: `listarPlanesParaCliente` filtra `precio > 0`, así que
- * la prueba de 7 días —que se asigna al registrar el negocio— no aparece ni se acepta.
+ * Es la única cuenta que decide si un cambio es subida o bajada. Se calcula con los precios de
+ * hoy, los mismos que cobrará la renovación.
  */
-async function elegirPlan(idNegocio, idPlan) {
+async function precioMensual({ suscripcion, idPlan, complementos, catalogo }) {
+    // Un plan sin precio en esta moneda vale cero aquí, y no es un error: es el caso de la prueba
+    // de 7 días. Cualquier plan pagado será «subir» frente a ella, que es justo lo que es.
+    let precioPlan = 0;
+    try {
+        precioPlan = await Dao.getPrecio({
+            idPlan,
+            moneda: suscripcion.moneda,
+            ciclo: suscripcion.ciclo,
+        });
+    } catch (err) {
+        if (err.code !== 'PRECIO_NO_CONFIGURADO') throw err;
+    }
+
+    let total = Number(precioPlan);
+    for (const [idComplemento, cantidad] of complementos) {
+        const c = catalogo.find((x) => Number(x.id_complemento) === Number(idComplemento));
+        if (!c || cantidad <= 0) continue;
+        total += Number(c.precio) * cantidad;
+    }
+    return total;
+}
+
+/**
+ * Qué parte del ciclo le queda al cliente, entre 0 y 1.
+ *
+ * Es lo que multiplica la diferencia de precio. Un plan que vence mañana casi no cobra nada al
+ * subir; uno recién renovado cobra casi la diferencia completa. Sin vigencia conocida se cobra
+ * la diferencia entera: es el caso del plan vencido, donde el ciclo entero está por delante.
+ */
+function proporcionRestante({ fin, hoy, ciclo }) {
+    if (!fin || fin < hoy) return 1;
+
+    const DIA = 86_400_000;
+    const enMs = (iso) => {
+        const { a, m, d } = partes(iso);
+        return Date.UTC(a, m - 1, d);
+    };
+
+    const restantes = Math.round((enMs(fin) - enMs(hoy)) / DIA) + 1; // el día de fin cuenta
+    const totales = Math.round((enMs(sumarCiclo(hoy, ciclo)) - enMs(hoy)) / DIA);
+    if (totales <= 0) return 1;
+    return Math.max(0, Math.min(1, restantes / totales));
+}
+
+/** Los complementos que el cliente tiene contratados hoy, como mapa id → cantidad. */
+function mapaDeComplementos(lista, usar) {
+    return new Map(lista.map((c) => [Number(c.id_complemento), usar(c)]));
+}
+
+/**
+ * El administrador del negocio cambia su plan, sus complementos, o los dos a la vez.
+ *
+ * Devuelve qué pasó, porque de eso depende lo que la pantalla tiene que decirle:
+ *   - **`sin_cambios`**: pidió exactamente lo que ya tiene. Si había algo pedido sin pagar, se
+ *     deshace — es la forma de cancelar una solicitud.
+ *   - **`ajuste`**: sube. Hay un cobro nuevo por la diferencia prorrateada y el cambio entra
+ *     cuando lo pague.
+ *   - **`renovacion`**: baja (o cuesta lo mismo). No se cobra nada ahora y entra al renovar.
+ *
+ * @param {number|null} idPlan el plan que quiere. `null` = deja el que tiene.
+ * @param {Array<{codigo: string, cantidad: number}>|null} complementos la elección COMPLETA.
+ *        `null` = no toca los complementos.
+ */
+async function cambiarMiPlan(idNegocio, { idPlan = null, complementos = null } = {}) {
     const suscripcion = await Dao.exigirSuscripcion(idNegocio);
 
     if (suscripcion.estado === 'cancelada') {
@@ -1332,66 +1731,339 @@ async function elegirPlan(idNegocio, idPlan) {
         );
     }
 
-    const disponibles = await Dao.listarPlanesParaCliente({
-        moneda: suscripcion.moneda,
-        ciclo: suscripcion.ciclo,
+    const moneda = suscripcion.moneda;
+    const ciclo = suscripcion.ciclo;
+    const disponibles = await Dao.listarPlanesParaCliente({ moneda, ciclo });
+    const catalogo = await Dao.listarComplementosCatalogo({ moneda, ciclo });
+    const contratados = await Dao.listarComplementosSuscripcion(suscripcion.id_suscripcion, {
+        moneda,
+        ciclo,
     });
-    const elegido = disponibles.find((p) => Number(p.id_plan) === Number(idPlan));
-    if (!elegido) {
-        throw error(
-            'Ese plan no está disponible para tu negocio.',
-            'PLAN_NO_DISPONIBLE',
-            409
-        );
+
+    // ── El plan objetivo ──
+    const idPlanActual = Number(suscripcion.id_plan);
+    const idPlanObjetivo = idPlan == null ? idPlanActual : Number(idPlan);
+    const planObjetivo = disponibles.find((p) => Number(p.id_plan) === idPlanObjetivo);
+    if (!planObjetivo && idPlanObjetivo !== idPlanActual) {
+        throw error('Ese plan no está disponible para tu negocio.', 'PLAN_NO_DISPONIBLE', 409);
     }
 
-    const actual = suscripcion.id_plan_solicitado || suscripcion.id_plan;
-    if (Number(actual) === Number(idPlan)) {
-        throw error('Ya tienes ese plan seleccionado.', 'PLAN_SIN_CAMBIO', 409);
+    // ── Los complementos objetivo ──
+    const actuales = mapaDeComplementos(contratados, (c) => Number(c.cantidad ?? 0));
+    let objetivo;
+    if (complementos == null) {
+        // No los toca: sigue queriendo lo que ya pidió, o lo que tiene.
+        objetivo = mapaDeComplementos(contratados, cantidadObjetivo);
+    } else {
+        objetivo = new Map();
+        for (const item of complementos) {
+            const codigo = String(item?.codigo ?? '').trim().toUpperCase();
+            const c = catalogo.find((x) => x.codigo === codigo);
+            if (!c) {
+                throw error(
+                    `El complemento ${codigo} no existe o no está disponible en tu moneda.`,
+                    'COMPLEMENTO_NO_DISPONIBLE',
+                    422
+                );
+            }
+            const cantidad = Number(item.cantidad ?? 0);
+            if (!Number.isInteger(cantidad) || cantidad < 0 || cantidad > c.cantidad_maxima) {
+                throw error(
+                    `«${c.nombre}»: la cantidad debe estar entre 0 y ${c.cantidad_maxima}.`,
+                    'COMPLEMENTO_CANTIDAD',
+                    422
+                );
+            }
+            if (cantidad > 0) objetivo.set(Number(c.id_complemento), cantidad);
+        }
+        // Lo que tiene y no viene en la lista se entiende como «quítamelo».
+        for (const id of actuales.keys()) if (!objetivo.has(id)) objetivo.set(id, 0);
     }
+
+    // ── ¿Cambia algo de verdad? ──
+    const mismoPlan = idPlanObjetivo === idPlanActual;
+    const mismosComplementos = [...new Set([...actuales.keys(), ...objetivo.keys()])].every(
+        (id) => (actuales.get(id) ?? 0) === (objetivo.get(id) ?? 0)
+    );
 
     setAuditNegocio(idNegocio);
 
-    // El cobro pendiente más viejo es el que el cliente va a pagar: se le cambia el plan y el
-    // monto. Si no hay ninguno, el cambio entra en el cobro que se genere la próxima vez.
-    const pendiente = await Models.CobFactura.findOne({
-        where: { id_negocio: idNegocio, estado: 'pendiente' },
-        order: [['periodo_inicio', 'ASC']],
-    });
-
-    if (pendiente) {
-        await Dao.actualizarFactura(pendiente.id_factura, {
-            id_plan: elegido.id_plan,
-            subtotal: elegido.precio,
-            total: elegido.precio,
-        });
+    if (mismoPlan && mismosComplementos) {
+        return deshacerSolicitud(idNegocio, suscripcion);
     }
 
+    // ── ¿Sube o baja? ──
+    const [precioActual, precioObjetivo] = await Promise.all([
+        precioMensual({ suscripcion, idPlan: idPlanActual, complementos: actuales, catalogo }),
+        precioMensual({ suscripcion, idPlan: idPlanObjetivo, complementos: objetivo, catalogo }),
+    ]);
+    const sube = precioObjetivo > precioActual;
+
+    // Lo pedido se anota en los dos casos; lo que cambia es cuándo y cómo se cobra.
     await Dao.actualizarSuscripcion(suscripcion.id_suscripcion, {
-        id_plan_solicitado: elegido.id_plan,
+        id_plan_solicitado: mismoPlan ? null : idPlanObjetivo,
     });
+    if (complementos != null) {
+        await Dao.solicitarComplementosSuscripcion(
+            suscripcion.id_suscripcion,
+            idNegocio,
+            [...objetivo].map(([id_complemento, cantidad]) => ({ id_complemento, cantidad }))
+        );
+    }
+
+    // ¿Tiene un plan que esté disfrutando hoy? Solo entonces tiene sentido un ajuste aparte: se
+    // cobra la parte de los días que le quedan. Sin plan vigente —compra web sin pagar, plan
+    // vencido, en días de gracia— lo que añada va a la MISMA mensualidad que tiene que pagar
+    // para volver a entrar. Un segundo cobro por separado le hacía pagar dos veces los mismos
+    // complementos (la renovación ya cobra lo pedido) y no se entendía cuál pagar primero.
+    const planNegocio = await Dao.planParaRenovar(idNegocio);
+    const planVigente = !!planNegocio && (!planNegocio.fin || planNegocio.fin >= hoyBogota());
+
+    const resultado = !planVigente
+        ? await sumarAlCobroPendiente({ idNegocio, precioObjetivo })
+        : sube
+        ? await cobrarDiferenciaAhora({
+              idNegocio,
+              suscripcion,
+              idPlanObjetivo,
+              planObjetivo,
+              objetivo,
+              catalogo,
+              precioActual,
+              precioObjetivo,
+          })
+        : await agendarParaLaRenovacion({ idNegocio, precioObjetivo });
 
     await Audit.registrarEvento({
         modulo: 'cobranza',
-        accion: 'plan_solicitado',
+        accion: !planVigente
+            ? 'cambio_plan_en_cobro_pendiente'
+            : sube
+            ? 'cambio_plan_ajuste'
+            : 'cambio_plan_agendado',
         idNegocio,
         detalle: {
-            id_plan_anterior: suscripcion.id_plan,
-            id_plan_solicitado: elegido.id_plan,
-            plan: elegido.nombre,
-            precio: elegido.precio,
-            factura: pendiente?.referencia ?? null,
+            id_plan_anterior: idPlanActual,
+            id_plan_solicitado: mismoPlan ? null : idPlanObjetivo,
+            complementos: [...objetivo].map(([id, cantidad]) => ({ id_complemento: id, cantidad })),
+            precio_actual: precioActual,
+            precio_objetivo: precioObjetivo,
+            referencia: resultado.referencia ?? null,
+            total: resultado.total ?? null,
         },
     });
 
+    return resultado;
+}
+
+/** Cancela lo pedido y no pagado, y devuelve el cobro pendiente a lo que el cliente tiene hoy. */
+async function deshacerSolicitud(idNegocio, suscripcion) {
+    const habiaAlgo =
+        suscripcion.id_plan_solicitado != null ||
+        (await Dao.listarComplementosSuscripcion(suscripcion.id_suscripcion, {
+            moneda: suscripcion.moneda,
+            ciclo: suscripcion.ciclo,
+        })).some((c) => c.cantidad_solicitada != null);
+
+    if (!habiaAlgo) {
+        return { aplica: 'sin_cambios', cambio: false, mensaje: 'Eso es justo lo que ya tienes.' };
+    }
+
+    await Dao.actualizarSuscripcion(suscripcion.id_suscripcion, { id_plan_solicitado: null });
+    await Dao.limpiarComplementosSolicitados(suscripcion.id_suscripcion);
+    // El ajuste sin pagar deja de tener sentido: cobraba un cambio que ya no se quiere.
+    await anularAjustesPendientes(idNegocio);
+    await recalcularPendienteDeRenovacion(idNegocio);
+
     return {
-        aplica: pendiente ? 'ahora' : 'proximo_cobro',
-        id_plan_solicitado: elegido.id_plan,
-        plan_solicitado: elegido.nombre,
-        total: elegido.precio,
-        moneda: elegido.moneda,
-        referencia: pendiente?.referencia ?? null,
+        aplica: 'sin_cambios',
+        cambio: true,
+        mensaje: 'Se canceló el cambio pendiente: sigues con lo que tienes hoy.',
     };
+}
+
+/** Los cobros de ajuste sin pagar se anulan al cambiar de idea: cobraban otra cosa. */
+async function anularAjustesPendientes(idNegocio, { motivo = 'Cambio de plan cancelado' } = {}) {
+    const abiertos = await Models.CobFactura.findAll({
+        where: { id_negocio: idNegocio, estado: 'pendiente', tipo: 'ajuste' },
+    });
+    for (const f of abiertos) {
+        await Dao.actualizarFactura(f.id_factura, { estado: 'anulada', nota: motivo });
+    }
+    return abiertos.length;
+}
+
+/** La renovación pendiente, si la hay, pasa a cobrar lo que el cliente acaba de pedir. */
+async function recalcularPendienteDeRenovacion(idNegocio) {
+    const pendiente = await Models.CobFactura.findOne({
+        where: { id_negocio: idNegocio, estado: 'pendiente', tipo: 'renovacion' },
+        order: [['periodo_inicio', 'ASC']],
+    });
+    if (pendiente) await recalcularFacturaPendiente(pendiente.id_factura);
+    return pendiente;
+}
+
+/**
+ * Sube de plan o añade complementos: se cobra **solo la diferencia de los días que faltan**.
+ *
+ * El cobro es de tipo `ajuste`, y eso es lo que impide que pagarlo regale un mes: al aplicarse,
+ * el plan y los complementos entran, pero la fecha de vencimiento no se mueve.
+ */
+async function cobrarDiferenciaAhora({
+    idNegocio,
+    suscripcion,
+    idPlanObjetivo,
+    planObjetivo,
+    objetivo,
+    catalogo,
+    precioActual,
+    precioObjetivo,
+}) {
+    const hoy = hoyBogota();
+    const plan = await Dao.planParaRenovar(idNegocio);
+    const proporcion = proporcionRestante({ fin: plan?.fin ?? null, hoy, ciclo: suscripcion.ciclo });
+
+    // Se prorratea el TOTAL de la diferencia, no línea a línea: redondear cada línea por separado
+    // deja un total que no cuadra con la suma que el cliente ve.
+    const diferencia = Math.round((precioObjetivo - precioActual) * proporcion);
+
+    // Una diferencia que se queda en nada —quedan horas de ciclo— no se cobra: emitir un cobro de
+    // 200 pesos cuesta más en comisión que lo que recauda. Entra con la renovación.
+    if (diferencia <= 0) {
+        return agendarParaLaRenovacion({ idNegocio, precioObjetivo });
+    }
+
+    const lineas = [];
+    if (planObjetivo && Number(planObjetivo.id_plan) !== Number(suscripcion.id_plan)) {
+        lineas.push({
+            tipo: 'plan',
+            id_plan: idPlanObjetivo,
+            descripcion: `Cambio a ${planObjetivo.nombre} (parte proporcional)`,
+            cantidad: 1,
+            precio_unitario: diferencia,
+            subtotal: diferencia,
+        });
+    } else {
+        lineas.push({
+            tipo: 'complemento',
+            id_complemento: [...objetivo.keys()][0] ?? null,
+            descripcion: 'Complementos añadidos (parte proporcional)',
+            cantidad: 1,
+            precio_unitario: diferencia,
+            subtotal: diferencia,
+        });
+    }
+
+    // Se anula el ajuste anterior sin pagar: el cliente cambió de idea antes de pagarlo, y dos
+    // cobros abiertos por el mismo cambio es la forma de que pague dos veces.
+    await anularAjustesPendientes(idNegocio, { motivo: 'Reemplazado por un ajuste nuevo' });
+
+    // La referencia lleva un contador porque en un mismo mes puede haber varios ajustes.
+    let referencia = null;
+    for (let intento = 1; intento <= 20 && !referencia; intento += 1) {
+        const candidata = construirReferenciaAjuste(idNegocio, hoy, intento);
+        if (!(await Dao.getFacturaPorReferencia(candidata))) referencia = candidata;
+    }
+    if (!referencia) {
+        throw error('No se pudo generar el cobro del cambio. Inténtalo más tarde.', 'AJUSTE_SIN_REFERENCIA', 409);
+    }
+
+    const transaction = await sequelize.transaction();
+    try {
+        const factura = await Dao.crearFactura(
+            {
+                id_suscripcion: suscripcion.id_suscripcion,
+                id_negocio: idNegocio,
+                id_plan: idPlanObjetivo,
+                tipo: 'ajuste',
+                referencia,
+                // El ajuste cubre lo que queda del ciclo en curso: ni compra ni extiende nada.
+                periodo_inicio: hoy,
+                periodo_fin: plan?.fin && plan.fin >= hoy ? plan.fin : hoy,
+                moneda: suscripcion.moneda,
+                subtotal: diferencia,
+                impuestos: 0,
+                total: diferencia,
+                estado: 'pendiente',
+                pasarela: suscripcion.pasarela,
+                nota: 'Diferencia por el cambio de plan, proporcional a los días que faltan.',
+            },
+            { transaction }
+        );
+        await Dao.reemplazarDetalleFactura(factura.id_factura, lineas, { transaction });
+        await transaction.commit();
+
+        return {
+            aplica: 'ajuste',
+            cambio: true,
+            referencia: factura.referencia,
+            id_factura: factura.id_factura,
+            total: diferencia,
+            moneda: suscripcion.moneda,
+            precio_mensual: precioObjetivo,
+            proporcion_restante: Number(proporcion.toFixed(4)),
+            mensaje:
+                'Paga la diferencia y el cambio queda activo de inmediato, sin mover tu fecha de vencimiento.',
+        };
+    } catch (err) {
+        if (!transaction.finished) await transaction.rollback();
+        throw err;
+    }
+}
+
+/** Baja de plan o quita complementos: nada que cobrar hoy; entra en la próxima renovación. */
+async function agendarParaLaRenovacion({ idNegocio, precioObjetivo }) {
+    // Si ya había un ajuste abierto por una subida anterior, deja de valer.
+    await anularAjustesPendientes(idNegocio, { motivo: 'Reemplazado por un cambio agendado' });
+    const pendiente = await recalcularPendienteDeRenovacion(idNegocio);
+
+    return {
+        aplica: 'renovacion',
+        cambio: true,
+        referencia: pendiente?.referencia ?? null,
+        total: pendiente ? Number(pendiente.total) : null,
+        precio_mensual: precioObjetivo,
+        mensaje: pendiente
+            ? 'El cambio entra cuando pagues tu próximo cobro, que ya quedó con el valor nuevo.'
+            : 'El cambio entra en tu próxima renovación. Hasta entonces conservas lo que pagaste.',
+    };
+}
+
+/**
+ * Sin plan vigente: el cambio (suba o baje) se suma a la mensualidad que tiene que pagar.
+ *
+ * No hay «días que le quedan» que prorratear: el próximo pago compra un ciclo entero, y ese
+ * ciclo ya es el del plan y los complementos nuevos. Si todavía no existe el cobro pendiente
+ * —plan vencido hace poco y nadie lo ha generado— se genera aquí, ya con lo pedido.
+ */
+async function sumarAlCobroPendiente({ idNegocio, precioObjetivo }) {
+    await anularAjustesPendientes(idNegocio, { motivo: 'Sumado a la mensualidad pendiente' });
+
+    let pendiente = await recalcularPendienteDeRenovacion(idNegocio);
+    if (!pendiente) {
+        const generado = await asegurarCobroPendiente(idNegocio);
+        if (generado) pendiente = await recalcularFacturaPendiente(generado.id_factura);
+    }
+
+    return {
+        aplica: 'renovacion',
+        cambio: true,
+        referencia: pendiente?.referencia ?? null,
+        total: pendiente ? Number(pendiente.total) : null,
+        precio_mensual: precioObjetivo,
+        mensaje: pendiente
+            ? 'Lo sumamos a tu mensualidad pendiente: al pagarla, tu plan se activa con el cambio.'
+            : 'El cambio quedó guardado y entra con tu próximo pago.',
+    };
+}
+
+/**
+ * Compatibilidad: «elegir plan» es un cambio de plan sin tocar complementos.
+ *
+ * Se conserva el nombre porque es el que usan las rutas y la documentación del módulo.
+ */
+function elegirPlan(idNegocio, idPlan) {
+    return cambiarMiPlan(idNegocio, { idPlan });
 }
 
 module.exports = {
@@ -1400,10 +2072,16 @@ module.exports = {
     asegurarCobroPendiente,
     calcularRenovacion,
     elegirPlan,
+    cambiarMiPlan,
+    proporcionRestante,
     listarCartera,
     resumenIngresos,
     configurarSuscripcion,
+    getComplementosNegocio,
+    fijarComplementosNegocio,
     generarFacturaPeriodo,
+    calcularCobro,
+    recalcularFacturaPendiente,
     registrarPagoManual,
     cobrarFactura,
     anularFactura,

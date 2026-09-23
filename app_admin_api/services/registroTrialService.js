@@ -19,6 +19,7 @@ const CodigoVerifDao = require('../../app_core/dao/codigoVerificacionDao');
 const MailService    = require('./mailService');
 const { initTransaction } = require('../../app_core/helpers/funcionesAdicionales');
 const datosFiscales = require('../../app_core/facturacion/datosFiscales');
+const { asegurarCajaPrincipal } = require('../../app_core/helpers/cajaPrincipal');
 const { syncUsuarioRolActivo, rebuildNivelesUsuario } = require('../../app_core/dao/usuarioAdminDao');
 const tipoOperativo = require('../../app_core/helpers/tipoNegocioOperativo');
 
@@ -201,6 +202,11 @@ async function verificarYCrearCuentaTrial(email, code) {
         // siquiera están constituidos todavía. Se preguntará cuando el trial pase a pago, que
         // es cuando hay que facturarle. Ver docs/facturacion-electronica.md §4.
         await datosFiscales.asegurarFicha(idNegocio, { transaction });
+
+        // Caja principal: sin ninguna, el restaurante no puede tomar pedidos ni cobrar.
+        if (Number(idTipoNegocio) === 1) {
+            await asegurarCajaPrincipal(idNegocio, { transaction });
+        }
 
         // Vincular usuario a negocio
         await Models.GenerNegocioUsuario.create({

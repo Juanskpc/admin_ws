@@ -3,6 +3,7 @@ const { Op } = require('sequelize');
 const Models = require('../../app_core/models/conection');
 const { usuarioTieneSubnivel } = require('../../app_core/helpers/permisoSubnivel');
 const { avisar, TEMAS } = require('./avisoService');
+const puntoCajaService = require('./puntoCajaService');
 
 const SUBNIVEL_ANULAR_PEDIDO = 'caja_eliminar_pedido';
 
@@ -10,7 +11,9 @@ const SUBNIVEL_ANULAR_PEDIDO = 'caja_eliminar_pedido';
  * cajaService — Gestión de turno de caja del restaurante.
  *
  * Reglas:
- *  - Una sola caja abierta por negocio (índice único parcial en BD).
+ *  - Un turno abierto como mucho POR CAJA (índice único parcial en BD sobre id_punto_caja).
+ *    El negocio con una sola caja —lo normal— se comporta igual que cuando la regla era
+ *    «un turno por negocio»: la caja se resuelve sola y nadie tiene que elegir nada.
  *  - El cierre calcula `monto_esperado = apertura + ingresos - egresos`.
  *  - Si el cajero reporta un monto físico contado, se guarda
  *    `diferencia = reportado - esperado` (informativo, no bloquea cierre).
@@ -18,21 +21,44 @@ const SUBNIVEL_ANULAR_PEDIDO = 'caja_eliminar_pedido';
  *    en la caja abierta (ver pedidoService.cerrarOrden).
  */
 
-function buildCajaCerradaError() {
+function buildCajaCerradaError(punto = null) {
     const err = new Error('No hay una caja abierta para este negocio. Abre la caja para continuar.');
     err.code = 'CAJA_CERRADA';
     err.statusCode = 409;
+    // Cuál era la caja que estaba cerrada. Con una sola no aporta nada, pero con varias es la
+    // diferencia entre «abre la caja» y «abre LA DE LA TIENDA», que es lo que el cajero necesita.
+    if (punto) err.punto = { id_punto_caja: Number(punto.id_punto_caja), nombre: punto.nombre };
     return err;
 }
 
-/** Lanza CAJA_CERRADA si no existe caja abierta. Se usa antes de operaciones que mueven dinero. */
-async function requireCajaAbierta(idNegocio, { transaction } = {}) {
+/**
+ * Lanza CAJA_CERRADA si no existe turno abierto. Se usa antes de operaciones que mueven dinero.
+ *
+ * `idPuntoCaja` es opcional: sin él se resuelve la caja única del negocio (o la única del
+ * usuario). Solo cuando hay varias posibles y no se dijo cuál sale PUNTO_CAJA_REQUERIDO, y
+ * entonces quien llama ya tiene en el error la lista para preguntar.
+ *
+ * `punto` evita resolver dos veces cuando quien llama ya lo hizo.
+ */
+async function requireCajaAbierta(idNegocio, { idPuntoCaja = null, idUsuario = null, punto = null, transaction } = {}) {
+    const destino = punto || await puntoCajaService.resolverPuntoCaja({
+        idNegocio, idUsuario, idPuntoCaja, transaction,
+    });
     const caja = await Models.RestCaja.findOne({
-        where: { id_negocio: idNegocio, estado: 'A' },
+        where: { id_negocio: idNegocio, id_punto_caja: destino.id_punto_caja, estado: 'A' },
         transaction,
         lock: transaction ? transaction.LOCK.UPDATE : undefined,
     });
-    if (!caja) throw buildCajaCerradaError();
+    if (!caja) {
+        const err = buildCajaCerradaError(destino);
+        // Con varias cajas, «no hay caja abierta» no basta: hay que decir CUÁL. Solo se consulta
+        // en el camino del error, y con una sola caja el mensaje queda igual que siempre.
+        const activas = await puntoCajaService.listarActivas(idNegocio, { transaction });
+        if (activas.length > 1) {
+            err.message = `La caja «${destino.nombre}» no tiene un turno abierto. Ábrela para continuar.`;
+        }
+        throw err;
+    }
     return caja;
 }
 
@@ -71,18 +97,24 @@ function totalesDeMovimientos(movimientos) {
 /** Columnas mínimas para que `totalesDeMovimientos` pueda descartar las anulaciones. */
 const COLUMNAS_TOTALES = ['id_movimiento', 'id_movimiento_anula', 'tipo', 'monto'];
 
-async function abrirCaja({ idNegocio, idUsuario, montoApertura, observaciones }) {
+async function abrirCaja({ idNegocio, idUsuario, montoApertura, observaciones, idPuntoCaja = null }) {
+    const punto = await puntoCajaService.resolverPuntoCaja({ idNegocio, idUsuario, idPuntoCaja });
+
+    // El turno se bloquea por caja, no por negocio: la tienda puede estar abierta mientras el
+    // restaurante ya cuadró y cerró.
     const existente = await Models.RestCaja.findOne({
-        where: { id_negocio: idNegocio, estado: 'A' },
+        where: { id_negocio: idNegocio, id_punto_caja: punto.id_punto_caja, estado: 'A' },
     });
     if (existente) {
-        const err = new Error('Ya existe una caja abierta para este negocio.');
+        const err = new Error(`Ya hay un turno abierto en ${punto.nombre}.`);
         err.code = 'CAJA_YA_ABIERTA';
         err.statusCode = 409;
+        err.punto = { id_punto_caja: Number(punto.id_punto_caja), nombre: punto.nombre };
         throw err;
     }
     const caja = await Models.RestCaja.create({
         id_negocio: idNegocio,
+        id_punto_caja: punto.id_punto_caja,
         id_usuario: idUsuario,
         monto_apertura: montoApertura,
         observaciones: observaciones || null,
@@ -186,15 +218,17 @@ async function getDesglosePorMetodo(idCaja) {
     }));
 }
 
-async function getResumenDomiciliarios(idNegocio) {
+async function getResumenDomiciliarios(idNegocio, { idPuntoCaja = null, idUsuario = null } = {}) {
+    const punto = await puntoCajaService.resolverPuntoCaja({ idNegocio, idUsuario, idPuntoCaja });
+
     // Obtener fecha_apertura directamente de BD como string para evitar conversiones de timezone
     const cajaRow = await Models.sequelize.query(`
         SELECT id_caja, fecha_apertura::text AS fecha_apertura
         FROM restaurante.rest_caja
-        WHERE id_negocio = :idNegocio AND estado = 'A'
+        WHERE id_negocio = :idNegocio AND id_punto_caja = :idPunto AND estado = 'A'
         LIMIT 1
     `, {
-        replacements: { idNegocio },
+        replacements: { idNegocio, idPunto: punto.id_punto_caja },
         type: Models.sequelize.QueryTypes.SELECT,
     });
 
@@ -235,6 +269,7 @@ async function getResumenDomiciliarios(idNegocio) {
         FROM restaurante.pedid_orden o
         LEFT JOIN general.gener_usuario u ON u.id_usuario = o.id_domiciliario
         WHERE o.id_negocio = :idNegocio
+          AND o.id_punto_caja = :idPunto
           AND o.estado IN ('ABIERTA', 'CERRADA')
           AND o.tipo_pedido = 'DOMICILIO'
           AND o.id_domiciliario IS NOT NULL
@@ -242,7 +277,7 @@ async function getResumenDomiciliarios(idNegocio) {
         GROUP BY o.id_domiciliario, u.primer_nombre, u.primer_apellido
         ORDER BY pedidos_cobrados DESC, total_pedidos DESC, domiciliario ASC
     `, {
-        replacements: { idNegocio, fechaApertura: caja.fecha_apertura },
+        replacements: { idNegocio, idPunto: punto.id_punto_caja, fechaApertura: caja.fecha_apertura },
         type: Models.sequelize.QueryTypes.SELECT,
     });
 
@@ -283,17 +318,19 @@ async function getResumenDomiciliarios(idNegocio) {
     };
 }
 
-async function transferirDomiciliarioACaja({ idNegocio, idDomiciliario, idUsuario }) {
+async function transferirDomiciliarioACaja({ idNegocio, idDomiciliario, idUsuario, idPuntoCaja = null }) {
+    const punto = await puntoCajaService.resolverPuntoCaja({ idNegocio, idUsuario, idPuntoCaja });
+
     const t = await Models.sequelize.transaction();
     try {
         // Obtener caja y fecha_apertura como string sin conversión de timezone
         const cajaRow = await Models.sequelize.query(`
             SELECT id_caja, fecha_apertura::text AS fecha_apertura
             FROM restaurante.rest_caja
-            WHERE id_negocio = :idNegocio AND estado = 'A'
+            WHERE id_negocio = :idNegocio AND id_punto_caja = :idPunto AND estado = 'A'
             LIMIT 1
         `, {
-            replacements: { idNegocio },
+            replacements: { idNegocio, idPunto: punto.id_punto_caja },
             type: Models.sequelize.QueryTypes.SELECT,
             transaction: t,
         });
@@ -314,6 +351,7 @@ async function transferirDomiciliarioACaja({ idNegocio, idDomiciliario, idUsuari
                 valor_domicilio
             FROM restaurante.pedid_orden
             WHERE id_negocio = :idNegocio
+              AND id_punto_caja = :idPunto
               AND tipo_pedido = 'DOMICILIO'
               AND id_domiciliario = :idDomiciliario
               AND estado_pago = 'pagado'
@@ -321,7 +359,7 @@ async function transferirDomiciliarioACaja({ idNegocio, idDomiciliario, idUsuari
               AND COALESCE(fecha_cierre, fecha_creacion)::timestamp >= :fechaApertura::timestamp
             ORDER BY fecha_creacion ASC, id_orden ASC
         `, {
-            replacements: { idNegocio, idDomiciliario, fechaApertura },
+            replacements: { idNegocio, idPunto: punto.id_punto_caja, idDomiciliario, fechaApertura },
             type: Models.sequelize.QueryTypes.SELECT,
             transaction: t,
         });
@@ -341,6 +379,7 @@ async function transferirDomiciliarioACaja({ idNegocio, idDomiciliario, idUsuari
                 monto: Number(orden.total || 0),
                 numeroOrden,
                 valorDomicilio: Number(orden.valor_domicilio || 0),
+                punto,
                 transaction: t,
             });
             totalMonto += Number(orden.total || 0);
@@ -371,16 +410,21 @@ async function transferirDomiciliarioACaja({ idNegocio, idDomiciliario, idUsuari
  *  - Mesas con pedidos sin cobrar (ABIERTA + pendiente_pago).
  *  - Domicilios o pedidos para llevar sin finalizar (ABIERTA).
  */
-async function validarPendientesCierre(idNegocio) {
+async function validarPendientesCierre(idNegocio, { idPuntoCaja = null, idUsuario = null } = {}) {
+    // Lo pendiente se cuenta POR CAJA: cerrar la de la tienda no puede bloquearse porque el
+    // restaurante tenga mesas sin cobrar, que es plata de otro rubro y de otro turno.
+    const punto = await puntoCajaService.resolverPuntoCaja({ idNegocio, idUsuario, idPuntoCaja });
+    const base = { id_negocio: idNegocio, id_punto_caja: punto.id_punto_caja, estado: 'ABIERTA' };
+
     const [mesas, domicilios, llevar] = await Promise.all([
         Models.PedidOrden.count({
-            where: { id_negocio: idNegocio, estado: 'ABIERTA', tipo_pedido: 'MESA', estado_pago: 'pendiente_pago' },
+            where: { ...base, tipo_pedido: 'MESA', estado_pago: 'pendiente_pago' },
         }),
         Models.PedidOrden.count({
-            where: { id_negocio: idNegocio, estado: 'ABIERTA', tipo_pedido: 'DOMICILIO' },
+            where: { ...base, tipo_pedido: 'DOMICILIO' },
         }),
         Models.PedidOrden.count({
-            where: { id_negocio: idNegocio, estado: 'ABIERTA', tipo_pedido: 'LLEVAR' },
+            where: { ...base, tipo_pedido: 'LLEVAR' },
         }),
     ]);
     return {
@@ -392,7 +436,14 @@ async function validarPendientesCierre(idNegocio) {
 }
 
 async function cerrarCaja({ idCaja, idNegocio, montoReportado, observaciones }) {
-    const pendientes = await validarPendientesCierre(idNegocio);
+    const caja = await Models.RestCaja.findOne({
+        where: { id_caja: idCaja, id_negocio: idNegocio, estado: 'A' },
+        include: [{ model: Models.RestMovimientoCaja, as: 'movimientos' }],
+    });
+    if (!caja) return null;
+
+    // El turno dice a qué caja pertenece; los pendientes se cuentan solo de esa.
+    const pendientes = await validarPendientesCierre(idNegocio, { idPuntoCaja: caja.id_punto_caja });
     if (!pendientes.puedesCerrar) {
         const err = new Error('No se puede cerrar la caja con operaciones pendientes.');
         err.code        = 'PENDIENTES_ACTIVOS';
@@ -400,12 +451,6 @@ async function cerrarCaja({ idCaja, idNegocio, montoReportado, observaciones }) 
         err.pendientes  = { mesas: pendientes.mesas, domicilios: pendientes.domicilios, llevar: pendientes.llevar };
         throw err;
     }
-
-    const caja = await Models.RestCaja.findOne({
-        where: { id_caja: idCaja, id_negocio: idNegocio, estado: 'A' },
-        include: [{ model: Models.RestMovimientoCaja, as: 'movimientos' }],
-    });
-    if (!caja) return null;
 
     const { ingresos, egresos } = totalesDeMovimientos(caja.movimientos);
 
@@ -430,9 +475,20 @@ async function cerrarCaja({ idCaja, idNegocio, montoReportado, observaciones }) 
     return caja;
 }
 
-async function getCajaAbierta(idNegocio) {
+/**
+ * El turno abierto de una caja, con sus totales.
+ *
+ * Es consulta, no movimiento de plata: cuando el usuario tiene varias cajas y no dijo cuál,
+ * se muestra la primera en lugar de rebotar con PUNTO_CAJA_REQUERIDO. La pantalla trae su
+ * selector y manda `idPuntoCaja` en cuanto el usuario elige; hasta entonces es mejor enseñar
+ * algo que una pantalla de error.
+ */
+async function getCajaAbierta(idNegocio, { idPuntoCaja = null, idUsuario = null } = {}) {
+    const punto = await resolverParaConsulta({ idNegocio, idUsuario, idPuntoCaja });
+    if (!punto) return null;
+
     const caja = await Models.RestCaja.findOne({
-        where: { id_negocio: idNegocio, estado: 'A' },
+        where: { id_negocio: idNegocio, id_punto_caja: punto.id_punto_caja, estado: 'A' },
         include: [
             {
                 model: Models.GenerUsuario,
@@ -458,8 +514,26 @@ async function getCajaAbierta(idNegocio) {
     json.egresos             = egresos;
     json.monto_esperado      = Number(caja.monto_apertura) + ingresos - egresos;
     json.ingresos_por_metodo = desglose;
+    // Qué caja se está mirando, para que la pantalla pueda titularlo sin otra consulta.
+    json.punto               = { id_punto_caja: Number(punto.id_punto_caja), nombre: punto.nombre };
     delete json.movimientos;
     return json;
+}
+
+/**
+ * Como `resolverPuntoCaja` pero sin rebotar cuando hay varias: devuelve la primera.
+ *
+ * Solo para lecturas. Elegir en silencio dónde entra un ingreso sería inaceptable; elegir en
+ * silencio qué turno se enseña primero es lo que el usuario espera al abrir la pantalla.
+ */
+async function resolverParaConsulta({ idNegocio, idUsuario = null, idPuntoCaja = null }) {
+    if (idPuntoCaja != null && idPuntoCaja !== '') {
+        return puntoCajaService.resolverPuntoCaja({ idNegocio, idUsuario, idPuntoCaja });
+    }
+    const disponibles = idUsuario
+        ? await puntoCajaService.cajasDeUsuario({ idNegocio, idUsuario })
+        : await puntoCajaService.listarActivas(idNegocio);
+    return disponibles[0] || null;
 }
 
 /**
@@ -543,14 +617,20 @@ async function getCajaDetalle({ idCaja, idNegocio }) {
  * inclusivo en ambos extremos: `hasta` se compara contra el día siguiente a las
  * 00:00, para no dejar fuera los turnos de esa misma tarde.
  */
-async function listarHistorialCajas({ idNegocio, desde = null, hasta = null, limite = 20, offset = 0 }) {
+async function listarHistorialCajas({ idNegocio, idPuntoCaja = null, desde = null, hasta = null, limite = 20, offset = 0 }) {
     const replacements = {
         idNegocio,
+        // Sin filtro se listan los turnos de TODAS las cajas del negocio: el historial es la
+        // vista de quien revisa el mes, y ahí querer verlo todo junto es lo normal. Cada fila
+        // lleva el nombre de su caja.
+        idPunto: idPuntoCaja ? Number(idPuntoCaja) : null,
         desde: desde || null,
         hasta: hasta || null,
         limite,
         offset,
     };
+
+    const filtroPunto = 'AND (CAST(:idPunto AS integer) IS NULL OR c.id_punto_caja = CAST(:idPunto AS integer))';
 
     const filtroFechas = `
         AND (CAST(:desde AS date) IS NULL OR c.fecha_apertura >= CAST(:desde AS date))
@@ -568,6 +648,8 @@ async function listarHistorialCajas({ idNegocio, desde = null, hasta = null, lim
             c.fecha_cierre,
             c.observaciones,
             c.estado,
+            c.id_punto_caja,
+            pc.nombre AS punto_nombre,
             u.id_usuario,
             u.primer_nombre,
             u.primer_apellido,
@@ -576,6 +658,7 @@ async function listarHistorialCajas({ idNegocio, desde = null, hasta = null, lim
             COALESCE(mv.total_movimientos, 0) AS total_movimientos
         FROM restaurante.rest_caja c
         JOIN general.gener_usuario u ON u.id_usuario = c.id_usuario
+        LEFT JOIN restaurante.rest_punto_caja pc ON pc.id_punto_caja = c.id_punto_caja
         LEFT JOIN (
             -- Mismo criterio que totalesDeMovimientos: del par anulado no cuenta ninguna
             -- de las dos filas, ni el original ni su reversa. total_movimientos sí las
@@ -599,6 +682,7 @@ async function listarHistorialCajas({ idNegocio, desde = null, hasta = null, lim
         ) mv ON mv.id_caja = c.id_caja
         WHERE c.id_negocio = :idNegocio
           AND c.estado = 'C'
+          ${filtroPunto}
           ${filtroFechas}
         ORDER BY c.fecha_cierre DESC NULLS LAST, c.id_caja DESC
         LIMIT :limite OFFSET :offset;
@@ -609,6 +693,7 @@ async function listarHistorialCajas({ idNegocio, desde = null, hasta = null, lim
         FROM restaurante.rest_caja c
         WHERE c.id_negocio = :idNegocio
           AND c.estado = 'C'
+          ${filtroPunto}
           ${filtroFechas};
     `, { replacements });
 
@@ -616,6 +701,8 @@ async function listarHistorialCajas({ idNegocio, desde = null, hasta = null, lim
         total: Number(conteo?.total ?? 0),
         rows: filas.map((f) => ({
             id_caja: Number(f.id_caja),
+            id_punto_caja: f.id_punto_caja != null ? Number(f.id_punto_caja) : null,
+            punto: f.punto_nombre || null,
             fecha_apertura: f.fecha_apertura,
             fecha_cierre: f.fecha_cierre,
             estado: f.estado,
@@ -905,6 +992,47 @@ async function exigirCeroJustificadoPorDescuento({ idOrden, transaction }) {
 }
 
 /**
+ * La caja a la que pertenece un movimiento, por el turno en el que se registró.
+ *
+ * Se filtra por negocio en la misma consulta: el id del movimiento llega por la ruta y sin
+ * esto un id de otro inquilino resolvería una caja ajena.
+ */
+async function puntoDeMovimiento({ idMovimiento, idNegocio, transaction }) {
+    const [fila] = await Models.sequelize.query(
+        `SELECT pc.id_punto_caja, pc.nombre
+           FROM restaurante.rest_movimiento_caja m
+           JOIN restaurante.rest_caja c        ON c.id_caja = m.id_caja
+           JOIN restaurante.rest_punto_caja pc ON pc.id_punto_caja = c.id_punto_caja
+          WHERE m.id_movimiento = :idMovimiento AND c.id_negocio = :idNegocio;`,
+        { replacements: { idMovimiento, idNegocio }, type: Models.sequelize.QueryTypes.SELECT, transaction },
+    );
+    if (!fila) {
+        const e = new Error('El movimiento no existe en este negocio.');
+        e.code = 'MOVIMIENTO_NO_ENCONTRADO'; e.statusCode = 404;
+        throw e;
+    }
+    return { id_punto_caja: Number(fila.id_punto_caja), nombre: fila.nombre };
+}
+
+/** La caja a la que pertenece un pedido. */
+async function puntoDeOrden({ idOrden, transaction }) {
+    const [fila] = await Models.sequelize.query(
+        `SELECT o.id_punto_caja, pc.nombre
+           FROM restaurante.pedid_orden o
+           JOIN restaurante.rest_punto_caja pc ON pc.id_punto_caja = o.id_punto_caja
+          WHERE o.id_orden = :idOrden;`,
+        { replacements: { idOrden }, type: Models.sequelize.QueryTypes.SELECT, transaction },
+    );
+    if (!fila) {
+        const err = new Error('El pedido no existe o no tiene caja asignada.');
+        err.code = 'ORDEN_SIN_PUNTO_CAJA';
+        err.statusCode = 409;
+        throw err;
+    }
+    return { id_punto_caja: Number(fila.id_punto_caja), nombre: fila.nombre };
+}
+
+/**
  * Variante segura para registrar el INGRESO automático del cobro:
  * verifica que la caja siga abierta dentro de la transacción.
  *
@@ -918,9 +1046,13 @@ async function exigirCeroJustificadoPorDescuento({ idOrden, transaction }) {
  * por aquí), el egreso no se puede duplicar ni quedar huérfano.
  */
 async function registrarIngresoOrden({
-    idNegocio, idOrden, idUsuario, monto, numeroOrden, valorDomicilio = 0, montoContraCuenta = 0, transaction,
+    idNegocio, idOrden, idUsuario, monto, numeroOrden, valorDomicilio = 0, montoContraCuenta = 0,
+    punto = null, transaction,
 }) {
-    const caja = await requireCajaAbierta(idNegocio, { transaction });
+    // La caja la manda el PEDIDO, no quien cobra: un pedido de la tienda entra en la tienda
+    // aunque lo cobre el cajero del restaurante.
+    const destino = punto || await puntoDeOrden({ idOrden, transaction });
+    const caja = await requireCajaAbierta(idNegocio, { punto: destino, transaction });
 
     // Lo que paga la cuenta del cliente NO entra al cajón: la plata de una tiquetera entró el día
     // que se vendió, y la de un fiado entrará el día que la pague. El ingreso lleva solo lo que el
@@ -997,7 +1129,12 @@ async function anularOrdenCobrada({ idNegocio, idOrden, idUsuario }) {
 
     const t = await Models.sequelize.transaction();
     try {
-        const caja = await requireCajaAbierta(idNegocio, { transaction: t });
+        // La reversa entra en la misma caja en la que entró el cobro, no en la que tenga
+        // abierta quien anula.
+        const caja = await requireCajaAbierta(idNegocio, {
+            punto: await puntoDeOrden({ idOrden, transaction: t }),
+            transaction: t,
+        });
 
         const orden = await Models.PedidOrden.findOne({
             where: { id_orden: idOrden, id_negocio: idNegocio },
@@ -1109,7 +1246,13 @@ async function anularMovimientoCaja({ idNegocio, idMovimiento, idUsuario }) {
 
     const t = await Models.sequelize.transaction();
     try {
-        const caja = await requireCajaAbierta(idNegocio, { transaction: t });
+        // La reversa entra donde estaba el movimiento. Si ese turno ya cerró, la caja abierta
+        // de esa misma caja será otra y el `findOne` de abajo rebota, que es lo correcto:
+        // reversar contra un turno cerrado descuadraría los dos.
+        const caja = await requireCajaAbierta(idNegocio, {
+            punto: await puntoDeMovimiento({ idMovimiento, idNegocio, transaction: t }),
+            transaction: t,
+        });
 
         const mov = await Models.RestMovimientoCaja.findOne({
             where: { id_movimiento: idMovimiento, id_caja: caja.id_caja },
@@ -1242,6 +1385,7 @@ async function getItemsOrden({ idOrden, idNegocio }) {
 
 module.exports = {
     requireCajaAbierta,
+    puntoDeOrden,
     anularOrdenCobrada,
     anularMovimientoCaja,
     abrirCaja,

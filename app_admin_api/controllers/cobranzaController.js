@@ -106,6 +106,31 @@ async function configurarSuscripcion(req, res) {
  * de este período» y eso ya se cumplía. Distinguirlo con el código de estado evita que la
  * consola muestre «creada» dos veces por el mismo mes.
  */
+/** GET /admin/cobranza/negocios/:id_negocio/complementos — catálogo con lo que tiene el negocio. */
+async function getComplementos(req, res) {
+    if (!check(req, res)) return;
+    try {
+        const datos = await CobranzaService.getComplementosNegocio(Number(req.params.id_negocio));
+        return Respuesta.success(res, 'Complementos del negocio', datos);
+    } catch (err) {
+        return fallo(res, err, 'getComplementos', 'Error al consultar los complementos.');
+    }
+}
+
+/** PUT /admin/cobranza/negocios/:id_negocio/complementos — fija cantidades y qué se cobra. */
+async function putComplementos(req, res) {
+    if (!check(req, res)) return;
+    try {
+        const datos = await CobranzaService.fijarComplementosNegocio(
+            Number(req.params.id_negocio),
+            req.body.complementos ?? []
+        );
+        return Respuesta.success(res, 'Complementos actualizados', datos);
+    } catch (err) {
+        return fallo(res, err, 'putComplementos', 'Error al guardar los complementos.');
+    }
+}
+
 async function generarFactura(req, res) {
     if (!check(req, res)) return;
     try {
@@ -174,6 +199,32 @@ async function anularFactura(req, res) {
 
 // ── Pagos del cliente ───────────────────────────────────────────────────────────────────
 
+/**
+ * GET /admin/cobranza/mi-plan?id_negocio=N — qué tiene contratado ESTE negocio.
+ *
+ * Es el gemelo de solo lectura de `/cobranza/negocios/:id/complementos`, que es de super-admin
+ * porque ahí se deciden cortesías. El dueño necesita lo mismo sin poder tocarlo: cuántos usuarios
+ * y cajas le caben, cuántos extra tiene y qué dejó pedido. Lo usa el panel «Mi plan» de la app
+ * del negocio, que enseña el estado y manda a «Mis pagos» para cambiarlo.
+ */
+async function getMiPlan(req, res) {
+    if (!check(req, res)) return;
+    try {
+        const idNegocio = Number(req.query.id_negocio);
+
+        const alcance = await alcanceDeNegocios(req.usuario?.id_usuario);
+        const esSuyo =
+            alcance.superAdmin ||
+            (await CobranzaService.usuarioAdministraNegocio(req.usuario.id_usuario, idNegocio));
+        if (!esSuyo) return Respuesta.error(res, 'No tienes acceso a la suscripción de este negocio', 403);
+
+        const datos = await CobranzaService.getComplementosNegocio(idNegocio);
+        return Respuesta.success(res, 'Mi plan', datos);
+    } catch (err) {
+        return fallo(res, err, 'getMiPlan', 'Error al consultar tu plan.');
+    }
+}
+
 /** GET /admin/cobranza/mis-cobros — el administrador del negocio, con sesión. */
 async function getMisCobros(req, res) {
     try {
@@ -216,11 +267,15 @@ async function pagarFactura(req, res) {
 }
 
 /**
- * POST /admin/cobranza/mi-plan — el administrador del negocio elige su plan.
+ * POST /admin/cobranza/mi-plan — el administrador del negocio cambia su plan y/o sus complementos.
  *
- * Sirve para dos casos: pagar un plan vencido estrenando otro plan, y cambiar de plan teniendo
- * uno vigente (se cobra en la siguiente mensualidad). El dueño de la factura se comprueba contra
- * la base, igual que al pagar: el `id_negocio` viaja en el cuerpo y cualquiera puede cambiarlo.
+ * Los tres escenarios pasan por aquí, y se distinguen por lo que llega en el cuerpo:
+ *   - solo `id_plan` → cambia de plan y conserva sus complementos;
+ *   - solo `complementos` → conserva el plan y ajusta usuarios/cajas;
+ *   - los dos → cambia de plan y de complementos a la vez, con una sola cuenta.
+ *
+ * El dueño del negocio se comprueba contra la base, igual que al pagar: el `id_negocio` viaja en
+ * el cuerpo y cualquiera puede cambiarlo.
  */
 async function elegirPlan(req, res) {
     if (!check(req, res)) return;
@@ -233,12 +288,13 @@ async function elegirPlan(req, res) {
             (await CobranzaService.usuarioAdministraNegocio(req.usuario.id_usuario, idNegocio));
         if (!esSuyo) return Respuesta.error(res, 'No tienes acceso a la suscripción de este negocio', 403);
 
-        const resultado = await CobranzaService.elegirPlan(idNegocio, Number(req.body.id_plan));
-        const mensajes = {
-            ahora: 'Plan actualizado: el cobro pendiente quedó por el valor del nuevo plan',
-            proximo_cobro: 'Plan actualizado: se cobrará en tu próxima mensualidad',
-        };
-        return Respuesta.success(res, mensajes[resultado.aplica] ?? 'Plan actualizado', resultado);
+        const resultado = await CobranzaService.cambiarMiPlan(idNegocio, {
+            idPlan: req.body.id_plan != null ? Number(req.body.id_plan) : null,
+            complementos: Array.isArray(req.body.complementos) ? req.body.complementos : null,
+        });
+
+        // El mensaje lo compone el servicio, que es quien sabe si hubo que cobrar algo.
+        return Respuesta.success(res, resultado.mensaje ?? 'Plan actualizado', resultado);
     } catch (err) {
         return fallo(res, err, 'elegirPlan', 'No se pudo cambiar el plan.');
     }
@@ -329,6 +385,8 @@ async function verificarPagoWompi(req, res) {
 }
 
 module.exports = {
+    getComplementos,
+    putComplementos,
     getMiSuscripcion,
     getCartera,
     getIngresos,
@@ -338,6 +396,7 @@ module.exports = {
     cobrarFactura,
     anularFactura,
     getMisCobros,
+    getMiPlan,
     pagarFactura,
     elegirPlan,
     consultarPublico,

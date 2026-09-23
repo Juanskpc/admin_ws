@@ -3,6 +3,9 @@ module.exports = (sequelize, DataTypes) => {
     id_caja:          { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
     id_negocio:       { type: DataTypes.INTEGER, allowNull: false },
     id_usuario:       { type: DataTypes.INTEGER, allowNull: false },
+    // Rubro al que pertenece el turno. La migración lo rellenó para todo lo que ya existía,
+    // así que nunca es nulo; el negocio de una sola caja lo tiene todo apuntando ahí.
+    id_punto_caja:    { type: DataTypes.INTEGER, allowNull: false },
     monto_apertura:   { type: DataTypes.DECIMAL(12, 2), allowNull: false, defaultValue: 0 },
     monto_cierre:     DataTypes.DECIMAL(12, 2),
     monto_reportado:  DataTypes.DECIMAL(12, 2),
@@ -18,6 +21,7 @@ module.exports = (sequelize, DataTypes) => {
   RestCaja.associate = (models) => {
     RestCaja.belongsTo(models.GenerNegocio, { foreignKey: 'id_negocio', as: 'negocio' });
     RestCaja.belongsTo(models.GenerUsuario, { foreignKey: 'id_usuario', as: 'usuario' });
+    RestCaja.belongsTo(models.RestPuntoCaja, { foreignKey: 'id_punto_caja', as: 'punto' });
     RestCaja.hasMany(models.RestMovimientoCaja, { foreignKey: 'id_caja', as: 'movimientos' });
   };
 
