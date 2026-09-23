@@ -228,7 +228,10 @@ async function getMiPlan(req, res) {
 /** GET /admin/cobranza/mis-cobros — el administrador del negocio, con sesión. */
 async function getMisCobros(req, res) {
     try {
-        const cobros = await CobranzaService.cobrosDeUsuario(req.usuario.id_usuario);
+        // «Mis pagos» los quiere todos: también los negocios sin suscripción de cobro.
+        const cobros = await CobranzaService.cobrosDeUsuario(req.usuario.id_usuario, {
+            incluirSinSuscripcion: true,
+        });
         return Respuesta.success(res, 'Mis cobros', cobros);
     } catch (err) {
         return fallo(res, err, 'getMisCobros', 'Error al consultar tus cobros.');

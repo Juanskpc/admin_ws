@@ -49,19 +49,15 @@ function normalizeNegocioId(idNegocio) {
     return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
+/**
+ * Activa (o crea) el vínculo del usuario con ESE negocio. No toca sus vínculos con otros.
+ *
+ * Hasta 2026-09-23 inactivaba primero TODOS los vínculos del usuario: editar a alguien desde un
+ * restaurante (PUT /usuarios/admin/:id) o que un usuario existente adquiriera un segundo negocio
+ * lo sacaba en silencio de los demás. Así perdió el super admin de la BD compartida sus negocios.
+ */
 async function syncUsuarioNegocioActivo(idUsuario, idNegocio, transaction) {
     const normalizedNegocioId = normalizeNegocioId(idNegocio);
-
-    await Models.GenerNegocioUsuario.update(
-        { estado: 'I' },
-        {
-            where: {
-                id_usuario: idUsuario,
-                estado: 'A',
-            },
-            transaction,
-        }
-    );
 
     if (!normalizedNegocioId) {
         return null;
@@ -92,6 +88,13 @@ async function syncUsuarioNegocioActivo(idUsuario, idNegocio, transaction) {
     return normalizedNegocioId;
 }
 
+/**
+ * Deja al usuario con UN rol activo dentro de ese negocio (o entre sus roles globales si
+ * `idNegocio` es null). Los roles que tenga en otros negocios, y el global, no se tocan.
+ *
+ * Antes inactivaba todos los roles del usuario en todo el sistema: editar a un super admin desde
+ * un restaurante le quitaba el rol SUPER ADMINISTRADOR y el de cada uno de sus otros negocios.
+ */
 async function syncUsuarioRolActivo(idUsuario, idRol, idNegocio, transaction) {
     const normalizedNegocioId = normalizeNegocioId(idNegocio);
 
@@ -100,7 +103,9 @@ async function syncUsuarioRolActivo(idUsuario, idRol, idNegocio, transaction) {
         {
             where: {
                 id_usuario: idUsuario,
+                id_negocio: normalizedNegocioId,
                 estado: 'A',
+                id_rol: { [Op.ne]: idRol },
             },
             transaction,
         }
@@ -168,6 +173,7 @@ async function getUsuarios({ search = '', idRol = null, idNegocio = null, estado
             'segundo_apellido',
             'num_identificacion',
             'email',
+            'telefono',
             'estado',
             'fecha_creacion',
             'es_admin_principal',
@@ -221,6 +227,7 @@ async function getUsuarios({ search = '', idRol = null, idNegocio = null, estado
             segundo_apellido: usuario.segundo_apellido,
             num_identificacion: usuario.num_identificacion,
             email: usuario.email,
+            telefono: usuario.telefono ?? null,
             estado: usuario.estado,
             fecha_creacion: usuario.fecha_creacion,
             es_admin_principal: Boolean(usuario.es_admin_principal),
@@ -1091,7 +1098,7 @@ async function getPermisosEfectivosUsuario(idUsuario) {
 
 /**
  * Agrega (upsert) solo la relación usuario-negocio sin tocar las existentes.
- * A diferencia de syncUsuarioNegocioActivo, NO inactiva otras relaciones activas.
+ * (Desde 2026-09-23 syncUsuarioNegocioActivo tampoco toca los otros vínculos; ver su comentario.)
  */
 async function addNegocioUsuario(idUsuario, idNegocio, transaction) {
     const existing = await Models.GenerNegocioUsuario.findOne({
@@ -1112,7 +1119,7 @@ async function addNegocioUsuario(idUsuario, idNegocio, transaction) {
 
 /**
  * Agrega (upsert) solo el rol usuario-negocio sin tocar los existentes.
- * A diferencia de syncUsuarioRolActivo, NO inactiva otros roles activos.
+ * A diferencia de syncUsuarioRolActivo, NO inactiva los otros roles del mismo negocio.
  */
 async function addUsuarioRol(idUsuario, idRol, idNegocio, transaction) {
     const where = { id_usuario: idUsuario, id_rol: idRol, id_negocio: idNegocio };
@@ -1153,6 +1160,7 @@ module.exports = {
     savePermisosRol,
     getPermisosEfectivosUsuario,
     syncUsuarioRolActivo,
+    syncUsuarioNegocioActivo,
     rebuildNivelesUsuario,
     vincularUsuarioANegocio,
 };

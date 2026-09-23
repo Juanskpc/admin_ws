@@ -162,11 +162,14 @@ async function resumenIngresos(opciones) {
  * comprobaciones distintas: una fila activa en `cob_pasarela` sin código detrás es un error de
  * configuración, y dejarlo pasar produce una suscripción que nadie puede cobrar.
  */
-async function configurarSuscripcion(idNegocio, datos) {
-    const negocio = await Models.GenerNegocio.findByPk(idNegocio, { attributes: ['id_negocio'] });
+async function configurarSuscripcion(idNegocio, datos, { transaction } = {}) {
+    const negocio = await Models.GenerNegocio.findByPk(idNegocio, {
+        attributes: ['id_negocio'],
+        transaction,
+    });
     if (!negocio) throw error('Negocio no encontrado.', 'NEGOCIO_NO_ENCONTRADO', 404);
 
-    const pais = await paisDeNegocio(idNegocio);
+    const pais = await paisDeNegocio(idNegocio, { transaction });
     const disponibles = await Dao.listarPasarelas({ pais });
     // Por defecto, la primera pasarela activa del país. Antes era 'manual' fijo, y desde que la
     // transferencia se desactivó (migrate:cobranza-solo-wompi) ese defecto hacía fallar la
@@ -188,7 +191,7 @@ async function configurarSuscripcion(idNegocio, datos) {
     });
     if (!plan) throw error('Plan no encontrado o inactivo.', 'PLAN_NO_ENCONTRADO', 404);
 
-    const existente = await Dao.getSuscripcionPorNegocio(idNegocio);
+    const existente = await Dao.getSuscripcionPorNegocio(idNegocio, { transaction });
 
     // `proximo_cobro` solo tiene sentido si algo puede cobrar solo. Ponérselo a una suscripción
     // manual sería prometer un cobro automático que nadie va a ejecutar.
@@ -209,22 +212,27 @@ async function configurarSuscripcion(idNegocio, datos) {
     setAuditNegocio(idNegocio);
 
     if (existente) {
-        const actualizada = await Dao.actualizarSuscripcion(existente.id_suscripcion, campos);
+        const actualizada = await Dao.actualizarSuscripcion(existente.id_suscripcion, campos, { transaction });
         await Audit.registrarEvento({
             modulo: 'cobranza',
             accion: 'suscripcion_actualizada',
             idNegocio,
             detalle: { id_suscripcion: existente.id_suscripcion, ...campos },
+            transaction,
         });
         return actualizada;
     }
 
-    const creada = await Dao.crearSuscripcion({ id_negocio: idNegocio, estado: 'activa', ...campos });
+    const creada = await Dao.crearSuscripcion(
+        { id_negocio: idNegocio, estado: 'activa', ...campos },
+        { transaction }
+    );
     await Audit.registrarEvento({
         modulo: 'cobranza',
         accion: 'suscripcion_creada',
         idNegocio,
         detalle: { id_suscripcion: creada.id_suscripcion, ...campos },
+        transaction,
     });
     return creada;
 }
@@ -356,14 +364,14 @@ async function fijarComplementosNegocio(idNegocio, lista) {
  * La última factura que cuenta: la de período más reciente que no esté anulada. Anular es
  * justamente decir «ese período no cuenta», así que no cierra el paso a rehacerlo.
  */
-async function ultimaFactura(idNegocio) {
+async function ultimaFactura(idNegocio, { transaction } = {}) {
     const [fila] = await sequelize.query(
         `SELECT id_factura, periodo_fin, estado
            FROM cobranza.cob_factura
           WHERE id_negocio = :idNegocio AND estado <> 'anulada'
           ORDER BY periodo_fin DESC
           LIMIT 1;`,
-        { replacements: { idNegocio }, type: sequelize.QueryTypes.SELECT }
+        { replacements: { idNegocio }, type: sequelize.QueryTypes.SELECT, transaction }
     );
     return fila || null;
 }
@@ -394,8 +402,11 @@ function sumarDia(iso) {
  * Para adelantar un período a propósito está `desde`, que salta la guarda 2 explícitamente.
  * Un cobro anticipado tiene que ser una decisión, no un accidente.
  */
-async function generarFacturaPeriodo(idNegocio, { desde = null } = {}) {
-    const suscripcion = await Dao.exigirSuscripcion(idNegocio);
+async function generarFacturaPeriodo(idNegocio, { desde = null, transaction: txExterna = null } = {}) {
+    // Con `transaction` la factura se genera DENTRO de la transacción de quien llama (que la
+    // confirma o la deshace); sin ella, esta función abre y cierra la suya, como siempre.
+    const transaction = txExterna ?? undefined;
+    const suscripcion = await Dao.exigirSuscripcion(idNegocio, { transaction });
 
     if (suscripcion.estado === 'cancelada') {
         throw error(
@@ -405,7 +416,7 @@ async function generarFacturaPeriodo(idNegocio, { desde = null } = {}) {
         );
     }
 
-    const ultima = await ultimaFactura(idNegocio);
+    const ultima = await ultimaFactura(idNegocio, { transaction });
     const hoy = hoyBogota();
 
     // El plan de MAYOR cobertura del negocio: el mismo que renueva un pago.
@@ -415,7 +426,7 @@ async function generarFacturaPeriodo(idNegocio, { desde = null } = {}) {
           WHERE id_negocio = :idNegocio AND estado = 'A'
           ORDER BY fecha_fin DESC NULLS FIRST
           LIMIT 1;`,
-        { replacements: { idNegocio }, type: sequelize.QueryTypes.SELECT }
+        { replacements: { idNegocio }, type: sequelize.QueryTypes.SELECT, transaction }
     );
 
     // **Solo se cobra un plan vencido o a punto de vencer.** Sin esto, «Generar cobro» le ponía
@@ -454,7 +465,7 @@ async function generarFacturaPeriodo(idNegocio, { desde = null } = {}) {
         ultima.estado === 'pendiente' &&
         String(ultima.periodo_fin).slice(0, 10) >= hoy
     ) {
-        const vigente = await Dao.getFactura(ultima.id_factura);
+        const vigente = await Dao.getFactura(ultima.id_factura, { transaction });
         return { factura: vigente, ya_existia: true };
     }
 
@@ -488,7 +499,7 @@ async function generarFacturaPeriodo(idNegocio, { desde = null } = {}) {
     //   - ANULADA → se reactiva como cobro nuevo, con el precio y la pasarela de hoy. Antes se
     //     devolvía la anulada tal cual, y ese período ya no se podía volver a cobrar nunca: el
     //     UNIQUE impedía crear otra y «Generar cobro» respondía «ya existía» (2026-09-15).
-    const yaExiste = await Dao.getFacturaPorReferencia(referencia);
+    const yaExiste = await Dao.getFacturaPorReferencia(referencia, { transaction });
     if (yaExiste && yaExiste.estado !== 'anulada') return { factura: yaExiste, ya_existia: true };
 
     // El plan que se cobra es el que el cliente ELIGIÓ, si eligió uno y aún no lo ha pagado.
@@ -497,7 +508,7 @@ async function generarFacturaPeriodo(idNegocio, { desde = null } = {}) {
     const idPlanACobrar = suscripcion.id_plan_solicitado || suscripcion.id_plan;
     // Plan + complementos contratados, a precio de hoy. Es lo que hace que una renovación cobre
     // lo mismo que el alta: el cliente no eligió «un plan», eligió un plan con dos usuarios más.
-    const cobro = await calcularCobro(suscripcion, idPlanACobrar);
+    const cobro = await calcularCobro(suscripcion, idPlanACobrar, { transaction });
 
     setAuditNegocio(idNegocio);
 
@@ -517,7 +528,8 @@ async function generarFacturaPeriodo(idNegocio, { desde = null } = {}) {
     };
 
     // Factura y detalle juntos: un total sin sus líneas no se puede explicar al cliente.
-    const transaction = await sequelize.transaction();
+    const propia = txExterna ? null : await sequelize.transaction();
+    const tx = txExterna ?? propia;
     let factura;
     try {
         factura = yaExiste
@@ -531,13 +543,14 @@ async function generarFacturaPeriodo(idNegocio, { desde = null } = {}) {
                       neto_recibido: null,
                       nota: null,
                   },
-                  { transaction }
+                  { transaction: tx }
               )
-            : await Dao.crearFactura(campos, { transaction });
-        await Dao.reemplazarDetalleFactura(factura.id_factura, cobro.lineas, { transaction });
-        await transaction.commit();
+            : await Dao.crearFactura(campos, { transaction: tx });
+        await Dao.reemplazarDetalleFactura(factura.id_factura, cobro.lineas, { transaction: tx });
+        if (propia) await propia.commit();
     } catch (err) {
-        await transaction.rollback();
+        // La transacción ajena la deshace quien la abrió: aquí solo se propaga el error.
+        if (propia) await propia.rollback();
         throw err;
     }
 
@@ -552,6 +565,7 @@ async function generarFacturaPeriodo(idNegocio, { desde = null } = {}) {
             total: cobro.total,
             lineas: cobro.lineas.length,
         },
+        transaction: txExterna ?? undefined,
     });
 
     return { factura, ya_existia: false };
@@ -1152,8 +1166,14 @@ async function usuarioAdministraNegocio(idUsuario, idNegocio) {
 /**
  * Los negocios que administra un usuario, cada uno con sus facturas pendientes y los medios con
  * los que puede pagarlas. Es la fuente común de «Mis pagos» (con sesión) y del portal público.
+ *
+ * @param {object} [opciones]
+ * @param {boolean} [opciones.incluirSinSuscripcion=false] «Mis pagos» los quiere TODOS: también el
+ *        negocio que todavía no tiene suscripción de cobro, marcado `sin_plan: true` si además no
+ *        tiene ningún plan vigente. El portal público no: solo cuenta a quien tiene algo que pagar,
+ *        y para él la lista sigue siendo la de siempre.
  */
-async function cobrosDeUsuario(idUsuario) {
+async function cobrosDeUsuario(idUsuario, { incluirSinSuscripcion = false } = {}) {
     // Antes de mirar nada, se pone al día lo que el negocio deba: si su plan venció —o vence
     // dentro de la ventana— y no hay cobro, se genera aquí mismo. Esperar al cron de las 08:00
     // dejaba al cliente con «aún no hay un cobro» justo cuando entraba a pagar.
@@ -1176,21 +1196,21 @@ async function cobrosDeUsuario(idUsuario) {
     }
 
     const negocios = await sequelize.query(
-        `SELECT DISTINCT n.id_negocio, n.nombre AS negocio, s.estado, s.moneda, s.ciclo,
-                s.id_plan, p.nombre AS plan,
+        `SELECT DISTINCT n.id_negocio, n.nombre AS negocio, n.pais, s.id_suscripcion, s.estado,
+                s.moneda, s.ciclo, s.id_plan, p.nombre AS plan,
                 s.id_plan_solicitado, ps.nombre AS plan_solicitado
            FROM general.gener_usuario_rol ur
            JOIN general.gener_rol r        ON r.id_rol = ur.id_rol AND r.estado = 'A'
            JOIN general.gener_negocio n    ON n.id_negocio = ur.id_negocio AND n.estado = 'A'
-           JOIN cobranza.cob_suscripcion s ON s.id_negocio = n.id_negocio
-           JOIN general.gener_plan p       ON p.id_plan = s.id_plan
-           LEFT JOIN general.gener_plan ps ON ps.id_plan = s.id_plan_solicitado
+           LEFT JOIN cobranza.cob_suscripcion s ON s.id_negocio = n.id_negocio
+           LEFT JOIN general.gener_plan p       ON p.id_plan = s.id_plan
+           LEFT JOIN general.gener_plan ps      ON ps.id_plan = s.id_plan_solicitado
           WHERE ur.id_usuario = :idUsuario
             AND ur.estado = 'A'
             AND UPPER(TRIM(r.descripcion)) = 'ADMINISTRADOR'
           ORDER BY n.nombre;`,
         { replacements: { idUsuario }, type: sequelize.QueryTypes.SELECT }
-    );
+    ).then((filas) => (incluirSinSuscripcion ? filas : filas.filter((n) => n.id_suscripcion)));
 
     // La vigencia del PLAN, no el estado de la suscripción de cobro. Mostrar «Al día» a partir de
     // `cob_suscripcion.estado` era un error: esa columna sigue en 'activa' aunque el plan haya
@@ -1201,6 +1221,18 @@ async function cobrosDeUsuario(idUsuario) {
     const resultado = [];
     for (const n of negocios) {
         const v = vigencias.get(Number(n.id_negocio));
+
+        // Sin suscripción de cobro no hay moneda ni ciclo guardados: se usan los del país, que son
+        // los que tendría al crearla. Y «sin plan» es no tener NINGÚN plan vigente ni suscripción:
+        // un negocio en su prueba de 7 días no tiene suscripción pero sí plan, y no es lo mismo.
+        n.sin_plan = !n.id_suscripcion && !v;
+        if (!n.id_suscripcion) {
+            n.moneda = MONEDA_POR_PAIS[n.pais] || 'COP';
+            n.ciclo = 'mensual';
+            n.plan = v?.nombre ?? null;
+        }
+        delete n.id_suscripcion;
+        delete n.pais;
         n.vigencia = v
             ? {
                   fecha_inicio: v.fecha_inicio,
@@ -1721,7 +1753,10 @@ function mapaDeComplementos(lista, usar) {
  *        `null` = no toca los complementos.
  */
 async function cambiarMiPlan(idNegocio, { idPlan = null, complementos = null } = {}) {
-    const suscripcion = await Dao.exigirSuscripcion(idNegocio);
+    // Sin suscripción de cobro no hay nada que «cambiar»: lo que elige es su PRIMER plan.
+    const existente = await Dao.getSuscripcionPorNegocio(idNegocio);
+    if (!existente) return contratarPrimerPlan(idNegocio, { idPlan });
+    const suscripcion = existente;
 
     if (suscripcion.estado === 'cancelada') {
         throw error(
@@ -1854,6 +1889,78 @@ async function cambiarMiPlan(idNegocio, { idPlan = null, complementos = null } =
     });
 
     return resultado;
+}
+
+/**
+ * El negocio que aún no tiene suscripción de cobro elige su primer plan desde «Mis pagos».
+ *
+ * Es lo mismo que hace el alta desde la web (`adquirirService.prepararFactura`): crea la
+ * suscripción con el plan elegido y genera la factura del primer ciclo desde hoy. El plan se
+ * activa cuando esa factura se paga, no antes. Solo entra por aquí quien HOY recibiría
+ * `SUSCRIPCION_NO_ENCONTRADA`, así que no cambia nada para quien ya tenía suscripción.
+ *
+ * Los complementos no se piden en este paso: se ajustan después, cuando ya hay un plan.
+ */
+async function contratarPrimerPlan(idNegocio, { idPlan }) {
+    if (idPlan == null) {
+        throw error('Elige el plan que quieres contratar.', 'PLAN_REQUERIDO', 422);
+    }
+
+    const pais = await paisDeNegocio(idNegocio);
+    const moneda = MONEDA_POR_PAIS[pais] || 'COP';
+    const ciclo = 'mensual';
+    const disponibles = await Dao.listarPlanesParaCliente({ moneda, ciclo });
+    const plan = disponibles.find((p) => Number(p.id_plan) === Number(idPlan));
+    if (!plan) {
+        throw error('Ese plan no está disponible para tu negocio.', 'PLAN_NO_DISPONIBLE', 409);
+    }
+
+    setAuditNegocio(idNegocio);
+
+    // Suscripción, factura y evento de auditoría en UNA transacción: si cualquiera falla no queda
+    // una suscripción sin cobro (con ella, «cambiar plan» diría «eso es lo que ya tienes» y el
+    // negocio se quedaría sin poder pagar nunca). Ninguno de los tres habla con la pasarela: el
+    // checkout se abre después, cuando el cliente pulsa «Pagar».
+    const transaction = await sequelize.transaction();
+    try {
+        await configurarSuscripcion(
+            idNegocio,
+            {
+                id_plan: plan.id_plan,
+                ciclo,
+                moneda,
+                notas: 'Primer plan elegido desde Mis pagos.',
+            },
+            { transaction }
+        );
+        // `desde: hoy` salta las guardas de la renovación —no hay plan que vencer— y factura el
+        // primer ciclo a partir de hoy, igual que el alta desde la web.
+        const { factura } = await generarFacturaPeriodo(idNegocio, {
+            desde: hoyBogota(),
+            transaction,
+        });
+
+        await Audit.registrarEvento({
+            modulo: 'cobranza',
+            accion: 'primer_plan_elegido',
+            idNegocio,
+            detalle: { id_plan: plan.id_plan, referencia: factura.referencia, total: Number(factura.total) },
+            transaction,
+        });
+
+        await transaction.commit();
+
+        return {
+            aplica: 'primer_plan',
+            cambio: true,
+            mensaje: `Listo: te generamos el cobro del ${plan.nombre}. Págalo para activarlo.`,
+            referencia: factura.referencia,
+            total: Number(factura.total),
+        };
+    } catch (err) {
+        await transaction.rollback();
+        throw err;
+    }
 }
 
 /** Cancela lo pedido y no pagado, y devuelve el cobro pendiente a lo que el cliente tiene hoy. */

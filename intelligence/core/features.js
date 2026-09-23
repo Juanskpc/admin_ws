@@ -106,6 +106,45 @@ async function estaHabilitado(idNegocio, feature) {
     return (FEATURES_POR_PLAN[plan] || []).includes(feature);
 }
 
+/**
+ * Las features de VARIOS negocios en una sola consulta.
+ *
+ * Es `estaHabilitado` en lote, no otra regla: mismo plan activo (mismos filtros que `planActivo`),
+ * mismo mapeo `FEATURES_POR_PLAN`, misma escotilla `FORZADAS` (que en producción está vacía).
+ * Existe para las pantallas que pintan una lista de negocios y necesitan saber qué tiene cada uno
+ * — «Mis negocios», el botón «Ver planes» de WhatsApp —: preguntar de uno en uno serían N consultas.
+ *
+ * Quien la use sigue sin conocer el nombre de ningún plan: recibe nombres de FEATURE.
+ *
+ * @param {number[]} idNegocios
+ * @returns {Promise<Map<number, string[]>>} todos los ids pedidos, con `[]` si no tienen nada
+ */
+async function featuresDeNegocios(idNegocios) {
+    const ids = [...new Set((idNegocios || []).map(Number).filter(Number.isInteger))];
+    const resultado = new Map(ids.map((id) => [id, [...FORZADAS]]));
+    if (ids.length === 0) return resultado;
+
+    const filas = await Models.sequelize.query(
+        `
+        SELECT DISTINCT ON (np.id_negocio) np.id_negocio, p.nombre
+          FROM general.gener_negocio_plan np
+          JOIN general.gener_plan p ON p.id_plan = np.id_plan AND p.estado = 'A'
+         WHERE np.id_negocio IN (:ids)
+           AND np.estado = 'A'
+           AND (np.fecha_fin IS NULL OR np.fecha_fin >= CURRENT_DATE)
+         ORDER BY np.id_negocio, np.fecha_inicio DESC;
+        `,
+        { replacements: { ids }, type: Models.sequelize.QueryTypes.SELECT }
+    );
+
+    for (const { id_negocio: id, nombre } of filas) {
+        const propias = new Set(resultado.get(Number(id)));
+        for (const f of FEATURES_POR_PLAN[nombre] || []) propias.add(f);
+        resultado.set(Number(id), [...propias]);
+    }
+    return resultado;
+}
+
 /** Para diagnóstico y para la CLI: por qué la respuesta fue la que fue. */
 async function explicar(idNegocio, feature) {
     if (FORZADAS.has(feature)) {
@@ -121,4 +160,4 @@ async function explicar(idNegocio, feature) {
     };
 }
 
-module.exports = { estaHabilitado, explicar, planActivo, FEATURE, FEATURES_POR_PLAN };
+module.exports = { estaHabilitado, featuresDeNegocios, explicar, planActivo, FEATURE, FEATURES_POR_PLAN };

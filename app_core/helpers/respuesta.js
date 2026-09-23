@@ -17,10 +17,14 @@ function success(res, message, data = null, statusCode = 200) {
  * @param {string} message - Mensaje de error
  * @param {number} statusCode - Código HTTP (default: 500)
  * @param {*} errors - Detalle de errores de validación (opcional)
+ * @param {{code?: string, data?: *}} [extra] - `code` (enum-like) y `data` para errores de dominio
+ *        que necesitan devolver algo accionable (p. ej. la lista de usuarios que bloquean un borrado)
  */
-function error(res, message, statusCode = 500, errors = null) {
+function error(res, message, statusCode = 500, errors = null, extra = null) {
     const response = { success: false, message };
     if (errors) response.errors = errors;
+    if (extra?.code) response.code = extra.code;
+    if (extra?.data != null) response.data = extra.data;
     return res.status(statusCode).json(response);
 }
 

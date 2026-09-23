@@ -3,6 +3,8 @@ const { validationResult } = require('express-validator');
 const NegocioDao = require('../../app_core/dao/negocioDao');
 const planHelper = require('../../app_core/helpers/planHelper');
 const Respuesta = require('../../app_core/helpers/respuesta');
+const CicloVida = require('../services/negocioCicloVidaService');
+const { featuresDeNegocios } = require('../../intelligence/core/features');
 
 /**
  * Listar todos los negocios activos.
@@ -89,10 +91,15 @@ async function getMisNegocios(req, res) {
 
         // Cada negocio viaja con su plan: el dashboard avisa (vencido, en gracia, por iniciar)
         // antes de mandar al usuario a una app que lo iba a rechazar sin explicarle por qué.
-        const planMap = await planHelper.getPlanesActivosPorNegocio(negocios.map((n) => n.id_negocio));
+        const ids = negocios.map((n) => n.id_negocio);
+        const planMap = await planHelper.getPlanesActivosPorNegocio(ids);
+        // `features` = nombres de FEATURE que el negocio tiene habilitadas (ADR-021). Los clientes
+        // preguntan por esto y nunca por el nombre del plan.
+        const featuresMap = await featuresDeNegocios(ids);
         const conPlan = negocios.map((n) => ({
             ...(typeof n.get === 'function' ? n.get({ plain: true }) : n),
             plan: planMap.get(n.id_negocio) || null,
+            features: featuresMap.get(Number(n.id_negocio)) ?? [],
         }));
 
         return Respuesta.success(res, 'Negocios del usuario obtenidos', conPlan);
@@ -183,16 +190,79 @@ async function setEstadoNegocio(req, res) {
             return Respuesta.error(res, 'Datos de entrada inválidos', 400, errors.array());
         }
 
-        const estado = req.body.estado;
-        const affected = await NegocioDao.setEstadoNegocio(Number(req.params.id), estado);
-        if (!affected) {
-            return Respuesta.error(res, 'Negocio no encontrado', 404);
-        }
+        const { estado, motivo } = req.body;
+        await CicloVida.cambiarEstado(Number(req.params.id), estado, motivo?.trim() || null);
         return Respuesta.success(res, estado === 'A' ? 'Negocio activado' : 'Negocio desactivado');
     } catch (error) {
-        console.error('Error en setEstadoNegocio:', error);
-        return Respuesta.error(res, 'Error al cambiar el estado del negocio');
+        return responderError(res, error, 'setEstadoNegocio', 'Error al cambiar el estado del negocio');
     }
+}
+
+/**
+ * Qué se llevaría por delante eliminar el negocio (no modifica nada).
+ * GET /admin/negocios/:id/eliminacion
+ */
+async function getPrevisualizacionEliminacion(req, res) {
+    try {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return Respuesta.error(res, 'Datos de entrada inválidos', 400, errors.array());
+        }
+
+        const resumen = await CicloVida.previsualizarEliminacion(Number(req.params.id));
+        return Respuesta.success(res, 'Resumen de la eliminación', resumen);
+    } catch (error) {
+        return responderError(res, error, 'getPrevisualizacionEliminacion', 'Error al calcular lo que se eliminaría');
+    }
+}
+
+/**
+ * Elimina un negocio con TODOS sus datos, en una sola transacción.
+ * DELETE /admin/negocios/:id   body: { confirmacion: <nombre exacto del negocio> }
+ *   400 CONFIRMACION_INVALIDA · 404 NEGOCIO_NO_ENCONTRADO · 500 NEGOCIO_ELIMINACION_FALLIDA (sin cambios)
+ */
+async function eliminarNegocio(req, res) {
+    try {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return Respuesta.error(res, 'Datos de entrada inválidos', 400, errors.array());
+        }
+
+        const eliminado = await CicloVida.eliminarNegocio(Number(req.params.id), req.body?.confirmacion);
+        return Respuesta.success(res, `Negocio «${eliminado.nombre}» eliminado`, eliminado);
+    } catch (error) {
+        return responderError(res, error, 'eliminarNegocio', 'Error al eliminar el negocio');
+    }
+}
+
+/**
+ * Historial de inactivaciones, reactivaciones y demás cambios de ciclo de vida.
+ * GET /admin/negocios/:id/historial
+ */
+async function getHistorialNegocio(req, res) {
+    try {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return Respuesta.error(res, 'Datos de entrada inválidos', 400, errors.array());
+        }
+
+        const eventos = await CicloVida.historial(Number(req.params.id));
+        return Respuesta.success(res, 'Historial del negocio', eventos);
+    } catch (error) {
+        return responderError(res, error, 'getHistorialNegocio', 'Error al obtener el historial del negocio');
+    }
+}
+
+/** Los errores de dominio traen `.code` y `.statusCode` y se reenvían tal cual; el resto es un 500. */
+function responderError(res, error, contexto, mensajePorDefecto) {
+    if (error.statusCode && error.code) {
+        return Respuesta.error(res, error.message, error.statusCode, null, {
+            code: error.code,
+            data: error.data,
+        });
+    }
+    console.error(`Error en ${contexto}:`, error);
+    return Respuesta.error(res, mensajePorDefecto);
 }
 
 /**
@@ -237,6 +307,9 @@ module.exports = {
     getListaNegociosAdmin,
     updateNegocio,
     setEstadoNegocio,
+    eliminarNegocio,
+    getPrevisualizacionEliminacion,
+    getHistorialNegocio,
     registrarCliente,
 };
 

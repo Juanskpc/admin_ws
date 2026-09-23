@@ -3,6 +3,8 @@ const { body, param, query, validationResult } = require('express-validator');
 const UsuarioAdminDao = require('../../app_core/dao/usuarioAdminDao');
 const Respuesta = require('../../app_core/helpers/respuesta');
 const { initTransaction } = require('../../app_core/helpers/funcionesAdicionales');
+const Audit = require('../../app_core/helpers/auditHelper');
+const Models = require('../../app_core/models/conection');
 
 const usuarioAdminValidators = {
     list: [
@@ -60,6 +62,10 @@ const usuarioAdminValidators = {
     getPermisosUsuario: [
         param('id').isInt({ min: 1 }),
     ],
+    historial: [
+        param('id').isInt({ min: 1 }),
+        query('limit').optional().isInt({ min: 1, max: 100 }),
+    ],
     getPermisosRol: [
         param('id').isInt({ min: 1 }),
         query('id_negocio').optional().isInt({ min: 1 }),
@@ -78,6 +84,23 @@ const usuarioAdminValidators = {
         body('modulos.*.subniveles.*.puede_ver').optional().isBoolean(),
     ],
 };
+
+/**
+ * Audita una acción sobre un usuario. En `audit_evento.id_usuario` va el ACTOR (sale del JWT);
+ * el usuario afectado viaja en `detalle.id_usuario_objetivo`. Sin transacción: si la auditoría
+ * falla, la acción de negocio ya está hecha y no se revierte (ver auditHelper).
+ */
+function auditarUsuario(accion, usuario, extra = {}) {
+    return Audit.registrarEvento({
+        modulo: 'usuarios',
+        accion,
+        detalle: {
+            id_usuario_objetivo: Number(usuario.id_usuario),
+            nombre: usuario.nombre_completo,
+            ...extra,
+        },
+    });
+}
 
 function getValidationErrors(req, res) {
     const errors = validationResult(req);
@@ -228,6 +251,10 @@ async function createUsuario(req, res) {
         const idUsuario = await UsuarioAdminDao.createUsuario(payload, transaction);
         await transaction.commit();
 
+        await auditarUsuario('usuario_creado', {
+            id_usuario: idUsuario,
+            nombre_completo: `${payload.primer_nombre} ${payload.primer_apellido}`.trim(),
+        });
         return Respuesta.success(res, 'Usuario creado correctamente', { id_usuario: idUsuario }, 201);
     } catch (error) {
         if (transaction) await transaction.rollback();
@@ -268,7 +295,7 @@ async function updateUsuario(req, res) {
         }
 
         if (usuarioActual.es_admin_principal && payload.estado === 'I') {
-            return Respuesta.error(res, 'No se puede desactivar el administrador principal.', 409);
+            return Respuesta.error(res, 'No se puede inactivar el administrador principal.', 409);
         }
 
         const bloqueado = await validarReglaAdministradoresActivos(usuarioActual, payload, res);
@@ -331,6 +358,18 @@ async function updatePerfilUsuario(req, res) {
         await UsuarioAdminDao.updatePerfilUsuario(idUsuario, payload, transaction);
         await transaction.commit();
 
+        // Qué campos cambiaron (nunca la contraseña: solo el hecho de que se cambió).
+        const cambios = [];
+        if ((usuarioActual.primer_nombre || '') !== payload.primer_nombre
+            || (usuarioActual.segundo_nombre || '') !== (payload.segundo_nombre || '')) cambios.push('nombre');
+        if ((usuarioActual.primer_apellido || '') !== payload.primer_apellido
+            || (usuarioActual.segundo_apellido || '') !== (payload.segundo_apellido || '')) cambios.push('apellido');
+        if (usuarioActual.num_identificacion !== payload.num_identificacion) cambios.push('identificacion');
+        if ((usuarioActual.email || null) !== payload.email) cambios.push('email');
+        if (payload.telefono !== undefined && (usuarioActual.telefono || null) !== (payload.telefono || null)) cambios.push('telefono');
+        if (payload.password) cambios.push('password');
+        await auditarUsuario('usuario_editado', usuarioActual, { cambios });
+
         return Respuesta.success(res, 'Usuario actualizado correctamente');
     } catch (error) {
         if (transaction) await transaction.rollback();
@@ -355,7 +394,7 @@ async function setEstadoUsuario(req, res) {
         }
 
         if (usuario.es_admin_principal && estado === 'I') {
-            return Respuesta.error(res, 'No se puede desactivar el administrador principal.', 409);
+            return Respuesta.error(res, 'No se puede inactivar el administrador principal.', 409);
         }
 
         if (estado === 'I') {
@@ -363,7 +402,7 @@ async function setEstadoUsuario(req, res) {
             const esAdmin = esRolAdministrador(usuario.rol_principal);
 
             if (esAdmin && adminsActivos <= 0) {
-                return Respuesta.error(res, 'No puedes desactivar el último administrador activo.', 409);
+                return Respuesta.error(res, 'No puedes inactivar el último administrador activo.', 409);
             }
         }
 
@@ -371,7 +410,10 @@ async function setEstadoUsuario(req, res) {
         await UsuarioAdminDao.updateEstadoUsuario(idUsuario, estado, transaction);
         await transaction.commit();
 
-        return Respuesta.success(res, 'Estado del usuario actualizado');
+        if (usuario.estado !== estado) {
+            await auditarUsuario(estado === 'I' ? 'usuario_inactivado' : 'usuario_reactivado', usuario);
+        }
+        return Respuesta.success(res, estado === 'I' ? 'Usuario inactivado' : 'Usuario reactivado');
     } catch (error) {
         if (transaction) await transaction.rollback();
         console.error('Error en setEstadoUsuario:', error);
@@ -407,11 +449,47 @@ async function deleteUsuario(req, res) {
         await UsuarioAdminDao.softDeleteUsuario(idUsuario, transaction);
         await transaction.commit();
 
+        await auditarUsuario('usuario_eliminado', usuario);
+
         return Respuesta.success(res, 'Usuario eliminado correctamente');
     } catch (error) {
         if (transaction) await transaction.rollback();
         console.error('Error en deleteUsuario:', error);
         return Respuesta.error(res, 'Error al eliminar usuario');
+    }
+}
+
+/**
+ * Historial de un usuario: quién lo creó, editó, inactivó, reactivó o eliminó, y cuándo.
+ * GET /admin/usuarios/admin/:id/historial
+ *
+ * `audit_evento.id_usuario` es el ACTOR; el afectado se busca en `detalle.id_usuario_objetivo`.
+ */
+async function getHistorialUsuario(req, res) {
+    try {
+        const validationError = getValidationErrors(req, res);
+        if (validationError) return validationError;
+
+        const idUsuario = Number(req.params.id);
+        const limit = Math.min(Number(req.query.limit) || 20, 100);
+
+        const [rows] = await Models.sequelize.query(
+            `SELECT e.id_evento, e.fecha, e.accion, e.resultado, e.id_usuario AS id_actor,
+                    TRIM(COALESCE(u.primer_nombre, '') || ' ' || COALESCE(u.primer_apellido, '')) AS actor_nombre,
+                    e.detalle->'cambios' AS cambios
+               FROM auditoria.audit_evento e
+               LEFT JOIN general.gener_usuario u ON u.id_usuario = e.id_usuario
+              WHERE e.modulo = 'usuarios'
+                AND e.detalle->>'id_usuario_objetivo' = :idUsuario
+              ORDER BY e.fecha DESC, e.id_evento DESC
+              LIMIT :limit;`,
+            { replacements: { idUsuario: String(idUsuario), limit } }
+        );
+
+        return Respuesta.success(res, 'Historial del usuario obtenido', rows);
+    } catch (error) {
+        console.error('Error en getHistorialUsuario:', error);
+        return Respuesta.error(res, 'Error al consultar el historial del usuario');
     }
 }
 
@@ -517,6 +595,7 @@ module.exports = {
     setEstadoUsuario,
     deleteUsuario,
     getPermisosUsuario,
+    getHistorialUsuario,
     getPermisosRol,
     savePermisosRol,
     buscarUsuarios,

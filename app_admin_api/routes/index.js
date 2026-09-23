@@ -272,6 +272,7 @@ router.put('/usuarios/admin/:id/perfil', UsuarioAdminController.usuarioAdminVali
 router.patch('/usuarios/admin/:id/estado', UsuarioAdminController.usuarioAdminValidators.setEstado, UsuarioAdminController.setEstadoUsuario);
 router.delete('/usuarios/admin/:id', UsuarioAdminController.usuarioAdminValidators.remove, UsuarioAdminController.deleteUsuario);
 router.get('/usuarios/admin/:id/permisos', UsuarioAdminController.usuarioAdminValidators.getPermisosUsuario, UsuarioAdminController.getPermisosUsuario);
+router.get('/usuarios/admin/:id/historial', requireSuperAdmin, UsuarioAdminController.usuarioAdminValidators.historial, UsuarioAdminController.getHistorialUsuario);
 
 router.get('/roles/admin/lista', UsuarioAdminController.getRoles);
 router.get('/roles/admin/:id/permisos', UsuarioAdminController.usuarioAdminValidators.getPermisosRol, UsuarioAdminController.getPermisosRol);
@@ -336,8 +337,22 @@ router.put('/negocios/:id', requireSuperAdmin, [
 ], NegocioController.updateNegocio);
 router.patch('/negocios/:id/estado', requireSuperAdmin, [
     param('id').isInt({ min: 1 }).withMessage('ID de negocio inválido'),
-    body('estado').isIn(['A', 'I']).withMessage('Estado inválido')
+    body('estado').isIn(['A', 'I']).withMessage('Estado inválido'),
+    body('motivo').optional({ nullable: true }).isString().isLength({ max: 300 })
+        .withMessage('El motivo no puede pasar de 300 caracteres')
 ], NegocioController.setEstadoNegocio);
+router.get('/negocios/:id/eliminacion', requireSuperAdmin, [
+    param('id').isInt({ min: 1 }).withMessage('ID de negocio inválido')
+], NegocioController.getPrevisualizacionEliminacion);
+// `confirmacion` es el nombre exacto del negocio; si falta o no coincide el servicio responde
+// 400 CONFIRMACION_INVALIDA (por eso el validador no la exige: el código de error es el del dominio).
+router.delete('/negocios/:id', requireSuperAdmin, [
+    param('id').isInt({ min: 1 }).withMessage('ID de negocio inválido'),
+    body('confirmacion').optional({ nullable: true }).isString().withMessage('La confirmación debe ser texto')
+], NegocioController.eliminarNegocio);
+router.get('/negocios/:id/historial', requireSuperAdmin, [
+    param('id').isInt({ min: 1 }).withMessage('ID de negocio inválido')
+], NegocioController.getHistorialNegocio);
 // --- Datos fiscales del negocio (FE-1) ---
 //
 // El parámetro se llama `id_negocio` a propósito: `exigirPertenenciaNegocio` solo reconoce ese
