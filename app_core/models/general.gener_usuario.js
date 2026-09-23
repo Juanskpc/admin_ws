@@ -26,10 +26,15 @@ module.exports = (sequelize, DataTypes) => {
             allowNull: false,
             defaultValue: false,
         },
+        /**
+         * A = activo. I = suspendido: no entra, pero se sigue viendo y se puede reactivar.
+         * E = eliminado: no aparece en ninguna parte y su correo y cédula quedaron liberados.
+         * La fila se conserva porque pedidos, caja y auditoría apuntan a ella.
+         */
         estado: {
             type: DataTypes.CHAR(1),
             defaultValue: 'A',
-            validate: { isIn: [['A', 'I']] }
+            validate: { isIn: [['A', 'I', 'E']] }
         },
         fecha_creacion: { type: DataTypes.DATE, defaultValue: DataTypes.NOW }
     }, {

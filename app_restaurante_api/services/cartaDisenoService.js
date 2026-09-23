@@ -20,9 +20,29 @@ const { resolveAccesoNegocio } = require('./configuracionService');
  * se siembra al registrar un negocio, y por eso un negocio nuevo tiene carta desde el primer día.
  */
 
-const PLANTILLAS = ['esencial', 'neon', 'gaceta', 'medianoche', 'papel', 'vitrina', 'mostrador'];
-const FORMATOS = ['cards', 'lista', 'mixto'];
-const FUENTES = ['sistema', 'inter', 'poppins', 'lora', 'archivo-narrow', 'dm-serif-display'];
+const PLANTILLAS = ['esencial', 'neon', 'gaceta', 'mural', 'retro'];
+const FORMATOS = ['cards', 'lista'];
+const FUENTES = [
+    'sistema', 'inter', 'poppins', 'lora', 'archivo-narrow', 'dm-serif-display', 'urban-black',
+];
+
+/**
+ * Lo que se retiró el 2026-09-23 y a qué se traduce.
+ *
+ * Una carta publicada con «Medianoche» no puede reventar al guardar cualquier otro cambio: se
+ * acepta el nombre viejo y se guarda ya traducido al vivo más parecido. El frontend hace la misma
+ * traducción al pintar (`PLANTILLAS_RETIRADAS` en carta-diseno.ts), así que lo que el negocio ve
+ * antes y después de volver a publicar es lo mismo.
+ */
+const RETIRADAS = {
+    medianoche: 'neon',
+    papel: 'gaceta',
+    vitrina: 'esencial',
+    mostrador: 'retro',
+};
+
+/** «Mixto» existió hasta 2026-09-23; se lee como tarjetas, que es lo que más se le parecía. */
+const FORMATOS_RETIRADOS = { mixto: 'cards' };
 const BORDES = ['recto', 'suave', 'redondo'];
 
 /** La plantilla que existe para todos, pase lo que pase con el plan. */
@@ -119,15 +139,20 @@ function normalizarOpciones(opciones = {}) {
 }
 
 function normalizarDiseno({ plantilla, formato, marca, opciones }) {
-    if (!PLANTILLAS.includes(plantilla)) {
+    // Un nombre retirado se traduce en vez de rechazarse: el negocio que tenía «Medianoche»
+    // publicada y solo viene a cambiar su color no puede encontrarse un error.
+    const plantillaViva = RETIRADAS[plantilla] ?? plantilla;
+    const formatoVivo = FORMATOS_RETIRADOS[formato] ?? formato;
+
+    if (!PLANTILLAS.includes(plantillaViva)) {
         throw error('La plantilla elegida no existe.', 'PLANTILLA_INVALIDA');
     }
-    if (!FORMATOS.includes(formato)) {
+    if (!FORMATOS.includes(formatoVivo)) {
         throw error('El formato de visualización elegido no existe.', 'FORMATO_INVALIDO');
     }
     return {
-        plantilla,
-        formato,
+        plantilla: plantillaViva,
+        formato: formatoVivo,
         marca: normalizarMarca(marca || {}),
         opciones: normalizarOpciones(opciones || {}),
     };
@@ -154,9 +179,14 @@ function aDiseno(fila) {
     const base = clonarDefecto();
     if (!fila) return { ...base, publicado_en: null };
 
+    // Lo guardado con un nombre retirado se lee como su heredera, no como la carta por defecto:
+    // devolver «Esencial» a un bar que eligió una plantilla oscura sería cambiarle la carta.
+    const plantilla = RETIRADAS[fila.plantilla] ?? fila.plantilla;
+    const formato = FORMATOS_RETIRADOS[fila.formato] ?? fila.formato;
+
     return {
-        plantilla: PLANTILLAS.includes(fila.plantilla) ? fila.plantilla : base.plantilla,
-        formato: FORMATOS.includes(fila.formato) ? fila.formato : base.formato,
+        plantilla: PLANTILLAS.includes(plantilla) ? plantilla : base.plantilla,
+        formato: FORMATOS.includes(formato) ? formato : base.formato,
         marca: { ...(fila.marca || {}) },
         opciones: { ...base.opciones, ...(fila.opciones || {}) },
         publicado_en: fila.publicado_en ?? null,

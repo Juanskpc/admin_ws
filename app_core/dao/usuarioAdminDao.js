@@ -132,7 +132,10 @@ async function syncUsuarioRolActivo(idUsuario, idRol, idNegocio, transaction) {
 }
 
 async function getUsuarios({ search = '', idRol = null, idNegocio = null, estado = null } = {}) {
-    const where = {};
+    // Los eliminados no se listan nunca, ni siquiera pidiendo un estado concreto: eliminar
+    // significa que no se ve en ninguna parte. Su fila sigue ahí para que pedidos, caja y
+    // auditoría puedan decir quién los hizo (ver `softDeleteUsuario`).
+    const where = { estado: { [Op.ne]: 'E' } };
 
     if (estado === 'A' || estado === 'I') {
         where.estado = estado;
@@ -608,21 +611,48 @@ async function updateEstadoUsuario(idUsuario, estado, transaction) {
     return affectedRows;
 }
 
+/**
+ * Elimina un usuario sin borrar su fila.
+ *
+ * La fila se conserva porque los pedidos, los turnos de caja y la auditoría apuntan a ese
+ * `id_usuario` y tienen que poder decir quién los hizo; borrarla de verdad dejaría huérfano el
+ * historial de dinero del negocio. Lo que se hace es dejarlo invisible y liberar su sitio:
+ *
+ *  1. `estado = 'E'` — fuera del login, de los permisos, de los informes y del listado. Todo el
+ *     sistema filtra ya por `estado = 'A'`, así que basta el valor nuevo.
+ *  2. Se le quitan roles y vínculos con negocios, para que no aparezca en ningún equipo.
+ *  3. **Se liberan su correo y su cédula**, que son UNIQUE en la tabla. Sin esto, volver a dar de
+ *     alta a la misma persona era imposible: el alta chocaba con la fila del borrado. Los valores
+ *     originales quedan dentro del sufijo, así que se puede ver a quién correspondía.
+ */
 async function softDeleteUsuario(idUsuario, transaction) {
     await Models.GenerUsuarioRol.update(
         { estado: 'I' },
-        {
-            where: { id_usuario: idUsuario, estado: 'A' },
-            transaction,
-        }
+        { where: { id_usuario: idUsuario, estado: 'A' }, transaction }
     );
 
-    const [affectedRows] = await Models.GenerUsuario.update(
+    // El vínculo con el negocio es lo que lo hace aparecer en «Usuarios» de cada inquilino.
+    await Models.GenerNegocioUsuario.update(
         { estado: 'I' },
-        {
-            where: { id_usuario: idUsuario },
-            transaction,
-        }
+        { where: { id_usuario: idUsuario, estado: 'A' }, transaction }
+    );
+
+    const usuario = await Models.GenerUsuario.findByPk(idUsuario, {
+        attributes: ['id_usuario', 'email', 'num_identificacion'],
+        transaction,
+    });
+    if (!usuario) return 0;
+
+    // El correo tiene que seguir pareciendo un correo: la tabla lo valida con una expresión
+    // regular. Se usa la parte «+etiqueta», que es válida y no colisiona.
+    const marca = `eliminado.${idUsuario}`;
+    const [local, dominio] = String(usuario.email ?? `sin.correo.${idUsuario}@escalapp.co`).split('@');
+    const emailLibre = `${local}+${marca}@${dominio || 'escalapp.co'}`.slice(0, 255);
+    const cedulaLibre = `${usuario.num_identificacion ?? idUsuario}-EL${idUsuario}`.slice(0, 50);
+
+    const [affectedRows] = await Models.GenerUsuario.update(
+        { estado: 'E', email: emailLibre, num_identificacion: cedulaLibre },
+        { where: { id_usuario: idUsuario }, transaction }
     );
 
     return affectedRows;
