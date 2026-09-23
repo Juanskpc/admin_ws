@@ -1407,7 +1407,7 @@ resumen.
 | 2 | Paso a paso del alta, ¿quién crea la cuenta? | Parcial: al activar el panel mandan videos guía; la asociación de **rangos de numeración** la hace el aliado o su contador. No dice explícitamente quién genera las credenciales | ⚠️ sigue sin ser el paso a paso completo que se pidió |
 | 3 | En bolsa, ¿se puede reasignar entre clientes? | **Sí, a solicitud**: *«tú nos indicas cuántos documentos le asignamos a cada cliente y si deseas agregarle más documentos, lo realizamos según tu solicitud».* No es autoservicio ni instantáneo, pero confirma que se puede | ✅ resuelto, manual |
 | 4 | ¿Podemos comprar un paquete a nombre de un cliente? | Confirmado, y por escrito en el contrato — cláusula PRIMERA.B: *«El ALIADO podrá hacer uso propio o si así lo desea comercializar con los usuarios de su software»* | ✅ |
-| 5 | Producto sin IVA ni impoconsumo, ¿`is_excluded` es correcto? | **No contestada.** Ni por WhatsApp ni en los documentos nuevos | ❌ sigue abierta |
+| 5 | Producto sin IVA ni impoconsumo, ¿`is_excluded` es correcto? | **✅ Resuelta por WhatsApp el 2026-09-22**, al reenviar la pregunta junto con los contratos firmados: *«si sr debe enviarse como is_excluded en true»*, *«un producto puede ser excluido o exento»*, *«la responsabilidad es aparte según el facturador»* — es decir: el campo del producto (excluido/exento) es independiente de si el NEGOCIO es responsable de IVA/INC, que se configura aparte. Confirma el diseño que ya asumía §5.7 | ✅ **resuelta** |
 | 6 | ¿Existe paquete mensual? | **No.** *«Nuestros paquetes son anuales, tanto en individuales como en bolsas.»* | ❌ **cierra la esperanza de §8.2-quinquies sobre el T&C §f.2** |
 
 **Consecuencia de la 6:** §8.2-quinquies apuntaba que un paquete mensual *«resuelve buena parte de
@@ -1477,11 +1477,12 @@ antes de enviar los documentos firmados**, no antes.
    de EscalApp / Nicolás como representante legal. **Firmarlos no obliga a comprar nada** (P1): se
    puede hacer ya, sin esperar al primer cliente.
 2. **Sacar la Cámara de Comercio actualizada (≤30 días) y el RUT** de EscalApp para adjuntarlos.
-3. **Insistir por escrito en la pregunta 5** (productos sin IVA ni impoconsumo) antes de facturar a
-   un cliente que no sea responsable de ningún impuesto — sigue siendo el único punto legal sin
-   resolver de toda la integración.
-4. **Retomar «quién pone la plata del año»** en `precios-y-planes.md` §3 el día que haya un cliente
-   real, ya sin la salida del paquete mensual.
+3. ✅ **Pregunta 5 resuelta (2026-09-22)** — ver tabla arriba. Ya no queda ningún punto legal
+   pendiente para poder facturarle a un cliente no responsable de IVA/INC.
+4. **Retomar «quién pone la plata del año»** en `precios-y-planes.md` §3 — ya hay un candidato a
+   primer cliente real (JDD Consultores, ver `project_fe_como_servicio_terceros` en memoria de
+   ADMIN_APP), así que esto deja de ser hipotético y toca decidirlo pronto, ya sin la salida del
+   paquete mensual.
 
 #### 6. ⚠️ Contradicción sin resolver: ¿hay o no precio de aliado?
 

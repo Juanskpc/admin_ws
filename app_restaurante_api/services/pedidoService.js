@@ -325,83 +325,18 @@ async function consumirIngredientesPorItems({ idNegocio, items, permitirStockNeg
         await ing.update({ stock_actual: nuevoStock }, { transaction });
     }
 
-    // El pedido que se acaba de tomar pudo dejar sin stock un ingrediente que usan OTROS
-    // productos, no solo los de esta orden — dos platos que comparten una papa, por ejemplo.
-    // Sin esto, el bot seguía ofreciendo algo que ya no se puede preparar, y el cliente se
-    // enteraba de que no había hasta después de pedirlo y confirmarlo: la peor forma posible
-    // de decir que no hay.
-    await desactivarProductosSinStock({
-        idNegocio,
-        idsIngredientes: Array.from(ingredientesNecesarios.keys()),
-        transaction,
-    });
-}
-
-/**
- * Apaga `disponible` en cualquier producto ACTIVO cuya receta ya no se pueda preparar con el
- * stock que quedó tras un consumo.
- *
- * ## Por qué mira TODOS los productos que usan estos ingredientes, no solo los del pedido
- *
- * Un ingrediente compartido —la misma papa en dos platos distintos— puede dejar sin stock a un
- * producto que ni siquiera estaba en esta orden. Revisar solo lo que se acaba de pedir dejaría
- * ese otro plato ofreciéndose igual, con cero unidades posibles.
- *
- * ## Por qué NO vuelve a encender nada
- *
- * Es deliberadamente de una sola vía. Si se reabasteciera el ingrediente y esto reactivara el
- * producto solo, un negocio que lo apagó por otra razón —cambió la receta, es de temporada, lo
- * retiró de la carta— lo vería reaparecer sin haberlo decidido. Volver a activarlo es una
- * decisión del negocio, a mano, desde Configuración de la carta — igual que hoy.
- */
-async function desactivarProductosSinStock({ idNegocio, idsIngredientes, transaction }) {
-    if (!idsIngredientes || idsIngredientes.length === 0) return;
-
-    const candidatos = await Models.CartaProducto.findAll({
-        where: { id_negocio: idNegocio, estado: 'A', disponible: true },
-        attributes: ['id_producto', 'nombre'],
-        include: [{
-            model: Models.CartaProductoIngred,
-            as: 'ingredientes',
-            where: { estado: 'A', id_ingrediente: idsIngredientes },
-            required: true,
-            attributes: ['id_producto'],
-        }],
-        transaction,
-    });
-    if (candidatos.length === 0) return;
-
-    for (const producto of candidatos) {
-        const receta = await Models.CartaProductoIngred.findAll({
-            where: { id_producto: producto.id_producto, estado: 'A' },
-            attributes: ['id_ingrediente', 'porcion'],
-            include: [{
-                model: Models.CartaIngrediente,
-                as: 'ingrediente',
-                where: { id_negocio: idNegocio, estado: 'A' },
-                required: true,
-                attributes: ['stock_actual'],
-            }],
-            transaction,
-        });
-
-        const alcanzaParaUno = receta.every((r) => {
-            const porcion = Number(r.porcion || 0);
-            if (porcion <= 0) return true;
-            return Number(r.ingrediente?.stock_actual ?? 0) >= porcion;
-        });
-
-        if (!alcanzaParaUno) {
-            await Models.CartaProducto.update(
-                { disponible: false },
-                { where: { id_producto: producto.id_producto }, transaction }
-            );
-            console.log(
-                `[inventario] "${producto.nombre}" (id ${producto.id_producto}) se apagó solo: ` +
-                    'ya no hay stock para preparar uno más.'
-            );
-        }
-    }
+    // A propósito ya NO se apaga aquí ningún producto. Hasta el 2026-09-22 este consumo
+    // apagaba `disponible` en cualquier producto que se quedara sin stock para una unidad más
+    // — pero `disponible` es EL MISMO interruptor que ve el negocio en Productos, así que un
+    // insumo agotado en la cocina aparecía ahí como si alguien lo hubiera apagado a mano: un
+    // cliente reportó sus productos "deshabilitados" sin que nadie hubiera tocado nada.
+    //
+    // Lo que sí hace falta —que el bot y la carta digital no ofrezcan algo que no se puede
+    // preparar— se resuelve en el otro extremo, SIN guardar nada: `cartaService.alcanzaStockPara`
+    // calcula en vivo, cada vez que se arma el menú público, si el stock actual alcanza para una
+    // unidad más. Ver `cartaService.getCartaPublica` / `getProductosPublicosByCategoria` /
+    // `getCartaPublicaCompleta` / `buscarProductos`. La sección de Productos del negocio sigue
+    // leyendo `disponible` tal cual, sin que un pedido la toque jamás.
 }
 
 async function crearDetallesOrden({ idOrden, items, transaction }) {

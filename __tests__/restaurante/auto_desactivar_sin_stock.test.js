@@ -1,17 +1,21 @@
 /**
- * Un producto que se queda sin insumo para hacer uno más se apaga SOLO.
+ * Un producto sin stock para preparar uno más deja de OFRECERSE en el menú público (carta
+ * digital + asistente de WhatsApp), pero `disponible` — el interruptor manual que el negocio ve
+ * en Productos — nunca se toca.
  *
- * ## El fallo que esto evita
+ * ## El fallo que esto evita (y el que reemplaza)
  *
- * Hasta ahora `disponible` era un interruptor puramente manual: el negocio lo apagaba a mano
- * desde la carta, y nada más lo tocaba. El bot seguía ofreciendo un producto cuyo ingrediente
- * ya se había agotado, el cliente lo pedía, y solo AL CONFIRMAR se enteraba de que no había —
- * la peor forma posible de decir que no hay algo: después de que ya lo pidió.
+ * Hasta el 2026-09-21 `consumirIngredientesPorItems` apagaba `disponible` en cualquier producto
+ * cuya receta ya no alcanzara, para que el bot dejara de ofrecerlo. Pero `disponible` es EL MISMO
+ * valor que lee `cartaAdminController` para pintar Productos: un insumo agotado en la cocina
+ * aparecía ahí como si el negocio lo hubiera apagado a mano. Un cliente real reportó sus
+ * productos "deshabilitados" el 2026-09-22 sin que nadie hubiera tocado nada — era justo esto.
  *
- * `desactivarProductosSinStock` (dentro de `consumirIngredientesPorItems`) cierra esto: al
- * consumir el stock de un pedido, cualquier producto ACTIVO cuya receta ya no alcance para una
- * unidad más se apaga en la misma transacción, y `consultar_carta`/`buscar_producto` —que ya
- * filtran por `disponible`— dejan de ofrecerlo.
+ * Ahora la falta de stock se calcula EN VIVO, sin guardar nada:
+ * `cartaService.alcanzaStockPara` (usada por `getCartaPublica`, `getCartaPublicaCompleta`,
+ * `getCategoriasPublicas`, `getProductosPublicosByCategoria` y `buscarProductos` en modo
+ * público) decide en el momento en que se arma el menú si la receta alcanza con el stock actual.
+ * `disponible` sigue siendo puramente manual.
  *
  * Corre contra la base de verdad. El insumo, la receta y los dos productos de prueba los crea
  * y los borra la propia suite: depender de la carta sembrada haría que el test pasara o se
@@ -24,6 +28,7 @@ require('dotenv').config();
 const Models = require('../../app_core/models/conection');
 const pedidoService = require('../../app_restaurante_api/services/pedidoService');
 const cajaService = require('../../app_restaurante_api/services/cajaService');
+const cartaService = require('../../app_restaurante_api/services/cartaService');
 
 const sequelize = Models.sequelize;
 
@@ -53,6 +58,16 @@ async function disponibleDe(idProducto) {
         { p: idProducto },
     );
     return Boolean(fila?.disponible);
+}
+
+async function apareceEnMenuPublico(idProducto, idCategoriaProducto = idCategoria) {
+    const productos = await cartaService.getProductosPublicosByCategoria(idNegocio, idCategoriaProducto);
+    return productos.some((p) => p.id_producto === idProducto);
+}
+
+async function apareceEnBuscador(idProducto, termino) {
+    const productos = await cartaService.buscarProductos(idNegocio, termino);
+    return productos.some((p) => p.id_producto === idProducto);
 }
 
 async function ponerStock(idIng, valor) {
@@ -201,27 +216,41 @@ afterAll(async () => {
     await sequelize.close();
 });
 
-describe('desactivarProductosSinStock', () => {
-    it('si después del pedido todavía alcanza para uno más, nadie se apaga', async () => {
+describe('sin stock: desaparece del menú público, nunca de Productos', () => {
+    it('si después del pedido todavía alcanza para uno más, nadie desaparece', async () => {
         await ponerStock(idIngrediente, PORCION * 2);
         await ponerDisponible(idProductoA, true);
         await ponerDisponible(idProductoB, true);
 
         await crearPedido(idProductoA, 1); // queda exactamente PORCION: alcanza para uno más
 
-        expect(await disponibleDe(idProductoA)).toBe(true);
-        expect(await disponibleDe(idProductoB)).toBe(true);
+        expect(await apareceEnMenuPublico(idProductoA)).toBe(true);
+        expect(await apareceEnMenuPublico(idProductoB)).toBe(true);
     });
 
-    it('apaga también al que comparte el insumo, aunque no estuviera en el pedido', async () => {
+    it('desaparece del menú también el que comparte el insumo, aunque no estuviera en el pedido', async () => {
         await ponerStock(idIngrediente, PORCION * 2);
         await ponerDisponible(idProductoA, true);
         await ponerDisponible(idProductoB, true);
 
         await crearPedido(idProductoA, 2); // se lleva TODO el stock
 
-        expect(await disponibleDe(idProductoA)).toBe(false);
-        expect(await disponibleDe(idProductoB)).toBe(false); // nunca se pidió, y se apaga igual
+        expect(await apareceEnMenuPublico(idProductoA)).toBe(false);
+        expect(await apareceEnMenuPublico(idProductoB)).toBe(false); // nunca se pidió, y desaparece igual
+
+        // Pero en Productos —lo que ve el negocio— sigue apareciendo "disponible": nadie lo apagó.
+        expect(await disponibleDe(idProductoA)).toBe(true);
+        expect(await disponibleDe(idProductoB)).toBe(true);
+    });
+
+    it('el buscador del bot tampoco lo ofrece mientras no haya stock', async () => {
+        await ponerStock(idIngrediente, PORCION * 2);
+        await ponerDisponible(idProductoA, true);
+
+        await crearPedido(idProductoA, 2); // se lleva todo el stock
+
+        expect(await apareceEnBuscador(idProductoA, 'TEST-producto-A')).toBe(false);
+        expect(await disponibleDe(idProductoA)).toBe(true); // sigue "disponible" en Productos
     });
 
     it('con stock de sobra, nadie se toca', async () => {
@@ -231,8 +260,8 @@ describe('desactivarProductosSinStock', () => {
 
         await crearPedido(idProductoA, 1);
 
-        expect(await disponibleDe(idProductoA)).toBe(true);
-        expect(await disponibleDe(idProductoB)).toBe(true);
+        expect(await apareceEnMenuPublico(idProductoA)).toBe(true);
+        expect(await apareceEnMenuPublico(idProductoB)).toBe(true);
     });
 
     it('un producto con un insumo APARTE no se ve afectado por lo que le pase a otro', async () => {
@@ -242,34 +271,34 @@ describe('desactivarProductosSinStock', () => {
 
         await crearPedido(idProductoA, 1);
 
-        expect(await disponibleDe(idProductoA)).toBe(false);
-        expect(await disponibleDe(idProductoAparte)).toBe(true);
+        expect(await apareceEnMenuPublico(idProductoA)).toBe(false);
+        expect(await apareceEnMenuPublico(idProductoAparte)).toBe(true);
     });
 
-    it('no vuelve a encender solo: reabastecer no reactiva lo que se apagó', async () => {
+    it('se reabastece y vuelve a aparecer solo: ya no es un apagado de una sola vía', async () => {
         await ponerStock(idIngrediente, PORCION);
         await ponerDisponible(idProductoA, true);
         await crearPedido(idProductoA, 1);
-        expect(await disponibleDe(idProductoA)).toBe(false);
+        expect(await apareceEnMenuPublico(idProductoA)).toBe(false);
 
-        // Se reabastece de sobra, pero nadie ha vuelto a comprar nada.
+        // Se reabastece de sobra: como ya no se guarda nada, la siguiente consulta al menú
+        // público lo vuelve a ofrecer sin que nadie lo "reactive" a mano.
         await ponerStock(idIngrediente, PORCION * 10);
 
-        expect(await disponibleDe(idProductoA)).toBe(false);
+        expect(await apareceEnMenuPublico(idProductoA)).toBe(true);
     });
 
-    it('uno que el negocio ya había apagado a mano, por otra razón, no se toca ni se audita distinto', async () => {
+    it('uno que el negocio apagó a mano sigue sin aparecer aunque haya stock de sobra', async () => {
         await ponerStock(idIngrediente, PORCION * 10);
         await ponerDisponible(idProductoB, false); // apagado a mano, con stock de sobra
 
         await crearPedido(idProductoA, 1);
 
-        // Sigue apagado — y lo estaba desde antes, no por esto: no hay nada que verificar
-        // aparte de que la consulta no lo "reactivó" por accidente al filtrar por disponible=true.
-        expect(await disponibleDe(idProductoB)).toBe(false);
+        expect(await apareceEnMenuPublico(idProductoB)).toBe(false);
+        expect(await disponibleDe(idProductoB)).toBe(false); // seguía apagado desde antes, no por esto
     });
 
-    it('con controla_inventario apagado, no se apaga nada', async () => {
+    it('con controla_inventario apagado, nadie desaparece del menú público', async () => {
         const negocio = await unaFila(
             `SELECT controla_inventario FROM general.gener_negocio WHERE id_negocio = :n;`, { n: idNegocio },
         );
@@ -284,7 +313,7 @@ describe('desactivarProductosSinStock', () => {
 
             await crearPedido(idProductoA, 5); // muchísimo más de lo que hay
 
-            expect(await disponibleDe(idProductoA)).toBe(true);
+            expect(await apareceEnMenuPublico(idProductoA)).toBe(true);
         } finally {
             await sequelize.query(
                 `UPDATE general.gener_negocio SET controla_inventario = :v WHERE id_negocio = :n;`,
