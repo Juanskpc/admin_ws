@@ -564,10 +564,135 @@ async function devolverAlAsistente(req, res) {
     }
 }
 
+/**
+ * POST /admin/intelligence/bandeja/conversaciones/:id/bloquear
+ *
+ * «Este número abusa del sistema: que el asistente deje de contestarle.»
+ *
+ * ## Por qué esto NO es lo mismo que STOP/BAJA, aunque escriba el mismo estado
+ *
+ * `estado = 'bloqueada'` ya existía para cuando el propio cliente se da de baja (`optout.js`,
+ * ADR-023) — es una obligación legal y por eso es irrevocable salvo por un super admin desde
+ * la Consola. Esto es otra cosa: un negocio decidiendo, dentro de SU bandeja, que no quiere
+ * seguir sirviendo a un número — no hay opt-out de por medio, es moderación.
+ *
+ * Las dos llegan al mismo estado porque el motor solo necesita saber UNA cosa para callarse
+ * (`ESTADOS_PROCESABLES` no incluye `bloqueada`, sea cual sea el motivo). Lo que las distingue
+ * es `bloqueada_por` — y es lo que hace que el negocio pueda deshacer SU bloqueo
+ * (`desbloquear`, abajo) sin que eso le abra la puerta a deshacer la baja legal de alguien.
+ *
+ * Idempotente: bloquear algo ya bloqueado no es un error, es la misma decisión otra vez.
+ */
+async function bloquear(req, res) {
+    try {
+        if (!revisar(req, res)) return;
+        if (!(await hayEsquemaIntelligence())) {
+            return Respuesta.error(res, 'El módulo de conversaciones no está instalado', 503);
+        }
+
+        const conversacion = await cargarConversacionPermitida(
+            req.params.id,
+            req.usuario.id_usuario
+        );
+        if (!conversacion) return Respuesta.error(res, 'Conversación no encontrada', 404);
+
+        if (conversacion.estado === 'bloqueada') {
+            return Respuesta.success(res, 'Ese número ya estaba bloqueado', {
+                estado: 'bloqueada',
+                bloqueada_por: conversacion.bloqueada_por,
+            });
+        }
+
+        await Models.sequelize.query(
+            `UPDATE intelligence.conversacion
+                SET estado = 'bloqueada', bloqueada_por = 'negocio'
+              WHERE id_conversacion = :id;`,
+            { replacements: { id: conversacion.id_conversacion } }
+        );
+
+        await Audit.registrarEvento({
+            modulo: 'intelligence',
+            accion: 'conversacion_bloqueada_por_negocio',
+            idUsuario: req.usuario.id_usuario,
+            idNegocio: conversacion.id_negocio,
+            detalle: {
+                id_conversacion: conversacion.id_conversacion,
+                estado_anterior: conversacion.estado,
+                motivo: req.body?.motivo ? String(req.body.motivo).trim().slice(0, 300) : null,
+            },
+        });
+
+        return Respuesta.success(res, 'El asistente ya no le contestará a este número', {
+            estado: 'bloqueada',
+            bloqueada_por: 'negocio',
+        });
+    } catch (err) {
+        console.error('Error en bandeja.bloquear:', err);
+        return Respuesta.error(res, 'Error al bloquear la conversación');
+    }
+}
+
+/**
+ * POST /admin/intelligence/bandeja/conversaciones/:id/desbloquear
+ *
+ * El reverso de `bloquear` — y SOLO de `bloquear`. Deliberadamente estrecho: solo actúa si
+ * `bloqueada_por = 'negocio'`. Una baja por STOP/BAJA sigue exigiendo un super admin desde la
+ * Consola (ADR-023): este endpoint no le da al negocio una puerta de atrás para deshacer la
+ * baja legal de un cliente con el mismo botón que usa para deshacer su propio error.
+ */
+async function desbloquear(req, res) {
+    try {
+        if (!revisar(req, res)) return;
+        if (!(await hayEsquemaIntelligence())) {
+            return Respuesta.error(res, 'El módulo de conversaciones no está instalado', 503);
+        }
+
+        const conversacion = await cargarConversacionPermitida(
+            req.params.id,
+            req.usuario.id_usuario
+        );
+        if (!conversacion) return Respuesta.error(res, 'Conversación no encontrada', 404);
+
+        if (conversacion.estado !== 'bloqueada' || conversacion.bloqueada_por !== 'negocio') {
+            return Respuesta.error(
+                res,
+                conversacion.estado === 'bloqueada'
+                    ? 'Esta conversación está bloqueada por baja del propio cliente (STOP/BAJA): solo un administrador de EscalApp puede deshacerla.'
+                    : 'Esta conversación no está bloqueada.',
+                409
+            );
+        }
+
+        await Models.sequelize.query(
+            `UPDATE intelligence.conversacion
+                SET estado = 'activa', bloqueada_por = NULL
+              WHERE id_conversacion = :id;`,
+            { replacements: { id: conversacion.id_conversacion } }
+        );
+
+        await Audit.registrarEvento({
+            modulo: 'intelligence',
+            accion: 'conversacion_desbloqueada_por_negocio',
+            idUsuario: req.usuario.id_usuario,
+            idNegocio: conversacion.id_negocio,
+            detalle: { id_conversacion: conversacion.id_conversacion },
+        });
+
+        return Respuesta.success(res, 'El asistente vuelve a poder contestarle a este número', {
+            estado: 'activa',
+        });
+    } catch (err) {
+        console.error('Error en bandeja.desbloquear:', err);
+        return Respuesta.error(res, 'Error al desbloquear la conversación');
+    }
+}
+
 module.exports = {
     listarConversaciones,
     detalleConversacion,
     responder,
     atender,
     devolverAlAsistente,
+    bloquear,
+    desbloquear,
 };

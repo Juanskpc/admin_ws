@@ -1106,9 +1106,297 @@ basta que dos de ellos discrepen sobre si el teléfono hace falta.
   `estado_cocina`, y el KDS filtra por `PENDIENTE|EN_PREPARACION|LISTO`: la orden queda `ABIERTA`
   y visible en el POS, pero **nadie en la cocina la ve** hasta que alguien le da a «enviar a
   cocina». Mientras eso no se decida, el seguimiento que consulta el cliente no se mueve.
-- **No existe endpoint para asignar un domiciliario a un pedido ya creado.** `id_domiciliario`
-  solo se puede poner **al crear** la orden (y el pedido del bot nace sin él). Lo único que hay
-  para domiciliarios es la liquidación de caja (`/caja/domiciliarios/transferir`).
+- ~~No existe endpoint para asignar un domiciliario a un pedido ya creado.~~ **Resuelto
+  2026-09-22**: `PATCH /pedidos/:id/domiciliario` (`pedidoService.asignarDomiciliario`), botón en
+  el detalle del pedido en Despacho. Y desde el mismo día el pedido del bot **ya no nace sin
+  domiciliario**: `tomar_pedido` lo asigna siempre (en turno primero, al azar si no hay nadie en
+  turno) — ver "El resto de la petición" más abajo.
 - **El arnés de evaluación no tiene ni una conversación de restaurante.** Sus tres suites son
   todas de `reserva`, así que un cambio de prompt como el de la `v3` no se puede medir donde
   más se nota. `enrutado` es gratis; `respuestas` cuesta unos centavos por tanda.
+
+---
+
+## `cancelar_pedido` y `consultar_cuenta` (2026-09-21)
+
+Barrido de qué le falta al bot frente a lo que un cliente le pediría a un restaurante por
+WhatsApp. De la lista completa, estas dos eran las únicas que no necesitaban construir nada
+nuevo en el dominio — el resto (repetir pedido, modificar uno ya hecho, horario de atención,
+promociones) sí lo necesita, y no se tocó. La tercera candidata, **consultar métodos de pago**,
+se descartó a propósito: ver más abajo.
+
+| Capacidad | Tipo | Qué hace |
+|---|---|---|
+| `cancelar_pedido` | **mutación** | Cancela un pedido del cliente, con confirmación |
+| `consultar_cuenta` | consulta | Saldo de su tiquetera o de su cuenta fiada |
+
+### `cancelar_pedido` no reutiliza `cancelarOrden`
+
+`pedidoService.cancelarOrden` —la que usa Despacho— exige un `idUsuario` con permiso de rol
+(`usuarioPuedeCancelarPedidoNoPagado`): la comprobación correcta para un empleado, sin sentido
+para un cliente por WhatsApp, que no tiene ningún rol que darle. Tampoco acepta `{ transaction }`,
+así que un dry-run del Gate la habría confirmado igual — el mismo obstáculo #1 que ya tuvo
+`tomar_pedido`.
+
+Se escribió `pedidoService.cancelarPorCliente(idOrden, { idNegocio, transaction })` aparte, con su
+propia ventana de negocio: **la cocina no puede haber empezado a prepararlo**
+(`estado_cocina IN (NULL, 'PENDIENTE')`). Pasado ese punto se rechaza con `ORDEN_EN_PREPARACION` y
+el mensaje remite al restaurante — cancelar solo no debe poder tirar comida ya hecha. La
+pertenencia se comprueba en el adaptador, igual que en `consultar_estado_pedido`, antes de llamar
+al servicio.
+
+### `consultar_cuenta` busca por teléfono, no por `id_cuenta`
+
+El cliente no sabe su `id_cuenta`; lo único que tiene es su número. `cuentaService.buscarCuentaPorTelefono`
+resuelve la fila de `platform.persona_negocio` por `telefono_e164` y de ahí la cuenta — el
+mismo principio que `personaNegocioDao`, aplicado a un caso nuevo. Es opt-in por
+`gener_negocio.permite_cuentas_cliente`, comprobado dentro de la capacidad y no solo con la
+habilitación del Registry: son dos apagadores distintos (uno de dominio/Gate, otro del propio
+negocio) que se pueden accionar en momentos distintos.
+
+### Lo que se descartó: `consultar_metodos_pago`
+
+Ya existió una capacidad con ese nombre exacto, retirada el 2026-08-27 (ver más abajo) porque
+preguntar el método de pago dentro del flujo de pedido no convencía. Se construyó una versión
+distinta —pasiva, sin tocar `tomar_pedido`, solo para cuando el cliente pregunta suelto— pero el
+dueño prefirió no reabrir el tema todavía: el domiciliario cobra en la puerta, y así se queda por
+ahora. Se retiró antes de desplegar; queda anotado por si alguna vez se retoma, para no repetir la
+pregunta desde cero.
+
+### Falta antes de que sirvan en producción
+
+Como con toda capacidad nueva, `platform.capacidad_habilitada` no trae fila para negocios
+existentes (por diseño: la ausencia deniega). Hace falta, por negocio real:
+
+```bash
+node scripts/capacidad.js habilitar cancelar_pedido --negocio <id>
+node scripts/capacidad.js habilitar consultar_cuenta --negocio <id>
+```
+
+`consultar_cuenta` además solo sirve donde `permite_cuentas_cliente` esté encendido en
+Configuración — hoy eso es un negocio a la vez, a mano.
+
+### Seguimiento (mismo día): la cancelación dejó de ser muda
+
+Un compañero preguntó, sin haber visto el código: *«si se cancela un pedido, ¿cómo aparece al
+negocio?»*. La respuesta era: no aparece — la orden simplemente desaparece de Despacho, Cocina y
+Mesas en tiempo real (el mismo aviso SSE que ya existía), sin dejar ningún rastro visible en
+ninguna pantalla ni reporte. Para uno que cancela el propio empleado desde el panel, mirando la
+pantalla, es correcto. Para uno que cancela **el cliente** por WhatsApp sin que nadie del negocio
+tocara nada, es un hueco: el negocio solo nota que ya no está, nunca que pasó ni por qué.
+
+Se cerró en tres piezas:
+
+- **`pedid_orden.cancelado_por`** (`'cliente' | 'negocio'`, migración `restaurante-cancelado-por`).
+  `cancelarOrden` (panel) escribe `'negocio'`; `cancelarPorCliente` (bot) escribe `'cliente'`.
+- **`pedidoService.getOrdenesCanceladasRecientes`** — los cancelados de LLEVAR/DOMICILIO de
+  **hoy**, con el mismo filtro de visibilidad por domiciliario que `getOrdenesDespacho`. Aparte
+  y no mezclado con los activos: esto es una alerta de lo que acaba de pasar en el turno, no un
+  historial — el historial ya existe, es la fila que nunca se borra.
+- **`GET /despacho/cancelados`**, endpoint nuevo y no un campo más del `/despacho` de siempre,
+  para no cambiarle la forma de la respuesta a quien ya lo consume. En `restaurante_app`, un
+  chip «Cancelados hoy (N)» —mismo patrón que el chip de WhatsApp, solo aparece si hay
+  alguno— abre un panel chico con quién lo canceló.
+
+No se tocó nada de lo que ya existía: `getOrdenesDespacho` sigue devolviendo exactamente lo mismo
+que devolvía, y un pedido cancelado sigue desapareciendo de la vista principal al instante — eso
+seguía siendo correcto. Lo que cambió es que ahora hay un sitio, aparte, donde no se pierde.
+
+### El resto de la lista del compañero (2026-09-21)
+
+Las otras tres preguntas que hizo por WhatsApp, en el mismo hilo, con lo que se encontró y lo
+que se cerró de cada una:
+
+**«¿El sistema valida los domiciliarios?»** No, casi nada: `id_domiciliario` solo pasaba por
+`isInt({ min: 1 })` en el controlador y por la FK a `gener_usuario` en la base — que exista un
+usuario con ese id EN CUALQUIER PARTE del sistema, nunca que sea domiciliario **de este
+negocio**. `pedidoService.esDomiciliarioValido` cierra el hueco: reutiliza la misma regla de dos
+caminos de `listarDomiciliarios` (personal propio o rol DOMICILIARIO) pero comprobando un
+candidato, y `crearOrden` la exige antes de crear la orden (`DOMICILIARIO_INVALIDO`, 422).
+
+**«¿Cómo el negocio puede bloquear un número?»** No existía — solo el cliente podía llegar a
+`estado = 'bloqueada'`, escribiendo STOP/BAJA, y eso es irrevocable salvo por un super admin
+desde la Consola (ADR-023). Ahora la Bandeja (`/admin/bandeja`, la del propio negocio, no la
+Consola) tiene `bloquear`/`desbloquear`. La pieza que lo hace seguro:
+`intelligence.conversacion.bloqueada_por` (`'cliente' | 'negocio'`, migración
+`intelligence-bloqueada-por`) distingue quién lo puso, para que el negocio pueda deshacer **su
+propio** bloqueo sin que eso le abra una puerta trasera a deshacer la baja legal de un STOP real
+— `desbloquear` se niega en seco si `bloqueada_por` no es `'negocio'`.
+
+**«¿Se puede editar un pedido ya realizado?»** Desde el panel (POS), sí, desde siempre
+(`agregarItemsOrden`/`quitarItemsOrden`). Desde WhatsApp, no podía — el cliente solo podía
+cancelar. Se cerró la mitad que pedía el compañero: **`agregar_items_pedido`**, para un
+"también quiero..." sobre un pedido que ya puso. No reutiliza `agregarItemsOrden` — esa conoce
+método de pago, cuenta, multipago, descuento y domicilio, y nada de eso es una decisión que el
+cliente deba tocar por WhatsApp, y tampoco acepta transacción externa (el mismo obstáculo #1 de
+siempre) — sino `pedidoService.agregarItemsPorCliente`, con la MISMA ventana que
+`cancelar_pedido`: la cocina no puede haber empezado a prepararlo. **Quitar** ítems por WhatsApp
+se dejó fuera a propósito: `quitarItemsOrden` empareja por producto + exclusiones + nota para
+decidir qué detalle reducir, y exponer esa ambigüedad a un modelo que interpreta lenguaje
+natural — "quítame la hamburguesa" ¿cuál, si pidió dos distintas? — es más riesgo del que vale
+la pena para la primera tanda. Se puede añadir después si hace falta de verdad.
+
+Las tres, con sus tests, corridas contra la base local: 1020 pruebas en verde.
+
+### Falta antes de que sirvan en producción (actualizado)
+
+```bash
+node scripts/capacidad.js habilitar cancelar_pedido --negocio <id>
+node scripts/capacidad.js habilitar consultar_cuenta --negocio <id>
+node scripts/capacidad.js habilitar agregar_items_pedido --negocio <id>
+```
+
+Y las migraciones nuevas, en cualquier entorno donde no se hayan corrido:
+
+```bash
+npm run migrate:restaurante-cancelado-por
+npm run migrate:intelligence-bloqueada-por
+```
+
+### Cuatro ajustes pedidos tras el primer uso real (2026-09-21, tarde)
+
+- **Domicilio del bot sin nadie que lo lleve.** `tomar_pedido` ahora elige un domiciliario AL
+  AZAR (`pedidoService.elegirDomiciliarioAlAzar`, mismo criterio arbitrario que
+  `elegirProfesional` en `reserva`) antes de crear un pedido a DOMICILIO. Si el negocio no tiene
+  ningún domiciliario registrado, se rechaza (`SIN_DOMICILIARIO_DISPONIBLE`) en vez de crear un
+  domicilio que nadie va a llevar. **Ojo con esto al habilitar en un negocio nuevo**: sin
+  domiciliarios cargados, ese negocio no podrá tomar NINGÚN pedido a domicilio por WhatsApp
+  hasta que registre al menos uno.
+- **El error crudo de stock llegaba después de que el cliente ya había pedido.** Ahora
+  `consumirIngredientesPorItems` apaga solo (`disponible = false`) cualquier producto —no solo
+  el que se acaba de pedir, cualquiera que comparta el ingrediente que se quedó sin stock— cuya
+  receta ya no alcance para una unidad más. Es de una sola vía a propósito: no vuelve a
+  encenderse solo al reabastecer, eso lo decide el negocio a mano desde la carta, por si lo
+  había apagado por otra razón.
+- **Los textos de cancelar y agregar, reescritos a pedido del dueño**: la confirmación de
+  `cancelar_pedido` ahora nombra los productos del pedido, no el número («¿Estás seguro de
+  cancelar tu pedido de: 2 Hamburguesa doble?»); el aviso de hecho es «Tu pedido fue
+  cancelado.», sin el número. `agregar_items_pedido` avisa en el mismo mensaje que el precio
+  puede variar por empaques y domicilio.
+
+1034 tests en verde contra la base local.
+
+### El resto de la petición: horarios, reasignar domiciliario, y el aviso de domicilio (2026-09-22)
+
+- **El Policy Gate ahora prueba en seco ANTES de preguntar.** El fallo real: el cliente decía
+  que sí a "¿confirmo tu pedido?" y ahí se enteraba de que el restaurante estaba cerrado —
+  `requireCajaAbierta` vive dentro de `ejecutar`, y sin confirmación el Gate nunca llegaba a
+  llamarlo. Ahora, cuando `dryRun: true` y falta confirmar, el Gate deja seguir la ejecución en
+  seco (se deshace siempre) y solo AL FINAL, si todo iría bien, deniega por falta de
+  confirmación. `manejadorLlm.js` ya hacía esa llamada de prueba antes de preguntar; solo hacía
+  falta que el Gate la dejara llegar hasta el dominio.
+- **`restaurante.rest_horario`** (`migrate:restaurante-horario`): mismo patrón que
+  `reserva.reserva_horario` pero en tabla propia (ADR-005). `id_usuario NULL` = horario del
+  negocio; con valor = de ese domiciliario. Sin nada cargado, no restringe nada — ni al negocio
+  ni a la asignación de domiciliarios.
+  - `tomar_pedido` ahora comprueba el horario ANTES que la caja, con tres mensajes distintos:
+    fuera de horario (invita a mirar la carta mientras tanto), en horario pero caja cerrada
+    ("aún no abre"), y normal.
+  - `elegirDomiciliarioAlAzar` ahora prefiere a quien esté EN TURNO ahora mismo
+    (`horarioService.usuariosEnTurnoAhora`); si nadie lo está, cae al azar entre todos, como
+    antes.
+  - Pantalla nueva `/horarios` en `restaurante_app` (`ADMINISTRADOR` únicamente por ahora):
+    mismo editor semanal que ya existía en `reserva_app`, sin los bloqueos puntuales — no se
+    pidieron, y un restaurante que cierra un día concreto simplemente no abre la caja ese día.
+- **`pedidoService.asignarDomiciliario`** — `PATCH /pedidos/:id/domiciliario`: hasta ahora
+  `id_domiciliario` solo se podía fijar al CREAR la orden. Reutiliza `esDomiciliarioValido`.
+  Botón nuevo en el detalle de un pedido en Despacho (selector, solo para DOMICILIO).
+- **`pedido_en_camino`**, plantilla nueva para el aviso de domicilio («el domiciliario va en
+  camino», en vez de «puedes pasar a recogerlo»). `avisoPedido.plantillaParaTipo` elige la
+  correcta según `tipo_pedido`; `puede_avisar_listo` ahora es cierto para LLEVAR y DOMICILIO,
+  antes solo para LLEVAR. **⚠️ Esta plantilla NO está aprobada en Meta todavía** — hace falta
+  someterla al WhatsApp Manager antes de que el envío funcione en producción, exactamente como
+  pasó con `pedido_listo` el 2026-09-10. Hasta entonces, un intento de avisar un domicilio
+  fallará en el envío (`dead letter`), no en el código.
+
+1061 tests en verde contra la base local (más los que ya había).
+
+### El primer mensaje y la carta escrita (2026-09-22)
+
+Tres ajustes chicos, vistos en una conversación real de producción (`Restaurante pregonchos`):
+
+- **«Qué dice»** —un saludo colombiano tan corriente como «qué más» o «qué tal», que ya
+  funcionaban— no abría la bienvenida: `esSaludo` exige que TODAS las palabras sean de saludar,
+  y «dice» no estaba en la lista (`intelligence/engine/texto.js`). Se agregó.
+- **El botón «Pedir por aquí» del saludo se quitó.** El propio texto del saludo ya dice «dime
+  por aquí qué se te antoja»; el botón repetía la misma oferta al lado. El camino de texto
+  libre sigue abierto igual (`pedir por aquí` / `por chat` se reconocen sueltos).
+- **`consultar_carta` sin argumentos ya NO devuelve el catálogo completo — devuelve el enlace y
+  un índice de categorías (nombre, id, cuántos productos), sin productos.** Antes el modelo se
+  llevaba la carta entera y la transcribía en el chat como una lista de "Entradas / Platos /
+  Bebidas" con precio por línea: literalmente peor que el menú digital, que ya tiene fotos.
+  El fallo del 2026-08-24 que motivó devolver el catálogo completo —el modelo adivinando un
+  id_categoria para no tener que preguntar— sigue resuelto por otra vía: el índice le sigue
+  dando los ids reales, y ahora hay un tercer camino que entonces no existía (el enlace), así
+  que ya no hace falta preguntarle al cliente «¿cuál categoría?» para evitar inventar un id.
+  Preguntar por una categoría o un producto concreto (`id_categoria`, `buscar_producto`) sigue
+  devolviendo el detalle completo de esa parte — eso no es "el menú escrito", es contestar lo
+  que se preguntó.
+
+1068 tests en verde contra la base local (más los que ya había).
+
+### El saludo ya dice si el negocio está atendiendo (2026-09-22, mismo día)
+
+Reportado en producción: el bot seguía conversando normal aunque el negocio estuviera fuera de
+horario. La causa: el horario y la caja solo se comprobaban DENTRO de `tomar_pedido` —el cliente
+tenía que llegar hasta intentar confirmar un pedido para enterarse de que estaba cerrado, y un
+«hola» a las 3 de la tarde recibía «arma tu pedido» aunque el negocio abriera a las 5.
+
+- **`horarioService.estadoDeAtencion({ idNegocio, ahora })`** — nueva función que cruza horario y
+  caja en un solo sitio, devolviendo uno de cuatro estados: `fuera_de_horario`, `aun_no_abre`,
+  `cerrado_sin_horario`, `abierto`. Vive en `horarioService` (no en el adaptador) para que
+  `tomar_pedido` y el saludo lean la misma clasificación — dos copias de esta decisión son
+  exactamente la clase de cosa que diverge (ver `gener_rol_nivel` en `CLAUDE.md`).
+  - **No** reemplaza el chequeo de `tomar_pedido`: ese sigue usando
+    `cajaService.requireCajaAbierta` con su transacción y su lock, porque ahí sí importa que la
+    caja no pueda cerrarse entre la comprobación y la creación de la orden. `estadoDeAtencion` es
+    una lectura informativa sin transacción — para decidir qué DECIR, no para crear nada.
+- **`bienvenida()` en `flujo.js` ahora es async** y llama a `estadoAtencion` (inyectable, como
+  `gate`/`identidad`) antes de saludar. Cuatro variantes de texto, una por estado — la de
+  `abierto` es la de siempre.
+- Confirmado contra producción: `Restaurante pregonchos` (id 12) sí tenía el horario cargado
+  (17:00–23:59 casi todos los días); el bug no era falta de configuración, era que el saludo
+  nunca la leía.
+
+1076 tests en verde contra la base local (más los que ya había).
+
+### El menú digital también respeta el horario (2026-09-22, mismo día)
+
+Reportado por el dueño: la carta pública seguía dejando armar un carrito y abrir el modal de
+WhatsApp aunque el negocio estuviera fuera de horario — el bot era el único que lo comprobaba, y
+el cliente solo se enteraba después de escribir.
+
+- `GET /restaurante/public/negocios/:id` ahora incluye `atencion: { estado }`, la misma
+  clasificación que ya usa el saludo (`horarioService.estadoDeAtencion`). Si falla la lectura,
+  se responde `abierto` (falla abierto): es un gesto de la carta, no la comprobación que de
+  verdad protege la creación de la orden — esa sigue siendo `requireCajaAbierta` dentro de
+  `tomar_pedido`, con su transacción y su lock.
+- `menu-publico.ts`: `puedePedir` ahora exige también `atendiendoAhora()`. Un solo computed
+  gobierna todos los botones de "agregar" y el FAB de "ver mi pedido" — no hubo que tocarlos uno
+  a uno. La carta se sigue viendo entera; solo se avisa con una franja (`avisoAtencion`) que
+  ahora mismo no se puede pedir, con un texto distinto para cada uno de los tres estados
+  cerrados.
+
+1079 tests en verde contra la base local (más los que ya había).
+
+---
+
+## Cierre de la sesión del 2026-09-22
+
+Todo lo de esta fecha (horarios de atención, domiciliario siempre asignado, reasignarlo desde
+Despacho, saludo consciente del horario, "qué dice", menú público sin transcribir la carta, y
+el menú digital respetando el horario) quedó **desplegado y verificado en producción**, no solo
+commiteado: commit real confirmado con `git log` en el VPS después de cada `pull` (nunca el
+mensaje del comando), servicio reiniciado sin errores en los logs, y para el frontend los
+hashes de los chunks comparados byte a byte entre el build local y `/var/www/html/restaurante`.
+
+**Lo único que sigue bloqueado por fuera del código:**
+
+- **La plantilla de WhatsApp `pedido_en_camino` no está aprobada por Meta.** El botón de avisar
+  "va en camino" ya aparece en Despacho para pedidos a domicilio, pero el envío real fallará
+  (controladamente, no revienta nada) hasta que se someta esa plantilla al WhatsApp Manager —
+  mismo trámite pendiente que `pedido_listo` en su momento.
+
+**Para retomar:** este archivo tiene la historia completa en orden; la sección "Lo que queda
+pendiente" (arriba) es la lista viva de deuda técnica conocida y no específica de una sola
+sesión — conviene revisarla antes de tocar el bot de restaurante otra vez.

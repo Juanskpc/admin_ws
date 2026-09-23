@@ -25,8 +25,9 @@ const MetricasController = require('../controllers/metricasController');
 const FichaPersonaController = require('../controllers/fichaPersonaController');
 const AuditoriaController = require('../controllers/auditoriaController');
 const DatosFiscalesController = require('../controllers/datosFiscalesController');
-const AdquirirController = require('../controllers/adquirirController');
+const CanalWhatsappController = require('../controllers/canalWhatsappController');
 const CobranzaController = require('../controllers/cobranzaController');
+const AdquirirController = require('../controllers/adquirirController');
 const { verificarToken, requireSuperAdmin } = require('../../app_core/middleware/auth');
 const rateLimit = require('express-rate-limit');
 
@@ -421,6 +422,36 @@ router.put(
     DatosFiscalesController.putDeclaracion
 );
 
+// --- Canal de WhatsApp propio (F8-D, Embedded Signup — Opción B del panel) ---
+//
+// Mismo motivo que datos-fiscales para nombrar el parámetro `id_negocio`: por aquí pasa el
+// estado de conexión de un negocio y, al canjear, un secreto de Meta. Montada tras
+// `verificarToken` (línea 136) — no es pública: el JWT del admin ya autentica, y el `code` de
+// Meta caduca en 30s pero no reemplaza la sesión.
+router.get(
+    '/negocios/:id_negocio/canal-whatsapp',
+    idNegocioValidator,
+    CanalWhatsappController.getEstado
+);
+
+router.post(
+    '/negocios/:id_negocio/canal-whatsapp/embedded-signup/canjear',
+    [
+        ...idNegocioValidator,
+        body('code').trim().notEmpty().withMessage('Falta el code de Embedded Signup'),
+        body('phoneNumberId').trim().notEmpty().withMessage('Falta el phoneNumberId'),
+        body('numeroE164').optional({ nullable: true }).trim().isLength({ max: 20 }),
+        body('businessId').optional({ nullable: true }).trim().isLength({ max: 100 }),
+    ],
+    CanalWhatsappController.postCanjear
+);
+
+router.post(
+    '/negocios/:id_negocio/canal-whatsapp/desconectar',
+    idNegocioValidator,
+    CanalWhatsappController.postDesconectar
+);
+
 router.post('/negocios/registrar-cliente', requireSuperAdmin, [
     body('negocio.nombre').trim().notEmpty().withMessage('El nombre del negocio es requerido'),
     // Se acepta el oficio (`id_rubro`) o, por compatibilidad, el módulo a secas. El DAO
@@ -755,22 +786,17 @@ router.post('/intelligence/bandeja/conversaciones/:id/devolver-al-asistente', [
     param('id').isUUID().withMessage('ID de conversación inválido'),
 ], IntelligenceBandejaController.devolverAlAsistente);
 
-// Reportar a quien usa el asistente para nada. NO bloquea ni cambia el estado de la
-// conversación: es una opinión con autor, fecha y motivo, y se cuenta por contacto, que es de
-// quien habla la pregunta.
-// El motivo se valida contra la misma lista que el CHECK de `intelligence.reporte`.
-router.post('/intelligence/bandeja/conversaciones/:id/reportar', [
+// «Este número abusa del sistema»: el negocio le cierra la puerta al asistente sin que el
+// cliente haya escrito STOP. Distinto de la baja legal —ver el comentario del controlador—,
+// por eso el negocio SÍ puede deshacer su propio bloqueo con `desbloquear`, cosa que no puede
+// hacer con un STOP real.
+router.post('/intelligence/bandeja/conversaciones/:id/bloquear', [
     param('id').isUUID().withMessage('ID de conversación inválido'),
-    body('motivo').isIn(IntelligenceBandejaController.MOTIVOS)
-        .withMessage('Motivo de reporte inválido'),
-    body('nota').optional({ values: 'falsy' }).isString().trim().isLength({ max: 500 })
-        .withMessage('La nota no puede pasar de 500 caracteres'),
-], IntelligenceBandejaController.reportar);
+    body('motivo').optional().isString().trim().isLength({ max: 300 }),
+], IntelligenceBandejaController.bloquear);
 
-// Deshacer el propio reporte: el botón está al lado del de responder y el error es de un clic.
-// Solo el suyo — el del asistente se revisa, no se borra.
-router.post('/intelligence/bandeja/conversaciones/:id/reportar/retirar', [
+router.post('/intelligence/bandeja/conversaciones/:id/desbloquear', [
     param('id').isUUID().withMessage('ID de conversación inválido'),
-], IntelligenceBandejaController.retirarReporte);
+], IntelligenceBandejaController.desbloquear);
 
 module.exports = router;

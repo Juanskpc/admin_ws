@@ -56,25 +56,16 @@ const { normalizarE164Colombia } = require('../../../app_core/helpers/telefono')
 const cartaService = require('../../../app_restaurante_api/services/cartaService');
 const pedidoService = require('../../../app_restaurante_api/services/pedidoService');
 const cajaService = require('../../../app_restaurante_api/services/cajaService');
+const cuentaService = require('../../../app_restaurante_api/services/cuentaService');
+const horarioService = require('../../../app_restaurante_api/services/horarioService');
 const usuarioAsistenteDao = require('../../../app_core/dao/usuarioAsistenteDao');
 const Models = require('../../../app_core/models/conection');
-const { enPesos } = require('./flujo');
+const { enPesos, enlaceDelMenu } = require('./flujo');
 
 const VERTICAL = 'restaurante';
 
 /** Cuántos productos se devuelven como mucho. Una lista de WhatsApp son 10 filas. */
 const MAX_PRODUCTOS = 10;
-
-/**
- * Cuántos productos caben en la carta entera, sumando todas las categorías.
- *
- * No es un límite de WhatsApp —el bot no vuelca esto tal cual, lo lee y contesta— sino del
- * prompt: la carta viaja **después** del corte de caché, así que cada producto se paga entero en
- * cada vuelta del turno. Treinta es el orden de magnitud de una carta de barrio completa; una
- * carta más grande se recorta y el modelo lo sabe (`hay_mas`), con `buscar_producto` para lo que
- * falte.
- */
-const MAX_CARTA = 30;
 
 function precio(valor) {
     return valor != null ? Number(valor) : null;
@@ -152,14 +143,15 @@ function registrarCapacidades() {
     registry.registrar({
         nombre: 'consultar_carta',
         descripcion:
-            'Devuelve los productos de la carta con su precio, agrupados por categoría. Úsala ' +
-            'cuando el cliente pregunte qué venden, qué hay de comer, o pida ver el menú. ' +
-            'Sin argumentos devuelve la carta entera: eso es lo normal, porque lo que el ' +
-            'cliente quiere saber es QUÉ HAY y CUÁNTO VALE. **Nunca le preguntes de qué ' +
-            'categoría quiere ver**: las categorías son la forma en que el restaurante ordena ' +
-            'su carta, no una pregunta que se le hace a nadie. Pásale id_categoria solo si el ' +
-            'propio cliente nombró una parte de la carta ("¿qué bebidas tienen?"), y usa ' +
-            'entonces el id exacto que devolvió esta misma capacidad: NO son 1, 2, 3.',
+            'Sin argumentos, devuelve el ENLACE de la carta digital (con fotos y precios) y un ' +
+            'índice de categorías —nombre, id y cuántos productos tiene cada una—, pero NO la ' +
+            'lista de productos. Úsala cuando el cliente pida ver el menú, la carta, o ' +
+            'pregunte qué venden EN GENERAL: la respuesta correcta es darle el enlace y decirle ' +
+            'que ahí ve todo con fotos y precios, **nunca transcribir el catálogo en el chat**. ' +
+            'Si en cambio el cliente pregunta por una parte concreta de la carta ("¿qué bebidas ' +
+            'tienen?", "¿qué hay de postre?"), ahí sí contesta en el chat: vuelve a llamar a ' +
+            'esta misma capacidad con el id_categoria exacto que salió en el índice (NO son ' +
+            '1, 2, 3). Para un plato suelto ("¿cuánto vale la limonada?") usa buscar_producto.',
         vertical: VERTICAL,
         tipo: registry.TIPO.CONSULTA,
         feature: FEATURE.ASISTENTE_IA,
@@ -173,39 +165,36 @@ function registrarCapacidades() {
             // es justo la diferencia entre lo que el negocio gestiona y lo que le enseña a un
             // cliente. Un producto oculto a propósito no debe salir por el bot.
 
-            // ⚠️ Sin categoría se devuelve la CARTA, no el índice.
+            // ⚠️ Sin categoría se devuelve el ENLACE y un ÍNDICE, no el catálogo entero.
             //
-            // Antes esto devolvía solo la lista de categorías, y el bot hacía lo que la forma
-            // del dato le pedía: contestar «tenemos Entradas, Platos y Bebidas, ¿cuál quieres
-            // ver?». Un cliente no escribe a un restaurante para navegar un índice; escribe
-            // para saber qué hay y cuánto vale. Cada pregunta intermedia es un turno más, y en
-            // un chat cada turno es una oportunidad de que se vaya.
+            // Hasta el 2026-09-22 esto devolvía la carta completa —todas las categorías con
+            // todos sus productos y precios— y el modelo la transcribía en el chat tal cual:
+            // un mensaje larguísimo de "Entradas / Platos / Bebidas" con precio por línea,
+            // justo lo que ya existe —mejor hecho, con fotos— en el menú digital. Visto en
+            // producción el 2026-09-21.
             //
-            // De paso desaparece la ronda que causó el fallo del 2026-08-24: si el modelo nunca
-            // tiene que elegir una categoría, tampoco puede inventarse su id.
+            // El índice (sin productos) sostiene lo mismo que ya resolvió el fallo del
+            // 2026-08-24: el modelo sigue sin tener que ADIVINAR un id_categoria, porque aquí
+            // se lo llevamos. La diferencia es que ya no hace falta preguntarle al cliente «¿cuál
+            // categoría?» —el fallo que motivó devolver el catálogo completo— porque ahora hay
+            // un tercer camino que no existía entonces: el enlace. Ver el catálogo completo
+            // sigue disponible, con id_categoria, para cuando el cliente SÍ pregunta por una
+            // parte concreta.
             if (!args.id_categoria) {
                 const carta = await cartaService.getCartaPublica(idNegocio);
 
-                let quedan = MAX_CARTA;
-                const grupos = [];
-                for (const c of carta) {
-                    const productos = (c.productos || []).slice(0, Math.max(quedan, 0));
-                    if (productos.length === 0) continue;
-                    quedan -= productos.length;
-                    grupos.push({
+                const categorias = carta
+                    .map((c) => ({
                         id_categoria: c.id_categoria,
                         categoria: c.nombre,
-                        productos: productos.map(producto),
-                    });
-                }
+                        cuantos_productos: (c.productos || []).length,
+                    }))
+                    .filter((c) => c.cuantos_productos > 0);
 
-                const total = carta.reduce((n, c) => n + (c.productos || []).length, 0);
                 return {
-                    carta: grupos,
-                    // `hay_mas` no es cosmética: sin él, una carta recortada le enseña al modelo
-                    // a decir «esto es todo lo que tenemos», que es mentira.
-                    hay_mas: total > MAX_CARTA,
-                    cuantos_productos: total,
+                    enlace: enlaceDelMenu(idNegocio),
+                    cuantos_productos: categorias.reduce((n, c) => n + c.cuantos_productos, 0),
+                    categorias,
                 };
             }
 
@@ -336,6 +325,73 @@ function registrarCapacidades() {
                 estado_pago: orden.estado_pago || null,
                 tipo_pedido: orden.tipo_pedido,
                 total: precio(orden.total),
+            };
+        },
+    });
+
+    registry.registrar({
+        nombre: 'consultar_cuenta',
+        descripcion:
+            'Dice el saldo de la tiquetera o de la cuenta fiada del cliente que escribe: ' +
+            'cuánto tiene a favor, cuánto debe, o cuántos tiquetes le quedan. Úsala cuando ' +
+            'pregunte "¿cuánto me queda?", "¿cuánto debo?" o algo de su cuenta o tiquetera. ' +
+            'No todos los restaurantes manejan esto: si el negocio no lo tiene activado, dilo ' +
+            'sin más y no ofrezcas abrirle una.',
+        vertical: VERTICAL,
+        tipo: registry.TIPO.CONSULTA,
+        feature: FEATURE.ASISTENTE_IA,
+        parametros: {},
+
+        async ejecutar({ idNegocio, contexto }) {
+            // Opt-in por negocio (`permite_cuentas_cliente`), igual que en `cuentaController`.
+            // Se comprueba aquí y no solo con la habilitación de la capacidad en el Registry
+            // porque son dos apagadores distintos que un negocio puede accionar en momentos
+            // distintos: uno es comercial/de dominio (¿puede este negocio usar la capacidad?),
+            // el otro es que el propio negocio nunca prendió el módulo de tiqueteras.
+            const negocio = await Models.GenerNegocio.findByPk(idNegocio, {
+                attributes: ['id_negocio', 'permite_cuentas_cliente'],
+                transaction: contexto.transaction,
+            });
+            if (!negocio?.permite_cuentas_cliente) {
+                const e = new Error('Este restaurante no maneja tiqueteras ni cuentas de cliente.');
+                e.code = 'CUENTAS_NO_HABILITADAS';
+                e.statusCode = 403;
+                throw e;
+            }
+
+            // Sin teléfono probado por el canal no hay a quién buscarle cuenta — decir un
+            // número no prueba que sea el suyo, la misma regla que en `consultar_estado_pedido`.
+            const telefono =
+                contexto.principal?.tipo === TIPO.CONTACTO
+                    ? normalizarE164Colombia(contexto.principal.telefono_verificado)
+                    : null;
+            if (!telefono) {
+                const e = new Error('No puedo comprobar tu número desde aquí. Llama al restaurante.');
+                e.code = 'TELEFONO_NO_VERIFICADO';
+                e.statusCode = 403;
+                throw e;
+            }
+
+            const cuenta = await cuentaService.buscarCuentaPorTelefono({
+                idNegocio,
+                telefono,
+                transaction: contexto.transaction,
+            });
+            if (!cuenta) {
+                const e = new Error('No encuentro ninguna cuenta o tiquetera a tu nombre.');
+                e.code = 'CUENTA_NO_ENCONTRADA';
+                e.statusCode = 404;
+                throw e;
+            }
+
+            return {
+                modo: cuenta.modo,
+                saldo: cuenta.modo === cuentaService.MODO.DINERO ? precio(cuenta.saldo) : null,
+                disponible: cuenta.modo === cuentaService.MODO.DINERO ? precio(cuenta.disponible) : null,
+                tiquetes:
+                    cuenta.modo === cuentaService.MODO.TIQUETES
+                        ? cuenta.tiquetes.map((t) => ({ producto: t.producto, disponibles: t.disponibles }))
+                        : null,
             };
         },
     });
@@ -512,6 +568,29 @@ function registrarCapacidades() {
         },
 
         async ejecutar({ idNegocio, args, contexto }) {
+            // ── 0. El horario de atención del negocio ─────────────────────────────────────
+            //
+            // Va ANTES que la caja porque son dos preguntas distintas y el cliente necesita
+            // saber cuál de las dos es: «estamos cerrados por hoy» no es «ya es hora, pero
+            // todavía no hemos abierto la caja» — la primera dice que vuelva otro día o más
+            // tarde, la segunda que espere un momento. `estaAbierto` devuelve `configurado:
+            // false` cuando el negocio nunca cargó un horario propio, y entonces no hay nada
+            // que comprobar aquí — sin horario cargado, esto no restringe nada (ver
+            // `migrate_restaurante_horario.js`).
+            const horario = await horarioService.estaAbierto({
+                idNegocio,
+                transaction: contexto.transaction,
+            });
+            if (horario.configurado && !horario.abierto) {
+                const e = new Error(
+                    'Ahora mismo estamos fuera de nuestro horario de atención. Te atendemos ' +
+                        'apenas sea posible. Si quieres, puedes ir mirando la carta mientras tanto.'
+                );
+                e.code = 'FUERA_DE_HORARIO_ATENCION';
+                e.statusCode = 409;
+                throw e;
+            }
+
             // ── 1. La caja tiene que estar abierta ────────────────────────────────────────
             //
             // Es una regla del negocio, no un obstáculo que rodear: una orden no existe fuera
@@ -523,11 +602,20 @@ function registrarCapacidades() {
             // entre esta comprobación y la creación de la orden. Su error se traduce a uno que
             // un cliente entienda: el suyo habla de turnos de caja, que no significa nada para
             // quien solo quiere una hamburguesa.
+            //
+            // El mensaje cambia si YA sabemos que estamos en horario de atención: «cerrado»
+            // a secas confundiría a alguien que está viendo el horario publicado y ve que
+            // debería estar abierto — lo que pasa es que nadie ha abierto la caja todavía.
             try {
                 await cajaService.requireCajaAbierta(idNegocio, { transaction: contexto.transaction });
             } catch (_) {
-                const e = new Error('El restaurante está cerrado ahora mismo y no puedo tomar pedidos.');
-                e.code = 'RESTAURANTE_CERRADO';
+                const e = new Error(
+                    horario.configurado
+                        ? 'Ya estamos en nuestro horario de atención, pero el restaurante todavía ' +
+                              'no ha abierto. Danos un momento y vuelve a escribir.'
+                        : 'El restaurante está cerrado ahora mismo y no puedo tomar pedidos.'
+                );
+                e.code = horario.configurado ? 'NEGOCIO_AUN_NO_ABRE' : 'RESTAURANTE_CERRADO';
                 e.statusCode = 409;
                 throw e;
             }
@@ -605,6 +693,33 @@ function registrarCapacidades() {
                 throw e;
             }
 
+            // ── El domiciliario, al azar ──────────────────────────────────────────────────
+            //
+            // Un pedido a domicilio tomado por el bot no tiene a nadie del negocio decidiendo
+            // quién lo lleva — a diferencia del POS, donde un humano lo asigna a mano o lo deja
+            // para después. Sin esto, el pedido llegaba a Despacho sin domiciliario y alguien
+            // tenía que asignarlo ahí, a mano, cada vez. El reparto es arbitrario a propósito
+            // (ver `elegirDomiciliarioAlAzar`): repartir la carga de verdad es una decisión de
+            // negocio que nadie ha tomado todavía.
+            //
+            // Si el negocio no tiene NINGÚN domiciliario registrado, se rechaza en vez de crear
+            // un domicilio que nadie va a llevar — el mismo criterio que `SIN_PROFESIONAL` en
+            // `reserva`.
+            let idDomiciliario = null;
+            if (esDomicilio) {
+                idDomiciliario = await pedidoService.elegirDomiciliarioAlAzar(idNegocio, {
+                    transaction: contexto.transaction,
+                });
+                if (!idDomiciliario) {
+                    const e = new Error(
+                        'No tengo domiciliarios disponibles ahora mismo. Llama al restaurante para tu domicilio.'
+                    );
+                    e.code = 'SIN_DOMICILIARIO_DISPONIBLE';
+                    e.statusCode = 409;
+                    throw e;
+                }
+            }
+
             // ── El método de pago ────────────────────────────────────────────────────────
             //
             // **No se valida aquí a propósito.** `pedidoService.validarMetodoPagoParaNegocio` ya
@@ -626,6 +741,8 @@ function registrarCapacidades() {
                     contactoTelefono: telefono,
                     // Nula en un pedido para recoger: no hay a dónde llevarlo.
                     direccionDomicilio: esDomicilio ? direccion : null,
+                    // Al azar, y solo para domicilio — ver el bloque de arriba.
+                    idDomiciliario,
                     // La nota SÍ va en los dos casos, aunque la columna se llame «de
                     // domicilio»: es el campo que la pantalla de despacho pinta como «Nota»
                     // para cualquier tipo de pedido. Mandarla al `nota` de la orden sería más
@@ -654,6 +771,243 @@ function registrarCapacidades() {
                 estado: orden.estado,
                 total: precio(orden.total),
                 items: args.items.length,
+            };
+        },
+    });
+
+    registry.registrar({
+        nombre: 'cancelar_pedido',
+        descripcion:
+            'Cancela un pedido del cliente, por su número. Úsala cuando pida anularlo o diga ' +
+            'que se equivocó. Solo funciona si la cocina todavía no lo ha empezado a preparar: ' +
+            'si ya está en preparación o ya se cobró, se rechaza y hay que decirle que llame ' +
+            'al restaurante. Al pedirla, el negocio le enseña al cliente una pregunta de ' +
+            'confirmación y no se ejecuta hasta que diga sí: no le digas que ya está cancelado.',
+        vertical: VERTICAL,
+        tipo: registry.TIPO.MUTACION,
+        // Cancelar dos veces el mismo pedido no lo cancela dos veces: la segunda vez
+        // `cancelarPorCliente` rechaza con ORDEN_YA_CANCELADA en vez de repetir el efecto.
+        idempotente: true,
+        confirmacion: {
+            // Se nombran los PRODUCTOS y no solo el número de orden — pedido del dueño: un
+            // número no le dice nada al cliente en el momento de decidir, lo que compra es lo
+            // que pidió. Si por lo que sea no se puede leer el detalle (pedido raro, fallo de
+            // consulta), se cae al número — degradar el detalle, nunca tumbar la confirmación
+            // (ADR-010 no la negocia).
+            pregunta: async ({ args, idNegocio }) => {
+                const numero = String(args.numero_orden || '').trim();
+                try {
+                    const orden = await Models.PedidOrden.findOne({
+                        where: { id_negocio: idNegocio, numero_orden: numero },
+                        attributes: ['id_orden'],
+                    });
+                    if (!orden) throw new Error('pedido no encontrado');
+
+                    const detalles = await Models.PedidDetalle.findAll({
+                        where: { id_orden: orden.id_orden },
+                        attributes: ['cantidad'],
+                        include: [{ model: Models.CartaProducto, as: 'producto', attributes: ['nombre'] }],
+                    });
+                    const nombres = detalles
+                        .filter((d) => d.producto?.nombre)
+                        .map((d) => (Number(d.cantidad) > 1 ? `${d.cantidad} ${d.producto.nombre}` : d.producto.nombre));
+                    if (nombres.length === 0) throw new Error('sin detalle que mostrar');
+
+                    return `¿Estás seguro de cancelar tu pedido de: ${nombres.join(', ')}?`;
+                } catch (error) {
+                    console.warn(
+                        `[cancelar_pedido] no se pudo detallar en la confirmación: ${error.message}`
+                    );
+                    return `¿Estás seguro de cancelar tu pedido ${numero}?`;
+                }
+            },
+            hecho: () => 'Tu pedido fue cancelado.',
+        },
+        feature: FEATURE.ASISTENTE_IA,
+        parametros: {
+            numero_orden: { tipo: 'string', requerido: true, max_longitud: 40 },
+        },
+
+        async ejecutar({ idNegocio, args, contexto }) {
+            // Misma búsqueda y misma comprobación de pertenencia que `consultar_estado_pedido`:
+            // el número de orden es corto y adivinable, así que sin esto cualquiera podría
+            // cancelar el pedido de otro. Se hace aquí, en el adaptador, porque es sobre
+            // `telefono_verificado` del Principal — un concepto de canal que `pedidoService`
+            // no tiene por qué conocer (ADR-009).
+            const orden = await Models.PedidOrden.findOne({
+                where: { id_negocio: idNegocio, numero_orden: String(args.numero_orden).trim() },
+                attributes: ['id_orden', 'contacto_telefono'],
+                transaction: contexto.transaction,
+            });
+            if (!orden) {
+                const e = new Error('No encuentro ese pedido.');
+                e.code = 'PEDIDO_NO_ENCONTRADO';
+                e.statusCode = 404;
+                throw e;
+            }
+            if (contexto.principal && contexto.principal.tipo === TIPO.CONTACTO) {
+                const deQuienPide = normalizarE164Colombia(contexto.principal.telefono_verificado);
+                const delPedido = normalizarE164Colombia(orden.contacto_telefono);
+                if (!deQuienPide || !delPedido || deQuienPide !== delPedido) {
+                    const e = new Error(
+                        'No puedo comprobar que ese pedido sea tuyo. Llama al restaurante y te lo cancelan.'
+                    );
+                    e.code = 'PEDIDO_NO_ES_DE_QUIEN_PIDE';
+                    e.statusCode = 403;
+                    throw e;
+                }
+            }
+
+            const cancelado = await pedidoService.cancelarPorCliente(orden.id_orden, {
+                idNegocio,
+                transaction: contexto.transaction,
+            });
+
+            return {
+                numero_orden: cancelado.numero_orden,
+                estado: cancelado.estado,
+            };
+        },
+    });
+
+    registry.registrar({
+        nombre: 'agregar_items_pedido',
+        descripcion:
+            'Agrega productos a un pedido que el cliente YA PUSO, por su número. Úsala cuando ' +
+            'diga "también quiero...", "se me olvidó..." o "añádele..." sobre un pedido que ya ' +
+            'confirmó — nunca para el primer pedido, para eso está tomar_pedido. Solo funciona ' +
+            'si la cocina todavía no lo ha empezado a preparar: si ya está en preparación o ya ' +
+            'se cobró, se rechaza y hay que decirle que llame al restaurante. Al pedirla, el ' +
+            'negocio le enseña al cliente una pregunta de confirmación y no se ejecuta hasta ' +
+            'que diga sí: no le digas que ya está agregado.',
+        vertical: VERTICAL,
+        tipo: registry.TIPO.MUTACION,
+        // Igual que `tomar_pedido`: no es idempotente. Dos llamadas agregan dos veces, porque
+        // no hay nada que la segunda encuentre ya gastado.
+        idempotente: false,
+        confirmacion: {
+            pregunta: async ({ args, idNegocio }) => {
+                const items = Array.isArray(comoLista(args.items)) ? comoLista(args.items) : [];
+                const cabecera = `¿Agrego esto a tu pedido ${args.numero_orden}?`;
+
+                // Mismo criterio que en `tomar_pedido`: se relee del catálogo y cualquier fallo
+                // degrada el detalle, nunca tumba la confirmación (ADR-010 no la negocia).
+                try {
+                    const ids = items
+                        .map((i) => Number(i?.id_producto))
+                        .filter((n) => Number.isInteger(n) && n > 0);
+                    if (ids.length === 0) throw new Error('sin ids utilizables');
+
+                    const productos = await Models.CartaProducto.findAll({
+                        where: { id_negocio: idNegocio, id_producto: ids },
+                        attributes: ['id_producto', 'nombre', 'precio'],
+                    });
+                    const porId = new Map(productos.map((p) => [p.id_producto, p]));
+
+                    let total = 0;
+                    const lineas = items.map((i) => {
+                        const p = porId.get(Number(i?.id_producto));
+                        const cantidad = Number(i?.cantidad) || 1;
+                        if (!p) throw new Error('un producto ya no está en la carta');
+                        const subtotal = Number(p.precio) * cantidad;
+                        total += subtotal;
+                        return `• ${cantidad} × ${p.nombre} — ${enPesos(subtotal)}`;
+                    });
+
+                    return [cabecera, '', ...lineas, '', `*Se suma: ${enPesos(total)}*`].join('\n');
+                } catch (error) {
+                    console.warn(
+                        `[agregar_items_pedido] no se pudo detallar en la confirmación: ${error.message}`
+                    );
+                    return cabecera;
+                }
+            },
+            hecho: ({ resultado }) =>
+                `¡Listo! Se lo agregué a tu pedido ${resultado.numero_orden}. ` +
+                `Nuevo total: ${enPesos(resultado.total)} (el precio puede variar por empaques y domicilio).`,
+        },
+        feature: FEATURE.ASISTENTE_IA,
+        parametros: {
+            numero_orden: { tipo: 'string', requerido: true, max_longitud: 40 },
+            items: {
+                tipo: 'lista',
+                requerido: true,
+                min_items: 1,
+                max_items: 20,
+                elemento: {
+                    id_producto: { tipo: 'entero', requerido: true, min: 1 },
+                    cantidad: { tipo: 'entero', requerido: true, min: 1, max: 50 },
+                },
+            },
+        },
+
+        async ejecutar({ idNegocio, args, contexto }) {
+            // Misma búsqueda y misma comprobación de pertenencia que `cancelar_pedido` y
+            // `consultar_estado_pedido`: el número de orden es corto y adivinable.
+            const orden = await Models.PedidOrden.findOne({
+                where: { id_negocio: idNegocio, numero_orden: String(args.numero_orden).trim() },
+                attributes: ['id_orden', 'contacto_telefono'],
+                transaction: contexto.transaction,
+            });
+            if (!orden) {
+                const e = new Error('No encuentro ese pedido.');
+                e.code = 'PEDIDO_NO_ENCONTRADO';
+                e.statusCode = 404;
+                throw e;
+            }
+            if (contexto.principal && contexto.principal.tipo === TIPO.CONTACTO) {
+                const deQuienPide = normalizarE164Colombia(contexto.principal.telefono_verificado);
+                const delPedido = normalizarE164Colombia(orden.contacto_telefono);
+                if (!deQuienPide || !delPedido || deQuienPide !== delPedido) {
+                    const e = new Error(
+                        'No puedo comprobar que ese pedido sea tuyo. Llama al restaurante.'
+                    );
+                    e.code = 'PEDIDO_NO_ES_DE_QUIEN_PIDE';
+                    e.statusCode = 403;
+                    throw e;
+                }
+            }
+
+            // Los productos, releídos del dominio — misma razón que en `tomar_pedido`: no se
+            // confía en un precio que la conversación pueda recordar mal.
+            const idsPedidos = args.items.map((i) => Number(i.id_producto));
+            const productos = await Models.CartaProducto.findAll({
+                where: {
+                    id_negocio: idNegocio,
+                    id_producto: idsPedidos,
+                    estado: 'A',
+                    disponible: true,
+                    visible: true,
+                },
+                attributes: ['id_producto', 'nombre', 'precio'],
+                transaction: contexto.transaction,
+            });
+            const porId = new Map(productos.map((pr) => [pr.id_producto, pr]));
+            const faltantes = idsPedidos.filter((id) => !porId.has(id));
+            if (faltantes.length > 0) {
+                const e = new Error(
+                    'Alguno de esos productos ya no está disponible. Vuelve a consultar la carta ' +
+                        'antes de prometer nada.'
+                );
+                e.code = 'PRODUCTO_NO_DISPONIBLE';
+                e.statusCode = 409;
+                throw e;
+            }
+
+            const actualizada = await pedidoService.agregarItemsPorCliente(orden.id_orden, {
+                idNegocio,
+                items: args.items.map((i) => ({
+                    id_producto: Number(i.id_producto),
+                    cantidad: Number(i.cantidad) || 1,
+                    precio_unitario: Number(porId.get(Number(i.id_producto)).precio),
+                })),
+                transaction: contexto.transaction,
+            });
+
+            return {
+                numero_orden: actualizada.numero_orden,
+                total: precio(actualizada.total),
+                items_agregados: args.items.length,
             };
         },
     });

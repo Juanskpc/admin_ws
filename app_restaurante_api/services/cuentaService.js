@@ -258,6 +258,33 @@ async function getCuenta({ idNegocio, idCuenta, transaction = null }) {
     };
 }
 
+/**
+ * Encuentra la cuenta de UN cliente por su teléfono, para que el propio cliente pueda
+ * consultar su saldo por WhatsApp (Policy Gate) sin conocer su `id_cuenta`.
+ *
+ * `telefono` debe llegar ya normalizado a E.164 — quien llama (el adaptador de
+ * `intelligence/`) es responsable de eso, igual que hace `consultar_estado_pedido` antes de
+ * comparar contra `contacto_telefono`. Este servicio no sabe de canales ni de Principal
+ * (ADR-009): solo compara contra `persona_negocio.telefono_e164`.
+ */
+async function buscarCuentaPorTelefono({ idNegocio, telefono, transaction = null }) {
+    if (!telefono) return null;
+
+    const [fila] = await sequelize.query(
+        `
+        SELECT c.id_cuenta
+          FROM restaurante.rest_cuenta c
+          JOIN platform.persona_negocio pn
+            ON pn.id_persona_negocio = c.id_persona_negocio AND pn.id_negocio = c.id_negocio
+         WHERE c.id_negocio = :idNegocio AND c.estado <> 'E' AND pn.telefono_e164 = :telefono
+        `,
+        { replacements: { idNegocio, telefono }, type: sequelize.QueryTypes.SELECT, transaction },
+    );
+    if (!fila) return null;
+
+    return getCuenta({ idNegocio, idCuenta: fila.id_cuenta, transaction });
+}
+
 async function listarMovimientos({ idNegocio, idCuenta, limite = 100, offset = 0 }) {
     return sequelize.query(
         `
@@ -914,6 +941,7 @@ module.exports = {
     TIPO,
     listarCuentas,
     getCuenta,
+    buscarCuentaPorTelefono,
     listarMovimientos,
     crearCuenta,
     actualizarCuenta,

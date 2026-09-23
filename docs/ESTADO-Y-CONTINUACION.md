@@ -1,6 +1,13 @@
 # EscalApp Intelligence — estado y cómo continuar
 
-**Última actualización:** 2026-09-15 (**Clientes/tiqueteras rehecho, sin commitear ni desplegar** — pendientes al inicio de §4-0.13. Antes, 2026-09-14: **reunión con Factus**: una cuenta por cliente, sin exclusividad y paquetes/bolsa combinables — FE-2 ya se puede diseñar; resumen en §4-0.12. Antes, 2026-09-13: sesión de **exploración de ser proveedor tecnológico**: una empresa socia cumple los requisitos de patrimonio, y con eso se reabre lo que ADR-026 había cerrado —sin detener Factus—; el resumen está en §4-0.11, **que empieza con la lista de lo que se está esperando**. Las anteriores: decisión del modelo de facturación en §4-0.10, volumen real y lista de precios de Factus en §4-0.9, App Review de Meta en §4-0.8, proveedor de facturación y precios en §4-0.7)
+**Última actualización:** 2026-09-19/20 (**F8-D — Embedded Signup, Opción B, IMPLEMENTADO Y PROBADO
+EN PRODUCCIÓN.** Backend + panel construidos y desplegados, primera conexión real de punta a punta
+contra la cuenta de Meta (no un doble), botón de autoservicio para desconectar, y la pregunta de
+"¿quién paga?" contestada con evidencia real — el cliente, en una cuenta separada de la de
+EscalApp, nunca la nuestra. Detalle completo, con las trampas encontradas, en
+[`embedded-signup.md`](embedded-signup.md) §9. Lo único pendiente ya no es código: conectar a un
+cliente real. Antes, 2026-09-15: **Clientes/tiqueteras rehecho, sin commitear ni desplegar** —
+pendientes al inicio de §4-0.13. Antes, 2026-09-14: **reunión con Factus**: una cuenta por cliente, sin exclusividad y paquetes/bolsa combinables — FE-2 ya se puede diseñar; resumen en §4-0.12. Antes, 2026-09-13: sesión de **exploración de ser proveedor tecnológico**: una empresa socia cumple los requisitos de patrimonio, y con eso se reabre lo que ADR-026 había cerrado —sin detener Factus—; el resumen está en §4-0.11, **que empieza con la lista de lo que se está esperando**. Las anteriores: decisión del modelo de facturación en §4-0.10, volumen real y lista de precios de Factus en §4-0.9, App Review de Meta en §4-0.8, proveedor de facturación y precios en §4-0.7)
 **Propósito:** que retomar el trabajo no cueste una sesión de arqueología. Si vuelves a este
 proyecto después de semanas, **lee este documento primero** y sigue por donde diga.
 
@@ -3249,6 +3256,7 @@ estado por consumidor y la Ficha 360 no agrega verticales vacías.
 | **Encender un productor de eventos rompe los tests que cuentan lotes** | Desde F8-B `reserva` emite `cita.creada.v1` de verdad, así que `platform.outbox` deja de estar vacío y `expect(res.entregados).toBe(1)` en la suite del relay pasa a depender de lo que hayan dejado las otras suites. Es la **tercera** aparición de la misma lección —ya estaba escrita para los contadores del entregador y para los agregados por negocio—: los asertos van sobre **la fila**, y un consumidor de prueba se registra con `patron` aunque no lo necesite, o recibirá también los eventos reales. |
 | **Añadir backoff rompe los tests que cuentan intentos** | Los dos casos de dead letter de `canal.test.js` llamaban a `entregarUnaVez()` tres veces seguidas esperando tres intentos. Con la curva puesta, el segundo no reintenta nada y el test mide el reloj en vez del entregador. No se arregla quitando el backoff: se pone su techo a cero en ese `describe` y la espera se prueba donde la espera **es** lo que se comprueba (`ventana.test.js`). |
 | **Procesos zombis en el puerto** | Ver §3. |
+| **Subir a GitHub no despliega nada — dos veces la misma sesión** | El 2026-09-19, al probar Embedded Signup en producción, un arreglo (backend) se commiteó y se subió a `origin/master` pero **nunca se le hizo `git pull` al VPS**: el servidor siguió corriendo la versión vieja y falló con un error de SQL que ya estaba arreglado en el repo. Minutos después pasó lo mismo con el **frontend**: se compiló, se commiteó, se subió a GitHub — y nunca se volvió a `scp`+extraer el build nuevo a `/var/www/html/admin`, así que un botón que sí existía en el código no aparecía en la pantalla. Los dos casos se notaron por el síntoma, no por revisión. La lección: "commitear y subir a GitHub" y "compilar y desplegar al VPS" son **dos pasos separados** y el primero no implica el segundo — conviene tratarlos como el mismo paso, no como uno seguido del otro por costumbre. Ver `embedded-signup.md` §9.5. |
 
 ---
 
@@ -3266,6 +3274,7 @@ estado por consumidor y la Ficha 360 no agrega verticales vacías.
 | `desarrollo-local.md` | Montar el entorno local desde cero. |
 | `nivel-4.md` | Qué modelo sirve el Nivel 4, por qué diverge del id que nombra ADR-018 y qué señales hay que vigilar. |
 | `canal-whatsapp.md` | El canal de WhatsApp de punta a punta: F8-A/B/C, los límites de Meta confirmados en la fuente, **las tres trampas silenciosas del alta (2026-08-24)**, cómo cobra Meta, y qué haría falta para dar de alta el número de un cliente. |
+| `embedded-signup.md` | **F8-D — Opción B, implementado y probado en producción (2026-09-19).** El código capa por capa, y §9: la primera conexión real, la pregunta de quién paga contestada con evidencia, las dos trampas de datos (`numero_e164`, `waba_id`≠`business_id`) y la del despliegue olvidado dos veces la misma sesión. |
 | `meta-app-review.md` | **El trámite del App Review de Meta**: qué revisa de verdad (los tres trámites que se confunden en uno), la comparación entre lo que ya tenemos y lo que falta, el guion de los dos videos y los textos en inglés listos para pegar. |
 | `mejoras-flujo-agenda.md` | Las mejoras del flujo de agendamiento pedidas tras la primera prueba real, y el prerrequisito de seguridad que esconde el cambio del código de cita. |
 | `asistente-restaurante.md` | La vertical de restaurante: sus cuatro capacidades, los tres obstáculos de `tomar_pedido` y cómo se resolvieron, y el pedido armado desde el menú digital con su contrato entre repos. |
@@ -3300,6 +3309,8 @@ estado por consumidor y la Ficha 360 no agrega verticales vacías.
 | Recordatorios proactivos (F8-B) | motor: `intelligence/recordatorios/index.js` · quien sabe leer una cita: `intelligence/adapters/reserva/recordatorios.js` |
 | Recorrido del canal sin cuenta de Meta | `scripts/whatsapp_e2e.js` |
 | Todo lo de WhatsApp explicado | `docs/canal-whatsapp.md` |
+| Embedded Signup — el cliente conecta su propio número (F8-D) | `app_core/whatsapp/` — `embeddedSignupApi.js` (Graph API, fuera de `intelligence/` a propósito, ver su cabecera) · `canalEmbeddedSignup.js` (conectar/desconectar/estado) · `app_core/helpers/credencialCifrada.js` (AES-256-GCM genérico) · endpoint: `app_admin_api/controllers/canalWhatsappController.js` · panel: `admin_app-v21` → `/admin/canal-whatsapp`, con botón de autoservicio para desconectar |
+| Todo lo de Embedded Signup explicado, con la prueba real | `docs/embedded-signup.md` §9 |
 | Leer «sí», «cancelar» y una ráfaga (F7) | `intelligence/engine/texto.js` — compartido por la FSM y la confirmación |
 | Arnés de evaluación (F6) | `intelligence/evaluacion/` · CLI: `scripts/evaluar.js` (`npm run evaluar`) |
 | Proveedores, modelos, tarifas y cómo se elige | `docs/nivel-4.md` |

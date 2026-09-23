@@ -20,6 +20,7 @@ const CajaController       = require('../controllers/cajaController');
 const PuntoCajaController  = require('../controllers/puntoCajaController');
 const MetodoPagoController = require('../controllers/metodoPagoController');
 const CartaDisenoController = require('../controllers/cartaDisenoController');
+const HorarioController    = require('../controllers/horarioController');
 const { verificarToken }   = require('../../app_core/middleware/auth');
 
 // ───────── Multer: imágenes de la carta (productos y categorías) ─────────
@@ -331,6 +332,10 @@ router.patch('/pedidos/:id/agregar-items', [
 	param('id').isInt({ min: 1 }),
 	...PedidoController.agregarItemsOrdenValidators,
 ], PedidoController.agregarItemsOrden);
+router.patch('/pedidos/:id/quitar-items', [
+	param('id').isInt({ min: 1 }),
+	...PedidoController.quitarItemsOrdenValidators,
+], PedidoController.quitarItemsOrden);
 router.patch('/pedidos/detalle/:id/completar',            PedidoController.marcarDetalleCompleto);
 router.get('/pedidos/:id',                                PedidoController.getOrdenById);
 router.patch('/pedidos/:id/enviar-cocina',                PedidoController.enviarACocina);
@@ -347,6 +352,10 @@ router.patch('/pedidos/:id/descuento', [
 	param('id').isInt({ min: 1 }),
 	...PedidoController.actualizarDescuentoValidators,
 ], PedidoController.actualizarDescuento);
+router.patch('/pedidos/:id/domiciliario', [
+	param('id').isInt({ min: 1 }),
+	...PedidoController.asignarDomiciliarioValidators,
+], PedidoController.asignarDomiciliario);
 router.patch('/pedidos/:id/cancelar',                     PedidoController.cancelarOrden);
 router.patch('/pedidos/:id/cerrar', [
 	param('id').isInt({ min: 1 }),
@@ -360,6 +369,9 @@ router.get('/cocina', PedidoController.getOrdenesCocina);
 router.get('/despacho', [
 	query('id_negocio').isInt({ min: 1 }),
 ], PedidoController.getOrdenesDespacho);
+router.get('/despacho/cancelados', [
+	query('id_negocio').isInt({ min: 1 }),
+], PedidoController.getOrdenesCanceladasRecientes);
 router.post('/despacho/:id/avisar-listo', [
 	param('id').isInt({ min: 1 }),
 	...PedidoController.avisarPedidoListoValidators,
@@ -367,6 +379,17 @@ router.post('/despacho/:id/avisar-listo', [
 router.get('/domiciliarios', [
 	query('id_negocio').isInt({ min: 1 }),
 ], PedidoController.getDomiciliarios);
+
+// --- Horarios (del negocio y de sus domiciliarios) ---
+router.get('/horarios', [query('id_negocio').isInt({ min: 1 })], HorarioController.listar);
+router.put('/horarios', [
+	body('id_negocio').isInt({ min: 1 }),
+	body('id_usuario').optional({ nullable: true }).isInt({ min: 1 }),
+	body('bloques').isArray(),
+	body('bloques.*.dia_semana').isInt({ min: 0, max: 6 }),
+	body('bloques.*.hora_inicio').matches(/^\d{2}:\d{2}(:\d{2})?$/),
+	body('bloques.*.hora_fin').matches(/^\d{2}:\d{2}(:\d{2})?$/),
+], HorarioController.reemplazar);
 
 // --- Inventario ---
 router.get('/inventario/resumen', InventarioController.getResumenInventario);

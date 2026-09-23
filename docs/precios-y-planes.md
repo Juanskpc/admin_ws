@@ -188,6 +188,13 @@ mes, ya pagamos $820.000 y cobramos $198.000. Tres salidas, sin decidir todavía
 
 Lo que no hay que hacer es anunciar «facturación desde $39.000 al mes» sin haber elegido una.
 
+⚠️ **Cerrado el 2026-09-15: no existe paquete mensual de Factus.** Se esperaba que lo hubiera —sus
+Términos y Condiciones §f.2 mencionan «de manera mensual o anual»— porque habría resuelto buena
+parte de este problema solo. Por escrito confirmaron lo contrario: *«nuestros paquetes son anuales,
+tanto en individuales como en bolsas»* (`facturacion-electronica.md` §8.2-sexies). Las tres salidas
+de arriba siguen siendo las únicas, y no hay que decidir cuál hasta que exista un cliente real:
+firmar la alianza con Factus no obliga a comprar nada todavía.
+
 ---
 
 ## 4. ⚠️ El 1 de octubre de 2026 WhatsApp deja de ser gratis

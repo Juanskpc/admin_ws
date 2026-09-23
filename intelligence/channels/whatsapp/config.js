@@ -142,11 +142,24 @@ function numeroDeNegocio(idNegocio) {
     return numeros.numeroDe(idNegocio);
 }
 
+/**
+ * El token con el que enviar por este negocio (F8-D, Embedded Signup).
+ *
+ * Si el negocio conectó su propio número, es el suyo (descifrado, ya en memoria vía
+ * `numeros.js`). Si no — alta manual, o no tiene número — es `null`, y quien llama debe caer al
+ * token global de `leer().token`. Nunca al revés: preferir el propio cuando existe es lo que
+ * evita mandar por la WABA equivocada.
+ */
+function tokenDeNegocio(idNegocio) {
+    return numeros.tokenDeNegocio(idNegocio);
+}
+
 module.exports = {
     leer,
     habilitado,
     estado,
     resolverNegocio,
     numeroDeNegocio,
+    tokenDeNegocio,
     VERSION_API,
 };

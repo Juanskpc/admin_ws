@@ -309,7 +309,25 @@ async function ejecutar({
     // Va después de validar los argumentos porque la prueba se ata a **estos** argumentos: no
     // sirve un sí genérico, sirve el sí a lo que se le preguntó. Y va antes de ejecutar, que es
     // lo único que de verdad importa aquí.
-    if (registry.requiereConfirmacion(capacidad) && !esConfirmacionValida(confirmadoPor)) {
+    //
+    // ## Por qué esto no corta siempre en el mismo sitio (2026-09-21)
+    //
+    // Sin prueba y SIN dry-run, es el intento real de saltarse el paso 5: se corta aquí, sin
+    // tocar el dominio. Pero con dry-run se deja **seguir** a propósito — el bloque de después
+    // de ejecutar, más abajo, es el que vuelve a denegar al final — porque es la única forma de
+    // que el modelo descubra ANTES de preguntar que el negocio está cerrado, en vez de después
+    // de que el cliente ya dijo que sí a una pregunta que de todos modos iba a fallar.
+    //
+    // Pasó en producción el 2026-09-21: el cliente llegó hasta «¿confirmo tu pedido?», dijo que
+    // sí, y ENTONCES se enteró de que el restaurante estaba cerrado — porque `requireCajaAbierta`
+    // vive dentro de `tomar_pedido.ejecutar`, y `ejecutar` nunca se llegaba a invocar sin la
+    // prueba. El manejador de modelo YA hace una llamada de prueba antes de preguntar
+    // (`ejecutarSolicitud`, intelligence/engine/manejadorLlm.js) esperando que esto deniegue por
+    // falta de confirmación; dejarla continuar en seco es lo que hace que esa llamada también
+    // vea el «restaurante cerrado», sin gastar nada real: un dry-run se deshace siempre, pase lo
+    // que pase dentro.
+    const sinConfirmar = registry.requiereConfirmacion(capacidad) && !esConfirmacionValida(confirmadoPor);
+    if (sinConfirmar && !dryRun) {
         const error = denegar(
             DENEGADO.SIN_CONFIRMAR,
             `La capacidad "${nombre}" exige confirmación humana explícita y la invocación no ` +
@@ -383,6 +401,34 @@ async function ejecutar({
                     transaction,
                 }
             );
+        }
+
+        // ── El corte que faltaba: llegar aquí sin confirmación significa que el DOMINIO sí lo
+        // habría permitido — caja abierta, horario, stock, todo lo que `ejecutar` comprueba
+        // pasó —, pero eso no es el sí del cliente. ADR-010 exige la prueba para EJECUTAR, no
+        // para saber que se podría.
+        //
+        // Se lanza ANTES del rollback de abajo y no después, a propósito: así la transacción
+        // sigue abierta cuando esto lanza, y es el `catch` de siempre —el que ya usa cualquier
+        // otro fallo de `ejecutar`— el que la cierra una vez. Cerrarla aquí Y dejar que el catch
+        // la cierre otra vez revienta con «Transaction cannot be rolled back because it has been
+        // finished» — se pagó ese error escribiendo esto la primera vez.
+        if (sinConfirmar) {
+            const error = denegar(
+                DENEGADO.SIN_CONFIRMAR,
+                `La capacidad "${nombre}" exige confirmación humana explícita y la invocación no ` +
+                    'la trae. El modelo puede proponer; solo el cliente dispara (ADR-010).'
+            );
+            await auditar({
+                nombre,
+                idNegocio,
+                principal,
+                args: limpios,
+                resultado: 'denegado',
+                dryRun,
+                detalle: { motivo: error.code, paso_de_prueba_ok: true },
+            });
+            throw error;
         }
 
         if (dryRun) {

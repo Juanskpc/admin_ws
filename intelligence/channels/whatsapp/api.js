@@ -1,5 +1,14 @@
 /**
- * Cliente de la Cloud API — el único sitio de todo el proyecto que le habla a Meta (F8-A).
+ * Cliente de la Cloud API — el único sitio del proyecto que envía mensajes a Meta (F8-A).
+ *
+ * ⚠️ **Ya no es "el único sitio que le habla a Meta" en sentido literal** desde F8-D (Embedded
+ * Signup): `app_core/whatsapp/embeddedSignupApi.js` también habla con Meta, pero con la Graph API
+ * de Business Management (OAuth de un cliente, gestión de su WABA), no con la Cloud API de
+ * mensajería de aquí. Son dos productos distintos de Meta, con ciclos de vida de token distintos
+ * (el de aquí es un token de sistema de larga duración; el de allá es un token corto de usuario
+ * canjeado una vez por conexión) y llamadores distintos (Intelligence manda mensajes en cada
+ * turno; `app_admin_api` llama al otro una vez, cuando un negocio conecta su número). Viven
+ * separados a propósito — ver la cabecera de `embeddedSignupApi.js` para el porqué de fronteras.
  *
  * ## Por qué está aislado en un archivo de veinte líneas útiles
  *
@@ -83,6 +92,7 @@ async function enviarMensaje({
     // El respaldo al global solo aplica cuando no se pasa negocio (llamadas antiguas y pruebas).
     // Si se pasa un negocio y no tiene número, se falla: mandar «por el que haya» es el fallo.
     let phoneNumberId = c.phoneNumberId;
+    let token = c.token;
     if (idNegocio) {
         phoneNumberId = config.numeroDeNegocio ? config.numeroDeNegocio(idNegocio) : null;
         if (!phoneNumberId) {
@@ -91,9 +101,14 @@ async function enviarMensaje({
                 { code: 'WHATSAPP_NEGOCIO_SIN_NUMERO', reintentable: false }
             );
         }
+        // Si conectó su propio número (Embedded Signup), se manda con SU token — nunca con el
+        // global, que ni siquiera tendría permiso sobre su WABA. Si no tiene uno propio (alta
+        // manual), se cae al global, igual que hoy.
+        const tokenPropio = config.tokenDeNegocio ? config.tokenDeNegocio(idNegocio) : null;
+        token = tokenPropio ?? c.token;
     }
 
-    if (!c.token || !phoneNumberId) {
+    if (!token || !phoneNumberId) {
         throw fallo('El canal de WhatsApp no está configurado (falta token o número).', {
             code: 'WHATSAPP_SIN_CONFIGURAR',
             reintentable: false,
@@ -115,7 +130,7 @@ async function enviarMensaje({
     try {
         respuesta = await fetchImpl(url, {
             method: 'POST',
-            headers: { Authorization: `Bearer ${c.token}`, 'Content-Type': 'application/json' },
+            headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
             body: JSON.stringify(cuerpo),
             signal: control.signal,
         });

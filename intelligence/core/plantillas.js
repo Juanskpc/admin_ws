@@ -113,6 +113,36 @@ const CATALOGO = {
             'Hola {{1}}, tu pedido {{2}} de {{3}} ya está listo y puedes pasar a recogerlo. ' +
             'Si necesitas algo, respóndenos a este mensaje.',
     },
+
+    /**
+     * «Tu pedido está listo, el domiciliario ya va en camino» (2026-09-22).
+     *
+     * Es la plantilla que `pedido_listo` dejó anotada como pendiente desde que nació: «un
+     * domicilio no lo necesita —lo que llega es el domiciliario—, así que su plantilla se
+     * escribirá el día que alguien la pida». Se pidió.
+     *
+     * ## ⚠️ Todavía NO está aprobada en Meta — no tocar `idioma` a la ligera
+     *
+     * Mismo susto que ya costó con `pedido_listo`: Meta busca la plantilla por nombre **más
+     * idioma**, exactos. Hasta que esto se someta al WhatsApp Manager y quede aprobada, el
+     * envío fallará con `(#132001) Template name does not exist` y el mensaje morirá en dead
+     * letter — el negocio creerá que avisó y el cliente no habrá recibido nada. En cuanto Meta
+     * apruebe, este archivo tiene que copiar el `idioma` con el que quedó aprobada tal cual, sin
+     * asumir que será `es_CO` solo porque `pedido_listo` lo fue.
+     *
+     * Mismas dos reglas de Meta que `pedido_listo`: `UTILITY` (es una transacción que el
+     * cliente pidió, no marketing) y no termina en variable (invita a responder, lo que reabre
+     * la ventana de 24 h).
+     */
+    pedido_en_camino: {
+        nombre: 'pedido_en_camino',
+        idioma: 'es_CO',
+        categoria: 'UTILITY',
+        parametros: ['cliente', 'orden', 'negocio'],
+        texto:
+            'Hola {{1}}, tu pedido {{2}} de {{3}} ya está listo y el domiciliario va en camino. ' +
+            'Si necesitas algo, respóndenos a este mensaje.',
+    },
 };
 
 /** La plantilla, o `null` si no está en el catálogo. Nunca lanza: quien decide es el que envía. */

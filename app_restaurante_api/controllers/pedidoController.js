@@ -56,6 +56,15 @@ const agregarItemsOrdenValidators = [
     body('descuento').optional({ nullable: true }).isFloat({ min: 0 }).withMessage('descuento inválido'),
 ];
 
+const quitarItemsOrdenValidators = [
+    body('id_negocio').isInt({ min: 1 }).withMessage('id_negocio inválido'),
+    body('items').isArray({ min: 1 }).withMessage('Debe haber al menos un item'),
+    body('items.*.id_producto').isInt({ min: 1 }).withMessage('id_producto inválido'),
+    body('items.*.cantidad').isInt({ min: 1 }).withMessage('Cantidad mínima: 1'),
+    body('items.*.exclusiones').optional().isArray(),
+    body('items.*.nota').optional({ nullable: true }).isString(),
+];
+
 const marcarPagadoValidators = [
     // Pago simple: id_metodo_pago. Multipago: arreglo pagos[]. Al menos uno.
     body('id_metodo_pago').optional({ nullable: true }).isInt({ min: 1 }).withMessage('id_metodo_pago inválido'),
@@ -77,6 +86,11 @@ const actualizarValorDomicilioValidators = [
 const actualizarDescuentoValidators = [
     body('id_negocio').isInt({ min: 1 }).withMessage('id_negocio inválido'),
     body('descuento').isFloat({ min: 0 }).withMessage('descuento inválido'),
+];
+
+const asignarDomiciliarioValidators = [
+    body('id_negocio').isInt({ min: 1 }).withMessage('id_negocio inválido'),
+    body('id_domiciliario').isInt({ min: 1 }).withMessage('id_domiciliario inválido'),
 ];
 
 /**
@@ -208,6 +222,39 @@ async function agregarItemsOrden(req, res) {
         }
         console.error('[Pedidos] Error agregarItemsOrden:', err.message);
         return Respuesta.error(res, 'Error al agregar items a la orden.');
+    }
+}
+
+/** PATCH /restaurante/pedidos/:id/quitar-items */
+async function quitarItemsOrden(req, res) {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+        return Respuesta.error(res, 'Datos inválidos', 422, errors.array());
+    }
+
+    try {
+        const idOrden = Number(req.params.id);
+        const { id_negocio, items } = req.body;
+
+        const orden = await PedidoService.quitarItemsOrden({
+            idOrden,
+            idNegocio: id_negocio,
+            items,
+        });
+
+        return Respuesta.success(res, 'Items quitados de la orden', orden);
+    } catch (err) {
+        if (err.code === 'CAJA_CERRADA') {
+            return Respuesta.error(res, err.message, err.statusCode || 409, { code: err.code });
+        }
+        if (err.message === 'ORDEN_NO_ENCONTRADA') {
+            return Respuesta.error(res, 'Orden no encontrada o no está abierta', 404);
+        }
+        if (err.statusCode) {
+            return Respuesta.error(res, err.message, err.statusCode, { code: err.code });
+        }
+        console.error('[Pedidos] Error quitarItemsOrden:', err.message);
+        return Respuesta.error(res, 'Error al quitar items de la orden.');
     }
 }
 
@@ -343,6 +390,28 @@ async function actualizarValorDomicilio(req, res) {
     }
 }
 
+/** PATCH /restaurante/pedidos/:id/domiciliario */
+async function asignarDomiciliario(req, res) {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+        return Respuesta.error(res, 'Datos inválidos', 422, errors.array());
+    }
+
+    try {
+        const orden = await PedidoService.asignarDomiciliario(Number(req.params.id), {
+            idNegocio: Number(req.body.id_negocio),
+            idDomiciliario: Number(req.body.id_domiciliario),
+        });
+        return Respuesta.success(res, 'Domiciliario asignado', orden);
+    } catch (err) {
+        if (['ORDEN_NO_ENCONTRADA', 'ORDEN_NO_ABIERTA', 'ORDEN_NO_ES_DOMICILIO', 'DOMICILIARIO_INVALIDO'].includes(err.code)) {
+            return Respuesta.error(res, err.message, err.statusCode || 409, { code: err.code });
+        }
+        console.error('[Pedidos] Error asignarDomiciliario:', err.message);
+        return Respuesta.error(res, 'Error al asignar el domiciliario.');
+    }
+}
+
 /** PATCH /restaurante/pedidos/:id/descuento */
 async function actualizarDescuento(req, res) {
     const errors = validationResult(req);
@@ -427,6 +496,27 @@ async function getOrdenesDespacho(req, res) {
 }
 
 /**
+ * GET /restaurante/despacho/cancelados
+ *
+ * Endpoint aparte —no un campo más de `getOrdenesDespacho`— para no cambiarle la forma de la
+ * respuesta a quien ya consume ese endpoint tal como es hoy: un array plano de pedidos activos.
+ */
+async function getOrdenesCanceladasRecientes(req, res) {
+    try {
+        const idNegocio = Number(req.query.id_negocio);
+        if (!idNegocio) return Respuesta.error(res, 'id_negocio requerido', 400);
+        const ordenes = await PedidoService.getOrdenesCanceladasRecientes({
+            idNegocio,
+            idUsuario: req.usuario.id_usuario,
+        });
+        return Respuesta.success(res, 'Pedidos cancelados recientes', ordenes);
+    } catch (err) {
+        console.error('[Despacho] Error getOrdenesCanceladasRecientes:', err.message);
+        return Respuesta.error(res, 'Error al obtener los pedidos cancelados.');
+    }
+}
+
+/**
  * POST /restaurante/despacho/:id/avisar-listo
  *
  * Le avisa al cliente por WhatsApp que su pedido está listo para recoger.
@@ -480,12 +570,14 @@ async function getDomiciliarios(req, res) {
 module.exports = {
     crearOrden, crearOrdenValidators,
     agregarItemsOrden, agregarItemsOrdenValidators,
+    quitarItemsOrden, quitarItemsOrdenValidators,
     marcarPagadoValidators,
     cerrarOrdenValidators,
     getOrdenesAbiertas,
     getOrdenById,
     getOrdenesCocina,
     getOrdenesDespacho,
+    getOrdenesCanceladasRecientes,
     avisarPedidoListo, avisarPedidoListoValidators,
     getDomiciliarios,
     enviarACocina,
@@ -493,6 +585,7 @@ module.exports = {
     marcarDetalleCompleto,
     marcarPagado,
     actualizarValorDomicilio, actualizarValorDomicilioValidators,
+    asignarDomiciliario, asignarDomiciliarioValidators,
     actualizarDescuento, actualizarDescuentoValidators,
     cancelarOrden,
     cerrarOrden,

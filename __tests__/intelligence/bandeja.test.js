@@ -529,6 +529,110 @@ describe('las pastillas de negocio', () => {
     });
 });
 
+describe('bloquear / desbloquear un número desde el negocio', () => {
+    // Distinto de STOP/BAJA (`optout.test.js`): esto es el NEGOCIO decidiendo que no quiere
+    // seguir sirviendo a un número, no un opt-out legal. Por eso el negocio sí puede deshacer
+    // su propio bloqueo, y por eso hace falta comprobar que NO puede deshacer el de un STOP.
+
+    test('bloquear cierra la puerta: estado bloqueada, bloqueada_por negocio', async () => {
+        const c = await nuevaConversacion({ idNegocio: negocioA });
+
+        const r = await llamar(Bandeja.bloquear, {
+            idUsuario: usuarioA,
+            params: { id: c.id_conversacion },
+        });
+        expect(r.cuerpo.success).toBe(true);
+
+        const fila = await unaFila(
+            `SELECT estado, bloqueada_por FROM intelligence.conversacion WHERE id_conversacion = :id;`,
+            { id: c.id_conversacion }
+        );
+        expect(fila.estado).toBe('bloqueada');
+        expect(fila.bloqueada_por).toBe('negocio');
+    });
+
+    test('bloquear dos veces no es un error', async () => {
+        const c = await nuevaConversacion({ idNegocio: negocioA });
+        const args = { idUsuario: usuarioA, params: { id: c.id_conversacion } };
+        await llamar(Bandeja.bloquear, args);
+        const r = await llamar(Bandeja.bloquear, args);
+        expect(r.cuerpo.success).toBe(true);
+    });
+
+    test('no se puede bloquear la conversación de otro negocio', async () => {
+        const ajena = await nuevaConversacion({ idNegocio: negocioB });
+        const r = await llamar(Bandeja.bloquear, {
+            idUsuario: usuarioA,
+            params: { id: ajena.id_conversacion },
+        });
+        expect(r.statusCode).toBe(404);
+
+        const fila = await unaFila(
+            `SELECT estado FROM intelligence.conversacion WHERE id_conversacion = :id;`,
+            { id: ajena.id_conversacion }
+        );
+        expect(fila.estado).not.toBe('bloqueada');
+    });
+
+    test('el negocio puede deshacer SU PROPIO bloqueo', async () => {
+        const c = await nuevaConversacion({ idNegocio: negocioA });
+        await llamar(Bandeja.bloquear, { idUsuario: usuarioA, params: { id: c.id_conversacion } });
+
+        const r = await llamar(Bandeja.desbloquear, {
+            idUsuario: usuarioA,
+            params: { id: c.id_conversacion },
+        });
+        expect(r.cuerpo.success).toBe(true);
+
+        const fila = await unaFila(
+            `SELECT estado, bloqueada_por FROM intelligence.conversacion WHERE id_conversacion = :id;`,
+            { id: c.id_conversacion }
+        );
+        expect(fila.estado).toBe('activa');
+        expect(fila.bloqueada_por).toBeNull();
+    });
+
+    test('el negocio NO puede deshacer una baja real (STOP/BAJA)', async () => {
+        // Simula lo que deja optout.js: bloqueada_por = 'cliente'. Ver repositorio.guardarEstado.
+        const c = await nuevaConversacion({ idNegocio: negocioA });
+        await sequelize.query(
+            `UPDATE intelligence.conversacion
+                SET estado = 'bloqueada', bloqueada_por = 'cliente'
+              WHERE id_conversacion = :id;`,
+            { replacements: { id: c.id_conversacion }, logging: false }
+        );
+
+        const r = await llamar(Bandeja.desbloquear, {
+            idUsuario: usuarioA,
+            params: { id: c.id_conversacion },
+        });
+        expect(r.statusCode).toBe(409);
+
+        const fila = await unaFila(
+            `SELECT estado, bloqueada_por FROM intelligence.conversacion WHERE id_conversacion = :id;`,
+            { id: c.id_conversacion }
+        );
+        expect(fila.estado).toBe('bloqueada');
+        expect(fila.bloqueada_por).toBe('cliente');
+    });
+
+    test('no se puede desbloquear la de otro negocio', async () => {
+        const ajena = await nuevaConversacion({ idNegocio: negocioB });
+        await sequelize.query(
+            `UPDATE intelligence.conversacion
+                SET estado = 'bloqueada', bloqueada_por = 'negocio'
+              WHERE id_conversacion = :id;`,
+            { replacements: { id: ajena.id_conversacion }, logging: false }
+        );
+
+        const r = await llamar(Bandeja.desbloquear, {
+            idUsuario: usuarioA,
+            params: { id: ajena.id_conversacion },
+        });
+        expect(r.statusCode).toBe(404);
+    });
+});
+
 afterAll(async () => {
     await sequelize.close();
 });

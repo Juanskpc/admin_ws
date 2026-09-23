@@ -3,6 +3,7 @@ const cajaService = require('./cajaService');
 const puntoCajaService = require('./puntoCajaService');
 const { avisar, avisarTrasCommit, TEMAS } = require('./avisoService');
 const cuentaService = require('./cuentaService');
+const horarioService = require('./horarioService');
 const personaNegocioDao = require('../../app_core/dao/personaNegocioDao');
 const usuarioAsistenteDao = require('../../app_core/dao/usuarioAsistenteDao');
 // La costura de entitlements (ADR-021). Es lo único que este servicio sabe de lo comercial, y
@@ -324,6 +325,84 @@ async function consumirIngredientesPorItems({ idNegocio, items, permitirStockNeg
         const nuevoStock = Number(ing.stock_actual ?? 0) - consumo;
         await ing.update({ stock_actual: nuevoStock }, { transaction });
     }
+
+    // El pedido que se acaba de tomar pudo dejar sin stock un ingrediente que usan OTROS
+    // productos, no solo los de esta orden — dos platos que comparten una papa, por ejemplo.
+    // Sin esto, el bot seguía ofreciendo algo que ya no se puede preparar, y el cliente se
+    // enteraba de que no había hasta después de pedirlo y confirmarlo: la peor forma posible
+    // de decir que no hay.
+    await desactivarProductosSinStock({
+        idNegocio,
+        idsIngredientes: Array.from(ingredientesNecesarios.keys()),
+        transaction,
+    });
+}
+
+/**
+ * Apaga `disponible` en cualquier producto ACTIVO cuya receta ya no se pueda preparar con el
+ * stock que quedó tras un consumo.
+ *
+ * ## Por qué mira TODOS los productos que usan estos ingredientes, no solo los del pedido
+ *
+ * Un ingrediente compartido —la misma papa en dos platos distintos— puede dejar sin stock a un
+ * producto que ni siquiera estaba en esta orden. Revisar solo lo que se acaba de pedir dejaría
+ * ese otro plato ofreciéndose igual, con cero unidades posibles.
+ *
+ * ## Por qué NO vuelve a encender nada
+ *
+ * Es deliberadamente de una sola vía. Si se reabasteciera el ingrediente y esto reactivara el
+ * producto solo, un negocio que lo apagó por otra razón —cambió la receta, es de temporada, lo
+ * retiró de la carta— lo vería reaparecer sin haberlo decidido. Volver a activarlo es una
+ * decisión del negocio, a mano, desde Configuración de la carta — igual que hoy.
+ */
+async function desactivarProductosSinStock({ idNegocio, idsIngredientes, transaction }) {
+    if (!idsIngredientes || idsIngredientes.length === 0) return;
+
+    const candidatos = await Models.CartaProducto.findAll({
+        where: { id_negocio: idNegocio, estado: 'A', disponible: true },
+        attributes: ['id_producto', 'nombre'],
+        include: [{
+            model: Models.CartaProductoIngred,
+            as: 'ingredientes',
+            where: { estado: 'A', id_ingrediente: idsIngredientes },
+            required: true,
+            attributes: ['id_producto'],
+        }],
+        transaction,
+    });
+    if (candidatos.length === 0) return;
+
+    for (const producto of candidatos) {
+        const receta = await Models.CartaProductoIngred.findAll({
+            where: { id_producto: producto.id_producto, estado: 'A' },
+            attributes: ['id_ingrediente', 'porcion'],
+            include: [{
+                model: Models.CartaIngrediente,
+                as: 'ingrediente',
+                where: { id_negocio: idNegocio, estado: 'A' },
+                required: true,
+                attributes: ['stock_actual'],
+            }],
+            transaction,
+        });
+
+        const alcanzaParaUno = receta.every((r) => {
+            const porcion = Number(r.porcion || 0);
+            if (porcion <= 0) return true;
+            return Number(r.ingrediente?.stock_actual ?? 0) >= porcion;
+        });
+
+        if (!alcanzaParaUno) {
+            await Models.CartaProducto.update(
+                { disponible: false },
+                { where: { id_producto: producto.id_producto }, transaction }
+            );
+            console.log(
+                `[inventario] "${producto.nombre}" (id ${producto.id_producto}) se apagó solo: ` +
+                    'ya no hay stock para preparar uno más.'
+            );
+        }
+    }
 }
 
 async function crearDetallesOrden({ idOrden, items, transaction }) {
@@ -491,6 +570,15 @@ async function crearOrden({
             idNegocio, idUsuario, idPuntoCaja, transaction: t,
         });
         await cajaService.requireCajaAbierta(idNegocio, { punto, transaction: t });
+
+        if (tipoPedido === 'DOMICILIO' && idDomiciliario) {
+            const valido = await esDomiciliarioValido({ idNegocio, idDomiciliario, transaction: t });
+            if (!valido) {
+                const e = new Error('Ese domiciliario no existe o no está activo en este negocio.');
+                e.code = 'DOMICILIARIO_INVALIDO'; e.statusCode = 422;
+                throw e;
+            }
+        }
 
         const numeroOrden = await generarNumeroOrden(idNegocio);
 
@@ -744,6 +832,192 @@ async function agregarItemsOrden({
 }
 
 /**
+ * Agrega ítems a un pedido YA PUESTO, A PETICIÓN DEL PROPIO CLIENTE (asistente de WhatsApp,
+ * Policy Gate).
+ *
+ * No es `agregarItemsOrden` con otro nombre: esa es la función del POS y conoce método de
+ * pago, cuenta de cliente, multipago, descuento y valor de domicilio — nada de eso es una
+ * decisión que un cliente deba poder tocar por WhatsApp con un "también quiero...". Tampoco
+ * acepta `{ transaction }`, el mismo obstáculo #1 que ya tuvo `tomar_pedido`: el Policy Gate
+ * envuelve toda invocación en su propia transacción para que el dry-run sea genérico, y sin
+ * esto la adición de prueba de un dry-run se habría confirmado igual.
+ *
+ * Misma ventana de negocio que `cancelarPorCliente`: **la cocina no puede haber empezado a
+ * prepararlo.** Agregar algo después de que el resto ya se está cocinando es una comanda que
+ * llega tarde y a medias — el negocio tiene que enterarse por teléfono, no por una comanda
+ * fantasma apareciendo sola en la pantalla de cocina.
+ */
+async function agregarItemsPorCliente(idOrden, { idNegocio, items, transaction }) {
+    const orden = await Models.PedidOrden.findOne({
+        where: { id_orden: idOrden, id_negocio: idNegocio },
+        transaction,
+        lock: transaction ? transaction.LOCK.UPDATE : undefined,
+    });
+    if (!orden) {
+        const e = new Error('No encuentro ese pedido.');
+        e.code = 'PEDIDO_NO_ENCONTRADO'; e.statusCode = 404;
+        throw e;
+    }
+    if (orden.estado !== 'ABIERTA') {
+        const e = new Error('Ese pedido ya no está abierto y no le puedo agregar nada. Llama al restaurante.');
+        e.code = 'ORDEN_NO_ABIERTA'; e.statusCode = 409;
+        throw e;
+    }
+    if (orden.estado_pago === 'pagado') {
+        const e = new Error('Ese pedido ya se cobró y no le puedo agregar nada. Llama al restaurante.');
+        e.code = 'ORDEN_NO_EDITABLE'; e.statusCode = 409;
+        throw e;
+    }
+    // Misma regla y mismo comentario que en `cancelarPorCliente`: `estado_cocina` es NULL
+    // hasta que el restaurante lo manda a preparar, y solo entonces avanza a
+    // EN_PREPARACION/LISTO. NULL o PENDIENTE = todavía no se ha tocado nada en cocina.
+    if (['EN_PREPARACION', 'LISTO'].includes(orden.estado_cocina)) {
+        const e = new Error(
+            'Tu pedido ya está en preparación y no le puedo agregar nada. Llama al restaurante.'
+        );
+        e.code = 'ORDEN_EN_PREPARACION'; e.statusCode = 409;
+        throw e;
+    }
+
+    try {
+        await cajaService.requireCajaAbierta(idNegocio, { transaction });
+    } catch (_) {
+        const e = new Error('El restaurante está cerrado ahora mismo y no puedo agregar nada al pedido.');
+        e.code = 'RESTAURANTE_CERRADO'; e.statusCode = 409;
+        throw e;
+    }
+
+    await consumirIngredientesPorItems({
+        idNegocio,
+        items,
+        permitirStockNegativo: false,
+        transaction,
+    });
+
+    await crearDetallesOrden({ idOrden, items, transaction });
+
+    // Sin impuesto ni domicilio ni descuento nuevos: `recalcularTotalesOrden` relee lo que la
+    // orden ya tenía pactado y solo suma el subtotal de lo recién agregado. Es la misma
+    // decisión que `tomar_pedido`, que tampoco pregunta impuesto.
+    await recalcularTotalesOrden({ idOrden, porcentajeImpuesto: 0, transaction });
+
+    avisarTrasCommit(transaction, idNegocio, TEMAS.PEDIDOS, TEMAS.MESAS, TEMAS.COCINA);
+    return getOrdenById(idOrden, { transaction });
+}
+
+/**
+ * Quita (reduce o borra) items de una orden ABIERTA existente.
+ *
+ * Simétrica de `agregarItemsOrden`: mismo flujo de edición desde Despacho/Mesas, pero
+ * para lo que el usuario retiró del pedido. Antes de esto no existía manera de que un
+ * producto quitado en el POS dejara de estar en la orden — el edit solo podía AGREGAR,
+ * así que quitar algo en pantalla no se reflejaba en el backend y volvía a aparecer.
+ *
+ * Empareja por la misma clave que agrupa en el frontend (producto + exclusiones + nota):
+ * reduce la cantidad del detalle que matchea, o lo borra si se queda en cero. Si piden
+ * quitar más de lo que hay, se quita lo que exista y se ignora el resto en silencio —no
+ * hay nada más que restar.
+ *
+ * Igual que `cancelarOrden`, el stock consumido NO se restaura: es la misma decisión ya
+ * tomada para pedidos cancelados, y automatizarlo contra la receta actual (que puede
+ * haber cambiado desde que se tomó el pedido) sería una cuenta aproximada sobre un
+ * negocio real.
+ */
+async function quitarItemsOrden({ idOrden, idNegocio, items, porcentajeImpuesto = 0 }) {
+    const t = await Models.sequelize.transaction();
+    try {
+        await cajaService.requireCajaAbierta(idNegocio, { transaction: t });
+
+        const orden = await Models.PedidOrden.findOne({
+            where: { id_orden: idOrden, id_negocio: idNegocio, estado: 'ABIERTA' },
+            transaction: t,
+            lock: t.LOCK.UPDATE,
+        });
+        if (!orden) {
+            throw new Error('ORDEN_NO_ENCONTRADA');
+        }
+
+        // Sin `include` a propósito: Postgres no deja aplicar FOR UPDATE del lado nulo de
+        // un LEFT JOIN, y `exclusiones` es opcional (no todo detalle tiene ingredientes
+        // excluidos), así que el join lo generaba OUTER y el lock fallaba siempre.
+        const detalles = await Models.PedidDetalle.findAll({
+            where: { id_orden: idOrden },
+            transaction: t,
+            lock: t.LOCK.UPDATE,
+        });
+
+        const exclusionesPorDetalle = await Models.PedidDetalleExclu.findAll({
+            where: { id_detalle: detalles.map((d) => d.id_detalle) },
+            attributes: ['id_detalle', 'id_ingrediente'],
+            transaction: t,
+        });
+        const exclusionesMap = new Map();
+        for (const e of exclusionesPorDetalle) {
+            if (!exclusionesMap.has(e.id_detalle)) exclusionesMap.set(e.id_detalle, []);
+            exclusionesMap.get(e.id_detalle).push(e.id_ingrediente);
+        }
+
+        const claveDe = (idProducto, exclusiones, nota) => {
+            const excl = [...new Set(exclusiones || [])].sort((a, b) => a - b).join(',');
+            return `${idProducto}|${excl}|${String(nota || '').trim()}`;
+        };
+
+        const porClave = new Map();
+        for (const d of detalles) {
+            const clave = claveDe(
+                d.id_producto,
+                exclusionesMap.get(d.id_detalle) || [],
+                d.nota,
+            );
+            if (!porClave.has(clave)) porClave.set(clave, []);
+            porClave.get(clave).push(d);
+        }
+
+        for (const item of items) {
+            let restante = Number(item.cantidad || 0);
+            if (restante <= 0) continue;
+
+            const clave = claveDe(item.id_producto, item.exclusiones, item.nota);
+            const candidatos = porClave.get(clave) || [];
+
+            for (const detalle of candidatos) {
+                if (restante <= 0) break;
+                const cantidadActual = Number(detalle.cantidad);
+                if (cantidadActual <= restante) {
+                    await Models.PedidDetalleExclu.destroy({
+                        where: { id_detalle: detalle.id_detalle },
+                        transaction: t,
+                    });
+                    await detalle.destroy({ transaction: t });
+                    restante -= cantidadActual;
+                } else {
+                    const nuevaCantidad = cantidadActual - restante;
+                    await detalle.update({
+                        cantidad: nuevaCantidad,
+                        subtotal: Number(detalle.precio_unitario) * nuevaCantidad,
+                    }, { transaction: t });
+                    restante = 0;
+                }
+            }
+        }
+
+        await recalcularTotalesOrden({
+            idOrden,
+            porcentajeImpuesto,
+            transaction: t,
+        });
+
+        avisarTrasCommit(t, idNegocio, TEMAS.PEDIDOS, TEMAS.MESAS, TEMAS.COCINA);
+
+        await t.commit();
+        return getOrdenById(idOrden);
+    } catch (err) {
+        if (!t.finished) await t.rollback();
+        throw err;
+    }
+}
+
+/**
  * Obtiene una orden por su ID, con detalles, exclusiones, producto e ingrediente.
  */
 /**
@@ -903,8 +1177,12 @@ async function getOrdenesDespacho({ idNegocio, idUsuario }) {
         // discrepe sería el que ofrece un botón que el backend rechaza. Allí se vuelven a
         // comprobar de todos modos — esto decide qué se ENSEÑA, no qué se permite.
         const avisoVivo = plano.aviso_listo_en && plano.aviso_listo_estado !== 'fallido';
+        // LLEVAR y DOMICILIO llevan aviso, cada uno con su plantilla («puedes recogerlo» /
+        // «el domiciliario va en camino» — ver `avisoPedido.plantillaParaTipo`); MESA no.
         plano.puede_avisar_listo =
-            plano.de_whatsapp && plano.tipo_pedido === 'LLEVAR' && !avisoVivo;
+            plano.de_whatsapp
+            && (plano.tipo_pedido === 'LLEVAR' || plano.tipo_pedido === 'DOMICILIO')
+            && !avisoVivo;
         return plano;
     });
 }
@@ -918,10 +1196,60 @@ async function getOrdenesDespacho({ idNegocio, idUsuario }) {
  * listas porque el personal ya las incluye a todas: quien tiene el rol también está en
  * `gener_negocio_usuario`.
  */
-async function listarDomiciliarios(idNegocio) {
+/**
+ * ¿Este usuario es domiciliario de ESTE negocio? Misma regla de dos caminos que
+ * `listarDomiciliarios` —personal propio (`permite_domicilio_personal`) o el rol
+ * DOMICILIARIO— pero comprobando UN candidato, no listando a todos.
+ *
+ * ## Por qué hace falta
+ *
+ * Hasta ahora `id_domiciliario` solo pasaba por `isInt({ min: 1 })` en el controlador y por la
+ * FK a `gener_usuario` en la base: la comprobación de que sea un entero positivo que exista EN
+ * ALGUNA PARTE del sistema. Ninguna de las dos comprueba que sea domiciliario **de este
+ * negocio** — un id de un empleado de otro negocio, o de un usuario sin ningún rol de
+ * domiciliario, pasaba igual. Sin explotarse porque hoy solo lo escribe el propio panel del
+ * negocio (no llega del bot), pero es la clase de comprobación que no debe depender de que
+ * quien llama se porte bien.
+ */
+async function esDomiciliarioValido({ idNegocio, idDomiciliario, transaction }) {
     const negocio = await Models.GenerNegocio.findOne({
         where: { id_negocio: idNegocio },
         attributes: ['permite_domicilio_personal'],
+        transaction,
+    });
+
+    if (negocio?.permite_domicilio_personal) {
+        const link = await Models.GenerNegocioUsuario.findOne({
+            where: { id_negocio: idNegocio, id_usuario: idDomiciliario, estado: 'A' },
+            include: [{
+                model: Models.GenerUsuario, as: 'usuario', where: { estado: 'A' }, attributes: ['id_usuario'],
+            }],
+            transaction,
+        });
+        return Boolean(link);
+    }
+
+    const rolDom = await Models.GenerRol.findOne({
+        where: { descripcion: 'DOMICILIARIO', id_tipo_negocio: 1 },
+        transaction,
+    });
+    if (!rolDom) return false;
+
+    const link = await Models.GenerUsuarioRol.findOne({
+        where: { id_negocio: idNegocio, id_rol: rolDom.id_rol, id_usuario: idDomiciliario, estado: 'A' },
+        include: [{
+            model: Models.GenerUsuario, as: 'usuario', where: { estado: 'A' }, attributes: ['id_usuario'],
+        }],
+        transaction,
+    });
+    return Boolean(link);
+}
+
+async function listarDomiciliarios(idNegocio, { transaction } = {}) {
+    const negocio = await Models.GenerNegocio.findOne({
+        where: { id_negocio: idNegocio },
+        attributes: ['permite_domicilio_personal'],
+        transaction,
     });
 
     if (negocio?.permite_domicilio_personal) {
@@ -932,6 +1260,7 @@ async function listarDomiciliarios(idNegocio) {
                 where: { estado: 'A' },
                 attributes: ['id_usuario', 'primer_nombre', 'primer_apellido', 'num_identificacion', 'telefono'],
             }],
+            transaction,
         });
         return links.map(l => ({
             id_usuario: l.usuario.id_usuario,
@@ -941,7 +1270,10 @@ async function listarDomiciliarios(idNegocio) {
         }));
     }
 
-    const rolDom = await Models.GenerRol.findOne({ where: { descripcion: 'DOMICILIARIO', id_tipo_negocio: 1 } });
+    const rolDom = await Models.GenerRol.findOne({
+        where: { descripcion: 'DOMICILIARIO', id_tipo_negocio: 1 },
+        transaction,
+    });
     if (!rolDom) return [];
     const links = await Models.GenerUsuarioRol.findAll({
         where: { id_negocio: idNegocio, id_rol: rolDom.id_rol, estado: 'A' },
@@ -950,6 +1282,7 @@ async function listarDomiciliarios(idNegocio) {
             where: { estado: 'A' },
             attributes: ['id_usuario', 'primer_nombre', 'primer_apellido', 'num_identificacion', 'telefono'],
         }],
+        transaction,
     });
     return links.map(l => ({
         id_usuario: l.usuario.id_usuario,
@@ -957,6 +1290,44 @@ async function listarDomiciliarios(idNegocio) {
         num_identificacion: l.usuario.num_identificacion,
         telefono: l.usuario.telefono,
     }));
+}
+
+/**
+ * Elige un domiciliario para un pedido a domicilio que toma el asistente de WhatsApp, para que
+ * nunca llegue a Despacho sin nadie asignado.
+ *
+ * ## Dos pasos, y el segundo es el que ya existía
+ *
+ * 1. **Quien esté EN TURNO ahora, según `rest_horario`.** Si el negocio cargó horarios de sus
+ *    domiciliarios, lo natural es asignarle el pedido a quien dice estar trabajando a esta
+ *    hora, no a cualquiera. Al azar entre los que están en turno si hay más de uno — repartir
+ *    la carga de verdad (quién anda más cerca, quién lleva menos pedidos hoy) sigue siendo una
+ *    decisión de negocio que nadie ha tomado todavía.
+ * 2. **Si nadie está en turno —o el negocio no cargó horarios de domiciliarios—, al azar entre
+ *    TODOS los que tiene.** Es el comportamiento con el que nació esta función: un negocio sin
+ *    horarios cargados no debe quedarse sin poder asignar a nadie.
+ *
+ * Mismo criterio arbitrario que `elegirProfesional` en el adaptador de `reserva`: no hay «el
+ * primero» razonable entre domiciliarios, así que un orden fijo repartiría siempre a favor del
+ * mismo.
+ *
+ * @returns {Promise<number|null>} `id_usuario` del domiciliario elegido, o `null` si el
+ *   negocio no tiene ninguno — quien llama decide qué hacer con eso.
+ */
+async function elegirDomiciliarioAlAzar(idNegocio, { transaction, ahora = new Date() } = {}) {
+    const domiciliarios = await listarDomiciliarios(idNegocio, { transaction });
+    if (domiciliarios.length === 0) return null;
+
+    const enTurno = await horarioService.usuariosEnTurnoAhora({ idNegocio, ahora, transaction });
+    if (enTurno.length > 0) {
+        const idsEnTurno = new Set(enTurno);
+        const candidatos = domiciliarios.filter((d) => idsEnTurno.has(d.id_usuario));
+        if (candidatos.length > 0) {
+            return candidatos[Math.floor(Math.random() * candidatos.length)].id_usuario;
+        }
+    }
+
+    return domiciliarios[Math.floor(Math.random() * domiciliarios.length)].id_usuario;
 }
 
 /**
@@ -1385,6 +1756,59 @@ async function actualizarValorDomicilio(idOrden, { idNegocio, valorDomicilio }) 
 }
 
 /**
+ * Asigna o cambia el domiciliario de un pedido a domicilio ya creado.
+ *
+ * Hasta ahora `id_domiciliario` solo se podía poner AL CREAR la orden — no existía forma de
+ * corregirlo después. Hacía falta para dos casos reales: el bot lo asigna al azar (o por
+ * turno) y el negocio quiere cambiarlo por el que de verdad va a salir, o un domiciliario se
+ * reporta enfermo a mitad de turno y hay que repartir sus pedidos pendientes entre los demás.
+ *
+ * Reutiliza `esDomiciliarioValido` — la misma comprobación que ya evita que `crearOrden`
+ * acepte un id de cualquier usuario del sistema que no sea domiciliario de ESTE negocio.
+ */
+async function asignarDomiciliario(idOrden, { idNegocio, idDomiciliario }) {
+    const t = await Models.sequelize.transaction();
+    try {
+        const orden = await Models.PedidOrden.findOne({
+            where: { id_orden: idOrden, id_negocio: idNegocio },
+            transaction: t,
+            lock: t.LOCK.UPDATE,
+        });
+        if (!orden) {
+            const e = new Error('Orden no encontrada.');
+            e.code = 'ORDEN_NO_ENCONTRADA'; e.statusCode = 404;
+            throw e;
+        }
+        if (orden.estado !== 'ABIERTA') {
+            const e = new Error('Solo se puede asignar domiciliario a una orden abierta.');
+            e.code = 'ORDEN_NO_ABIERTA'; e.statusCode = 409;
+            throw e;
+        }
+        if (orden.tipo_pedido !== 'DOMICILIO') {
+            const e = new Error('Solo los pedidos a domicilio llevan domiciliario.');
+            e.code = 'ORDEN_NO_ES_DOMICILIO'; e.statusCode = 409;
+            throw e;
+        }
+
+        const valido = await esDomiciliarioValido({ idNegocio, idDomiciliario, transaction: t });
+        if (!valido) {
+            const e = new Error('Ese domiciliario no existe o no está activo en este negocio.');
+            e.code = 'DOMICILIARIO_INVALIDO'; e.statusCode = 422;
+            throw e;
+        }
+
+        await orden.update({ id_domiciliario: idDomiciliario }, { transaction: t });
+
+        avisarTrasCommit(t, idNegocio, TEMAS.PEDIDOS, TEMAS.MESAS);
+        await t.commit();
+        return getOrdenById(idOrden);
+    } catch (err) {
+        if (!t.finished) await t.rollback();
+        throw err;
+    }
+}
+
+/**
  * Actualiza SOLO el descuento de una orden abierta y recalcula su total.
  *
  * Existe aparte de `agregarItemsOrden` por el mismo motivo que el del domicilio:
@@ -1468,9 +1892,120 @@ async function cancelarOrden(idOrden, { idUsuario } = {}) {
         e.code = 'ORDEN_CERRADA'; e.statusCode = 409;
         throw e;
     }
-    await orden.update({ estado: 'CANCELADA', fecha_cierre: new Date() });
+    await orden.update({ estado: 'CANCELADA', cancelado_por: 'negocio', fecha_cierre: new Date() });
     avisar(orden.id_negocio, TEMAS.PEDIDOS, TEMAS.MESAS, TEMAS.COCINA);
     return orden;
+}
+
+/**
+ * Cancela un pedido A PETICIÓN DEL PROPIO CLIENTE (asistente de WhatsApp, Policy Gate).
+ *
+ * No es `cancelarOrden` con otro nombre: esa exige un `idUsuario` con permiso de rol
+ * (`usuarioPuedeCancelarPedidoNoPagado`), que es la comprobación correcta para un empleado
+ * cancelando desde el panel, pero no tiene sentido para un cliente cancelando el suyo por
+ * WhatsApp — no hay ningún rol que darle. Aquí lo que autoriza es la pertenencia (ya
+ * comprobada por el adaptador contra `telefono_verificado`, igual que en
+ * `consultar_estado_pedido`) y una ventana de negocio distinta: **la cocina no puede haber
+ * empezado a prepararlo**. Pasado ese punto, cancelar por su cuenta tira comida ya hecha —
+ * de ahí el mensaje remite al restaurante en vez de ejecutar.
+ *
+ * Acepta `{ transaction }` (a diferencia de `cancelarOrden`) porque el Policy Gate envuelve
+ * toda invocación en su propia transacción para que el dry-run sea genérico: sin esto, la
+ * cancelación de prueba de un dry-run se habría confirmado igual.
+ */
+async function cancelarPorCliente(idOrden, { idNegocio, transaction }) {
+    const orden = await Models.PedidOrden.findOne({
+        where: { id_orden: idOrden, id_negocio: idNegocio },
+        transaction,
+        lock: transaction ? transaction.LOCK.UPDATE : undefined,
+    });
+    if (!orden) {
+        const e = new Error('No encuentro ese pedido.');
+        e.code = 'PEDIDO_NO_ENCONTRADO'; e.statusCode = 404;
+        throw e;
+    }
+    if (orden.estado === 'CANCELADA') {
+        const e = new Error('Ese pedido ya estaba cancelado.');
+        e.code = 'ORDEN_YA_CANCELADA'; e.statusCode = 409;
+        throw e;
+    }
+    if (orden.estado_pago === 'pagado' || orden.estado === 'CERRADA') {
+        const e = new Error(
+            'Ese pedido ya se cobró y no lo puedo cancelar por aquí. Llama al restaurante.'
+        );
+        e.code = 'ORDEN_NO_CANCELABLE'; e.statusCode = 409;
+        throw e;
+    }
+    // `estado_cocina` es NULL hasta que el restaurante lo manda a preparar (`enviarACocina`)
+    // y solo entonces avanza a EN_PREPARACION/LISTO. NULL o PENDIENTE = todavía no se ha
+    // tocado nada en cocina; a partir de ahí ya no es una decisión que el cliente pueda
+    // tomar solo.
+    if (['EN_PREPARACION', 'LISTO'].includes(orden.estado_cocina)) {
+        const e = new Error(
+            'Tu pedido ya está en preparación y no lo puedo cancelar por aquí. Llama al restaurante.'
+        );
+        e.code = 'ORDEN_EN_PREPARACION'; e.statusCode = 409;
+        throw e;
+    }
+
+    await orden.update(
+        { estado: 'CANCELADA', cancelado_por: 'cliente', fecha_cierre: new Date() },
+        { transaction }
+    );
+    avisarTrasCommit(transaction, idNegocio, TEMAS.PEDIDOS, TEMAS.MESAS, TEMAS.COCINA);
+    return orden;
+}
+
+/**
+ * Los pedidos de despacho (LLEVAR/DOMICILIO) cancelados HOY, para que Despacho pueda
+ * mostrarlos aparte de los activos y decir quién los canceló.
+ *
+ * ## Por qué existe esto
+ *
+ * `getOrdenesDespacho` filtra por `estado: 'ABIERTA'`: un pedido cancelado desaparece de la
+ * pantalla en el mismo instante en que se cancela. Para uno que cancela el propio empleado
+ * desde ahí, es lo correcto — lo vio irse. Para uno que cancela EL CLIENTE por WhatsApp, sin
+ * que nadie del negocio tocara nada, la orden se esfuma sin dejar ningún rastro visible: el
+ * negocio solo nota que ya no está, nunca que pasó ni por qué.
+ *
+ * Se acota a HOY (`fecha_cierre >= hoy`) y no a todo el histórico: esto es una alerta
+ * operativa de lo que acaba de pasar en el turno, no un reporte — para eso está la base
+ * misma, que la fila cancelada nunca se borra.
+ *
+ * Mismo filtro de visibilidad que `getOrdenesDespacho` (LLEVAR/DOMICILIO, y por
+ * `id_domiciliario` si el usuario no puede ver todos): un domiciliario no debe ver que se
+ * canceló un pedido que nunca fue suyo.
+ */
+async function getOrdenesCanceladasRecientes({ idNegocio, idUsuario }) {
+    const { Op } = Models.Sequelize;
+    const verTodos = await usuarioPuedeVerTodosDespacho({ idUsuario, idNegocio });
+    const where = {
+        id_negocio: idNegocio,
+        tipo_pedido: { [Op.in]: ['LLEVAR', 'DOMICILIO'] },
+        estado: 'CANCELADA',
+        fecha_cierre: { [Op.gte]: sequelizeInicioDeHoy() },
+    };
+    if (!verTodos) where.id_domiciliario = idUsuario;
+
+    return Models.PedidOrden.findAll({
+        where,
+        attributes: [
+            'id_orden', 'numero_orden', 'tipo_pedido', 'total', 'contacto_nombre',
+            'cancelado_por', 'fecha_cierre',
+        ],
+        order: [['fecha_cierre', 'DESC']],
+        limit: 30,
+    });
+}
+
+/**
+ * La medianoche de HOY, en hora de Bogotá — no en la del proceso de Node, que en el VPS y en
+ * cualquier entorno con `TZ` distinto puede ser otra. El pool de Postgres ya está fijado a
+ * `America/Bogota` (`app_core/models/conection.js`), así que `CURRENT_DATE` en el propio
+ * servidor es la fuente de verdad, no una fecha calculada aquí y mandada como parámetro.
+ */
+function sequelizeInicioDeHoy() {
+    return Models.Sequelize.literal("date_trunc('day', now())");
 }
 
 /**
@@ -1614,18 +2149,25 @@ async function cerrarOrden(idOrden, { idUsuario, idMetodoPago, pagos, idCuenta =
 module.exports = {
     crearOrden,
     agregarItemsOrden,
+    agregarItemsPorCliente,
+    quitarItemsOrden,
     getOrdenById,
     getOrdenesAbiertas,
     getOrdenesCocina,
     getOrdenesDespacho,
     listarDomiciliarios,
+    esDomiciliarioValido,
+    elegirDomiciliarioAlAzar,
     enviarACocina,
     cambiarEstadoCocina,
     marcarDetalleCompleto,
     marcarPagado,
     actualizarValorDomicilio,
+    asignarDomiciliario,
     actualizarDescuento,
     cancelarOrden,
+    cancelarPorCliente,
+    getOrdenesCanceladasRecientes,
     cerrarOrden,
     usuarioPuedeVerTodosDespacho,
 };

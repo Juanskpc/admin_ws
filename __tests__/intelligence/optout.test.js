@@ -119,6 +119,68 @@ describe('la decisión del turno', () => {
     });
 });
 
+describe('quién queda registrado como quien bloqueó', () => {
+    // El negocio también puede bloquear un número, desde su Bandeja — pero eso NUNCA pasa por
+    // aquí: pasa por un UPDATE directo (`intelligenceBandejaController.bloquear`), sin turno de
+    // por medio. `guardarEstado` es el cierre de un turno, y un turno solo se abre sobre una
+    // conversación activa/dormida — así que si esto escribe `estado = bloqueada`, es porque el
+    // propio cliente lo acaba de pedir en el turno que se está cerrando.
+    test('cerrar un turno con estado bloqueada dice "cliente", no "negocio"', async () => {
+        const conv = await repositorio.asegurarConversacion(
+            { idNegocio, canal: CANAL, idExterno: `optout_bp_${Date.now()}` },
+            { transaction: null }
+        );
+        creadas.push(conv.id_conversacion);
+
+        const t = await sequelize.transaction();
+        try {
+            await repositorio.guardarEstado(
+                conv.id_conversacion,
+                { variables: {}, tareaActual: null, tareaDatos: {}, estado: 'bloqueada' },
+                { transaction: t }
+            );
+            await t.commit();
+        } catch (error) {
+            await t.rollback();
+            throw error;
+        }
+
+        const fila = await unaFila(
+            `SELECT estado, bloqueada_por FROM intelligence.conversacion WHERE id_conversacion = :id;`,
+            { id: conv.id_conversacion }
+        );
+        expect(fila.estado).toBe('bloqueada');
+        expect(fila.bloqueada_por).toBe('cliente');
+    });
+
+    test('cerrar un turno con cualquier OTRO estado no toca bloqueada_por', async () => {
+        const conv = await repositorio.asegurarConversacion(
+            { idNegocio, canal: CANAL, idExterno: `optout_bp2_${Date.now()}` },
+            { transaction: null }
+        );
+        creadas.push(conv.id_conversacion);
+
+        const t = await sequelize.transaction();
+        try {
+            await repositorio.guardarEstado(
+                conv.id_conversacion,
+                { variables: {}, tareaActual: null, tareaDatos: {}, estado: 'dormida' },
+                { transaction: t }
+            );
+            await t.commit();
+        } catch (error) {
+            await t.rollback();
+            throw error;
+        }
+
+        const fila = await unaFila(
+            `SELECT bloqueada_por FROM intelligence.conversacion WHERE id_conversacion = :id;`,
+            { id: conv.id_conversacion }
+        );
+        expect(fila.bloqueada_por).toBeNull();
+    });
+});
+
 // ── Y ya no sale nada: la regla vive en SQL ─────────────────────────────────────────────
 
 describe('a una conversación bloqueada no se le entrega nada', () => {
