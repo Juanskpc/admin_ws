@@ -84,7 +84,7 @@ async function getMesasDashboard(idNegocio) {
             as: 'ordenes',
             where: { estado: 'ABIERTA' },
             required: false,
-            attributes: ['id_orden', 'total', 'fecha_creacion', 'estado_cocina', 'id_metodo_pago', 'id_cuenta', 'nota', 'descuento', 'estado_pago'],
+            attributes: ['id_orden', 'numero_orden', 'total', 'fecha_creacion', 'estado_cocina', 'id_metodo_pago', 'id_cuenta', 'nota', 'descuento', 'estado_pago'],
             include: [{
                 model: Models.PedidDetalle,
                 as: 'detalles',
@@ -148,6 +148,8 @@ async function getMesasDashboard(idNegocio) {
             time,
             order: ordenActiva ? {
                 id_orden: ordenActiva.id_orden,
+                // «ORD-1052»: la comanda impresa la identifica junto a la mesa, igual que en Despacho.
+                numero_orden: ordenActiva.numero_orden ?? null,
                 total,
                 // La rebaja ya viene restada del total; se manda aparte para poder
                 // mostrarla y corregirla desde el cobro de la mesa.

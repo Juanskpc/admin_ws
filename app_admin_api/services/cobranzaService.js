@@ -1811,7 +1811,17 @@ async function cambiarMiPlan(idNegocio, { idPlan = null, complementos = null } =
         );
     }
 
-    const resultado = sube
+    // ¿Tiene un plan que esté disfrutando hoy? Solo entonces tiene sentido un ajuste aparte: se
+    // cobra la parte de los días que le quedan. Sin plan vigente —compra web sin pagar, plan
+    // vencido, en días de gracia— lo que añada va a la MISMA mensualidad que tiene que pagar
+    // para volver a entrar. Un segundo cobro por separado le hacía pagar dos veces los mismos
+    // complementos (la renovación ya cobra lo pedido) y no se entendía cuál pagar primero.
+    const planNegocio = await Dao.planParaRenovar(idNegocio);
+    const planVigente = !!planNegocio && (!planNegocio.fin || planNegocio.fin >= hoyBogota());
+
+    const resultado = !planVigente
+        ? await sumarAlCobroPendiente({ idNegocio, precioObjetivo })
+        : sube
         ? await cobrarDiferenciaAhora({
               idNegocio,
               suscripcion,
@@ -1826,7 +1836,11 @@ async function cambiarMiPlan(idNegocio, { idPlan = null, complementos = null } =
 
     await Audit.registrarEvento({
         modulo: 'cobranza',
-        accion: sube ? 'cambio_plan_ajuste' : 'cambio_plan_agendado',
+        accion: !planVigente
+            ? 'cambio_plan_en_cobro_pendiente'
+            : sube
+            ? 'cambio_plan_ajuste'
+            : 'cambio_plan_agendado',
         idNegocio,
         detalle: {
             id_plan_anterior: idPlanActual,
@@ -2012,6 +2026,34 @@ async function agendarParaLaRenovacion({ idNegocio, precioObjetivo }) {
         mensaje: pendiente
             ? 'El cambio entra cuando pagues tu próximo cobro, que ya quedó con el valor nuevo.'
             : 'El cambio entra en tu próxima renovación. Hasta entonces conservas lo que pagaste.',
+    };
+}
+
+/**
+ * Sin plan vigente: el cambio (suba o baje) se suma a la mensualidad que tiene que pagar.
+ *
+ * No hay «días que le quedan» que prorratear: el próximo pago compra un ciclo entero, y ese
+ * ciclo ya es el del plan y los complementos nuevos. Si todavía no existe el cobro pendiente
+ * —plan vencido hace poco y nadie lo ha generado— se genera aquí, ya con lo pedido.
+ */
+async function sumarAlCobroPendiente({ idNegocio, precioObjetivo }) {
+    await anularAjustesPendientes(idNegocio, { motivo: 'Sumado a la mensualidad pendiente' });
+
+    let pendiente = await recalcularPendienteDeRenovacion(idNegocio);
+    if (!pendiente) {
+        const generado = await asegurarCobroPendiente(idNegocio);
+        if (generado) pendiente = await recalcularFacturaPendiente(generado.id_factura);
+    }
+
+    return {
+        aplica: 'renovacion',
+        cambio: true,
+        referencia: pendiente?.referencia ?? null,
+        total: pendiente ? Number(pendiente.total) : null,
+        precio_mensual: precioObjetivo,
+        mensaje: pendiente
+            ? 'Lo sumamos a tu mensualidad pendiente: al pagarla, tu plan se activa con el cambio.'
+            : 'El cambio quedó guardado y entra con tu próximo pago.',
     };
 }
 
