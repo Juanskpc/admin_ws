@@ -566,16 +566,42 @@ Cambiar `id_plan` al elegir sería regalar el plan nuevo, y además la generaci�
 sincroniza la suscripción con el plan vigente del negocio: el cambio se habría borrado esa misma
 madrugada. Por eso la sincronización respeta un plan solicitado pendiente.
 
-Dos desenlaces, y la respuesta dice cuál fue:
-
-| `aplica` | Cuándo | Qué pasa |
-|---|---|---|
-| `ahora` | Hay un cobro pendiente | Ese cobro pasa a valer el plan nuevo; pagarlo estrena plan |
-| `proximo_cobro` | Está al día y no debe nada | Conserva el plan que pagó; el nuevo se cobra en la próxima mensualidad |
-
 **`cob_factura.id_plan`** dice qué plan cobra cada factura, y es el que queda en el negocio al
 pagarla. Sin esa columna, un cobro emitido por el Plan Avanzado se aplicaría contra el plan que
 tuviera la suscripción el día del pago.
+
+### Cambiar de plan y de complementos a mitad de ciclo (2026-09-22)
+
+El mismo `POST /admin/cobranza/mi-plan`, que ahora acepta `id_plan`, `complementos` o los dos: son
+una sola cuenta, porque subir de plan y quitar un usuario extra a la vez tiene que cobrarse por la
+diferencia **neta**.
+
+**La regla: subir se paga y entra hoy; bajar no se cobra y entra al renovar.**
+
+| `aplica` | Cuándo | Qué pasa |
+|---|---|---|
+| `ajuste` | Lo pedido cuesta MÁS al mes | Se emite un cobro de tipo `ajuste` por la diferencia prorrateada a los días que le quedan al ciclo. Al pagarlo el cambio entra, y **la fecha de vencimiento no se mueve** |
+| `renovacion` | Cuesta igual o menos | No se cobra nada hoy. Se agenda y entra con la próxima renovación, que ya sale con el valor nuevo |
+| `sin_cambios` | Pidió lo que ya tiene | Si había algo pedido sin pagar, se cancela (así se deshace una solicitud) |
+
+Por qué no es simétrico: al subir, hacerle esperar hasta la renovación es negarle durante semanas
+algo que quiere pagar. Al bajar, aplicarlo de inmediato sería quitarle un servicio que ya pagó
+completo, y devolver dinero abre un problema con las pasarelas que no compensa.
+
+**Dos columnas sostienen esto:**
+
+- **`cob_factura.tipo`** (`renovacion` | `ajuste`). Es lo que impide que pagar 10.000 pesos de
+  diferencia regale un mes entero: `aplicarPagoAprobado` suma un ciclo a cualquier renovación, y
+  al ajuste no le suma nada — solo cambia el plan que se disfruta hasta la fecha que ya tenía.
+- **`cob_suscripcion_complemento.cantidad_solicitada`**. Es al complemento lo que
+  `id_plan_solicitado` es al plan: `cantidad` manda en los límites de uso, así que moverla antes de
+  cobrar sería regalar el complemento. Al pagar se copia sobre `cantidad` y se limpia, conservando
+  la cortesía en unidades.
+
+La renovación cobra siempre **lo pedido** (`cantidad_solicitada ?? cantidad`): el período que se
+cobra es justo aquel en el que el cambio entra en vigor.
+
+Migración: `npm run migrate:cobranza-cambios-plan`.
 
 **Los planes gratuitos no se ofrecen ni se aceptan:** `listarPlanesParaCliente` filtra `precio > 0`,
 así que la prueba de 7 días —que se asigna al registrar el negocio, no se elige— queda fuera.

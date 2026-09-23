@@ -161,6 +161,243 @@ async function listarFacturasDeNegocio(idNegocio, { limite = 24 } = {}) {
     });
 }
 
+// ── Complementos ────────────────────────────────────────────────────────────────────────
+//
+// Van en SQL y no en modelos de Sequelize porque son cuatro consultas cortas y siempre con
+// joins: el catálogo con su precio, lo contratado con su precio vigente. Ver
+// migrations/migrate_cobranza_complementos.js para el porqué de cada tabla.
+
+/**
+ * El catálogo que se puede contratar en una moneda y ciclo: solo complementos activos **con**
+ * precio. Uno sin precio en esa moneda no se ofrece, igual que un plan sin fila en
+ * `cob_precio_plan`.
+ */
+async function listarComplementosCatalogo({ moneda = 'COP', ciclo = 'mensual' } = {}, { transaction } = {}) {
+    const filas = await sequelize.query(
+        `SELECT c.id_complemento, c.codigo, c.nombre, c.descripcion, c.amplia,
+                c.cantidad_maxima, p.precio
+           FROM cobranza.cob_complemento c
+           JOIN cobranza.cob_precio_complemento p
+             ON p.id_complemento = c.id_complemento
+            AND p.moneda = :moneda AND p.ciclo = :ciclo AND p.estado = 'A'
+          WHERE c.estado = 'A'
+          ORDER BY c.orden, c.id_complemento;`,
+        { replacements: { moneda, ciclo }, type: sequelize.QueryTypes.SELECT, transaction }
+    );
+    return filas.map((f) => ({ ...f, precio: Number(f.precio) }));
+}
+
+/**
+ * Lo que tiene contratado una suscripción, con el precio **de hoy** de cada complemento.
+ *
+ * Es el precio de hoy a propósito, igual que el plan: `generarFacturaPeriodo` cobra lo que
+ * vale el plan el día que se genera la factura, y un complemento no puede quedar congelado en
+ * un precio que el plan ya no respeta. Si un complemento perdió su precio en esa moneda, sale
+ * con `precio: null` y quien cobra decide (hoy: error explícito, nunca cobrarlo a cero).
+ */
+async function listarComplementosSuscripcion(idSuscripcion, { moneda, ciclo }, { transaction } = {}) {
+    const filas = await sequelize.query(
+        `SELECT sc.id_complemento, sc.cantidad, sc.cantidad_facturable, sc.cantidad_solicitada,
+                c.codigo, c.nombre, c.amplia, p.precio
+           FROM cobranza.cob_suscripcion_complemento sc
+           JOIN cobranza.cob_complemento c ON c.id_complemento = sc.id_complemento
+           LEFT JOIN cobranza.cob_precio_complemento p
+             ON p.id_complemento = sc.id_complemento
+            AND p.moneda = :moneda AND p.ciclo = :ciclo AND p.estado = 'A'
+          WHERE sc.id_suscripcion = :idSuscripcion AND sc.estado = 'A'
+          ORDER BY c.orden, c.id_complemento;`,
+        {
+            replacements: { idSuscripcion, moneda, ciclo },
+            type: sequelize.QueryTypes.SELECT,
+            transaction,
+        }
+    );
+    return filas.map((f) => ({ ...f, precio: f.precio == null ? null : Number(f.precio) }));
+}
+
+/**
+ * Deja anotado lo que el cliente pidió y todavía no ha pagado.
+ *
+ * No toca `cantidad`: esa es la que manda en los límites de uso, y moverla antes de cobrar sería
+ * regalar el complemento. Lo pedido vive en `cantidad_solicitada` hasta que un pago lo aplique
+ * (`aplicarComplementosSolicitados`), igual que `id_plan_solicitado` con el plan.
+ *
+ * Un complemento que el cliente aún no tiene se crea con `cantidad = 0`: la fila existe para
+ * poder recordar lo pedido, pero no amplía ningún límite hasta que se pague.
+ *
+ * @param {{ id_complemento: number, cantidad: number }[]} lista la elección COMPLETA del cliente.
+ */
+async function solicitarComplementosSuscripcion(idSuscripcion, idNegocio, lista, { transaction } = {}) {
+    const pedidos = new Map(lista.map((c) => [Number(c.id_complemento), Number(c.cantidad)]));
+
+    const vivos = await sequelize.query(
+        `SELECT id_complemento, cantidad FROM cobranza.cob_suscripcion_complemento
+          WHERE id_suscripcion = :idSuscripcion AND estado = 'A';`,
+        { replacements: { idSuscripcion }, type: sequelize.QueryTypes.SELECT, transaction }
+    );
+
+    // Lo que tenía y ya no pide: queda solicitado en cero (se le quitará al renovar), no se
+    // desactiva de golpe — el mes en curso ya está pagado y lo sigue usando.
+    for (const fila of vivos) {
+        if (!pedidos.has(Number(fila.id_complemento))) pedidos.set(Number(fila.id_complemento), 0);
+    }
+
+    for (const [idComplemento, cantidad] of pedidos) {
+        await sequelize.query(
+            `INSERT INTO cobranza.cob_suscripcion_complemento
+                    (id_suscripcion, id_negocio, id_complemento, cantidad, cantidad_facturable,
+                     cantidad_solicitada, estado)
+             VALUES (:idSuscripcion, :idNegocio, :idComplemento, 0, 0, :cantidad, 'A')
+             ON CONFLICT (id_suscripcion, id_complemento)
+             DO UPDATE SET cantidad_solicitada =
+                               CASE WHEN EXCLUDED.cantidad_solicitada = cob_suscripcion_complemento.cantidad
+                                    THEN NULL           -- pidió justo lo que ya tiene: no hay nada pendiente
+                                    ELSE EXCLUDED.cantidad_solicitada END,
+                           estado = 'A',
+                           actualizado_en = now();`,
+            {
+                replacements: { idSuscripcion, idNegocio, idComplemento, cantidad },
+                transaction,
+            }
+        );
+    }
+}
+
+/**
+ * Hace efectivo lo pedido: `cantidad_solicitada` pasa a ser `cantidad` y se limpia.
+ *
+ * Se llama al pagar, y solo ahí. La cortesía se conserva en unidades: quien tenía 5 de 8 gratis
+ * y sube a 10 sigue con 5 gratis y paga 5. Una fila que queda en cero se desactiva, que es como
+ * el resto del módulo dice «esto ya no está contratado».
+ */
+async function aplicarComplementosSolicitados(idSuscripcion, { transaction } = {}) {
+    await sequelize.query(
+        `UPDATE cobranza.cob_suscripcion_complemento
+            SET cantidad_facturable = GREATEST(
+                    0,
+                    cantidad_solicitada - GREATEST(0, cantidad - cantidad_facturable)
+                ),
+                cantidad = cantidad_solicitada,
+                cantidad_solicitada = NULL,
+                estado = CASE WHEN cantidad_solicitada = 0 THEN 'I' ELSE 'A' END,
+                actualizado_en = now()
+          WHERE id_suscripcion = :idSuscripcion
+            AND cantidad_solicitada IS NOT NULL;`,
+        { replacements: { idSuscripcion }, transaction }
+    );
+}
+
+/** Olvida lo pedido y no pagado. Se usa al deshacer una solicitud. */
+async function limpiarComplementosSolicitados(idSuscripcion, { transaction } = {}) {
+    await sequelize.query(
+        `UPDATE cobranza.cob_suscripcion_complemento
+            SET cantidad_solicitada = NULL, actualizado_en = now()
+          WHERE id_suscripcion = :idSuscripcion AND cantidad_solicitada IS NOT NULL;`,
+        { replacements: { idSuscripcion }, transaction }
+    );
+}
+
+/**
+ * Deja la suscripción con **exactamente** estos complementos.
+ *
+ * Es un reemplazo y no una suma porque lo que llega es la elección completa del cliente (la
+ * pantalla manda las cantidades finales, no incrementos): lo que no viene se desactiva, lo que
+ * viene se crea o se actualiza. Desactivar y no borrar deja rastro en la auditoría de cuándo
+ * dejó de tener cada cosa.
+ *
+ * `cantidad_facturable` es opcional: si no viene, se cobra todo lo contratado. Solo la consola
+ * de super-admin la manda distinta, que es donde se regalan unidades a un cliente.
+ *
+ * @param {{ id_complemento: number, cantidad: number, cantidad_facturable?: number }[]} lista
+ */
+async function fijarComplementosSuscripcion(idSuscripcion, idNegocio, lista, { transaction } = {}) {
+    const ids = lista.map((c) => c.id_complemento);
+
+    await sequelize.query(
+        `UPDATE cobranza.cob_suscripcion_complemento
+            SET estado = 'I', actualizado_en = now()
+          WHERE id_suscripcion = :idSuscripcion
+            AND estado = 'A'
+            AND (:sinIds OR id_complemento <> ALL (ARRAY[:ids]::int[]));`,
+        {
+            replacements: { idSuscripcion, sinIds: ids.length === 0, ids: ids.length ? ids : [0] },
+            transaction,
+        }
+    );
+
+    for (const { id_complemento, cantidad, cantidad_facturable } of lista) {
+        const facturable = Math.min(cantidad, Math.max(0, cantidad_facturable ?? cantidad));
+        await sequelize.query(
+            `INSERT INTO cobranza.cob_suscripcion_complemento
+                    (id_suscripcion, id_negocio, id_complemento, cantidad, cantidad_facturable, estado)
+             VALUES (:idSuscripcion, :idNegocio, :idComplemento, :cantidad, :facturable, 'A')
+             ON CONFLICT (id_suscripcion, id_complemento)
+             DO UPDATE SET cantidad = EXCLUDED.cantidad,
+                           cantidad_facturable = EXCLUDED.cantidad_facturable,
+                           estado = 'A',
+                           actualizado_en = now();`,
+            {
+                replacements: {
+                    idSuscripcion,
+                    idNegocio,
+                    idComplemento: id_complemento,
+                    cantidad,
+                    facturable,
+                },
+                transaction,
+            }
+        );
+    }
+}
+
+/**
+ * Reescribe las líneas de una factura. Se llama cada vez que se fija su total —al crearla y al
+ * recalcularla—, así que detalle y total no pueden quedar desalineados.
+ */
+async function reemplazarDetalleFactura(idFactura, lineas, { transaction } = {}) {
+    await sequelize.query(`DELETE FROM cobranza.cob_factura_detalle WHERE id_factura = :idFactura;`, {
+        replacements: { idFactura },
+        transaction,
+    });
+    for (const l of lineas) {
+        await sequelize.query(
+            `INSERT INTO cobranza.cob_factura_detalle
+                    (id_factura, tipo, id_plan, id_complemento, descripcion, cantidad,
+                     precio_unitario, subtotal)
+             VALUES (:idFactura, :tipo, :idPlan, :idComplemento, :descripcion, :cantidad,
+                     :precioUnitario, :subtotal);`,
+            {
+                replacements: {
+                    idFactura,
+                    tipo: l.tipo,
+                    idPlan: l.id_plan ?? null,
+                    idComplemento: l.id_complemento ?? null,
+                    descripcion: l.descripcion,
+                    cantidad: l.cantidad,
+                    precioUnitario: l.precio_unitario,
+                    subtotal: l.subtotal,
+                },
+                transaction,
+            }
+        );
+    }
+}
+
+async function listarDetalleFactura(idFactura, { transaction } = {}) {
+    const filas = await sequelize.query(
+        `SELECT tipo, id_plan, id_complemento, descripcion, cantidad, precio_unitario, subtotal
+           FROM cobranza.cob_factura_detalle
+          WHERE id_factura = :idFactura
+          ORDER BY id_factura_detalle;`,
+        { replacements: { idFactura }, type: sequelize.QueryTypes.SELECT, transaction }
+    );
+    return filas.map((f) => ({
+        ...f,
+        precio_unitario: Number(f.precio_unitario),
+        subtotal: Number(f.subtotal),
+    }));
+}
+
 async function registrarTransaccion(datos, { transaction } = {}) {
     return Models.CobTransaccion.create(datos, { transaction });
 }
@@ -313,6 +550,14 @@ module.exports = {
     fijarVencimientoPlan,
     listarPasarelas,
     getPrecio,
+    listarComplementosCatalogo,
+    listarComplementosSuscripcion,
+    fijarComplementosSuscripcion,
+    solicitarComplementosSuscripcion,
+    aplicarComplementosSolicitados,
+    limpiarComplementosSolicitados,
+    reemplazarDetalleFactura,
+    listarDetalleFactura,
     getSuscripcionPorNegocio,
     exigirSuscripcion,
     crearSuscripcion,
