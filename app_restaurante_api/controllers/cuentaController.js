@@ -218,6 +218,7 @@ async function abonar(req, res) {
             tiquetes: req.body.tiquetes,
             idProducto: req.body.id_producto || null,
             descuento: req.body.descuento || 0,
+            idPuntoCaja: req.body.id_punto_caja ?? null,
             concepto: req.body.concepto || null,
         });
 

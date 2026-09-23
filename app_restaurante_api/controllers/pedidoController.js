@@ -130,11 +130,20 @@ async function crearOrden(req, res) {
             idDomiciliario:    id_domiciliario ? Number(id_domiciliario) : null,
             valorDomicilio:    valor_domicilio != null ? Number(valor_domicilio) : 0,
             descuento:         descuento != null ? Number(descuento) : 0,
+            idPuntoCaja:       req.body.id_punto_caja ?? null,
         });
         return Respuesta.success(res, 'Orden creada', orden, 201);
     } catch (err) {
+        // El POS no sabía en qué caja va el pedido. El error lleva las cajas del usuario
+        // para que pueda preguntarlo sin otra consulta.
+        if (err.code === 'PUNTO_CAJA_REQUERIDO') {
+            return Respuesta.error(res, err.message, 409, { code: err.code, puntos: err.puntos || [] });
+        }
         if (err.code === 'CAJA_CERRADA') {
-            return Respuesta.error(res, err.message, err.statusCode || 409, { code: err.code });
+            return Respuesta.error(res, err.message, err.statusCode || 409, {
+                code: err.code,
+                ...(err.punto ? { punto: err.punto } : {}),
+            });
         }
         if (err.code === 'STOCK_INSUFICIENTE') {
             return Respuesta.error(res, err.message, err.statusCode || 409, {

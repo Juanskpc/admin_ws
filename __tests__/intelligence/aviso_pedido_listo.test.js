@@ -19,6 +19,7 @@
  */
 'use strict';
 require('dotenv').config();
+const { asegurarCajaPrincipal } = require('../../app_core/helpers/cajaPrincipal');
 
 const Models = require('../../app_core/models/conection');
 const avisoPedido = require('../../intelligence/adapters/restaurante/avisoPedido');
@@ -59,11 +60,14 @@ const salientesDe = (idConversacion) =>
 
 /** Una orden de despacho recién nacida, sin avisar. */
 async function crearOrden({ tipo = 'LLEVAR', telefono, nombre = 'Ana Ruiz' } = {}) {
+    // Todo pedido pertenece a una caja; el negocio de prueba se crea a mano y no la trae.
+    await asegurarCajaPrincipal(idNegocio);
     return unaFila(
         `INSERT INTO restaurante.pedid_orden
-            (id_negocio, id_usuario, numero_orden, tipo_pedido, estado,
+            (id_negocio, id_punto_caja, id_usuario, numero_orden, tipo_pedido, estado,
              contacto_nombre, contacto_telefono)
-         VALUES (:idNegocio, :idUsuario, :numero, :tipo, 'ABIERTA', :nombre, :telefono)
+         VALUES (:idNegocio, (SELECT id_punto_caja FROM restaurante.rest_punto_caja
+                    WHERE id_negocio = :idNegocio AND estado = 'A' ORDER BY orden LIMIT 1), :idUsuario, :numero, :tipo, 'ABIERTA', :nombre, :telefono)
          RETURNING id_orden, numero_orden;`,
         {
             idNegocio,

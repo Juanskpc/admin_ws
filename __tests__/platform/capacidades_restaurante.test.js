@@ -11,6 +11,7 @@
 'use strict';
 
 require('dotenv').config();
+const { asegurarCajaPrincipal } = require('../../app_core/helpers/cajaPrincipal');
 // La feature comercial se fuerza igual que en las demás suites: `asistente_ia` no está en
 // ningún plan de la base local, y sin ella el Gate deniega antes de llegar a la capacidad.
 process.env.FEATURES_FORZADAS = 'asistente_ia';
@@ -213,11 +214,14 @@ describe('consultar_estado_pedido — un pedido solo lo ve quien lo pidió', () 
     // pedido nuevo de ese negocio. Descubierto escribiendo esto, y es una fragilidad real del
     // servicio, no solo del test.
     async function crearOrdenDePrueba(numero, telefono) {
+        await asegurarCajaPrincipal(idNegocio);
         await sequelize.query(
             `
             INSERT INTO restaurante.pedid_orden
-                (id_negocio, numero_orden, id_usuario, estado, tipo_pedido, contacto_telefono, total)
-            VALUES (:n, :num, :u, 'ABIERTA', 'DOMICILIO', :tel, 45000);
+                (id_negocio, id_punto_caja, numero_orden, id_usuario, estado, tipo_pedido, contacto_telefono, total)
+            VALUES (:n, (SELECT id_punto_caja FROM restaurante.rest_punto_caja
+                          WHERE id_negocio = :n AND estado = 'A' ORDER BY orden LIMIT 1),
+                    :num, :u, 'ABIERTA', 'DOMICILIO', :tel, 45000);
             `,
             { replacements: { n: idNegocio, num: numero, u: principal.id_usuario, tel: telefono } }
         );

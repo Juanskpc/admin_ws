@@ -17,6 +17,7 @@ const InventarioController = require('../controllers/inventarioController');
 const ReporteController    = require('../controllers/reporteController');
 const ConfiguracionController = require('../controllers/configuracionController');
 const CajaController       = require('../controllers/cajaController');
+const PuntoCajaController  = require('../controllers/puntoCajaController');
 const MetodoPagoController = require('../controllers/metodoPagoController');
 const CartaDisenoController = require('../controllers/cartaDisenoController');
 const { verificarToken }   = require('../../app_core/middleware/auth');
@@ -153,6 +154,7 @@ router.post('/clientes/:id/abonos', [
 	body('tiquetes').optional().isInt({ min: 0 }),
 	body('id_producto').optional({ nullable: true }).isInt({ min: 1 }),
 	body('descuento').optional({ nullable: true }).isFloat({ min: 0 }),
+	body('id_punto_caja').optional({ nullable: true, checkFalsy: true }).isInt({ min: 1 }),
 	body('concepto').optional({ nullable: true }).isString().isLength({ max: 255 }),
 ], CuentaController.abonar);
 
@@ -398,19 +400,59 @@ router.get('/reportes/exportar', [
 	query('formato').optional().isIn(['xlsx', 'pdf']),
 ], ReporteController.exportarReporte);
 
+// --- Cajas del negocio (rubros de ingreso) ---
+//
+// '/cajas' (plural) son las cajas; '/caja' (singular) son los turnos de una de ellas.
+router.get('/cajas', [
+	query('id_negocio').isInt({ min: 1 }),
+], PuntoCajaController.listar);
+
+router.get('/cajas/mias', [
+	query('id_negocio').isInt({ min: 1 }),
+], PuntoCajaController.mias);
+
+router.get('/cajas/asignaciones', [
+	query('id_negocio').isInt({ min: 1 }),
+], PuntoCajaController.asignaciones);
+
+router.post('/cajas', [
+	body('id_negocio').isInt({ min: 1 }),
+	body('nombre').isString().trim().isLength({ min: 2, max: 60 }),
+	body('descripcion').optional({ nullable: true }).isString().isLength({ max: 160 }),
+], PuntoCajaController.crear);
+
+router.put('/cajas/:id', [
+	param('id').isInt({ min: 1 }),
+	body('id_negocio').isInt({ min: 1 }),
+	body('nombre').optional().isString().trim().isLength({ min: 2, max: 60 }),
+	body('descripcion').optional({ nullable: true }).isString().isLength({ max: 160 }),
+	body('orden').optional().isInt({ min: 0 }),
+	body('estado').optional().isIn(['A', 'I']),
+], PuntoCajaController.actualizar);
+
+router.put('/cajas/usuarios/:id_usuario', [
+	param('id_usuario').isInt({ min: 1 }),
+	body('id_negocio').isInt({ min: 1 }),
+	body('id_puntos_caja').optional().isArray(),
+	body('id_puntos_caja.*').isInt({ min: 1 }),
+], PuntoCajaController.asignarUsuario);
+
 // --- Caja ---
 router.get('/caja/abierta', [
 	query('id_negocio').isInt({ min: 1 }),
+	query('id_punto_caja').optional({ nullable: true, checkFalsy: true }).isInt({ min: 1 }),
 ], CajaController.getCajaAbierta);
 
 router.get('/caja/domiciliarios', [
 	query('id_negocio').isInt({ min: 1 }),
+	query('id_punto_caja').optional({ nullable: true, checkFalsy: true }).isInt({ min: 1 }),
 ], CajaController.getResumenDomiciliarios);
 
 // Va antes de '/caja/:id/...' por claridad; 'historial' nunca choca con :id
 // porque son rutas de distinta profundidad.
 router.get('/caja/historial', [
 	query('id_negocio').isInt({ min: 1 }),
+	query('id_punto_caja').optional({ nullable: true, checkFalsy: true }).isInt({ min: 1 }),
 	query('desde').optional({ nullable: true, checkFalsy: true }).isISO8601(),
 	query('hasta').optional({ nullable: true, checkFalsy: true }).isISO8601(),
 	query('limite').optional().isInt({ min: 1, max: 100 }),
@@ -429,6 +471,7 @@ router.get('/caja/:id/exportar', [
 
 router.post('/caja/abrir', [
 	body('id_negocio').isInt({ min: 1 }),
+	body('id_punto_caja').optional({ nullable: true, checkFalsy: true }).isInt({ min: 1 }),
 	body('monto_apertura').optional().isFloat({ min: 0 }),
 	body('observaciones').optional({ nullable: true }).isString(),
 ], CajaController.abrirCaja);
@@ -474,6 +517,7 @@ router.post('/caja/ordenes/:id/anular', [
 router.post('/caja/domiciliarios/transferir', [
 	body('id_negocio').isInt({ min: 1 }),
 	body('id_domiciliario').isInt({ min: 1 }),
+	body('id_punto_caja').optional({ nullable: true, checkFalsy: true }).isInt({ min: 1 }),
 ], CajaController.transferirDomiciliario);
 
 // --- Métodos de pago ---
