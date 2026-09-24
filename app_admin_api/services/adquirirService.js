@@ -88,6 +88,21 @@ function hoyBogota() {
 }
 
 /**
+ * LOS PLANES QUE SE VENDEN EN LÍNEA, por código. Una sola lista: añadir un plan a la venta es añadir
+ * su código aquí, y quitarlo es quitarlo; ni el catálogo ni la compra tienen otra.
+ *
+ * Los planes con facturación (`EMPRENDEDOR_FE_*`, `EMPRESARIAL_*`) se venden desde el 2026-09-24
+ * por decisión del usuario, **aunque la emisión de documentos (FE-2) todavía no existe**. Cada uno
+ * es una fila de `gener_plan` por paquete de documentos (S/M/L/XL).
+ */
+const CODIGOS_OFRECIDOS = [
+    'BASICO',
+    'AVANZADO',
+    'EMPRENDEDOR_FE_S', 'EMPRENDEDOR_FE_M', 'EMPRENDEDOR_FE_L', 'EMPRENDEDOR_FE_XL',
+    'EMPRESARIAL_S', 'EMPRESARIAL_M', 'EMPRESARIAL_L', 'EMPRESARIAL_XL',
+];
+
+/**
  * El plan que se va a cobrar, con su precio real.
  *
  * Se resuelve **por nombre** y contra `cob_precio_plan`, no por el precio que mande el navegador:
@@ -95,12 +110,20 @@ function hoyBogota() {
  * Si la landing promete un plan que no existe aquí, esto falla a propósito — es preferible una
  * compra que no arranca a una compra que cobra otra cosa.
  */
-async function resolverPlan(nombrePlan, moneda = 'COP', ciclo = 'mensual') {
+async function resolverPlan(nombrePlan, moneda = 'COP', ciclo = 'mensual', idTipoModulo = null) {
+    // Se busca por CÓDIGO ('BASICO', 'AVANZADO'…), que no cambia si el plan se renombra. El nombre
+    // se sigue aceptando como referencia antigua —los enlaces publicados de la landing llevan
+    // `?plan=Plan%20Avanzado`—; se quita cuando la landing mande el código.
+    const referencia = String(nombrePlan || '').trim();
     const plan = await Models.GenerPlan.findOne({
-        where: { nombre: String(nombrePlan || '').trim(), estado: 'A' },
-        attributes: ['id_plan', 'nombre'],
+        where: {
+            estado: 'A',
+            [Op.or]: [{ codigo: referencia.toUpperCase() }, { nombre: referencia }],
+        },
+        attributes: ['id_plan', 'nombre', 'codigo'],
     });
-    if (!plan) {
+    // Encontrarlo no basta: además tiene que estar en la lista de los que se venden.
+    if (!plan || !CODIGOS_OFRECIDOS.includes(plan.codigo)) {
         throw error(
             'Ese plan todavía no se puede contratar en línea. Escríbenos y lo activamos contigo.',
             'PLAN_NO_DISPONIBLE',
@@ -108,7 +131,9 @@ async function resolverPlan(nombrePlan, moneda = 'COP', ciclo = 'mensual') {
         );
     }
 
-    const precio = await Dao.getPrecio({ idPlan: plan.id_plan, moneda, ciclo });
+    // El precio es el del APLICATIVO del negocio que se está comprando (Reserva no vale lo mismo que
+    // Restaurante); sin fila propia, el de por defecto.
+    const precio = await Dao.getPrecio({ idPlan: plan.id_plan, moneda, ciclo, idTipoModulo });
     if (!precio || Number(precio) <= 0) {
         throw error(
             'Ese plan todavía no tiene precio publicado para tu país. Escríbenos y lo activamos contigo.',
@@ -117,7 +142,14 @@ async function resolverPlan(nombrePlan, moneda = 'COP', ciclo = 'mensual') {
         );
     }
 
-    return { id_plan: plan.id_plan, nombre: plan.nombre, precio: Number(precio), moneda, ciclo };
+    return {
+        id_plan: plan.id_plan,
+        nombre: plan.nombre,
+        codigo: plan.codigo ?? null,
+        precio: Number(precio),
+        moneda,
+        ciclo,
+    };
 }
 
 /**
@@ -126,13 +158,18 @@ async function resolverPlan(nombrePlan, moneda = 'COP', ciclo = 'mensual') {
  * El frontend ya conoce los rubros por `GET /admin/rubros`, pero los planes no: necesita saber
  * cuáles puede cobrar de verdad para no enseñar un botón que va a fallar en el último paso.
  */
-async function catalogoCompra({ moneda = 'COP', ciclo = 'mensual' } = {}) {
+async function catalogoCompra({ moneda = 'COP', ciclo = 'mensual', rubro = null } = {}) {
+    // Con el oficio elegido se sabe el aplicativo, y con él los precios que le tocan. Sin oficio
+    // (la página aún no lo pregunta) se enseñan los de por defecto.
+    const rubroElegido = rubro ? await resolverRubroElegido(rubro) : null;
+    const idTipoModulo = rubroElegido?.id_tipo_modulo ?? null;
+
     const planes = await sequelize.query(
-        `SELECT id_plan, nombre, descripcion, usuarios_incluidos, cajas_incluidas
+        `SELECT id_plan, codigo, nombre, descripcion, usuarios_incluidos, cajas_incluidas
            FROM general.gener_plan
-          WHERE estado = 'A' AND nombre IN ('Plan Básico', 'Plan Avanzado')
+          WHERE estado = 'A' AND codigo IN (:codigos)
           ORDER BY id_plan;`,
-        { type: sequelize.QueryTypes.SELECT }
+        { replacements: { codigos: CODIGOS_OFRECIDOS }, type: sequelize.QueryTypes.SELECT }
     );
 
     const vendibles = [];
@@ -141,7 +178,7 @@ async function catalogoCompra({ moneda = 'COP', ciclo = 'mensual' } = {}) {
         // se ofrece, en vez de tumbar el catálogo entero.
         let precio = null;
         try {
-            precio = await Dao.getPrecio({ idPlan: plan.id_plan, moneda, ciclo });
+            precio = await Dao.getPrecio({ idPlan: plan.id_plan, moneda, ciclo, idTipoModulo });
         } catch {
             continue;
         }
@@ -149,6 +186,7 @@ async function catalogoCompra({ moneda = 'COP', ciclo = 'mensual' } = {}) {
 
         vendibles.push({
             id_plan: plan.id_plan,
+            codigo: plan.codigo,
             nombre: plan.nombre,
             descripcion: plan.descripcion ?? null,
             precio: Number(precio),
@@ -297,11 +335,8 @@ async function crearCuenta(datos) {
     const correo = String(email).toLowerCase().trim();
     const cedula = String(num_identificacion).trim();
 
-    // 1. Lo que se va a cobrar, antes de tocar nada: el plan y lo que se le añade.
-    const plan = await resolverPlan(nombrePlan, moneda, ciclo);
-    const complementos = await resolverComplementos(complementosPedidos, moneda, ciclo);
-
-    // 2. El oficio elegido y el módulo que lo atiende — de ahí salen los roles del negocio.
+    // 1. El oficio elegido y el módulo que lo atiende — de ahí salen los roles del negocio, y el
+    //    aplicativo del que depende el PRECIO del plan.
     const rubroElegido = await resolverRubroElegido(rubro);
     if (!rubroElegido?.id_tipo_modulo) {
         throw error(
@@ -310,6 +345,11 @@ async function crearCuenta(datos) {
             409
         );
     }
+
+    // 2. Lo que se va a cobrar, antes de tocar nada: el plan (al precio de su aplicativo) y lo que
+    //    se le añade.
+    const plan = await resolverPlan(nombrePlan, moneda, ciclo, rubroElegido.id_tipo_modulo);
+    const complementos = await resolverComplementos(complementosPedidos, moneda, ciclo);
 
     // 3. ¿Ya hay algo con este correo o esta cédula?
     //
@@ -384,6 +424,8 @@ async function crearCuenta(datos) {
     let idUsuario;
     let idNegocio;
     try {
+        // Es el PRIMER usuario del negocio nuevo: no se comprueba el cupo (nunca falla el primero;
+        // ver app_core/helpers/cupoUsuarios.js).
         const usuario = await Models.GenerUsuario.create(
             {
                 primer_nombre,
@@ -696,7 +738,9 @@ async function notificarAltaPagada(idNegocio, referencia) {
 }
 
 module.exports = {
+    CODIGOS_OFRECIDOS,
     catalogoCompra,
+    resolverPlan,
     crearCuenta,
     iniciarCompra,
     reintentarPago,

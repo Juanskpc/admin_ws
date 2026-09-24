@@ -10,7 +10,7 @@ function check(req, res) {
 }
 
 function fallo(res, err, contexto, porDefecto) {
-    if (err.statusCode) return Respuesta.error(res, err.message, err.statusCode);
+    if (err.statusCode) return Respuesta.error(res, err.message, err.statusCode, null, { code: err.code });
     console.error(`[Reserva/Usuarios] ${contexto}:`, err.message);
     return Respuesta.error(res, porDefecto);
 }

@@ -54,7 +54,7 @@ async function actualizar(idServicio, idNegocio, data) {
     if (data.id_categoria === '') data.id_categoria = null;
     delete data.id_servicio; delete data.id_negocio; delete data.fecha_creacion;
     data.fecha_actualizacion = new Date();
-    return s.update(data);
+    return Models.sequelize.transaction((t) => s.update(data, { transaction: t }));
 }
 
 /**
@@ -71,7 +71,7 @@ async function inactivar(idServicio, idNegocio) {
     if (s.imagen_url) {
         ImagenService.eliminar({ tipo: 'servicio', idNegocio, idEntidad: idServicio });
     }
-    return s.update({ estado: 'I', imagen_url: null, fecha_actualizacion: new Date() });
+    return Models.sequelize.transaction((t) => s.update({ estado: 'I', imagen_url: null, fecha_actualizacion: new Date() }, { transaction: t }));
 }
 
 module.exports = { listar, getById, crear, actualizar, inactivar };

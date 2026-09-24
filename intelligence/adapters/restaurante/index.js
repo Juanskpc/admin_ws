@@ -58,6 +58,9 @@ const pedidoService = require('../../../app_restaurante_api/services/pedidoServi
 const cajaService = require('../../../app_restaurante_api/services/cajaService');
 const cuentaService = require('../../../app_restaurante_api/services/cuentaService');
 const horarioService = require('../../../app_restaurante_api/services/horarioService');
+const barrioService = require('../../../app_restaurante_api/services/barrioService');
+const exclusiones = require('./exclusiones');
+const mesaPublicaService = require('../../../app_restaurante_api/services/mesaPublicaService');
 const usuarioAsistenteDao = require('../../../app_core/dao/usuarioAsistenteDao');
 const Models = require('../../../app_core/models/conection');
 const { enPesos, enlaceDelMenu } = require('./flujo');
@@ -432,9 +435,49 @@ function registrarCapacidades() {
                 // cliente cace aquí —antes de que salga nada de la cocina— que le entendimos
                 // al revés. Es el único punto del flujo donde todavía sale gratis.
                 const recoge = args.tipo_entrega === 'LLEVAR';
-                const donde = recoge
-                    ? 'para recogerlo en el local'
-                    : `para llevártelo a ${args.direccion}`;
+                const enMesa = args.tipo_entrega === 'MESA';
+
+                // La mesa y el barrio que dijo el cliente son sugerencias: aquí se RELEEN para
+                // enseñar lo que de verdad se va a apuntar y cobrar. Un fallo no tumba la
+                // confirmación (ADR-010 no la negocia): sin el detalle, se pide igual.
+                let nombreMesa = null;
+                let sumaACuenta = false;
+                if (enMesa && args.id_mesa) {
+                    try {
+                        const mesa = await mesaPublicaService.resolverMesa({
+                            idNegocio,
+                            idMesa: args.id_mesa,
+                        });
+                        nombreMesa = mesa.nombre;
+                        // Si la mesa ya tiene cuenta abierta, esto se SUMA a ella: se dice antes
+                        // del «sí», porque el cliente tiene que saber que no es una cuenta aparte.
+                        sumaACuenta = Boolean(
+                            await mesaPublicaService.cuentaAbierta({ idNegocio, idMesa: mesa.id_mesa })
+                        );
+                    } catch (_) {
+                        nombreMesa = null;
+                    }
+                }
+                let domicilio = null;
+                if (args.tipo_entrega === 'DOMICILIO' && args.id_barrio) {
+                    try {
+                        const r = await barrioService.valorDomicilioDe({
+                            idNegocio,
+                            idBarrio: args.id_barrio,
+                        });
+                        if (r.valor > 0) domicilio = { barrio: r.barrio.nombre, valor: r.valor };
+                    } catch (_) {
+                        domicilio = null;
+                    }
+                }
+
+                const donde = enMesa
+                    ? sumaACuenta
+                        ? `para sumarlo a la cuenta de tu mesa${nombreMesa ? ` (${nombreMesa})` : ''}`
+                        : `para tu mesa${nombreMesa ? ` (${nombreMesa})` : ''}`
+                    : recoge
+                      ? 'para recogerlo en el local'
+                      : `para llevártelo a ${args.direccion}`;
                 const cabecera = `¿Confirmo tu pedido a nombre de ${args.cliente_nombre}, ${donde}?`;
 
                 /**
@@ -448,9 +491,10 @@ function registrarCapacidades() {
                  * El domicilio solo se nombra cuando lo hay: avisar de un recargo imposible a
                  * quien va a pasar por el local es ruido que resta credibilidad al resto.
                  */
-                const aviso = recoge
-                    ? '_El total es aproximado: puede variar por desechables._'
-                    : '_El total es aproximado: no incluye el domicilio y puede variar por desechables._';
+                const aviso =
+                    recoge || enMesa || domicilio
+                        ? '_El total es aproximado: puede variar por desechables._'
+                        : '_El total es aproximado: no incluye el domicilio y puede variar por desechables._';
 
                 /**
                  * La lista de productos, con su precio y el total.
@@ -483,20 +527,55 @@ function registrarCapacidades() {
                     });
                     const porId = new Map(productos.map((p) => [p.id_producto, p]));
 
+                    // Lo que el cliente quitó de cada plato se RELEE aquí y se enseña solo lo válido:
+                    // un ingrediente desactivado o que ya no es removible se descarta y se dice
+                    // («no pudimos quitar: X»), antes del «sí». `ejecutar` vuelve a comprobarlo.
+                    const quitadas = await exclusiones.resolver({
+                        idNegocio,
+                        lineas: items.map((i) => ({
+                            id_producto: Number(i?.id_producto),
+                            ids: exclusiones.leerSin(i?.sin),
+                        })),
+                    });
+                    const descartadas = [];
+
                     let total = 0;
-                    const lineas = items.map((i) => {
+                    const lineas = items.map((i, k) => {
                         const p = porId.get(Number(i?.id_producto));
                         const cantidad = Number(i?.cantidad) || 1;
                         if (!p) throw new Error('un producto del pedido ya no está en la carta');
                         const subtotal = Number(p.precio) * cantidad;
                         total += subtotal;
-                        return `• ${cantidad} × ${p.nombre} — ${enPesos(subtotal)}`;
+                        descartadas.push(...quitadas[k].descartadas);
+                        const sin = quitadas[k].validas.length
+                            ? ` (${quitadas[k].validas.map((v) => `sin ${v.nombre}`).join(', ')})`
+                            : '';
+                        return `• ${cantidad} × ${p.nombre}${sin} — ${enPesos(subtotal)}`;
                     });
+
+                    // Las que el flujo ya descartó al leer el código de la carta (`sin_descartadas`)
+                    // más las que dejaron de valer desde entonces.
+                    const previas = String(args.sin_descartadas || '').split(',').map((x) => x.trim()).filter(Boolean);
+                    const noQuitadas = [
+                        ...new Set([...previas, ...exclusiones.nombresLegibles(descartadas).split(', ').filter(Boolean)]),
+                    ];
+                    const avisoQuitar = noQuitadas.length
+                        ? [`_(no pudimos quitar: ${noQuitadas.join(', ')})_`]
+                        : [];
+
+                    // El domicilio va como línea propia y suma al total ANTES del «sí»: lo que el
+                    // cliente confirma tiene que ser lo que se le va a cobrar en la puerta.
+                    const lineaDomicilio = domicilio
+                        ? [`• Domicilio (${domicilio.barrio}) — ${enPesos(domicilio.valor)}`]
+                        : [];
+                    if (domicilio) total += domicilio.valor;
 
                     return [
                         cabecera,
                         '',
                         ...lineas,
+                        ...lineaDomicilio,
+                        ...avisoQuitar,
                         '',
                         `*Total: ${enPesos(total)}*`,
                         aviso,
@@ -512,8 +591,10 @@ function registrarCapacidades() {
                 }
             },
             hecho: ({ resultado }) =>
-                `¡Listo! Tu pedido quedó tomado. El número es ${resultado.numero_orden} — ` +
-                'guárdalo para consultar cómo va.',
+                resultado.suma_a_cuenta
+                    ? `¡Listo! Lo sumé a la cuenta de tu mesa (${resultado.mesa}).`
+                    : `¡Listo! Tu pedido quedó tomado. El número es ${resultado.numero_orden} — ` +
+                      'guárdalo para consultar cómo va.',
         },
         feature: FEATURE.ASISTENTE_IA,
         parametros: {
@@ -528,8 +609,15 @@ function registrarCapacidades() {
                 elemento: {
                     id_producto: { tipo: 'entero', requerido: true, min: 1 },
                     cantidad: { tipo: 'entero', requerido: true, min: 1, max: 50 },
+                    // Ingredientes que se quitan de ESTA línea, como ids separados por punto
+                    // («12.15»). Texto y no lista porque el motor de argumentos no anida listas
+                    // de escalares; `ejecutar` los relee y solo guarda los removibles del producto.
+                    sin: { tipo: 'string', requerido: false, max_longitud: 100 },
                 },
             },
+            // Nombres de lo que el flujo ya descartó al leer el código de la carta: solo para que
+            // la confirmación lo diga («no pudimos quitar: X»). No se usa para nada más.
+            sin_descartadas: { tipo: 'string', requerido: false, max_longitud: 300 },
             cliente_nombre: { tipo: 'string', requerido: true, min_longitud: 2, max_longitud: 150 },
             /**
              * Cómo recibe el cliente su pedido. **Obligatorio y sin valor por defecto**, que es
@@ -546,11 +634,17 @@ function registrarCapacidades() {
             tipo_entrega: {
                 tipo: 'enum',
                 requerido: true,
-                valores: ['DOMICILIO', 'LLEVAR'],
+                valores: ['DOMICILIO', 'LLEVAR', 'MESA'],
                 descripcion:
                     'DOMICILIO si se lo llevamos a su dirección, LLEVAR si el cliente pasa a ' +
-                    'recogerlo por el local. Pregúntaselo antes: no lo supongas.',
+                    'recogerlo por el local, MESA si está sentado en el local (exige id_mesa). ' +
+                    'Pregúntaselo antes: no lo supongas.',
             },
+            // Ambos son SUGERENCIAS del cliente: `ejecutar` los relee de la base, comprueba que
+            // sean de este negocio y calcula el valor del domicilio él mismo. Un precio que
+            // venga en el mensaje no se lee en ningún sitio.
+            id_barrio: { tipo: 'entero', requerido: false, min: 1 },
+            id_mesa: { tipo: 'entero', requerido: false, min: 1 },
             // Obligatoria **solo si es domicilio**, y eso no lo sabe expresar el validador: la
             // comprueba `ejecutar`, que es quien ve los dos argumentos a la vez. Declararla
             // obligatoria aquí impediría el pedido para recoger; declararla y no comprobarla
@@ -651,6 +745,42 @@ function registrarCapacidades() {
                 throw e;
             }
 
+            // ── 2-bis. Lo que el cliente quitó: se RELEE y se exige que siga valiendo ────────
+            //
+            // La confirmación ya mostró solo las exclusiones válidas (y dijo las que no). Aquí se
+            // vuelve a comprobar: si algo de lo confirmado dejó de ser removible de ese producto
+            // en este negocio —una ventana de segundos— se rechaza con `EXCLUSION_INVALIDA` en vez
+            // de guardar a medias. Nunca se guarda un id que no sea removible de ese producto.
+            const quitadasOrden = await exclusiones.resolver({
+                idNegocio,
+                lineas: args.items.map((i) => ({
+                    id_producto: Number(i.id_producto),
+                    ids: exclusiones.leerSin(i.sin),
+                })),
+                transaction: contexto.transaction,
+            });
+            const rechazadas = quitadasOrden.flatMap((r) => r.descartadas);
+            if (rechazadas.length > 0) {
+                const e = new Error(
+                    `Ya no puedo quitar ${exclusiones.nombresLegibles(rechazadas)} de tu pedido. ` +
+                        'Vuelve a armarlo o llama al restaurante.'
+                );
+                e.code = 'EXCLUSION_INVALIDA';
+                e.statusCode = 400;
+                throw e;
+            }
+            const itemsParaOrden = args.items.map((i, k) => ({
+                id_producto: Number(i.id_producto),
+                cantidad: Number(i.cantidad) || 1,
+                // `precio_unitario` sale del producto que se acaba de releer, NUNCA de la
+                // conversación: si viniera del modelo, un pedido podría cobrarse a lo que el bot
+                // recordara de hace veinte turnos.
+                precio_unitario: Number(porId.get(Number(i.id_producto)).precio),
+                ...(quitadasOrden[k].validas.length
+                    ? { exclusiones: quitadasOrden[k].validas.map((v) => v.id_ingrediente) }
+                    : {}),
+            }));
+
             // ── 3. El autor de la orden ───────────────────────────────────────────────────
             //
             // `pedid_orden.id_usuario` es NOT NULL y un pedido de WhatsApp no tiene empleado
@@ -693,6 +823,45 @@ function registrarCapacidades() {
                 throw e;
             }
 
+            // ── La mesa, releída de la base ───────────────────────────────────────────────
+            //
+            // Un pedido «en el local» necesita mesa, y esa mesa tiene que ser de ESTE negocio y
+            // estar activa: el id llega en un mensaje que el cliente pudo editar. Se comprueba
+            // dentro de la misma transacción que crea la orden. Sin dirección ni teléfono
+            // obligatorios: quien está sentado no los necesita.
+            const esMesa = args.tipo_entrega === 'MESA';
+            let mesa = null;
+            if (esMesa) {
+                if (!args.id_mesa) {
+                    const e = new Error('Necesito saber en qué mesa estás.');
+                    e.code = 'MESA_REQUERIDA';
+                    e.statusCode = 400;
+                    throw e;
+                }
+                mesa = await mesaPublicaService.resolverMesa({
+                    idNegocio,
+                    idMesa: args.id_mesa,
+                    transaction: contexto.transaction,
+                    bloquear: true,
+                });
+            }
+
+            // ── El valor del domicilio: lo pone el SERVIDOR ───────────────────────────────
+            //
+            // Del barrio que dijo el cliente solo se toma el id. Si no es de este negocio o ya
+            // no existe, `ZONA_INVALIDA`. Sin barrio («Otro barrio») el valor es 0 y el cajero
+            // lo ajusta al confirmar con el cliente. Con `permite_pago_domicilio` apagado,
+            // `valorDomicilioDe` devuelve 0 y `crearOrden` lo vuelve a aplicar.
+            let valorDomicilio = 0;
+            if (esDomicilio && args.id_barrio) {
+                const r = await barrioService.valorDomicilioDe({
+                    idNegocio,
+                    idBarrio: args.id_barrio,
+                    transaction: contexto.transaction,
+                });
+                valorDomicilio = r.valor;
+            }
+
             // ── El domiciliario, al azar ──────────────────────────────────────────────────
             //
             // Un pedido a domicilio tomado por el bot no tiene a nadie del negocio decidiendo
@@ -731,12 +900,58 @@ function registrarCapacidades() {
             // Que tenga que ser de este negocio no es formalismo: un id de otro inquilino en esa
             // columna es la fuga que cerró F2.
 
+            // ── Mesa con cuenta abierta: se SUMA a ella ────────────────────────────────────
+            //
+            // Mesas y cobro asumen una cuenta activa por mesa. Una orden nueva sobre una mesa
+            // ocupada (el mesero atendiéndola, u otro comensal que pidió un minuto antes) quedaría
+            // huérfana: ni se vería ni se cobraría desde Mesas. Se añade a la abierta por la misma
+            // vía de servicio que usa el asistente para «agregar a mi pedido» —así también pasa por
+            // el inventario, el recálculo del total y los avisos en vivo—. La mesa quedó bloqueada
+            // arriba, así que dos pedidos simultáneos hacen fila.
+            if (mesa) {
+                const abierta = await mesaPublicaService.cuentaAbierta({
+                    idNegocio,
+                    idMesa: mesa.id_mesa,
+                    transaction: contexto.transaction,
+                });
+                if (abierta) {
+                    const actualizada = await pedidoService.agregarItemsPorCliente(abierta.id_orden, {
+                        idNegocio,
+                        items: itemsParaOrden.map((it) => ({
+                            ...it,
+                            // Lo que entra por el bot a una cuenta que no es suya queda marcado en
+                            // CADA línea (la nota de la orden es del mesero y no se toca): en Mesas
+                            // y en cocina se ve qué añadió WhatsApp y se puede quitar con las
+                            // herramientas de siempre. La presencia del cliente no se verifica; el
+                            // «sí» y esta visibilidad son la defensa.
+                            nota: `WhatsApp: ${args.cliente_nombre}`.slice(0, 200),
+                        })),
+                        transaction: contexto.transaction,
+                        permitirEnCocina: true,
+                    });
+                    return {
+                        numero_orden: actualizada.numero_orden,
+                        estado: actualizada.estado,
+                        total: precio(actualizada.total),
+                        items: args.items.length,
+                        suma_a_cuenta: true,
+                        mesa: mesa.nombre,
+                    };
+                }
+            }
+
             const orden = await pedidoService.crearOrden(
                 {
                     idNegocio,
                     idUsuario,
-                    idMesa: null,
+                    idMesa: mesa ? mesa.id_mesa : null,
                     tipoPedido: args.tipo_entrega,
+                    valorDomicilio,
+                    // En una mesa no hay «contacto»: se deja dicho quién pidió, para que la
+                    // cocina no lea un pedido de mesa sin nombre.
+                    nota: esMesa
+                        ? `WhatsApp: ${args.cliente_nombre}${args.nota ? ` — ${args.nota}` : ''}`
+                        : undefined,
                     contactoNombre: args.cliente_nombre,
                     contactoTelefono: telefono,
                     // Nula en un pedido para recoger: no hay a dónde llevarlo.
@@ -757,14 +972,23 @@ function registrarCapacidades() {
                     // viniera del modelo, un pedido podría cobrarse a lo que el bot recordara
                     // de hace veinte turnos, y esa diferencia se descubre en la puerta del
                     // cliente con el domiciliario delante.
-                    items: args.items.map((i) => ({
-                        id_producto: Number(i.id_producto),
-                        cantidad: Number(i.cantidad) || 1,
-                        precio_unitario: Number(porId.get(Number(i.id_producto)).precio),
-                    })),
+                    items: itemsParaOrden,
                 },
                 { transaction: contexto.transaction }
             );
+
+            // El POS marca la mesa OCUPADA al tomar el pedido (desde la pantalla, con un PATCH).
+            // Aquí no hay pantalla: se hace en la misma transacción, y solo si estaba DISPONIBLE
+            // —una mesa en POR_COBRAR no se pisa—. Con `fecha_inicio_servicio` arranca el reloj.
+            if (mesa) {
+                await Models.RestMesa.update(
+                    { estado_servicio: 'OCUPADA', fecha_inicio_servicio: new Date() },
+                    {
+                        where: { id_mesa: mesa.id_mesa, id_negocio: idNegocio, estado_servicio: 'DISPONIBLE' },
+                        transaction: contexto.transaction,
+                    }
+                );
+            }
 
             return {
                 numero_orden: orden.numero_orden,

@@ -386,7 +386,7 @@ async function guardarVitrina(idNegocio, datos) {
         if (datos[campo] !== undefined) cambiosNegocio[campo] = normalizarRed(red, datos[campo]);
     }
 
-    if (Object.keys(cambiosNegocio).length) await negocio.update(cambiosNegocio);
+    if (Object.keys(cambiosNegocio).length) await Models.sequelize.transaction((t) => negocio.update(cambiosNegocio, { transaction: t }));
 
     const cambiosConfig = {};
     if (datos.descripcion_publica !== undefined) {
@@ -398,7 +398,7 @@ async function guardarVitrina(idNegocio, datos) {
 
     if (Object.keys(cambiosConfig).length) {
         const cfg = await ConfigService.get(idNegocio);
-        await cfg.update({ ...cambiosConfig, fecha_actualizacion: new Date() });
+        await Models.sequelize.transaction((t) => cfg.update({ ...cambiosConfig, fecha_actualizacion: new Date() }, { transaction: t }));
     }
 
     return getVitrinaEdicion(idNegocio);

@@ -2,6 +2,8 @@ const CartaService = require('../services/cartaService');
 const PublicoService = require('../services/publicoService');
 const CartaDisenoService = require('../services/cartaDisenoService');
 const horarioService = require('../services/horarioService');
+const BarrioService = require('../services/barrioService');
+const MesaPublicaService = require('../services/mesaPublicaService');
 const Respuesta = require('../../app_core/helpers/respuesta');
 const { tienePlanActivo } = require('../../app_core/helpers/planHelper');
 
@@ -63,6 +65,32 @@ async function getNegocio(req, res) {
     } catch (err) {
         console.error('[Publico] Error getNegocio:', err.message);
         return Respuesta.error(res, 'Error al obtener informacion del negocio.');
+    }
+}
+
+/** GET /restaurante/public/negocios/:id/barrios — solo id, nombre y valor; vacío si no cobra domicilio. */
+async function getBarrios(req, res) {
+    try {
+        const idNegocio = Number(req.params.id);
+        if (!idNegocio) return Respuesta.error(res, 'id_negocio requerido', 400);
+        if (!(await tienePlanActivo(idNegocio))) return planError(res);
+        return Respuesta.success(res, 'Barrios obtenidos', await BarrioService.listarPublico(idNegocio));
+    } catch (err) {
+        console.error('[Publico] Error getBarrios:', err.message);
+        return Respuesta.error(res, 'Error al obtener los barrios.');
+    }
+}
+
+/** GET /restaurante/public/negocios/:id/mesas — solo id, nombre y número de las mesas activas. */
+async function getMesas(req, res) {
+    try {
+        const idNegocio = Number(req.params.id);
+        if (!idNegocio) return Respuesta.error(res, 'id_negocio requerido', 400);
+        if (!(await tienePlanActivo(idNegocio))) return planError(res);
+        return Respuesta.success(res, 'Mesas obtenidas', await MesaPublicaService.listarPublicas(idNegocio));
+    } catch (err) {
+        console.error('[Publico] Error getMesas:', err.message);
+        return Respuesta.error(res, 'Error al obtener las mesas.');
     }
 }
 
@@ -160,6 +188,8 @@ async function getCartaCompleta(req, res) {
                 icono: p.icono,
                 es_popular: p.es_popular,
                 disponible: p.disponible !== false,
+                // Solo lo que el cliente puede quitar, sin cantidades ni stock ni costos.
+                ingredientes_removibles: p.removibles ?? [],
             })),
         }));
 
@@ -192,6 +222,8 @@ async function getPaleta(req, res) {
 
 module.exports = {
     getNegocio,
+    getBarrios,
+    getMesas,
     getCartaCompleta,
     getCategorias,
     getProductos,

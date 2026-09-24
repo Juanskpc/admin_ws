@@ -45,6 +45,9 @@ const confirmacion = require('../../engine/confirmacion');
 const policyGate = require('../../core/policyGate');
 const identidadReal = require('../../engine/identidad');
 const horarioService = require('../../../app_restaurante_api/services/horarioService');
+const barrioService = require('../../../app_restaurante_api/services/barrioService');
+const exclusiones = require('./exclusiones');
+const mesaPublicaService = require('../../../app_restaurante_api/services/mesaPublicaService');
 
 const VERTICAL = 'restaurante';
 
@@ -378,6 +381,12 @@ const TAREA_PEDIDO = 'pedido_domicilio';
 const ENTREGA = {
     DOMICILIO: 'DOMICILIO',
     RECOGER: 'LLEVAR',
+    /**
+     * Sentado en el local. **Solo entra desde la carta virtual** (`~m=L` del código): el bot no
+     * lo ofrece al preguntar por chat, porque sin la carta no hay forma de saber que la persona
+     * está de verdad en el local.
+     */
+    MESA: 'MESA',
 };
 
 const PASO_PEDIDO = {
@@ -409,6 +418,14 @@ const PASO_PEDIDO = {
     DATOS: 'datos',
     TELEFONO: 'telefono',
     DIRECCION: 'direccion',
+    /**
+     * El barrio de un domicilio, cuando el negocio cobra el domicilio por barrio y el cliente no
+     * lo trajo elegido de la carta. Va **antes** que la dirección: el valor del domicilio
+     * depende de él y es lo que el cliente quiere saber antes de dar su casa.
+     */
+    BARRIO: 'barrio',
+    /** La mesa de quien pide desde el local, cuando no la trajo o la que trajo no vale. */
+    MESA: 'mesa',
 };
 
 /** Lo que hace falta para crear la orden, y que nadie más sabe. */
@@ -445,7 +462,10 @@ function huecosDelCliente(datos, { telefonoProbado }) {
     // El teléfono se pide en los dos casos, pero **no por lo mismo**: en un domicilio es para
     // que el domiciliario llame desde la puerta; en un pedido para recoger es para poder
     // avisarle cuando esté listo. Como el motivo cambia, el texto de la pregunta también.
-    if (!datos.telefono && !telefonoProbado) faltan.push(PASO_PEDIDO.TELEFONO);
+    // Ni en una mesa: quien está sentado no necesita que lo llamen ni que le avisen.
+    if (datos.entrega !== ENTREGA.MESA && !datos.telefono && !telefonoProbado) {
+        faltan.push(PASO_PEDIDO.TELEFONO);
+    }
     // La dirección **solo** si se lo llevamos. Quien pasa a recoger no tiene que dar su casa,
     // y pedírsela sería recoger un dato que no se va a usar.
     if (datos.entrega === ENTREGA.DOMICILIO && !datos.direccion) {
@@ -454,10 +474,27 @@ function huecosDelCliente(datos, { telefonoProbado }) {
     return faltan;
 }
 
+/**
+ * ¿Hay que preguntar el barrio? Solo si es un domicilio, el negocio cobra el domicilio por barrio
+ * (y tiene alguno cargado) y todavía no se sabe: ni elegido, ni un «otro barrio» dicho.
+ */
+function necesitaBarrio(datos, ctx) {
+    return (
+        datos.entrega === ENTREGA.DOMICILIO &&
+        Boolean(ctx?.barrios?.habilitado) &&
+        (ctx.barrios.barrios || []).length > 0 &&
+        !datos.id_barrio &&
+        !datos.barrio_otro
+    );
+}
+
 function loQueFalta(datos, ctx) {
     if (!datos.nombre) return PASO_PEDIDO.NOMBRE;
     // Antes que nada de lo demás: de esta respuesta depende qué más se pregunta.
     if (!datos.entrega) return PASO_PEDIDO.ENTREGA;
+    // El barrio y la mesa, antes de nada más: de ellos depende lo que cuesta y adónde va.
+    if (necesitaBarrio(datos, ctx)) return PASO_PEDIDO.BARRIO;
+    if (datos.entrega === ENTREGA.MESA && !datos.id_mesa) return PASO_PEDIDO.MESA;
     const faltan = huecosDelCliente(datos, ctx);
     if (faltan.length === 0) return null;
     // Uno solo se pregunta por su nombre; varios, todos juntos. Preguntar «necesito una cosita»
@@ -541,6 +578,25 @@ function pregunta(paso, datos, ctx) {
             };
         case PASO_PEDIDO.DATOS:
             return preguntaCombinada(datos, ctx);
+        case PASO_PEDIDO.BARRIO: {
+            const lista = (ctx?.barrios?.barrios || [])
+                .map((b) => `• ${b.nombre} — ${enPesos(b.valor)}`)
+                .join('\n');
+            return {
+                texto:
+                    '¿En qué barrio estás? 📍 Esto es lo que cuesta el domicilio a cada uno:\n\n' +
+                    `${lista}\n\n` +
+                    'Escríbeme el tuyo, o *otro* si no aparece: el restaurante te confirma el valor.',
+            };
+        }
+        case PASO_PEDIDO.MESA: {
+            const numeros = (ctx?.mesas || []).map((m) => m.numero).join(', ');
+            return {
+                texto:
+                    '¿En qué mesa estás? 🪑 Escríbeme el número.' +
+                    (numeros ? ` (Tenemos las mesas: ${numeros})` : ''),
+            };
+        }
         default:
             return { texto: '¿Seguimos?' };
     }
@@ -573,13 +629,20 @@ function seguirOConfirmar(ctx, datos, pasos, { apertura = '', solicitarConfirmac
     return solicitarConfirmacion({
         capacidad: 'tomar_pedido',
         args: {
-            items: datos.items,
+            items: itemsParaArgumentos(datos.items),
+            ...(datos.sin_descartadas ? { sin_descartadas: datos.sin_descartadas } : {}),
             cliente_nombre: datos.nombre,
             tipo_entrega: datos.entrega,
             // Solo va si existe. Un pedido para recoger no tiene dirección, y mandar la clave
             // en `undefined` la convierte en un `null` que el validador tendría que perdonar.
             ...(datos.direccion ? { direccion: datos.direccion } : {}),
             ...(datos.telefono ? { cliente_telefono: datos.telefono } : {}),
+            // Solo los que aplican al tipo de entrega: un barrio en un pedido para recoger, o
+            // una mesa en un domicilio, son basura que el servidor tendría que ignorar.
+            ...(datos.entrega === ENTREGA.DOMICILIO && datos.id_barrio
+                ? { id_barrio: datos.id_barrio }
+                : {}),
+            ...(datos.entrega === ENTREGA.MESA && datos.id_mesa ? { id_mesa: datos.id_mesa } : {}),
         },
         conversacion: {
             ...ctx.conversacion,
@@ -591,6 +654,106 @@ function seguirOConfirmar(ctx, datos, pasos, { apertura = '', solicitarConfirmac
         pasos,
         nivel: 'determinista',
     });
+}
+
+/**
+ * Deja en `datos.items` solo las exclusiones válidas y en `datos.sin_descartadas` los nombres de
+ * las que no. Si no se puede leer (el catálogo falla), las líneas se quedan como llegaron: no se
+ * guarda nada sin pasar por `tomar_pedido.ejecutar`, que las vuelve a comprobar.
+ */
+async function sembrarExclusiones(ctx, datos) {
+    if (!datos.items.some((i) => i.exclusiones?.length)) return;
+    const resolver = ctx.catalogo?.resolverExclusiones;
+    if (!resolver) return;
+    try {
+        const resultado = await resolver({
+            idNegocio: ctx.idNegocio,
+            lineas: datos.items.map((i) => ({ id_producto: i.id_producto, ids: i.exclusiones || [] })),
+        });
+        const descartadas = [];
+        datos.items = datos.items.map((i, k) => {
+            const { exclusiones: _viejas, ...resto } = i;
+            const validas = resultado[k].validas.map((v) => v.id_ingrediente);
+            descartadas.push(...resultado[k].descartadas);
+            return validas.length ? { ...resto, exclusiones: validas } : resto;
+        });
+        const nombres = exclusiones.nombresLegibles(descartadas);
+        if (nombres) datos.sin_descartadas = nombres;
+    } catch (error) {
+        console.warn(`[restaurante] no se pudieron comprobar los ingredientes quitados: ${error.message}`);
+    }
+}
+
+/** Los items del pedido tal como los recibe `tomar_pedido`: `exclusiones` viaja como `sin: "12.15"`. */
+function itemsParaArgumentos(items) {
+    return (items || []).map(({ exclusiones: quitadas, ...resto }) =>
+        quitadas?.length ? { ...resto, sin: exclusiones.escribirSin(quitadas) } : resto
+    );
+}
+
+/**
+ * Vuelca en `datos` la modalidad, el barrio y la mesa que el cliente eligió en la carta.
+ *
+ * Nada de esto se acepta a ciegas:
+ *  - `m=R` → para recoger. `m=D` → domicilio. `m=L` → mesa, **solo si el negocio tiene mesas
+ *    activas**; si no, se ignora y se pregunta como siempre.
+ *  - Domicilio con barrio (`z=<id>`): se relee; si ya no existe o es de otro negocio
+ *    (`ZONA_INVALIDA`) NO se pierde el carrito: se vuelve a preguntar el barrio. `z=0` o sin `z` =
+ *    «otro barrio»: no hay valor, y se le avisa que el restaurante se lo confirma.
+ *  - Mesa (`t=<id>`): igual con `MESA_INVALIDA`; se vuelve a preguntar la mesa.
+ * Un código sin modalidad (los de antes) no toca nada: se pregunta domicilio o recoger.
+ */
+async function sembrarEleccionDelMenu(ctx, pedido, datos) {
+    const pasosEleccion = [];
+    let avisoEleccion = '';
+    const catalogo = ctx.catalogo;
+
+    if (pedido.modalidad === ENTREGA.RECOGER) {
+        datos.entrega = ENTREGA.RECOGER;
+    } else if (pedido.modalidad === ENTREGA.DOMICILIO) {
+        datos.entrega = ENTREGA.DOMICILIO;
+        if (ctx.barrios?.habilitado && (ctx.barrios.barrios || []).length > 0) {
+            if (pedido.idBarrio > 0) {
+                try {
+                    const barrio = await catalogo.resolverBarrio({
+                        idNegocio: ctx.idNegocio,
+                        idBarrio: pedido.idBarrio,
+                    });
+                    datos.id_barrio = barrio.id_barrio;
+                    datos.barrio_nombre = barrio.nombre;
+                    pasosEleccion.push(paso('pedido_barrio_del_menu', { id_barrio: barrio.id_barrio }));
+                } catch (error) {
+                    if (error.code !== 'ZONA_INVALIDA') throw error;
+                    // Se pregunta de nuevo (`necesitaBarrio` seguirá siendo verdad).
+                    avisoEleccion = 'Ese barrio no aparece en mi lista de domicilios. ';
+                    pasosEleccion.push(paso('pedido_barrio_invalido', { id_barrio: pedido.idBarrio }));
+                }
+            } else {
+                datos.barrio_otro = true;
+                avisoEleccion = 'El valor del domicilio te lo confirma el restaurante. ';
+                pasosEleccion.push(paso('pedido_barrio_otro'));
+            }
+        }
+    } else if (pedido.modalidad === ENTREGA.MESA && (ctx.mesas || []).length > 0) {
+        datos.entrega = ENTREGA.MESA;
+        if (pedido.idMesa) {
+            try {
+                const mesa = await catalogo.resolverMesa({
+                    idNegocio: ctx.idNegocio,
+                    idMesa: pedido.idMesa,
+                });
+                datos.id_mesa = mesa.id_mesa;
+                datos.mesa_nombre = mesa.nombre;
+                pasosEleccion.push(paso('pedido_mesa_del_menu', { id_mesa: mesa.id_mesa }));
+            } catch (error) {
+                if (error.code !== 'MESA_INVALIDA') throw error;
+                avisoEleccion = 'No encontré esa mesa. ';
+                pasosEleccion.push(paso('pedido_mesa_invalida', { id_mesa: pedido.idMesa }));
+            }
+        }
+    }
+
+    return { avisoEleccion, pasosEleccion };
 }
 
 /**
@@ -607,7 +770,7 @@ function seguirOConfirmar(ctx, datos, pasos, { apertura = '', solicitarConfirmac
  * El nombre vive en `variables` (memoria larga) y el teléfono lo prueba el canal. Preguntar dos
  * veces lo que ya te dijeron es lo que hace que un bot parezca un formulario.
  */
-function recibirPedidoDelMenu(ctx, pedido, { solicitarConfirmacion }) {
+async function recibirPedidoDelMenu(ctx, pedido, { solicitarConfirmacion }) {
     if (pedido.idNegocio !== ctx.idNegocio) {
         return {
             pasos: [
@@ -631,14 +794,26 @@ function recibirPedidoDelMenu(ctx, pedido, { solicitarConfirmacion }) {
         ...(previas.nombre ? { nombre: previas.nombre } : {}),
     };
 
+    // Los ingredientes que quitó en la carta se RELEEN: se queda solo lo que de verdad se puede
+    // quitar de ese plato, y lo descartado se guarda para decírselo en la confirmación.
+    await sembrarExclusiones(ctx, datos);
+
+    // Lo que el cliente ya eligió en la carta (`~m`, `~z`, `~t` del código) para no volver a
+    // preguntárselo. Son sugerencias: el barrio y la mesa se RELEEN de la base aquí —para
+    // enseñarle el valor real— y otra vez en `tomar_pedido.ejecutar`, que es quien manda.
+    const { avisoEleccion, pasosEleccion } = await sembrarEleccionDelMenu(ctx, pedido, datos);
+
     return seguirOConfirmar(
         ctx,
         datos,
-        [paso('pedido_del_menu_recibido', { items: pedido.items.length, unidades: cuantos })],
+        [
+            paso('pedido_del_menu_recibido', { items: pedido.items.length, unidades: cuantos }),
+            ...pasosEleccion,
+        ],
         {
             apertura:
                 `¡Listo, ya tengo tu pedido! ${cuantos === 1 ? 'Es 1 producto' : `Son ${cuantos} productos`}` +
-                `${previas.nombre ? `, a nombre de ${previas.nombre}` : ''}. `,
+                `${previas.nombre ? `, a nombre de ${previas.nombre}` : ''}. ${avisoEleccion}`,
             solicitarConfirmacion,
         }
     );
@@ -789,6 +964,54 @@ function seguirPedido(ctx, { solicitarConfirmacion }) {
                 entrega === ENTREGA.RECOGER ? '¡Listo, te lo dejamos preparado! ' : '¡De una! ';
             break;
         }
+        case PASO_PEDIDO.BARRIO: {
+            const barrio = elegirBarrio(dicho, ctx.barrios?.barrios || []);
+            if (barrio === null) {
+                const q = pregunta(PASO_PEDIDO.BARRIO, datos, ctx);
+                return {
+                    pasos: [paso('pedido_barrio_no_entendido', { dijo: dicho.slice(0, 40) })],
+                    respuestas: [
+                        {
+                            ...q,
+                            texto: `Perdona, no encontré ese barrio 🙈\n\n${q.texto}`,
+                        },
+                    ],
+                    variables: conMemoria(ctx.conversacion),
+                    tarea: tareaPedido(datos),
+                    resultado: 'resuelto',
+                    nivel: 'determinista',
+                };
+            }
+            if (barrio === OTRO_BARRIO) {
+                conLoDicho.barrio_otro = true;
+                apertura = 'Listo, el restaurante te confirma el valor del domicilio. ';
+            } else {
+                conLoDicho.id_barrio = barrio.id_barrio;
+                conLoDicho.barrio_nombre = barrio.nombre;
+                apertura = `${barrio.nombre}, anotado. `;
+            }
+            break;
+        }
+        case PASO_PEDIDO.MESA: {
+            const mesa = elegirMesa(dicho, ctx.mesas || []);
+            if (!mesa) {
+                const q = pregunta(PASO_PEDIDO.MESA, datos, ctx);
+                return {
+                    pasos: [paso('pedido_mesa_no_entendida', { dijo: dicho.slice(0, 40) })],
+                    respuestas: [
+                        { ...q, texto: `Perdona, no encontré esa mesa 🙈\n\n${q.texto}` },
+                    ],
+                    variables: conMemoria(ctx.conversacion),
+                    tarea: tareaPedido(datos),
+                    resultado: 'resuelto',
+                    nivel: 'determinista',
+                };
+            }
+            conLoDicho.id_mesa = mesa.id_mesa;
+            conLoDicho.mesa_nombre = mesa.nombre;
+            apertura = `Mesa ${mesa.numero}, anotado. `;
+            break;
+        }
         case PASO_PEDIDO.TELEFONO:
             conLoDicho.telefono = dicho;
             break;
@@ -851,6 +1074,47 @@ function leerTelefono(texto) {
     const m = CELULAR_CO.exec(String(texto || ''));
     if (!m) return null;
     return `${m[1]}${m[2]}${m[3]}`;
+}
+
+/** Lo que devuelve `elegirBarrio` cuando el cliente dice que su barrio no está en la lista. */
+const OTRO_BARRIO = Symbol('otro_barrio');
+
+/**
+ * El barrio que nombra el cliente, entre los que el negocio atiende.
+ *
+ * Devuelve el barrio, `OTRO_BARRIO` («otro», «no aparece»…) o `null` si no se entiende. Compara
+ * sin tildes ni mayúsculas y acepta que diga solo una parte («Poblado» por «El Poblado») siempre
+ * que sea **una sola coincidencia**: con dos posibles no se elige, se vuelve a preguntar. Elegir
+ * por el cliente un barrio equivocado es cobrarle un domicilio que no es.
+ */
+function elegirBarrio(texto, barrios) {
+    const t = normalizar(texto).trim();
+    if (!t) return null;
+    const exacto = barrios.find((b) => normalizar(b.nombre).trim() === t);
+    if (exacto) return exacto;
+    if (/^(otro|otra|ninguno|ninguna)\b|\b(no aparece|no esta|no sale|otro barrio)\b/.test(t)) {
+        return OTRO_BARRIO;
+    }
+    if (t.length < 3) return null;
+    const parciales = barrios.filter((b) => {
+        const n = normalizar(b.nombre).trim();
+        return n.includes(t) || t.includes(n);
+    });
+    return parciales.length === 1 ? parciales[0] : null;
+}
+
+/** La mesa que nombra el cliente: por número («5», «mesa 5») o por nombre exacto. */
+function elegirMesa(texto, mesas) {
+    const t = normalizar(texto).trim();
+    if (!t) return null;
+    const numero = /(?:^|\D)(\d{1,4})(?:\D|$)/.exec(t);
+    if (numero) {
+        const n = Number(numero[1]);
+        const porNumero = mesas.filter((m) => Number(m.numero) === n);
+        if (porNumero.length === 1) return porNumero[0];
+    }
+    const porNombre = mesas.filter((m) => normalizar(m.nombre).trim() === t);
+    return porNombre.length === 1 ? porNombre[0] : null;
 }
 
 /**
@@ -1098,7 +1362,35 @@ function crearFlujoRestaurante({
     // y sin poder sustituirlo un test del saludo necesitaría Postgres para algo que no es su
     // dominio (ver `bienvenida`).
     estadoAtencion = horarioService.estadoDeAtencion,
+    // Barrios con precio y mesas del negocio: lo que hace falta para leer lo que el cliente
+    // eligió en la carta. Se inyecta por lo mismo que lo demás. Si leer falla, se sigue como si
+    // el negocio no tuviera ni barrios ni mesas: pedir no se rompe por un extra.
+    catalogo = {
+        barrios: (idNegocio) => barrioService.listarPublico(idNegocio),
+        mesas: (idNegocio) => mesaPublicaService.listarPublicas(idNegocio),
+        resolverBarrio: (args) => barrioService.resolverBarrio(args),
+        resolverMesa: (args) => mesaPublicaService.resolverMesa(args),
+        resolverExclusiones: (args) => exclusiones.resolver(args),
+    },
 } = {}) {
+    /** Barrios y mesas en el contexto, para las preguntas y para leer el código de la carta. */
+    async function conCatalogo(ctx) {
+        ctx.catalogo = catalogo;
+        try {
+            ctx.barrios = await catalogo.barrios(ctx.idNegocio);
+        } catch (error) {
+            console.warn(`[restaurante] no se pudieron leer los barrios: ${error.message}`);
+            ctx.barrios = { habilitado: false, barrios: [] };
+        }
+        try {
+            ctx.mesas = await catalogo.mesas(ctx.idNegocio);
+        } catch (error) {
+            console.warn(`[restaurante] no se pudieron leer las mesas: ${error.message}`);
+            ctx.mesas = [];
+        }
+        return ctx;
+    }
+
     /**
      * Rellena el contexto con quién es el cliente.
      *
@@ -1147,6 +1439,7 @@ function crearFlujoRestaurante({
         const delMenu = codigoPedido.leer(texto);
         if (delMenu) {
             await conIdentidad(ctx);
+            await conCatalogo(ctx);
             return recibirPedidoDelMenu(ctx, delMenu, {
                 solicitarConfirmacion: (peticion) => confirmacion.solicitar(peticion),
             });
@@ -1158,6 +1451,7 @@ function crearFlujoRestaurante({
         // está apuntado.
         if (conversacion.tarea_actual === TAREA_PEDIDO) {
             await conIdentidad(ctx);
+            await conCatalogo(ctx);
             return seguirPedido(ctx, {
                 solicitarConfirmacion: (peticion) => confirmacion.solicitar(peticion),
             });
@@ -1205,6 +1499,9 @@ module.exports = {
     interpretarDatos,
     leerTelefono,
     leerEntrega,
+    elegirBarrio,
+    elegirMesa,
+    OTRO_BARRIO,
     // Expuestos para las pruebas, como `tareaCaducada` en la escalera: son las dos piezas de
     // producto que conviene poder ejercitar sin montar una conversación entera.
     pareceDireccion,

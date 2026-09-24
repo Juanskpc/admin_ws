@@ -90,7 +90,7 @@ async function actualizar(idCategoria, idNegocio, { nombre, descripcion }) {
     }
     if (descripcion !== undefined) cambios.descripcion = String(descripcion || '').trim() || null;
 
-    return cat.update(cambios);
+    return Models.sequelize.transaction((t) => cat.update(cambios, { transaction: t }));
 }
 
 /**

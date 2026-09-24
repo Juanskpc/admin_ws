@@ -254,9 +254,13 @@ async function recibir(entrada) {
             { transaction: t }
         );
 
+        // Este es el único sitio donde entra un mensaje del CLIENTE, y por eso el único que pide la
+        // reactivación por plazo (ADR-023, Enmienda 2): si su negocio la activó y ya pasó el
+        // tiempo desde la última intervención humana, la conversación vuelve al asistente ANTES
+        // de procesar este mensaje. Una reentrega duplicada no debe reactivar nada.
         const conversacion = await repositorio.asegurarConversacion(
             { idNegocio, canal, idExterno },
-            { transaction: t }
+            { transaction: t, reactivarPorPlazo: !duplicado }
         );
 
         if (duplicado) {

@@ -470,7 +470,11 @@ async function cerrarCaja({ idCaja, idNegocio, montoReportado, observaciones }) 
             ? `${caja.observaciones}\n[CIERRE] ${observaciones}`
             : observaciones;
     }
-    await caja.save();
+    // Solo la escritura va en transacción: las validaciones de arriba no cambian. Dentro de un
+    // request, abrirla fija el actor (ALS) y el cierre queda en auditoría con su usuario.
+    await Models.sequelize.transaction(async (t) => {
+        await caja.save({ transaction: t });
+    });
     avisar(idNegocio, TEMAS.CAJA, TEMAS.PEDIDOS);
     return caja;
 }

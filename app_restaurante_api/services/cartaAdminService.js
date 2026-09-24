@@ -275,11 +275,15 @@ async function eliminarCategoria(idCategoria) {
     const cat = await Models.CartaCategoria.findByPk(idCategoria);
     if (!cat) throw new Error('Categoría no encontrada');
     // Soft-delete también los productos de la categoría
-    await Models.CartaProducto.update(
-        { estado: 'I' },
-        { where: { id_categoria: idCategoria } }
-    );
-    return cat.update({ estado: 'I' });
+    // En una transacción (los productos y la categoría van juntos) para que la auditoría de
+    // carta_producto sepa quién fue: el actor solo se fija dentro de una.
+    return Models.sequelize.transaction(async (t) => {
+        await Models.CartaProducto.update(
+            { estado: 'I' },
+            { where: { id_categoria: idCategoria }, transaction: t }
+        );
+        return cat.update({ estado: 'I' }, { transaction: t });
+    });
 }
 
 // ================================================================
@@ -380,7 +384,8 @@ async function editarProducto(idProducto, { id_categoria, nombre, descripcion, p
 async function eliminarProducto(idProducto) {
     const prod = await Models.CartaProducto.findByPk(idProducto);
     if (!prod) throw new Error('Producto no encontrado');
-    return prod.update({ estado: 'I' });
+    // En transacción: el actor de auditoría solo se fija dentro de una.
+    return Models.sequelize.transaction((t) => prod.update({ estado: 'I' }, { transaction: t }));
 }
 
 module.exports = {

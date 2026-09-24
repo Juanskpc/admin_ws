@@ -117,7 +117,7 @@ async function subirImagenServicio(req, res) {
             tipo: 'servicio', idNegocio, idEntidad: idServicio,
             buffer: req.file.buffer, mimetype: req.file.mimetype,
         });
-        await servicio.update({ imagen_url: url, fecha_actualizacion: new Date() });
+        await Models.sequelize.transaction((t) => servicio.update({ imagen_url: url, fecha_actualizacion: new Date() }, { transaction: t }));
 
         return Respuesta.success(res, 'Imagen actualizada', { imagen_url: url, bytes }, 201);
     } catch (err) {
@@ -138,7 +138,7 @@ async function eliminarImagenServicio(req, res) {
         if (!servicio) return Respuesta.error(res, 'Servicio no encontrado', 404);
 
         ImagenService.eliminar({ tipo: 'servicio', idNegocio, idEntidad: idServicio });
-        await servicio.update({ imagen_url: null, fecha_actualizacion: new Date() });
+        await Models.sequelize.transaction((t) => servicio.update({ imagen_url: null, fecha_actualizacion: new Date() }, { transaction: t }));
 
         return Respuesta.success(res, 'Imagen eliminada', { imagen_url: null });
     } catch (err) {
@@ -195,7 +195,7 @@ async function subirFotoProfesional(req, res) {
             tipo: 'profesional', idNegocio, idEntidad: idProfesional,
             buffer: req.file.buffer, mimetype: req.file.mimetype,
         });
-        await profesional.update({ foto_url: url, fecha_actualizacion: new Date() });
+        await Models.sequelize.transaction((t) => profesional.update({ foto_url: url, fecha_actualizacion: new Date() }, { transaction: t }));
 
         return Respuesta.success(res, 'Foto actualizada', { foto_url: url, bytes }, 201);
     } catch (err) {
@@ -216,7 +216,7 @@ async function eliminarFotoProfesional(req, res) {
         if (!profesional) return Respuesta.error(res, 'Profesional no encontrado', 404);
 
         ImagenService.eliminar({ tipo: 'profesional', idNegocio, idEntidad: idProfesional });
-        await profesional.update({ foto_url: null, fecha_actualizacion: new Date() });
+        await Models.sequelize.transaction((t) => profesional.update({ foto_url: null, fecha_actualizacion: new Date() }, { transaction: t }));
 
         return Respuesta.success(res, 'Foto eliminada', { foto_url: null });
     } catch (err) {

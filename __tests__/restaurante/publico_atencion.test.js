@@ -17,6 +17,7 @@
 require('dotenv').config();
 
 const Models = require('../../app_core/models/conection');
+const puntoCajaService = require('../../app_restaurante_api/services/puntoCajaService');
 const horarioService = require('../../app_restaurante_api/services/horarioService');
 const publicoController = require('../../app_restaurante_api/controllers/publicoController');
 
@@ -50,11 +51,13 @@ async function pedirNegocioPublico() {
 }
 
 async function abrirCaja() {
+    // El turno cuelga de un punto de caja (NOT NULL): se resuelve como en producción.
+    const { id_punto_caja: idPunto } = await puntoCajaService.resolverPuntoCaja({ idNegocio });
     await sequelize.query(
-        `INSERT INTO restaurante.rest_caja (id_negocio, id_usuario, monto_apertura, estado, fecha_apertura)
-         SELECT :n, (SELECT id_usuario FROM general.gener_negocio_usuario WHERE id_negocio = :n AND estado = 'A' LIMIT 1), 0, 'A', now()
+        `INSERT INTO restaurante.rest_caja (id_negocio, id_punto_caja, id_usuario, monto_apertura, estado, fecha_apertura)
+         SELECT :n, :p, (SELECT id_usuario FROM general.gener_negocio_usuario WHERE id_negocio = :n AND estado = 'A' LIMIT 1), 0, 'A', now()
           WHERE NOT EXISTS (SELECT 1 FROM restaurante.rest_caja WHERE id_negocio = :n AND estado = 'A');`,
-        { replacements: { n: idNegocio } },
+        { replacements: { n: idNegocio, p: idPunto } },
     );
 }
 

@@ -2,6 +2,9 @@ module.exports = (sequelize, DataTypes) => {
     const GenerPlan = sequelize.define('GenerPlan', {
         id_plan: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
         nombre: { type: DataTypes.STRING(150), allowNull: false, unique: true },
+        // Código estable: igual en todos los entornos y que no cambia si el plan se renombra
+        // ('BASICO', 'AVANZADO'). Lo que el código busca; el nombre es solo una etiqueta comercial.
+        codigo: DataTypes.STRING(40),
         descripcion: DataTypes.TEXT,
         precio: { type: DataTypes.DECIMAL(12, 2), defaultValue: 0 },
         moneda: { type: DataTypes.STRING(10), defaultValue: 'USD' },

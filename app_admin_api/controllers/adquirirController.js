@@ -34,6 +34,8 @@ async function getCatalogo(req, res) {
         const catalogo = await AdquirirService.catalogoCompra({
             moneda: req.query.moneda || 'COP',
             ciclo: req.query.ciclo || 'mensual',
+            // El oficio elegido, para enseñar los precios de su aplicativo.
+            rubro: req.query.rubro || null,
         });
         return Respuesta.success(res, 'Catálogo de compra', catalogo);
     } catch (err) {

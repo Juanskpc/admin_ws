@@ -8,6 +8,7 @@ const ImpersonacionDao = require('../../app_core/dao/impersonacionDao');
 const Respuesta = require('../../app_core/helpers/respuesta');
 const Audit = require('../../app_core/helpers/auditHelper');
 const { initTransaction } = require('../../app_core/helpers/funcionesAdicionales');
+const { exigirCupoDeUsuario } = require('../../app_core/helpers/cupoUsuarios');
 
 /**
  * Login de usuario.
@@ -179,6 +180,8 @@ async function createUsuario(req, res) {
 
         // Ligar usuario al negocio
         if (id_negocio) {
+            // Ocupa un sitio del equipo: cabe o es 409 LIMITE_USUARIOS (el primero nunca falla).
+            await exigirCupoDeUsuario(Number(id_negocio), { idUsuario: id_usuario, transaction });
             await UsuarioDao.createUsuarioNegocio({ id_usuario, id_negocio }, transaction);
         }
 
@@ -195,6 +198,9 @@ async function createUsuario(req, res) {
         return Respuesta.success(res, 'Usuario creado exitosamente', { id_usuario }, 201);
     } catch (error) {
         if (transaction) await transaction.rollback();
+        if (error?.code === 'LIMITE_USUARIOS') {
+            return Respuesta.error(res, error.message, 409, null, { code: error.code });
+        }
         console.error('Error en createUsuario:', error);
         return Respuesta.error(res, 'Error al crear el usuario');
     }

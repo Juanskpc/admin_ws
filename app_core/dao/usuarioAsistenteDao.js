@@ -36,6 +36,7 @@
 
 const crypto = require('crypto');
 const bcrypt = require('bcrypt');
+const { Op } = require('sequelize');
 const db = require('../models/conection');
 
 const sequelize = db.sequelize;
@@ -45,7 +46,31 @@ const NOMBRE = 'Asistente';
 const APELLIDO = 'EscalApp';
 
 /** Identificadores sintéticos. Las dos columnas son UNIQUE, así que llevan el id del negocio. */
-const identificacionDe = (idNegocio) => `ASISTENTE-${idNegocio}`;
+const PREFIJO_IDENTIFICACION = 'ASISTENTE-';
+const identificacionDe = (idNegocio) => `${PREFIJO_IDENTIFICACION}${idNegocio}`;
+
+/**
+ * ¿Esta fila (o este número de identificación) es la de un usuario asistente?
+ *
+ * ÚNICA fuente para reconocerlo: nadie más escribe el literal del prefijo. El asistente es
+ * un actor de auditoría y el autor de los pedidos del bot, no una persona del equipo: no debe
+ * salir en los listados de usuarios ni ocupar un sitio del plan. (En el informe de ventas por
+ * usuario SÍ debe verse, a propósito: ver la cabecera de este archivo.)
+ */
+function esUsuarioAsistente(filaONumero) {
+    const num = typeof filaONumero === 'string' ? filaONumero : filaONumero?.num_identificacion;
+    return typeof num === 'string' && num.startsWith(PREFIJO_IDENTIFICACION);
+}
+
+/** Cláusula `where` de Sequelize que deja fuera a los asistentes. Se mezcla con `Object.assign`. */
+function whereSinAsistente(campo = 'num_identificacion') {
+    return { [campo]: { [Op.notLike]: `${PREFIJO_IDENTIFICACION}%` } };
+}
+
+/** Fragmento SQL crudo equivalente. `alias` es el de `general.gener_usuario` en la consulta. */
+function sqlSinAsistente(alias = 'u') {
+    return `${alias}.num_identificacion NOT LIKE '${PREFIJO_IDENTIFICACION}%'`;
+}
 const emailDe = (idNegocio) => `asistente+${idNegocio}@escalapp.local`;
 
 /**
@@ -151,4 +176,7 @@ async function buscar(idNegocio, { transaction = null } = {}) {
     return fila ? fila.id_usuario : null;
 }
 
-module.exports = { resolverOCrear, buscar, NOMBRE, APELLIDO, identificacionDe, emailDe };
+module.exports = {
+    resolverOCrear, buscar, NOMBRE, APELLIDO, identificacionDe, emailDe,
+    PREFIJO_IDENTIFICACION, esUsuarioAsistente, whereSinAsistente, sqlSinAsistente,
+};

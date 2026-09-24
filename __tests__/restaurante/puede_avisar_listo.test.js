@@ -13,6 +13,7 @@ require('dotenv').config();
 process.env.FEATURES_FORZADAS = 'asistente_ia';
 
 const Models = require('../../app_core/models/conection');
+const puntoCajaService = require('../../app_restaurante_api/services/puntoCajaService');
 const pedidoService = require('../../app_restaurante_api/services/pedidoService');
 const usuarioAsistenteDao = require('../../app_core/dao/usuarioAsistenteDao');
 
@@ -32,13 +33,15 @@ async function crearOrdenDelBot(numero, tipoPedido) {
     // `id_domiciliario` se pone también en LLEVAR y en MESA, aunque no signifique nada ahí:
     // es lo único que hace que `getOrdenesDespacho` enseñe la orden sin importar si el usuario
     // del asistente tiene o no el permiso "ver todos" — este test no quiere depender de eso.
+    // El pedido cuelga de un punto de caja (NOT NULL): se resuelve como en producción.
+    const { id_punto_caja: idPunto } = await puntoCajaService.resolverPuntoCaja({ idNegocio });
     const orden = await unaFila(
         `INSERT INTO restaurante.pedid_orden
-            (id_negocio, id_usuario, numero_orden, tipo_pedido, estado, contacto_nombre,
+            (id_negocio, id_punto_caja, id_usuario, numero_orden, tipo_pedido, estado, contacto_nombre,
              contacto_telefono, id_domiciliario, total)
-         VALUES (:n, :u, :num, :tipo, 'ABIERTA', 'BOT Cliente Aviso', '+573000000099', :u, 15000)
+         VALUES (:n, :p, :u, :num, :tipo, 'ABIERTA', 'BOT Cliente Aviso', '+573000000099', :u, 15000)
          RETURNING id_orden;`,
-        { n: idNegocio, u: idUsuarioAsistente, num: numero, tipo: tipoPedido },
+        { n: idNegocio, p: idPunto, u: idUsuarioAsistente, num: numero, tipo: tipoPedido },
     );
     ordenesCreadas.push(orden.id_orden);
     return orden.id_orden;

@@ -127,8 +127,8 @@ function fechaBogota(valor, finDeDia = false) {
 /** Días que dura la prueba sin plan pagado. Los mismos que el registro trial de la landing. */
 const DIAS_PRUEBA = 7;
 
-/** El plan con el que corre una prueba: el mismo que asigna el registro trial. */
-const NOMBRE_PLAN_PRUEBA = 'Plan Básico';
+/** El plan con el que corre una prueba —el mismo que asigna el registro trial—, por CÓDIGO. */
+const CODIGO_PLAN_PRUEBA = 'BASICO';
 
 /** La fecha de calendario de hoy en Bogotá, 'YYYY-MM-DD'. */
 function hoyBogota() {
@@ -174,13 +174,13 @@ async function resolverVigencia({ idPlan = null, meses = 1, fechaInicio = null, 
 
     const plan = await Models.GenerPlan.findOne({
         where: esPrueba
-            ? { nombre: NOMBRE_PLAN_PRUEBA, estado: 'A' }
+            ? { codigo: CODIGO_PLAN_PRUEBA, estado: 'A' }
             : { id_plan: idPlan, estado: 'A' },
         attributes: ['id_plan'],
     });
     if (!plan) {
         const err = new Error(esPrueba
-            ? `No hay un «${NOMBRE_PLAN_PRUEBA}» activo con el que correr la prueba`
+            ? `No hay un plan ${CODIGO_PLAN_PRUEBA} activo con el que correr la prueba`
             : 'Plan no encontrado o inactivo');
         err.statusCode = esPrueba ? 409 : 404;
         throw err;
@@ -521,4 +521,5 @@ module.exports = {
     updateNegocio,
     setEstadoNegocio,
     registrarCliente,
+    resolverVigencia,
 };

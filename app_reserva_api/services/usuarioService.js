@@ -1,7 +1,9 @@
 'use strict';
 const Models = require('../../app_core/models/conection');
+const { whereSinAsistente } = require('../../app_core/dao/usuarioAsistenteDao');
 const { normalizarE164 } = require('../../app_core/helpers/telefono');
 const { PAIS_POR_DEFECTO } = require('../../app_core/helpers/paises');
+const { exigirCupoDeUsuario } = require('../../app_core/helpers/cupoUsuarios');
 const { Op } = Models.Sequelize;
 
 /**
@@ -176,7 +178,8 @@ async function exigirPuedeAdministrar({ idUsuario, idNegocio }) {
 
 /** Usuarios del negocio, con su rol aquí dentro y el profesional al que estén ligados. */
 async function listar({ idNegocio, search = '', incluirInactivos = false }) {
-    const whereUsuario = {};
+    // El asistente del bot es un actor de auditoría, no una persona del equipo: no se lista.
+    const whereUsuario = { ...whereSinAsistente() };
     if (!incluirInactivos) whereUsuario.estado = 'A';
     if (search.trim()) {
         const like = `%${search.trim()}%`;
@@ -524,6 +527,9 @@ async function crear({ idNegocio, datos: datosCrudos, idProfesionalExistente = n
     }
 
     return Models.sequelize.transaction(async (t) => {
+        // Un usuario nuevo ocupa un sitio del equipo: cabe o es 409 LIMITE_USUARIOS.
+        await exigirCupoDeUsuario(idNegocio, { transaction: t });
+
         const usuario = await Models.GenerUsuario.create({
             primer_nombre: String(datos.primer_nombre || '').trim(),
             segundo_nombre: datos.segundo_nombre?.trim() || null,
@@ -770,6 +776,10 @@ async function cambiarEstado({ idNegocio, idUsuario, estado, idUsuarioSolicitant
     if (!vinculo) throw error('Ese usuario no pertenece a este negocio.', 404);
 
     return Models.sequelize.transaction(async (t) => {
+        // Devolverle el acceso a alguien vuelve a ocupar su sitio. Quitarlo nunca se bloquea.
+        if (estado === 'A' && vinculo.estado !== 'A') {
+            await exigirCupoDeUsuario(idNegocio, { idUsuario, transaction: t });
+        }
         await vinculo.update({ estado }, { transaction: t });
         await Models.GenerUsuarioRol.update(
             { estado },
@@ -810,10 +820,11 @@ async function resetPassword({ idNegocio, idUsuario }) {
     const usuario = await Models.GenerUsuario.findByPk(idUsuario);
     if (!usuario) throw error('Usuario no encontrado.', 404);
 
-    await usuario.update({
+    // En transacción: el actor de auditoría solo se fija dentro de una (ALS del request).
+    await Models.sequelize.transaction((t) => usuario.update({
         password: usuario.num_identificacion,   // el hook la cifra
         debe_cambiar_password: true,
-    });
+    }, { transaction: t }));
     return { id_usuario: usuario.id_usuario, password_temporal: usuario.num_identificacion };
 }
 

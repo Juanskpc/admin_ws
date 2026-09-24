@@ -130,6 +130,7 @@ async function getResumenNegocio(idNegocio) {
             idPlan: suscripcion.id_plan,
             moneda: suscripcion.moneda,
             ciclo: suscripcion.ciclo,
+            idNegocio,
         });
     } catch (err) {
         if (err.code !== 'PRECIO_NO_CONFIGURADO') throw err;
@@ -606,7 +607,11 @@ async function calcularCobro(suscripcion, idPlan, { transaction } = {}) {
     const moneda = suscripcion.moneda;
     const ciclo = suscripcion.ciclo;
 
-    const precioPlan = await Dao.getPrecio({ idPlan, moneda, ciclo }, { transaction });
+    // El precio del aplicativo del negocio (Reserva no paga lo mismo que Restaurante).
+    const precioPlan = await Dao.getPrecio(
+        { idPlan, moneda, ciclo, idNegocio: suscripcion.id_negocio },
+        { transaction }
+    );
     const plan = await Models.GenerPlan.findByPk(idPlan, { attributes: ['nombre'], transaction });
     const complementos = await Dao.listarComplementosSuscripcion(
         suscripcion.id_suscripcion,
@@ -1279,7 +1284,11 @@ async function cobrosDeUsuario(idUsuario, { incluirSinSuscripcion = false } = {}
             pasarelas: await pasarelasParaPagar(await paisDeNegocio(n.id_negocio)),
             // Los planes entre los que puede elegir, con su precio en su moneda. La prueba de
             // 7 días no está: no se elige ni se paga, se asigna al registrar el negocio.
-            planes: await Dao.listarPlanesParaCliente({ moneda: n.moneda, ciclo: n.ciclo }),
+            planes: await Dao.listarPlanesParaCliente({
+                moneda: n.moneda,
+                ciclo: n.ciclo,
+                idNegocio: n.id_negocio,
+            }),
         });
     }
     return resultado;
@@ -1697,6 +1706,7 @@ async function precioMensual({ suscripcion, idPlan, complementos, catalogo }) {
             idPlan,
             moneda: suscripcion.moneda,
             ciclo: suscripcion.ciclo,
+            idNegocio: suscripcion.id_negocio,
         });
     } catch (err) {
         if (err.code !== 'PRECIO_NO_CONFIGURADO') throw err;
@@ -1712,6 +1722,60 @@ async function precioMensual({ suscripcion, idPlan, complementos, catalogo }) {
 }
 
 /**
+ * Lo que valdría al mes un plan con unos complementos, ANTES de guardarlos. Es la vista previa del
+ * editor de negocios: no toca nada.
+ *
+ * Usa `precioMensual`, la misma cuenta que decide si un cambio sube o baja y la que cobrará la
+ * renovación, y los precios del catálogo: así la pantalla no lleva su propia aritmética de
+ * precios y no puede desviarse de lo que de verdad se cobra.
+ *
+ * Un negocio sin suscripción se calcula con la moneda de su país y ciclo mensual, que son los
+ * que tendría al crearla. `idPlan` nulo = prueba o sin plan: el plan vale cero.
+ *
+ * @param {Array<{codigo: string, cantidad_facturable: number}>} complementos lo que SE COBRA
+ * @returns {Promise<{moneda, ciclo, precio_plan, complementos, total}>}
+ */
+async function previsualizarTotalMensual(idNegocio, { idPlan = null, complementos = [] } = {}) {
+    const suscripcion = await Dao.getSuscripcionPorNegocio(idNegocio);
+    const pais = await paisDeNegocio(idNegocio);
+    const moneda = suscripcion?.moneda || MONEDA_POR_PAIS[pais] || 'COP';
+    const ciclo = suscripcion?.ciclo || 'mensual';
+    const catalogo = await Dao.listarComplementosCatalogo({ moneda, ciclo });
+
+    const cobrados = new Map();
+    const detalle = [];
+    for (const item of complementos || []) {
+        const codigo = String(item?.codigo ?? '').trim().toUpperCase();
+        const c = catalogo.find((x) => x.codigo === codigo);
+        if (!c) throw error(`El complemento ${codigo} no existe o no tiene precio.`, 'COMPLEMENTO_NO_DISPONIBLE', 422);
+
+        const cantidad = Number(item.cantidad_facturable ?? 0);
+        if (!Number.isInteger(cantidad) || cantidad < 0 || cantidad > c.cantidad_maxima) {
+            throw error(
+                `«${c.nombre}»: la cantidad debe estar entre 0 y ${c.cantidad_maxima}.`,
+                'COMPLEMENTO_CANTIDAD',
+                422
+            );
+        }
+        if (cantidad > 0) cobrados.set(Number(c.id_complemento), cantidad);
+        detalle.push({
+            codigo: c.codigo,
+            precio: Number(c.precio),
+            cantidad_facturable: cantidad,
+            subtotal: Number(c.precio) * cantidad,
+        });
+    }
+
+    const sus = { moneda, ciclo, id_negocio: idNegocio };
+    const [precioPlan, total] = await Promise.all([
+        precioMensual({ suscripcion: sus, idPlan, complementos: new Map(), catalogo }),
+        precioMensual({ suscripcion: sus, idPlan, complementos: cobrados, catalogo }),
+    ]);
+
+    return { moneda, ciclo, precio_plan: precioPlan, complementos: detalle, total };
+}
+
+/**
  * Qué parte del ciclo le queda al cliente, entre 0 y 1.
  *
  * Es lo que multiplica la diferencia de precio. Un plan que vence mañana casi no cobra nada al
@@ -1721,16 +1785,36 @@ async function precioMensual({ suscripcion, idPlan, complementos, catalogo }) {
 function proporcionRestante({ fin, hoy, ciclo }) {
     if (!fin || fin < hoy) return 1;
 
-    const DIA = 86_400_000;
-    const enMs = (iso) => {
-        const { a, m, d } = partes(iso);
-        return Date.UTC(a, m - 1, d);
-    };
-
-    const restantes = Math.round((enMs(fin) - enMs(hoy)) / DIA) + 1; // el día de fin cuenta
-    const totales = Math.round((enMs(sumarCiclo(hoy, ciclo)) - enMs(hoy)) / DIA);
+    const restantes = diasQueQuedan({ fin, hoy });
+    const totales = Math.round((enMsUTC(sumarCiclo(hoy, ciclo)) - enMsUTC(hoy)) / 86_400_000);
     if (totales <= 0) return 1;
     return Math.max(0, Math.min(1, restantes / totales));
+}
+
+function enMsUTC(iso) {
+    const { a, m, d } = partes(iso);
+    return Date.UTC(a, m - 1, d);
+}
+
+/** Días que le quedan al plan contando el de fin. 0 si no hay vigencia. */
+function diasQueQuedan({ fin, hoy }) {
+    if (!fin || fin < hoy) return 0;
+    return Math.round((enMsUTC(fin) - enMsUTC(hoy)) / 86_400_000) + 1;
+}
+
+/**
+ * LA cuenta del prorrateo, sin tocar la base: lo que cuesta subir de `precioActual` a
+ * `precioObjetivo` cuando al plan vigente le quedan los días hasta `fin`.
+ *
+ * La usan tanto el cobro real (`cobrarDiferenciaAhora`) como la simulación que ve el cliente antes
+ * de confirmar (`simularCambioPlan`): así el monto que se muestra es EXACTAMENTE el que se cobra.
+ * Se prorratea el TOTAL de la diferencia, no línea a línea: redondear cada línea por separado deja
+ * un total que no cuadra con la suma que el cliente ve.
+ */
+function calcularDiferenciaCambio({ precioActual, precioObjetivo, fin, hoy, ciclo }) {
+    const proporcion = proporcionRestante({ fin, hoy, ciclo });
+    const diferencia = Math.round((precioObjetivo - precioActual) * proporcion);
+    return { proporcion, diferencia, diasRestantes: diasQueQuedan({ fin, hoy }) };
 }
 
 /** Los complementos que el cliente tiene contratados hoy, como mapa id → cantidad. */
@@ -1739,25 +1823,13 @@ function mapaDeComplementos(lista, usar) {
 }
 
 /**
- * El administrador del negocio cambia su plan, sus complementos, o los dos a la vez.
+ * Lo que `cambiarMiPlan` necesita saber para decidir, SIN escribir nada: la única lectura del
+ * cambio pedido. La comparten el cambio de verdad y la simulación (`simularCambioPlan`), para que
+ * ninguna de las dos pueda entender distinto lo que el cliente pidió.
  *
- * Devuelve qué pasó, porque de eso depende lo que la pantalla tiene que decirle:
- *   - **`sin_cambios`**: pidió exactamente lo que ya tiene. Si había algo pedido sin pagar, se
- *     deshace — es la forma de cancelar una solicitud.
- *   - **`ajuste`**: sube. Hay un cobro nuevo por la diferencia prorrateada y el cambio entra
- *     cuando lo pague.
- *   - **`renovacion`**: baja (o cuesta lo mismo). No se cobra nada ahora y entra al renovar.
- *
- * @param {number|null} idPlan el plan que quiere. `null` = deja el que tiene.
- * @param {Array<{codigo: string, cantidad: number}>|null} complementos la elección COMPLETA.
- *        `null` = no toca los complementos.
+ * Lanza los mismos errores tipados de validación que el cambio real.
  */
-async function cambiarMiPlan(idNegocio, { idPlan = null, complementos = null } = {}) {
-    // Sin suscripción de cobro no hay nada que «cambiar»: lo que elige es su PRIMER plan.
-    const existente = await Dao.getSuscripcionPorNegocio(idNegocio);
-    if (!existente) return contratarPrimerPlan(idNegocio, { idPlan });
-    const suscripcion = existente;
-
+async function resolverCambio(idNegocio, suscripcion, { idPlan, complementos }) {
     if (suscripcion.estado === 'cancelada') {
         throw error(
             'La suscripción está cancelada: escríbenos para reactivarla.',
@@ -1768,7 +1840,7 @@ async function cambiarMiPlan(idNegocio, { idPlan = null, complementos = null } =
 
     const moneda = suscripcion.moneda;
     const ciclo = suscripcion.ciclo;
-    const disponibles = await Dao.listarPlanesParaCliente({ moneda, ciclo });
+    const disponibles = await Dao.listarPlanesParaCliente({ moneda, ciclo, idNegocio });
     const catalogo = await Dao.listarComplementosCatalogo({ moneda, ciclo });
     const contratados = await Dao.listarComplementosSuscripcion(suscripcion.id_suscripcion, {
         moneda,
@@ -1821,18 +1893,71 @@ async function cambiarMiPlan(idNegocio, { idPlan = null, complementos = null } =
         (id) => (actuales.get(id) ?? 0) === (objetivo.get(id) ?? 0)
     );
 
-    setAuditNegocio(idNegocio);
 
-    if (mismoPlan && mismosComplementos) {
-        return deshacerSolicitud(idNegocio, suscripcion);
+    const cambia = !(mismoPlan && mismosComplementos);
+    let precioActual = null;
+    let precioObjetivo = null;
+    if (cambia) {
+        [precioActual, precioObjetivo] = await Promise.all([
+            precioMensual({ suscripcion, idPlan: idPlanActual, complementos: actuales, catalogo }),
+            precioMensual({ suscripcion, idPlan: idPlanObjetivo, complementos: objetivo, catalogo }),
+        ]);
     }
 
-    // ── ¿Sube o baja? ──
-    const [precioActual, precioObjetivo] = await Promise.all([
-        precioMensual({ suscripcion, idPlan: idPlanActual, complementos: actuales, catalogo }),
-        precioMensual({ suscripcion, idPlan: idPlanObjetivo, complementos: objetivo, catalogo }),
-    ]);
-    const sube = precioObjetivo > precioActual;
+    return {
+        idPlanActual,
+        idPlanObjetivo,
+        planObjetivo,
+        actuales,
+        objetivo,
+        catalogo,
+        mismoPlan,
+        mismosComplementos,
+        cambia,
+        precioActual,
+        precioObjetivo,
+        sube: cambia && precioObjetivo > precioActual,
+    };
+}
+
+/**
+ * El administrador del negocio cambia su plan, sus complementos, o los dos a la vez.
+ *
+ * Devuelve qué pasó, porque de eso depende lo que la pantalla tiene que decirle:
+ *   - **`sin_cambios`**: pidió exactamente lo que ya tiene. Si había algo pedido sin pagar, se
+ *     deshace — es la forma de cancelar una solicitud.
+ *   - **`ajuste`**: sube. Hay un cobro nuevo por la diferencia prorrateada y el cambio entra
+ *     cuando lo pague.
+ *   - **`renovacion`**: baja (o cuesta lo mismo). No se cobra nada ahora y entra al renovar.
+ *
+ * @param {number|null} idPlan el plan que quiere. `null` = deja el que tiene.
+ * @param {Array<{codigo: string, cantidad: number}>|null} complementos la elección COMPLETA.
+ *        `null` = no toca los complementos.
+ */
+async function cambiarMiPlan(idNegocio, { idPlan = null, complementos = null } = {}) {
+    // Sin suscripción de cobro no hay nada que «cambiar»: lo que elige es su PRIMER plan.
+    const existente = await Dao.getSuscripcionPorNegocio(idNegocio);
+    if (!existente) return contratarPrimerPlan(idNegocio, { idPlan });
+    const suscripcion = existente;
+
+    const {
+        idPlanActual,
+        idPlanObjetivo,
+        planObjetivo,
+        objetivo,
+        catalogo,
+        mismoPlan,
+        cambia,
+        precioActual,
+        precioObjetivo,
+        sube,
+    } = await resolverCambio(idNegocio, suscripcion, { idPlan, complementos });
+
+    setAuditNegocio(idNegocio);
+
+    if (!cambia) {
+        return deshacerSolicitud(idNegocio, suscripcion);
+    }
 
     // Lo pedido se anota en los dos casos; lo que cambia es cuándo y cómo se cobra.
     await Dao.actualizarSuscripcion(suscripcion.id_suscripcion, {
@@ -1892,6 +2017,49 @@ async function cambiarMiPlan(idNegocio, { idPlan = null, complementos = null } =
 }
 
 /**
+ * Qué pasaría si el cliente guardara este cambio, SIN hacerlo: ni transacción de escritura, ni
+ * factura, ni anotar lo pedido. Lo que devuelve es lo que `cambiarMiPlan` cobraría después, porque
+ * usa la misma resolución (`resolverCambio`) y la misma cuenta (`calcularDiferenciaCambio`).
+ *
+ * `total` solo viene cuando hay un cobro de ajuste que anunciar; en los demás casos es `null` y la
+ * pantalla se queda con su texto sin monto.
+ */
+async function simularCambioPlan(idNegocio, { idPlan = null, complementos = null } = {}) {
+    const suscripcion = await Dao.getSuscripcionPorNegocio(idNegocio);
+    if (!suscripcion) {
+        return { aplica: 'primer_plan', total: null, moneda: null, dias_restantes: 0, proporcion_restante: null };
+    }
+
+    const r = await resolverCambio(idNegocio, suscripcion, { idPlan, complementos });
+    const base = { total: null, moneda: suscripcion.moneda, dias_restantes: 0, proporcion_restante: null };
+    if (!r.cambia) return { ...base, aplica: 'sin_cambios' };
+
+    const plan = await Dao.planParaRenovar(idNegocio);
+    const hoy = hoyBogota();
+    const planVigente = !!plan && (!plan.fin || plan.fin >= hoy);
+    // Igual que cambiarMiPlan: sin plan vigente o bajando, no hay ajuste que cobrar hoy.
+    if (!planVigente || !r.sube) return { ...base, aplica: 'renovacion' };
+
+    const { proporcion, diferencia, diasRestantes } = calcularDiferenciaCambio({
+        precioActual: r.precioActual,
+        precioObjetivo: r.precioObjetivo,
+        fin: plan?.fin ?? null,
+        hoy,
+        ciclo: suscripcion.ciclo,
+    });
+    // Una diferencia que se queda en nada entra con la renovación (ver cobrarDiferenciaAhora).
+    if (diferencia <= 0) return { ...base, aplica: 'renovacion' };
+
+    return {
+        aplica: 'ajuste',
+        total: diferencia,
+        moneda: suscripcion.moneda,
+        dias_restantes: diasRestantes,
+        proporcion_restante: Number(proporcion.toFixed(4)),
+    };
+}
+
+/**
  * El negocio que aún no tiene suscripción de cobro elige su primer plan desde «Mis pagos».
  *
  * Es lo mismo que hace el alta desde la web (`adquirirService.prepararFactura`): crea la
@@ -1909,7 +2077,7 @@ async function contratarPrimerPlan(idNegocio, { idPlan }) {
     const pais = await paisDeNegocio(idNegocio);
     const moneda = MONEDA_POR_PAIS[pais] || 'COP';
     const ciclo = 'mensual';
-    const disponibles = await Dao.listarPlanesParaCliente({ moneda, ciclo });
+    const disponibles = await Dao.listarPlanesParaCliente({ moneda, ciclo, idNegocio });
     const plan = disponibles.find((p) => Number(p.id_plan) === Number(idPlan));
     if (!plan) {
         throw error('Ese plan no está disponible para tu negocio.', 'PLAN_NO_DISPONIBLE', 409);
@@ -2028,11 +2196,13 @@ async function cobrarDiferenciaAhora({
 }) {
     const hoy = hoyBogota();
     const plan = await Dao.planParaRenovar(idNegocio);
-    const proporcion = proporcionRestante({ fin: plan?.fin ?? null, hoy, ciclo: suscripcion.ciclo });
-
-    // Se prorratea el TOTAL de la diferencia, no línea a línea: redondear cada línea por separado
-    // deja un total que no cuadra con la suma que el cliente ve.
-    const diferencia = Math.round((precioObjetivo - precioActual) * proporcion);
+    const { proporcion, diferencia } = calcularDiferenciaCambio({
+        precioActual,
+        precioObjetivo,
+        fin: plan?.fin ?? null,
+        hoy,
+        ciclo: suscripcion.ciclo,
+    });
 
     // Una diferencia que se queda en nada —quedan horas de ciclo— no se cobra: emitir un cobro de
     // 200 pesos cuesta más en comisión que lo que recauda. Entra con la renovación.
@@ -2174,12 +2344,15 @@ function elegirPlan(idNegocio, idPlan) {
 }
 
 module.exports = {
+    previsualizarTotalMensual,
     getResumenNegocio,
     generarCobrosPorVencer,
     asegurarCobroPendiente,
     calcularRenovacion,
     elegirPlan,
     cambiarMiPlan,
+    simularCambioPlan,
+    calcularDiferenciaCambio,
     proporcionRestante,
     listarCartera,
     resumenIngresos,

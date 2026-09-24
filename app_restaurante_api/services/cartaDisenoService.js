@@ -358,14 +358,15 @@ async function subirLogo(idUsuario, { idNegocio, buffer, mimetype }) {
         buffer,
         mimetype,
     });
-    await negocio.update({ logo_url: url });
+    // En transacción: el actor de auditoría solo se fija dentro de una.
+    await Models.sequelize.transaction((t) => negocio.update({ logo_url: url }, { transaction: t }));
     return { logo_url: url };
 }
 
 async function eliminarLogo(idUsuario, idNegocio) {
     const { acceso, negocio } = await exigirEdicion(idUsuario, idNegocio);
     ImagenService.eliminar({ tipo: 'logo', idNegocio: acceso.idNegocio, idEntidad: acceso.idNegocio });
-    await negocio.update({ logo_url: null });
+    await Models.sequelize.transaction((t) => negocio.update({ logo_url: null }, { transaction: t }));
     return { logo_url: null };
 }
 

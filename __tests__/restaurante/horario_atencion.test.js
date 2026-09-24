@@ -16,6 +16,7 @@
 
 require('dotenv').config();
 
+const puntoCajaService = require('../../app_restaurante_api/services/puntoCajaService');
 const Models = require('../../app_core/models/conection');
 const horarioService = require('../../app_restaurante_api/services/horarioService');
 const pedidoService = require('../../app_restaurante_api/services/pedidoService');
@@ -103,11 +104,13 @@ describe('estadoDeAtencion — cruza horario y caja en un solo sitio', () => {
     // dueño era que el PRIMER mensaje ya dijera en cuál de los tres estados está el negocio, en
     // vez de que el cliente solo se enterara al intentar confirmar un pedido.
     async function abrirCaja() {
+        // El turno cuelga de un punto de caja (NOT NULL): se resuelve como en producción.
+        const { id_punto_caja: idPunto } = await puntoCajaService.resolverPuntoCaja({ idNegocio });
         await sequelize.query(
-            `INSERT INTO restaurante.rest_caja (id_negocio, id_usuario, monto_apertura, estado, fecha_apertura)
-             SELECT :n, :u, 0, 'A', now()
+            `INSERT INTO restaurante.rest_caja (id_negocio, id_punto_caja, id_usuario, monto_apertura, estado, fecha_apertura)
+             SELECT :n, :p, :u, 0, 'A', now()
               WHERE NOT EXISTS (SELECT 1 FROM restaurante.rest_caja WHERE id_negocio = :n AND estado = 'A');`,
-            { replacements: { n: idNegocio, u: idUsuario1 } },
+            { replacements: { n: idNegocio, p: idPunto, u: idUsuario1 } },
         );
     }
 

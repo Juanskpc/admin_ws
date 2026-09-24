@@ -145,6 +145,11 @@ function resolvePersistenceError(error, accion) {
         };
     }
 
+    // El plan no deja añadir más gente: el mensaje ya explica qué hacer (complemento o cambio de plan).
+    if (error?.code === 'LIMITE_USUARIOS') {
+        return { status: 409, message: error.message, code: error.code, limite: error.limite };
+    }
+
     const safeMessage = String(error?.message || '').trim();
     if (/^(No se|No puedes|Ya existe|El usuario)/i.test(safeMessage)) {
         return {
@@ -260,7 +265,7 @@ async function createUsuario(req, res) {
         if (transaction) await transaction.rollback();
         console.error('Error en createUsuario:', error);
         const mapped = resolvePersistenceError(error, 'crear');
-        return Respuesta.error(res, mapped.message, mapped.status);
+        return Respuesta.error(res, mapped.message, mapped.status, null, { code: mapped.code });
     }
 }
 
@@ -310,7 +315,7 @@ async function updateUsuario(req, res) {
         if (transaction) await transaction.rollback();
         console.error('Error en updateUsuario:', error);
         const mapped = resolvePersistenceError(error, 'actualizar');
-        return Respuesta.error(res, mapped.message, mapped.status);
+        return Respuesta.error(res, mapped.message, mapped.status, null, { code: mapped.code });
     }
 }
 
@@ -375,7 +380,7 @@ async function updatePerfilUsuario(req, res) {
         if (transaction) await transaction.rollback();
         console.error('Error en updatePerfilUsuario:', error);
         const mapped = resolvePersistenceError(error, 'actualizar');
-        return Respuesta.error(res, mapped.message, mapped.status);
+        return Respuesta.error(res, mapped.message, mapped.status, null, { code: mapped.code });
     }
 }
 
@@ -416,6 +421,10 @@ async function setEstadoUsuario(req, res) {
         return Respuesta.success(res, estado === 'I' ? 'Usuario inactivado' : 'Usuario reactivado');
     } catch (error) {
         if (transaction) await transaction.rollback();
+        // Reactivar a alguien vuelve a ocupar un sitio: si el plan no lo permite, se explica.
+        if (error?.code === 'LIMITE_USUARIOS') {
+            return Respuesta.error(res, error.message, 409, null, { code: error.code });
+        }
         console.error('Error en setEstadoUsuario:', error);
         return Respuesta.error(res, 'Error al actualizar estado del usuario');
     }

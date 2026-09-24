@@ -106,8 +106,98 @@ async function reservarIngesta({ idNegocio, canal, idExternoMensaje }, { transac
  * Una conversación `dormida` o `cerrada` se reactiva: escribir de nuevo *es* reabrirla. Los
  * otros tres estados no se tocan, porque los decidió alguien —un humano que tomó el control,
  * el negocio que bloqueó a un contacto— y el motor no está para deshacerlo.
+ *
+ * ## `reactivarPorPlazo` (ADR-023, Enmienda 2)
+ *
+ * Con esta opción, una conversación en `handoff_humano` cuyo negocio pidió que el asistente vuelva
+ * pasado un plazo (`gener_negocio.reactivar_asistente_min > 0`) **vuelve a `activa` antes de
+ * devolverse**, si ya pasó ese plazo desde la última intervención humana. Es la evaluación
+ * PEREZOSA de la regla: no hay temporizador, solo se mira cuando entra un mensaje del cliente, así
+ * que el asistente nunca le habla solo a alguien que no escribió.
+ *
+ * Solo la pasa quien procesa un mensaje ENTRANTE (el motor). Los recordatorios y los avisos
+ * llaman a esta misma función para colgar un mensaje saliente y NO la pasan: ahí no escribió
+ * ningún cliente, y cambiar el estado sería justo lo que la Enmienda 2 prohíbe.
+ *
+ * Devuelve la conversación con `reactivada_automaticamente: true` cuando eso ocurrió.
  */
-async function asegurarConversacion({ idNegocio, canal, idExterno }, { transaction }) {
+async function asegurarConversacion(
+    { idNegocio, canal, idExterno },
+    { transaction, reactivarPorPlazo = false }
+) {
+    const reactivada = reactivarPorPlazo
+        ? await reactivarSiVencioElPlazo({ idNegocio, canal, idExterno }, { transaction })
+        : null;
+
+    const conversacion = await asegurarConversacionSinReglas(
+        { idNegocio, canal, idExterno },
+        { transaction }
+    );
+    if (reactivada) conversacion.reactivada_automaticamente = true;
+    return conversacion;
+}
+
+/**
+ * ¿Ya venció el plazo de reactivación? Si sí, devuelve la conversación al asistente y **lo deja
+ * escrito** en la misma transacción (`auditoria.audit_evento`, `origen: 'automatico'`).
+ *
+ * El `UPDATE` es la regla entera, y cada condición es una salvaguarda de la Enmienda 2:
+ *   - `estado = 'handoff_humano'`: solo una conversación en manos de una persona.
+ *   - `reactivar_asistente_min > 0`: el negocio lo activó. 0 es «nunca» y es el valor de fábrica.
+ *   - `humano_ultimo_en IS NOT NULL`: una persona intervino. Si el asistente escaló y nadie hizo
+ *     nada, el reloj no existe y NO vuelve solo: la promesa «te responde una persona» sigue sin
+ *     cumplirse, y devolverle el hilo al bot ahí sí contradiría la decisión original.
+ *   - el plazo cuenta desde la ÚLTIMA intervención humana (cada mensaje suyo lo reinicia), no
+ *     desde que se abrió la conversación.
+ *
+ * `bloqueada`, `suspendida` y demás no entran: solo se toca `handoff_humano`.
+ */
+async function reactivarSiVencioElPlazo({ idNegocio, canal, idExterno }, { transaction }) {
+    const fila = await unaFila(
+        `
+        UPDATE intelligence.conversacion c
+           SET estado = 'activa'
+          FROM general.gener_negocio n
+         WHERE c.id_negocio = :idNegocio AND c.canal = :canal AND c.id_externo = :idExterno
+           AND n.id_negocio = c.id_negocio
+           AND c.estado = 'handoff_humano'
+           AND n.reactivar_asistente_min > 0
+           AND c.humano_ultimo_en IS NOT NULL
+           AND c.humano_ultimo_en + (n.reactivar_asistente_min * interval '1 minute') <= now()
+        RETURNING c.id_conversacion, c.id_negocio, c.humano_ultimo_en,
+                  n.reactivar_asistente_min AS minutos;
+        `,
+        { idNegocio, canal, idExterno },
+        transaction
+    );
+    if (!fila) return null;
+
+    await sequelize.query(
+        `
+        INSERT INTO auditoria.audit_evento
+               (modulo, accion, resultado, id_usuario, id_negocio, ip, detalle)
+        VALUES ('intelligence', 'asistente_retomo_automatico', 'ok', NULL, :idNegocio, NULL,
+                CAST(:detalle AS jsonb));
+        `,
+        {
+            replacements: {
+                idNegocio: fila.id_negocio,
+                detalle: JSON.stringify({
+                    id_conversacion: fila.id_conversacion,
+                    origen: 'automatico',
+                    minutos: fila.minutos,
+                    humano_ultimo_en: fila.humano_ultimo_en,
+                    adr: 'ADR-023 Enmienda 2',
+                }),
+            },
+            transaction,
+        }
+    );
+    return fila;
+}
+
+/** El upsert de siempre: ver `asegurarConversacion`. */
+async function asegurarConversacionSinReglas({ idNegocio, canal, idExterno }, { transaction }) {
     return unaFila(
         `
         INSERT INTO intelligence.conversacion (id_negocio, canal, id_externo, ultimo_mensaje_en)
@@ -128,6 +218,24 @@ async function asegurarConversacion({ idNegocio, canal, idExterno }, { transacti
                   variables, tarea_actual, tarea_datos;
         `,
         { idNegocio, canal, idExterno },
+        transaction
+    );
+}
+
+/**
+ * Una persona del negocio acaba de intervenir en la conversación: reinicia el reloj de la
+ * reactivación (ADR-023, Enmienda 2). Lo llaman quienes ya saben que hubo intervención: contestar
+ * desde la Bandeja, marcarla atendida, o el dueño escribiendo desde su propio WhatsApp.
+ */
+async function marcarIntervencionHumana(idConversacion, { transaction = null } = {}) {
+    return unaFila(
+        `
+        UPDATE intelligence.conversacion
+           SET humano_ultimo_en = now()
+         WHERE id_conversacion = :idConversacion
+        RETURNING id_conversacion, humano_ultimo_en;
+        `,
+        { idConversacion },
         transaction
     );
 }
@@ -992,6 +1100,7 @@ module.exports = {
     esErrorDeLock,
     reservarIngesta,
     asegurarConversacion,
+    marcarIntervencionHumana,
     buscarConversacion,
     cambiarEstadoConversacion,
     bloquear,

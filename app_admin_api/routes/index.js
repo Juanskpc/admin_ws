@@ -350,6 +350,9 @@ router.delete('/negocios/:id', requireSuperAdmin, [
     param('id').isInt({ min: 1 }).withMessage('ID de negocio inválido'),
     body('confirmacion').optional({ nullable: true }).isString().withMessage('La confirmación debe ser texto')
 ], NegocioController.eliminarNegocio);
+router.get('/negocios/:id/cupo-usuarios', requireSuperAdmin, [
+    param('id').isInt({ min: 1 }).withMessage('ID de negocio inválido')
+], NegocioController.getCupoUsuarios);
 router.get('/negocios/:id/historial', requireSuperAdmin, [
     param('id').isInt({ min: 1 }).withMessage('ID de negocio inválido')
 ], NegocioController.getHistorialNegocio);
@@ -577,6 +580,17 @@ router.post('/cobranza/mi-plan', [
     }),
 ], CobranzaController.elegirPlan);
 
+// Cuánto se cobraría por un cambio de plan/complementos, sin hacerlo (solo lectura). Los
+// complementos van como `USUARIO_ADICIONAL:2,CAJA_ADICIONAL:1`. Comparte cálculo con el cobro real.
+router.get('/cobranza/mi-plan/simular', [
+    query('id_negocio').isInt({ min: 1 }).withMessage('id_negocio inválido'),
+    query('id_plan').optional().isInt({ min: 1 }).withMessage('Plan inválido'),
+    query('complementos')
+        .optional({ values: 'falsy' }) // `complementos=` (vacío) = «todos a cero», como `[]` en el POST
+        .matches(/^([A-Za-z0-9_]{2,40}:\d{1,2})(,[A-Za-z0-9_]{2,40}:\d{1,2})*$/)
+        .withMessage('Complementos inválidos'),
+], CobranzaController.simularCambio);
+
 router.post('/cobranza/facturas/:id/pagar', [
     param('id').isInt({ min: 1 }).withMessage('ID de factura inválido'),
     body('pasarela').isIn(['manual', 'dlocal', 'wompi']).withMessage('Medio de pago inválido'),
@@ -597,6 +611,18 @@ router.get('/cobranza/ingresos', requireSuperAdmin, [
 router.get('/cobranza/negocios/:id_negocio/complementos', requireSuperAdmin, [
     param('id_negocio').isInt({ min: 1 }).withMessage('ID de negocio inválido'),
 ], CobranzaController.getComplementos);
+
+// Vista previa del total mensual (plan + complementos que se cobran) sin guardar. Lo usa el editor
+// de negocios para no llevar su propia aritmética de precios.
+router.post('/cobranza/negocios/:id_negocio/total-mensual', requireSuperAdmin, [
+    param('id_negocio').isInt({ min: 1 }).withMessage('ID de negocio inválido'),
+    body('id_plan').optional({ nullable: true }).isInt({ min: 1 }).withMessage('Plan inválido'),
+    body('complementos').optional().isArray({ max: 20 }).withMessage('Complementos inválidos'),
+    body('complementos.*.codigo').isString().trim().isLength({ min: 2, max: 40 })
+        .withMessage('Complemento inválido'),
+    body('complementos.*.cantidad_facturable').isInt({ min: 0, max: 100 }).toInt()
+        .withMessage('Cantidad a cobrar inválida'),
+], CobranzaController.postTotalMensual);
 
 router.put('/cobranza/negocios/:id_negocio/complementos', requireSuperAdmin, [
     param('id_negocio').isInt({ min: 1 }).withMessage('ID de negocio inválido'),
@@ -674,6 +700,8 @@ router.post('/tipos-negocio', requireSuperAdmin, [
     body('icono').optional({ nullable: true }).trim().isLength({ max: 50 }),
     body('color_hex').optional({ nullable: true }).trim()
         .matches(/^#?[0-9A-Fa-f]{3,8}$/).withMessage('Color hexadecimal inválido'),
+    // El aplicativo que lo atiende (RESTAURANTE o RESERVA). Se valida contra los habilitados en el DAO.
+    body('id_tipo_modulo').isInt({ min: 1 }).withMessage('Elige el aplicativo del tipo de negocio'),
 ], TipoNegocioController.createTipoNegocio);
 
 // --- Planes ---
@@ -699,6 +727,7 @@ router.patch('/negocios/:id/paleta', PaletaColorController.assignPaletaValidator
 // --- Notificaciones ---
 router.get('/mis-notificaciones', NotificacionController.getMisNotificaciones);
 router.get('/mis-notificaciones/no-leidas', NotificacionController.contarMisNoLeidas);
+router.get('/mis-notificaciones/esperando-respuesta', NotificacionController.getConversacionesEsperando);
 router.get('/notificaciones/:id_negocio', [
     param('id_negocio').isInt({ min: 1 }).withMessage('ID de negocio inválido')
 ], NotificacionController.getNotificaciones);
@@ -813,5 +842,16 @@ router.post('/intelligence/bandeja/conversaciones/:id/bloquear', [
 router.post('/intelligence/bandeja/conversaciones/:id/desbloquear', [
     param('id').isUUID().withMessage('ID de conversación inválido'),
 ], IntelligenceBandejaController.desbloquear);
+
+// Reactivación del asistente (ADR-023, Enmienda 2): cuántos minutos después de la última
+// intervención humana vuelve solo (0 = nunca). Guardar exige ser ADMINISTRADOR de ESE negocio.
+router.get('/intelligence/bandeja/configuracion', [
+    query('id_negocio').isInt({ min: 1 }).withMessage('ID de negocio inválido'),
+], IntelligenceBandejaController.leerConfiguracion);
+router.put('/intelligence/bandeja/configuracion', [
+    body('id_negocio').isInt({ min: 1 }).withMessage('ID de negocio inválido'),
+    body('reactivar_asistente_min').isInt({ min: 0, max: 10080 })
+        .withMessage('Los minutos deben estar entre 0 (nunca) y 10080'),
+], IntelligenceBandejaController.guardarConfiguracion);
 
 module.exports = router;

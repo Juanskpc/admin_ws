@@ -134,6 +134,42 @@ algún día eso cambiara, «el bot no vuelve» dejaría de significar nada.
 
 ---
 
+## El asistente vuelve solo (ADR-023, Enmienda 2 — 2026-09-23)
+
+Además del botón manual, el negocio puede decidir que el asistente **vuelva solo** a una conversación que
+atendió una persona. Es una decisión suya, por negocio, y **nace apagada («Nunca»)**. El detalle de por qué
+es aceptable y qué sigue prohibido está en la [Enmienda 2 del ADR-023](adr/ADR-023-guardarrailes.md).
+
+**Cómo funciona**
+
+- `general.gener_negocio.reactivar_asistente_min`: minutos, 0 = nunca (migración
+  `npm run migrate:intelligence-reactivacion`, idempotente). `intelligence.conversacion.humano_ultimo_en`:
+  la última vez que una persona intervino (responder desde la Bandeja, el dueño escribiendo desde su
+  WhatsApp, o «Ya me ocupé»).
+- **Perezosa:** no hay temporizador. Cuando entra un mensaje del cliente a una conversación en
+  `handoff_humano`, `asegurarConversacion` (solo si el motor lo pide con `reactivarPorPlazo`) la pasa a
+  `activa` **antes** de procesarlo, si `humano_ultimo_en + reactivar_asistente_min <= now()`. Sin
+  intervención humana (reloj en NULL) no vuelve. Los recordatorios y avisos no la reactivan.
+- **Constancia:** `auditoria.audit_evento` → `asistente_retomo_automatico` (misma transacción). El detalle de
+  la conversación devuelve `retomadas` (automáticas y manuales) y el hilo las pinta en su sitio.
+
+**En la pantalla**
+
+- Cabecera de Conversaciones, a la izquierda de «Esperan respuesta»: «Asistente vuelve tras [N] min» y la
+  casilla **Nunca**. Solo con un negocio determinado; solo un administrador de ese negocio lo cambia; al
+  guardar sale un aviso.
+- En un hilo en modo humano: «El asistente vuelve a las 3:45 p. m. si el cliente escribe», «El asistente no
+  volverá solo», o desde cuándo cuenta si nadie ha intervenido todavía.
+- El botón manual «Ya terminé, que siga el asistente» sigue existiendo.
+
+**Endpoints:** `GET`/`PUT /admin/intelligence/bandeja/configuracion` (`id_negocio`, `reactivar_asistente_min`
+0..10080). El `PUT` exige ser ADMINISTRADOR de ESE negocio: cualquier otro recibe 403.
+
+**Tests:** `__tests__/intelligence/reactivacion.test.js` (contra la 5432): no vuelve antes del plazo ni con
+«nunca» ni sin intervención; vuelve a los X al llegar el mensaje del cliente (repositorio y motor); el
+plazo se reinicia con responder, atender y con el dueño desde su WhatsApp; recordatorios y duplicados no
+reactivan; el endpoint rechaza a un administrador de otro negocio.
+
 ## Por qué se refresca sondeando y no con un canal de eventos
 
 Se miró SSE y se descartó **por dos medidas, no por gusto**:

@@ -142,7 +142,8 @@ async function verificarYCrearCuentaTrial(email, code) {
 
     // 8. Buscar Plan Básico
     const planBasico = await Models.GenerPlan.findOne({
-        where: { nombre: 'Plan Básico', estado: 'A' },
+        // Por código: el nombre comercial del plan puede cambiar, 'BASICO' no.
+        where: { codigo: 'BASICO', estado: 'A' },
         attributes: ['id_plan', 'nombre'],
     });
 
@@ -168,7 +169,8 @@ async function verificarYCrearCuentaTrial(email, code) {
     let idUsuario;
     let idNegocio;
     try {
-        // Crear usuario con cédula como contraseña temporal
+        // Crear usuario con cédula como contraseña temporal. Es el PRIMER usuario del negocio nuevo:
+        // no se comprueba el cupo (nunca falla el primero; ver app_core/helpers/cupoUsuarios.js).
         const nuevoUsuario = await Models.GenerUsuario.create({
             primer_nombre,
             segundo_nombre:        segundo_nombre || null,

@@ -1,6 +1,8 @@
 const { Op } = require('sequelize');
 const Models = require('../models/conection');
+const { whereSinAsistente } = require('./usuarioAsistenteDao');
 const planHelper = require('../helpers/planHelper');
+const { exigirCupoDeUsuario } = require('../helpers/cupoUsuarios');
 
 function isAdminRoleName(nombreRol = '') {
     return nombreRol.toUpperCase().includes('ADMINISTRADOR');
@@ -140,7 +142,8 @@ async function getUsuarios({ search = '', idRol = null, idNegocio = null, estado
     // Los eliminados no se listan nunca, ni siquiera pidiendo un estado concreto: eliminar
     // significa que no se ve en ninguna parte. Su fila sigue ahí para que pedidos, caja y
     // auditoría puedan decir quién los hizo (ver `softDeleteUsuario`).
-    const where = { estado: { [Op.ne]: 'E' } };
+    // El asistente del bot es un actor de auditoría, no una persona del equipo: nunca se lista.
+    const where = { estado: { [Op.ne]: 'E' }, ...whereSinAsistente() };
 
     if (estado === 'A' || estado === 'I') {
         where.estado = estado;
@@ -523,6 +526,14 @@ async function createUsuario(payload, transaction) {
         { transaction }
     );
 
+    // Ocupa un sitio en el equipo del negocio: cabe o es 409 LIMITE_USUARIOS (y todo se deshace).
+    // El PRIMER usuario de un negocio nunca falla (ver `cupoUsuarios`).
+    await exigirCupoDeUsuario(normalizeNegocioId(payload.id_negocio), {
+        idUsuario: nuevoUsuario.id_usuario,
+        estadoFinal: nuevoUsuario.estado,
+        transaction,
+    });
+
     const idNegocio = await syncUsuarioNegocioActivo(
         nuevoUsuario.id_usuario,
         payload.id_negocio,
@@ -560,6 +571,14 @@ async function updateUsuario(idUsuario, payload, transaction) {
     if (payload.password) {
         patch.password = payload.password;
     }
+
+    // Antes de tocar nada: si esta edición lo REACTIVA o lo mete en un negocio en el que no estaba,
+    // ocupa un sitio nuevo. Editar a quien ya ocupa el suyo nunca se bloquea.
+    await exigirCupoDeUsuario(normalizeNegocioId(payload.id_negocio), {
+        idUsuario,
+        estadoFinal: payload.estado ?? usuario.estado,
+        transaction,
+    });
 
     await usuario.update(patch, { transaction });
 
@@ -607,6 +626,18 @@ async function updatePerfilUsuario(idUsuario, payload, transaction) {
 }
 
 async function updateEstadoUsuario(idUsuario, estado, transaction) {
+    // Reactivar a alguien vuelve a ocupar un sitio en cada negocio en el que sigue vinculado.
+    if (estado === 'A') {
+        const vinculos = await Models.GenerNegocioUsuario.findAll({
+            where: { id_usuario: idUsuario, estado: 'A' },
+            attributes: ['id_negocio'],
+            transaction,
+        });
+        for (const v of vinculos) {
+            await exigirCupoDeUsuario(v.id_negocio, { idUsuario, estadoFinal: 'A', transaction });
+        }
+    }
+
     const [affectedRows] = await Models.GenerUsuario.update(
         { estado },
         {
@@ -1107,9 +1138,11 @@ async function addNegocioUsuario(idUsuario, idNegocio, transaction) {
     });
     if (existing) {
         if (existing.estado !== 'A') {
+            await exigirCupoDeUsuario(idNegocio, { idUsuario, transaction });
             await existing.update({ estado: 'A' }, { transaction });
         }
     } else {
+        await exigirCupoDeUsuario(idNegocio, { idUsuario, transaction });
         await Models.GenerNegocioUsuario.create(
             { id_usuario: idUsuario, id_negocio: idNegocio, estado: 'A' },
             { transaction },

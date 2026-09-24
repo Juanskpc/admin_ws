@@ -188,7 +188,43 @@ async function getCartaPublicaCompleta(idNegocio, { incluirAgotados = false } = 
             categoria.productos = (categoria.productos || []).filter(alcanzaStockPara);
         }
     }
+    await adjuntarRemovibles(idNegocio, categorias);
     return categorias;
+}
+
+/**
+ * Le pone a cada producto `removibles`: SOLO id y nombre de los ingredientes que el cliente puede
+ * quitar (`es_removible`, receta activa, ingrediente activo de este negocio).
+ *
+ * Es lo único que la carta pública sabe de la receta: ni porciones, ni stock, ni costos, ni los
+ * ingredientes que NO se pueden quitar. Va en una consulta aparte y no en el `include` de los
+ * productos porque ese include, cuando existe, es del cálculo de stock y lleva justo lo que aquí
+ * no debe salir.
+ */
+async function adjuntarRemovibles(idNegocio, categorias) {
+    const productos = categorias.flatMap((c) => c.productos || []);
+    if (productos.length === 0) return;
+
+    const filas = await Models.CartaProductoIngred.findAll({
+        where: { id_producto: productos.map((p) => p.id_producto), estado: 'A', es_removible: true },
+        attributes: ['id_producto', 'id_ingrediente'],
+        include: [{
+            model: Models.CartaIngrediente,
+            as: 'ingrediente',
+            where: { id_negocio: idNegocio, estado: 'A' },
+            required: true,
+            attributes: ['id_ingrediente', 'nombre'],
+        }],
+        order: [[{ model: Models.CartaIngrediente, as: 'ingrediente' }, 'nombre', 'ASC']],
+    });
+
+    const porProducto = new Map();
+    for (const f of filas) {
+        const lista = porProducto.get(f.id_producto) ?? [];
+        lista.push({ id_ingrediente: f.ingrediente.id_ingrediente, nombre: f.ingrediente.nombre });
+        porProducto.set(f.id_producto, lista);
+    }
+    for (const p of productos) p.removibles = porProducto.get(p.id_producto) ?? [];
 }
 
 /**

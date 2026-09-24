@@ -246,6 +246,8 @@ async function getPlanesActivosPorNegocio(idNegocios) {
 
         map.set(idNegocio, {
             id_plan: p?.id_plan ?? null,
+            // Estable entre entornos; el frontend decide por él y no por una regex del nombre.
+            codigo: p?.codigo ?? null,
             nombre: p?.nombre ?? 'Sin nombre',
             precio: p ? parseFloat(p.precio) : 0,
             moneda: p?.moneda ?? 'COP',

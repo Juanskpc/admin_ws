@@ -287,3 +287,36 @@ empieza el 1 de octubre y no depende de nadie de fuera medirlo.
 - Cobro de Meta: <https://developers.facebook.com/docs/whatsapp/pricing> y el panel de la WABA
 - El cambio del 1 de octubre de 2026 sobre mensajes de servicio: anuncio de Meta, recogido por
   varios integradores en agosto de 2026 — **confirmarlo en el panel antes de la fecha**
+
+---
+
+## 8. Pendientes de los planes de la landing (2026-09-24)
+
+Los planes con facturación y el Plan Empresarial de la landing se llevan a la base (una fila por
+paquete: «Emprendedor + Facturación» S/M/L/XL y «Plan Empresarial» S/M/L/XL, sobre `general.gener_plan`
+con `codigo` estable). Estas cosas quedan **fuera de esa primera entrega** y hay que decidirlas antes
+de vender:
+
+- **CLP (Chile).** Los planes nuevos **no tienen precio en pesos chilenos** y por tanto **no se
+  venden en Chile** hasta definirlo. Hoy solo «Plan Básico» ($8.900) y «Plan Avanzado» ($18.900) tienen
+  precio CLP en `cob_precio_plan`. Un negocio chileno que intente contratar uno de los nuevos recibe
+  «ese plan todavía no tiene precio publicado para tu país».
+- **Ciclo anual.** La landing presenta los planes con facturación como anuales (certificado digital
+  incluido), pero **se crean con precio MENSUAL**. `cob_suscripcion` admite `ciclo = 'anual'` y no está
+  probado que la renovación, el prorrateo de cambios de plan y el aviso de vencimiento se comporten
+  bien con doce meses. Hasta que se pruebe y se decida quién pone la plata del año (§3), el anual no
+  se ofrece.
+- **Se venden aunque la emisión de facturas (FE-2) todavía no existe.** Los planes con facturación
+  (`EMPRENDEDOR_FE_S…XL` y `EMPRESARIAL_S…XL`) están en la compra en línea **por decisión del usuario del
+  2026-09-24**, aunque el sistema aún no emite documentos. Es una promesa comercial que hay que cumplir
+  con FE-2. Los códigos que se ofrecen viven en **una sola lista**, `CODIGOS_OFRECIDOS` de
+  `adquirirService.js`: quitar un plan de la venta es quitar su código de esa lista.
+- **Precio por aplicativo (decidido y hecho, 2026-09-24).** La landing publica Reserva más caro que
+  Restaurante y `cob_precio_plan` guarda ahora un precio por (plan, moneda, ciclo, aplicativo):
+  `id_tipo_modulo` NULL = precio por defecto (el de Restaurante), y una fila propia por aplicativo donde
+  lo hay (`migrate:cobranza-precio-aplicativo`). Todo lo que cotiza resuelve el aplicativo del negocio
+  (`gener_negocio.id_tipo_negocio`): la factura y su renovación, el total mensual, cambiar de plan, el
+  primer plan y la compra en línea. **Sin precio pactado**: la renovación cotiza a precio de hoy, así que
+  un cliente de Reserva que ya paga toma el precio de Reserva en su próxima renovación. El dueño lo aceptó
+  porque hoy no hay clientes reales de Reserva en Colombia; el de Chile (CLP) no cambia porque no hay
+  precios de Reserva en CLP.

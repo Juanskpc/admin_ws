@@ -213,7 +213,7 @@ async function migrate() {
              SELECT p.id_plan, 'COP', 'mensual', p.precio
                FROM general.gener_plan p
               WHERE p.estado = 'A'
-             ON CONFLICT (id_plan, moneda, ciclo) DO NOTHING
+             ON CONFLICT DO NOTHING
              RETURNING id_precio;`,
             { transaction: t, type: sequelize.QueryTypes.SELECT }
         );

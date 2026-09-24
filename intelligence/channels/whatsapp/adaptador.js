@@ -342,9 +342,15 @@ async function silenciarPorHumano({ idNegocio, idExterno, wamid }) {
         idExterno,
     });
     if (!conversacion) return { silenciada: false, motivo: 'sin_conversacion' };
-    if (conversacion.estado === 'handoff_humano') return { silenciada: true, motivo: 'ya_estaba' };
+    // Cada vez que el dueño escribe desde su teléfono cuenta como intervención humana y reinicia
+    // el reloj de la reactivación (ADR-023, Enmienda 2), esté ya la conversación en handoff o no.
+    if (conversacion.estado === 'handoff_humano') {
+        await repositorio.marcarIntervencionHumana(conversacion.id_conversacion);
+        return { silenciada: true, motivo: 'ya_estaba' };
+    }
 
     await repositorio.cambiarEstadoConversacion(conversacion.id_conversacion, 'handoff_humano');
+    await repositorio.marcarIntervencionHumana(conversacion.id_conversacion);
     await auditar('humano_tomo_la_conversacion', idNegocio, {
         id_conversacion: conversacion.id_conversacion,
         wamid,

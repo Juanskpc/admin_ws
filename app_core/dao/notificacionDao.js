@@ -44,9 +44,10 @@ async function getNotificaciones(id_negocio, opts = {}) {
  */
 async function getNotificacionesMulti(ids_negocio, opts = {}) {
     if (!ids_negocio || ids_negocio.length === 0) return [];
-    const { soloNoLeidas = false, limit = 50 } = opts;
+    const { soloNoLeidas = false, limit = 50, excluirTipos = [] } = opts;
     const where = { id_negocio: { [Op.in]: ids_negocio } };
     if (soloNoLeidas) where.leida = false;
+    if (excluirTipos.length > 0) where.tipo = { [Op.notIn]: excluirTipos };
 
     return Models.GenerNotificacion.findAll({
         where,
@@ -67,11 +68,12 @@ async function contarNoLeidas(id_negocio) {
 /**
  * Cuenta las notificaciones no leídas de múltiples negocios.
  */
-async function contarNoLeidasMulti(ids_negocio) {
+async function contarNoLeidasMulti(ids_negocio, opts = {}) {
     if (!ids_negocio || ids_negocio.length === 0) return 0;
-    return Models.GenerNotificacion.count({
-        where: { id_negocio: { [Op.in]: ids_negocio }, leida: false }
-    });
+    const { excluirTipos = [] } = opts;
+    const where = { id_negocio: { [Op.in]: ids_negocio }, leida: false };
+    if (excluirTipos.length > 0) where.tipo = { [Op.notIn]: excluirTipos };
+    return Models.GenerNotificacion.count({ where });
 }
 
 /**

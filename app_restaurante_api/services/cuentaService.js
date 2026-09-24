@@ -423,12 +423,15 @@ async function actualizarCuenta({ idNegocio, idCuenta, modo, cupo, estado, nota 
 
     if (modo && modo !== cuenta.modo) await exigirSaldosEnCero(idCuenta);
 
-    await cuenta.update({
-        modo: modo ?? cuenta.modo,
-        cupo: cupo != null ? Number(cupo) : cuenta.cupo,
-        estado: estado ?? cuenta.estado,
-        nota: nota !== undefined ? nota : cuenta.nota,
-        fecha_actualizacion: new Date(),
+    // En transacción: el actor de auditoría solo se fija dentro de una.
+    await Models.sequelize.transaction(async (t) => {
+        await cuenta.update({
+            modo: modo ?? cuenta.modo,
+            cupo: cupo != null ? Number(cupo) : cuenta.cupo,
+            estado: estado ?? cuenta.estado,
+            nota: nota !== undefined ? nota : cuenta.nota,
+            fecha_actualizacion: new Date(),
+        }, { transaction: t });
     });
 
     avisar(idNegocio, TEMAS.CLIENTES);

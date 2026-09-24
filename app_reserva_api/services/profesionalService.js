@@ -169,7 +169,7 @@ async function inactivar(idProfesional, idNegocio) {
     if (p.foto_url) {
         ImagenService.eliminar({ tipo: 'profesional', idNegocio, idEntidad: idProfesional });
     }
-    return p.update({ estado: 'I', foto_url: null, fecha_actualizacion: new Date() });
+    return Models.sequelize.transaction((t) => p.update({ estado: 'I', foto_url: null, fecha_actualizacion: new Date() }, { transaction: t }));
 }
 
 async function setServicios(idProfesional, idNegocio, idServicios = []) {

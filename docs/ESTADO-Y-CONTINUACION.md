@@ -1,5 +1,13 @@
 # EscalApp Intelligence — estado y cómo continuar
 
+> **⚠️ 2026-09-24 — HAY UN DESPLIEGUE A MEDIAS: léelo antes de subir nada.** Planes de la landing
+> (8 nuevos por paquete, código estable de plan, precio por aplicativo), límite de usuarios que ya
+> se hace cumplir, reactivación automática del bot (ADR-023 Enmienda 2) y otro barrido del panel:
+> todo construido y probado en dev, **sin commitear ni desplegar**. Lleva **4 migraciones que van
+> ANTES del backend**, en un orden fijo — desplegar el backend primero rompe la cotización. Lista
+> paso a paso, comprobaciones y cómo revertir en
+> [`despliegue-pendiente-2026-09-24.md`](despliegue-pendiente-2026-09-24.md).
+
 **Última actualización:** 2026-09-19/20 (**F8-D — Embedded Signup, Opción B, IMPLEMENTADO Y PROBADO
 EN PRODUCCIÓN.** Backend + panel construidos y desplegados, primera conexión real de punta a punta
 contra la cuenta de Meta (no un doble), botón de autoservicio para desconectar, y la pregunta de

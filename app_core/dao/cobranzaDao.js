@@ -47,26 +47,60 @@ async function listarPasarelas({ pais = 'CO' } = {}) {
  * asigna al registrar el negocio. Si algún día hay un plan gratuito, tampoco tiene por qué
  * aparecer aquí (decisión del usuario, 2026-09-15).
  */
-async function listarPlanesParaCliente({ moneda = 'COP', ciclo = 'mensual' } = {}) {
+async function listarPlanesParaCliente(
+    { moneda = 'COP', ciclo = 'mensual', idNegocio = null, idTipoModulo = null } = {}
+) {
+    // Cada plan con SU precio: el del aplicativo del negocio si lo tiene, y si no el de por defecto
+    // (`id_tipo_modulo IS NULL`). Un negocio de Restaurante, sin filas propias, ve lo de siempre.
+    const modulo = await resolverModulo({ idNegocio, idTipoModulo });
     return sequelize.query(
-        `SELECT p.id_plan, p.nombre, p.descripcion, pr.precio::float8 AS precio, pr.moneda, pr.ciclo
-           FROM cobranza.cob_precio_plan pr
-           JOIN general.gener_plan p ON p.id_plan = pr.id_plan AND p.estado = 'A'
-          WHERE pr.estado = 'A' AND pr.moneda = :moneda AND pr.ciclo = :ciclo AND pr.precio > 0
-          ORDER BY pr.precio ASC;`,
-        { replacements: { moneda, ciclo }, type: sequelize.QueryTypes.SELECT }
+        `SELECT * FROM (
+             SELECT DISTINCT ON (p.id_plan)
+                    p.id_plan, p.codigo, p.nombre, p.descripcion, pr.precio::float8 AS precio, pr.moneda, pr.ciclo
+               FROM cobranza.cob_precio_plan pr
+               JOIN general.gener_plan p ON p.id_plan = pr.id_plan AND p.estado = 'A'
+              WHERE pr.estado = 'A' AND pr.moneda = :moneda AND pr.ciclo = :ciclo AND pr.precio > 0
+                AND (pr.id_tipo_modulo IS NULL OR pr.id_tipo_modulo = :modulo)
+              ORDER BY p.id_plan, (pr.id_tipo_modulo IS NULL) ASC
+         ) t
+         ORDER BY t.precio ASC;`,
+        { replacements: { moneda, ciclo, modulo }, type: sequelize.QueryTypes.SELECT }
     );
+}
+
+/**
+ * El aplicativo (módulo) contra el que se cotiza: el que se dice, o el del negocio.
+ * `gener_negocio.id_tipo_negocio` ES el módulo (el oficio va aparte, en `id_rubro`).
+ * `null` = sin aplicativo conocido: se cotiza con los precios por defecto.
+ */
+async function resolverModulo({ idNegocio = null, idTipoModulo = null } = {}, { transaction } = {}) {
+    if (idTipoModulo) return Number(idTipoModulo);
+    if (!idNegocio) return null;
+    const [fila] = await sequelize.query(
+        'SELECT id_tipo_negocio FROM general.gener_negocio WHERE id_negocio = :idNegocio;',
+        { replacements: { idNegocio }, type: sequelize.QueryTypes.SELECT, transaction }
+    );
+    return fila?.id_tipo_negocio ? Number(fila.id_tipo_negocio) : null;
 }
 
 /**
  * Precio vigente de un plan. Devuelve un número, no el string del DECIMAL: coercer aquí evita
  * que un `'27999.00' + 0` se cuele en un total tres capas más arriba.
  */
-async function getPrecio({ idPlan, moneda, ciclo = 'mensual' }, { transaction } = {}) {
-    const fila = await Models.CobPrecioPlan.findOne({
-        where: { id_plan: idPlan, moneda, ciclo, estado: 'A' },
-        transaction,
-    });
+async function getPrecio(
+    { idPlan, moneda, ciclo = 'mensual', idNegocio = null, idTipoModulo = null },
+    { transaction } = {}
+) {
+    // El precio propio del aplicativo del negocio manda; si no lo tiene, el de por defecto.
+    const modulo = await resolverModulo({ idNegocio, idTipoModulo }, { transaction });
+    const [fila] = await sequelize.query(
+        `SELECT precio FROM cobranza.cob_precio_plan
+          WHERE id_plan = :idPlan AND moneda = :moneda AND ciclo = :ciclo AND estado = 'A'
+            AND (id_tipo_modulo IS NULL OR id_tipo_modulo = :modulo)
+          ORDER BY (id_tipo_modulo IS NULL) ASC
+          LIMIT 1;`,
+        { replacements: { idPlan, moneda, ciclo, modulo }, type: sequelize.QueryTypes.SELECT, transaction }
+    );
     if (!fila) {
         throw error(
             `No hay precio configurado para el plan ${idPlan} en ${moneda}/${ciclo}.`,
@@ -550,6 +584,7 @@ module.exports = {
     fijarVencimientoPlan,
     listarPasarelas,
     getPrecio,
+    resolverModulo,
     listarComplementosCatalogo,
     listarComplementosSuscripcion,
     fijarComplementosSuscripcion,

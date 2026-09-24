@@ -1,5 +1,6 @@
 'use strict';
 const Models = require('../../app_core/models/conection');
+const { fijarActorAsistente } = require('../../app_core/helpers/auditActor');
 const { Op } = Models.Sequelize;
 const outboxDao = require('../../app_core/dao/outboxDao');
 const personaNegocioDao = require('../../app_core/dao/personaNegocioDao');
@@ -333,6 +334,9 @@ async function cancelarPorCliente(codigoPublico, motivo, { idNegocio = null, tra
     if (!cita) {
         const e = new Error('Cita no encontrada'); e.statusCode = 404; throw e;
     }
+    // Con transacción externa esto lo llama el bot (sin request ni JWT): el actor de auditoría es
+    // el usuario asistente del negocio. Sin transacción (la web pública) no hay actor que fijar.
+    await fijarActorAsistente(transaction, cita.id_negocio);
     // Antes esta comprobación estaba escrita a mano aquí y en ningún otro sitio. Ahora es la
     // misma máquina de estados que usan el panel y (en F4-B) el asistente.
     EstadoCita.exigirTransicion(cita.estado, EstadoCita.ESTADO.CANCELADA);
@@ -402,6 +406,8 @@ async function reagendarCita(
         if (!cita) {
             const e = new Error('Cita no encontrada'); e.statusCode = 404; throw e;
         }
+        // Transacción ajena = el bot (sin request): el actor de auditoría es el usuario asistente.
+        if (transaccionExterna) await fijarActorAsistente(t, idNegocio);
         if (EstadoCita.esTerminal(cita.estado)) {
             const e = new Error(`Una cita "${cita.estado}" ya está cerrada y no se puede reagendar.`);
             e.statusCode = 409; e.code = 'TRANSICION_INVALIDA'; throw e;
@@ -627,13 +633,14 @@ async function aprobarPago(idCita, idNegocio, idUsuario) {
         const e = new Error('La cita no está pendiente de validación de pago'); e.statusCode = 409; throw e;
     }
     EstadoCita.exigirTransicion(cita.estado, EstadoCita.ESTADO.CONFIRMADA);
-    await cita.update({
+    // En transacción: el actor de auditoría solo se fija dentro de una (ALS del request).
+    await Models.sequelize.transaction((t) => cita.update({
         pago_estado: 'aprobado',
         estado: 'confirmada',
         pago_validado_por_id_usuario: idUsuario,
         pago_validado_en: new Date(),
         fecha_actualizacion: new Date(),
-    });
+    }, { transaction: t }));
 
     Notificacion.enviar('pago_aprobado', { cita: cita.toJSON() })
         .catch(err => console.error('[Reserva] notif error:', err.message));
@@ -648,14 +655,14 @@ async function rechazarPago(idCita, idNegocio, idUsuario, motivo) {
         const e = new Error('La cita no está pendiente de validación de pago'); e.statusCode = 409; throw e;
     }
     EstadoCita.exigirTransicion(cita.estado, EstadoCita.ESTADO.CANCELADA);
-    await cita.update({
+    await Models.sequelize.transaction((t) => cita.update({
         pago_estado: 'rechazado',
         estado: 'cancelada',
         pago_validado_por_id_usuario: idUsuario,
         pago_validado_en: new Date(),
         pago_rechazo_motivo: motivo || null,
         fecha_actualizacion: new Date(),
-    });
+    }, { transaction: t }));
 
     Notificacion.enviar('pago_rechazado', { cita: cita.toJSON(), motivo })
         .catch(err => console.error('[Reserva] notif error:', err.message));

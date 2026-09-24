@@ -1,4 +1,6 @@
 const Models = require('../../app_core/models/conection');
+const Audit = require('../../app_core/helpers/auditHelper');
+const { fijarActor } = require('../../app_core/helpers/auditActor');
 
 /**
  * inventarioService - Control de insumos y recetas del restaurante.
@@ -174,7 +176,69 @@ async function ajustarStockIngrediente(idNegocio, idIngrediente, payload = {}) {
     };
 }
 
+const MOTIVO_RESTABLECER = 'Restablecido a 0';
+
+/**
+ * Deja el stock de un insumo en 0 como un AJUSTE con historia, no como un UPDATE mudo.
+ *
+ * `carta_ingrediente` no tiene bitácora de movimientos ni trigger de auditoría, así que el rastro
+ * es un evento en `auditoria.audit_evento` (quién, cuándo, cuánto había y el motivo), escrito
+ * en la MISMA transacción que el cambio: o quedan los dos o ninguno. Si el stock ya es 0 no se
+ * escribe nada.
+ *
+ * Funciona con `controla_inventario` apagado: es una corrección manual explícita, igual que el
+ * ajuste rápido, y no depende de que las ventas descuenten. Lo que sí cambia es que, apagado, el
+ * stock no refleja lo vendido (la pantalla ya lo avisa).
+ */
+async function restablecerStockACero(idNegocio, idIngrediente, { idUsuario } = {}) {
+    return Models.sequelize.transaction(async (t) => {
+        await fijarActor(t, { idUsuario, idNegocio });
+
+        // El negocio va EN la búsqueda: un insumo de otro negocio no existe para este.
+        const ingrediente = await Models.CartaIngrediente.findOne({
+            where: { id_ingrediente: idIngrediente, id_negocio: idNegocio, estado: 'A' },
+            transaction: t,
+            lock: t.LOCK.UPDATE,
+        });
+        if (!ingrediente) {
+            const err = new Error('Insumo no encontrado.');
+            err.code = 'INGREDIENTE_NO_ENCONTRADO';
+            err.statusCode = 404;
+            throw err;
+        }
+
+        const stockAnterior = Number(ingrediente.stock_actual ?? 0);
+        const base = {
+            id_ingrediente: ingrediente.id_ingrediente,
+            nombre: ingrediente.nombre,
+            unidad_medida: ingrediente.unidad_medida || 'g',
+            stock_actual: 0,
+        };
+        if (stockAnterior === 0) return { ...base, cambio: false, stock_anterior: 0 };
+
+        await ingrediente.update({ stock_actual: 0 }, { transaction: t });
+        await Audit.registrarEvento({
+            modulo: 'inventario',
+            accion: 'stock_restablecido_a_cero',
+            idUsuario,
+            idNegocio,
+            detalle: {
+                id_ingrediente: ingrediente.id_ingrediente,
+                nombre: ingrediente.nombre,
+                stock_anterior: stockAnterior,
+                stock_nuevo: 0,
+                delta: -stockAnterior,
+                motivo: MOTIVO_RESTABLECER,
+            },
+            transaction: t,
+        });
+
+        return { ...base, cambio: true, stock_anterior: stockAnterior };
+    });
+}
+
 module.exports = {
     getInventarioResumen,
     ajustarStockIngrediente,
+    restablecerStockACero,
 };

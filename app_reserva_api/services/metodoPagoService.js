@@ -66,7 +66,7 @@ async function actualizar({ idMetodo, idNegocio, nombre, orden }) {
     }
     if (orden !== undefined && Number.isInteger(orden)) datos.orden = orden;
 
-    return m.update(datos);
+    return Models.sequelize.transaction((t) => m.update(datos, { transaction: t }));
 }
 
 /** Reactivar es útil: el dueño apaga «Transferencia» en temporada baja y la vuelve a encender. */
@@ -84,7 +84,7 @@ async function cambiarEstado({ idMetodo, idNegocio, estado }) {
             x.nombre.trim().toLowerCase() === m.nombre.trim().toLowerCase());
         if (choque) throw errorValidacion('Ya hay otra forma de pago activa con ese nombre.');
     }
-    return m.update({ estado });
+    return Models.sequelize.transaction((t) => m.update({ estado }, { transaction: t }));
 }
 
 /** Valida que un conjunto de ids pertenezca al negocio y esté activo. Devuelve los modelos. */

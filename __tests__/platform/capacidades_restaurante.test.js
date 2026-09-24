@@ -12,6 +12,7 @@
 
 require('dotenv').config();
 const { asegurarCajaPrincipal } = require('../../app_core/helpers/cajaPrincipal');
+const puntoCajaService = require('../../app_restaurante_api/services/puntoCajaService');
 // La feature comercial se fuerza igual que en las demás suites: `asistente_ia` no está en
 // ningún plan de la base local, y sin ella el Gate deniega antes de llegar a la capacidad.
 process.env.FEATURES_FORZADAS = 'asistente_ia';
@@ -335,11 +336,13 @@ describe('tomar_pedido — la mutación', () => {
     async function abrirCaja() {
         // Una orden no existe fuera de un turno de caja: es la regla del dominio que hay que
         // respetar, no rodear. Aquí se abre una a mano para poder ejercitar el camino feliz.
+        // El turno cuelga de un punto de caja (NOT NULL): se resuelve como en producción.
+        const { id_punto_caja: idPunto } = await puntoCajaService.resolverPuntoCaja({ idNegocio });
         await sequelize.query(
-            `INSERT INTO restaurante.rest_caja (id_negocio, id_usuario, monto_apertura, estado, fecha_apertura)
-             SELECT :n, :u, 0, 'A', now()
+            `INSERT INTO restaurante.rest_caja (id_negocio, id_punto_caja, id_usuario, monto_apertura, estado, fecha_apertura)
+             SELECT :n, :p, :u, 0, 'A', now()
               WHERE NOT EXISTS (SELECT 1 FROM restaurante.rest_caja WHERE id_negocio = :n AND estado = 'A');`,
-            { replacements: { n: idNegocio, u: principal.id_usuario } }
+            { replacements: { n: idNegocio, p: idPunto, u: principal.id_usuario } }
         );
     }
 
@@ -778,16 +781,17 @@ describe('cancelar_pedido', () => {
         numero,
         { telefono = TEL_CLIENTE, estadoCocina = null, estadoPago = 'pendiente_pago', estado = 'ABIERTA' } = {}
     ) {
+        const { id_punto_caja: idPunto } = await puntoCajaService.resolverPuntoCaja({ idNegocio });
         await sequelize.query(
             `
             INSERT INTO restaurante.pedid_orden
-                (id_negocio, numero_orden, id_usuario, estado, estado_cocina, estado_pago,
+                (id_negocio, id_punto_caja, numero_orden, id_usuario, estado, estado_cocina, estado_pago,
                  tipo_pedido, contacto_telefono, contacto_nombre, total)
-            VALUES (:n, :num, :u, :estado, :cocina, :pago, 'DOMICILIO', :tel, 'BOT Cliente Cancelar', 30000);
+            VALUES (:n, :p, :num, :u, :estado, :cocina, :pago, 'DOMICILIO', :tel, 'BOT Cliente Cancelar', 30000);
             `,
             {
                 replacements: {
-                    n: idNegocio, num: numero, u: principal.id_usuario,
+                    n: idNegocio, p: idPunto, num: numero, u: principal.id_usuario,
                     estado, cocina: estadoCocina, pago: estadoPago, tel: telefono,
                 },
             }
@@ -856,11 +860,13 @@ describe('agregar_items_pedido', () => {
     let precioProducto;
 
     async function abrirCaja() {
+        // El turno cuelga de un punto de caja (NOT NULL): se resuelve como en producción.
+        const { id_punto_caja: idPunto } = await puntoCajaService.resolverPuntoCaja({ idNegocio });
         await sequelize.query(
-            `INSERT INTO restaurante.rest_caja (id_negocio, id_usuario, monto_apertura, estado, fecha_apertura)
-             SELECT :n, :u, 0, 'A', now()
+            `INSERT INTO restaurante.rest_caja (id_negocio, id_punto_caja, id_usuario, monto_apertura, estado, fecha_apertura)
+             SELECT :n, :p, :u, 0, 'A', now()
               WHERE NOT EXISTS (SELECT 1 FROM restaurante.rest_caja WHERE id_negocio = :n AND estado = 'A');`,
-            { replacements: { n: idNegocio, u: principal.id_usuario } }
+            { replacements: { n: idNegocio, p: idPunto, u: principal.id_usuario } }
         );
     }
 
@@ -875,16 +881,17 @@ describe('agregar_items_pedido', () => {
         numero,
         { telefono = TEL_CLIENTE, estadoCocina = null, estadoPago = 'pendiente_pago', estado = 'ABIERTA' } = {}
     ) {
+        const { id_punto_caja: idPunto } = await puntoCajaService.resolverPuntoCaja({ idNegocio });
         await sequelize.query(
             `
             INSERT INTO restaurante.pedid_orden
-                (id_negocio, numero_orden, id_usuario, estado, estado_cocina, estado_pago,
+                (id_negocio, id_punto_caja, numero_orden, id_usuario, estado, estado_cocina, estado_pago,
                  tipo_pedido, contacto_telefono, contacto_nombre, total)
-            VALUES (:n, :num, :u, :estado, :cocina, :pago, 'DOMICILIO', :tel, 'BOT Cliente Agregar', 0);
+            VALUES (:n, :p, :num, :u, :estado, :cocina, :pago, 'DOMICILIO', :tel, 'BOT Cliente Agregar', 0);
             `,
             {
                 replacements: {
-                    n: idNegocio, num: numero, u: principal.id_usuario,
+                    n: idNegocio, p: idPunto, num: numero, u: principal.id_usuario,
                     estado, cocina: estadoCocina, pago: estadoPago, tel: telefono,
                 },
             }
@@ -1001,11 +1008,13 @@ describe('los textos que pidió el dueño (2026-09-21)', () => {
     const TEL_CLIENTE = '+573005556699';
 
     async function abrirCaja() {
+        // El turno cuelga de un punto de caja (NOT NULL): se resuelve como en producción.
+        const { id_punto_caja: idPunto } = await puntoCajaService.resolverPuntoCaja({ idNegocio });
         await sequelize.query(
-            `INSERT INTO restaurante.rest_caja (id_negocio, id_usuario, monto_apertura, estado, fecha_apertura)
-             SELECT :n, :u, 0, 'A', now()
+            `INSERT INTO restaurante.rest_caja (id_negocio, id_punto_caja, id_usuario, monto_apertura, estado, fecha_apertura)
+             SELECT :n, :p, :u, 0, 'A', now()
               WHERE NOT EXISTS (SELECT 1 FROM restaurante.rest_caja WHERE id_negocio = :n AND estado = 'A');`,
-            { replacements: { n: idNegocio, u: principal.id_usuario } }
+            { replacements: { n: idNegocio, p: idPunto, u: principal.id_usuario } }
         );
     }
 

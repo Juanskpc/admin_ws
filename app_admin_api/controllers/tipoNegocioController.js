@@ -68,13 +68,19 @@ async function createTipoNegocio(req, res) {
             return Respuesta.error(res, 'Datos de entrada inválidos', 400, errors.array());
         }
 
-        const { nombre, descripcion, icono, color_hex } = req.body;
-        const tipo = await TipoNegocioDao.createTipoNegocio({ nombre, descripcion, icono, color_hex });
+        const { nombre, descripcion, icono, color_hex, id_tipo_modulo } = req.body;
+        const tipo = await TipoNegocioDao.createTipoNegocio({
+            nombre, descripcion, icono, color_hex, id_tipo_modulo,
+        });
 
         return Respuesta.success(res, 'Tipo de negocio creado exitosamente', tipo, 201);
     } catch (error) {
         if (error?.name === 'SequelizeUniqueConstraintError') {
             return Respuesta.error(res, 'Ya existe un tipo de negocio con ese nombre', 409);
+        }
+        // Errores de dominio (aplicativo requerido o no habilitado): traen su código y su estado.
+        if (error?.statusCode && error?.code) {
+            return Respuesta.error(res, error.message, error.statusCode, null, { code: error.code });
         }
         console.error('Error en createTipoNegocio:', error);
         return Respuesta.error(res, 'Error al crear el tipo de negocio');

@@ -5,6 +5,7 @@ const planHelper = require('../../app_core/helpers/planHelper');
 const Respuesta = require('../../app_core/helpers/respuesta');
 const CicloVida = require('../services/negocioCicloVidaService');
 const { featuresDeNegocios } = require('../../intelligence/core/features');
+const { getUsoUsuarios } = require('../../app_core/helpers/cupoUsuarios');
 
 /**
  * Listar todos los negocios activos.
@@ -236,6 +237,24 @@ async function eliminarNegocio(req, res) {
 }
 
 /**
+ * Cuántos usuarios usa el negocio y cuántos le caben («X de Y usuarios»).
+ * GET /admin/negocios/:id/cupo-usuarios   →   { usados, total|null, incluidos, adicionales, plan }
+ */
+async function getCupoUsuarios(req, res) {
+    try {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return Respuesta.error(res, 'Datos de entrada inválidos', 400, errors.array());
+        }
+
+        const uso = await getUsoUsuarios(Number(req.params.id));
+        return Respuesta.success(res, 'Uso de usuarios del negocio', uso);
+    } catch (error) {
+        return responderError(res, error, 'getCupoUsuarios', 'Error al consultar el cupo de usuarios');
+    }
+}
+
+/**
  * Historial de inactivaciones, reactivaciones y demás cambios de ciclo de vida.
  * GET /admin/negocios/:id/historial
  */
@@ -309,6 +328,7 @@ module.exports = {
     setEstadoNegocio,
     eliminarNegocio,
     getPrevisualizacionEliminacion,
+    getCupoUsuarios,
     getHistorialNegocio,
     registrarCliente,
 };

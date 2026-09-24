@@ -3,7 +3,7 @@ const tipoOperativo = require('../helpers/tipoNegocioOperativo');
 
 const TIPO_ATTRS = [
     'id_tipo_negocio', 'nombre', 'descripcion',
-    'icono', 'color_hex', 'estado',
+    'icono', 'color_hex', 'estado', 'id_tipo_modulo',
     'fecha_creacion', 'fecha_actualizacion',
 ];
 
@@ -26,10 +26,42 @@ async function getListaTiposNegocio() {
         tipoOperativo.getTiposOperativos(),
     ]);
 
-    return tipos.map((t) => ({
-        ...t.get({ plain: true }),
-        operativo: operativos.has(Number(t.id_tipo_negocio)),
-    }));
+    const porId = new Map(tipos.map((t) => [Number(t.id_tipo_negocio), t]));
+    const modulos = modulosDe(tipos, operativos);
+
+    return tipos.map((t) => {
+        // Un aplicativo se atiende a sí mismo aunque no se apunte (RESERVA no lo hace en la base).
+        const modulo = t.id_tipo_modulo != null
+            ? porId.get(Number(t.id_tipo_modulo))
+            : (modulos.has(Number(t.id_tipo_negocio)) ? t : null);
+        return {
+            ...t.get({ plain: true }),
+            operativo: operativos.has(Number(t.id_tipo_negocio)),
+            // El aplicativo que lo atiende, con nombre legible. `null` = sin aplicativo: hoy no
+            // se ofrece ni se puede atender.
+            aplicativo: modulo ? nombreLegible(modulo.nombre) : null,
+            // ¿Es uno de los aplicativos que se pueden elegir al crear un tipo?
+            es_modulo: modulos.has(Number(t.id_tipo_negocio)),
+        };
+    });
+}
+
+/**
+ * Los aplicativos habilitados: los tipos a los que apunta algún oficio (`id_tipo_modulo`) y que
+ * tienen permisos sembrados. Es la misma condición con la que `getRubros` decide qué se ofrece.
+ * No se exige que el módulo se apunte a sí mismo: RESTAURANTE lo hace, RESERVA no.
+ */
+function modulosDe(tipos, operativos) {
+    const apuntados = new Set(
+        tipos.filter((t) => t.id_tipo_modulo != null).map((t) => Number(t.id_tipo_modulo)),
+    );
+    return new Set([...apuntados].filter((id) => operativos.has(id)));
+}
+
+/** 'RESTAURANTE' → 'Restaurante'. Los módulos tienen nombre de una palabra en mayúsculas. */
+function nombreLegible(nombre) {
+    const t = String(nombre || '').toLowerCase();
+    return t.charAt(0).toUpperCase() + t.slice(1);
 }
 
 /**
@@ -45,16 +77,46 @@ function getTipoNegocioById(idTipoNegocio) {
 }
 
 /**
- * Crea un nuevo tipo de negocio.
- * @param {Object} data { nombre, descripcion, icono, color_hex }
+ * Crea un nuevo tipo de negocio (un OFICIO) y lo liga al aplicativo que lo atiende.
+ *
+ * El aplicativo es `id_tipo_modulo` y es OBLIGATORIO: un tipo sin módulo se queda fuera de todo
+ * lo que se ofrece (`NULL` = «hoy no lo podemos atender»), así que crearlo así solo produce una
+ * fila que nadie puede elegir. Se valida contra los módulos habilitados de verdad (`modulosDe`):
+ * tipos a los que ya apunta algún oficio y que tienen permisos sembrados —hoy RESTAURANTE y
+ * RESERVA—. Elegir cualquier otra cosa es un 409 en vez de un negocio inservible.
+ *
+ * @param {Object} data { nombre, descripcion, icono, color_hex, id_tipo_modulo }
  * @returns {Object} El tipo de negocio creado
  */
-function createTipoNegocio(data) {
+async function createTipoNegocio(data) {
+    const idModulo = Number(data.id_tipo_modulo);
+    if (!Number.isInteger(idModulo) || idModulo < 1) {
+        const err = new Error('Elige el aplicativo que atiende a este tipo de negocio.');
+        err.code = 'MODULO_REQUERIDO';
+        err.statusCode = 400;
+        throw err;
+    }
+
+    const [tipos, operativos] = await Promise.all([
+        Models.GenerTipoNegocio.findAll({
+            where: { estado: 'A' },
+            attributes: ['id_tipo_negocio', 'id_tipo_modulo'],
+        }),
+        tipoOperativo.getTiposOperativos(),
+    ]);
+    if (!modulosDe(tipos, operativos).has(idModulo)) {
+        const err = new Error('Ese aplicativo no está habilitado: elige Restaurante o Reserva.');
+        err.code = 'MODULO_NO_DISPONIBLE';
+        err.statusCode = 409;
+        throw err;
+    }
+
     return Models.GenerTipoNegocio.create({
         nombre: data.nombre,
         descripcion: data.descripcion ?? null,
         icono: data.icono ?? null,
         color_hex: data.color_hex ?? null,
+        id_tipo_modulo: idModulo,
         estado: 'A',
     });
 }

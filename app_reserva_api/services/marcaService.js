@@ -77,7 +77,7 @@ async function guardarColores({ idNegocio, primario, acento }) {
         primario: normalizarHex(primario, 'primario'),
         acento: normalizarHex(acento, 'acento'),
     };
-    await negocio.update({ colores, id_paleta: null });
+    await Models.sequelize.transaction((t) => negocio.update({ colores, id_paleta: null }, { transaction: t }));
     return colores;
 }
 
@@ -94,14 +94,14 @@ async function aplicarPaleta({ idNegocio, idPaleta }) {
         primario: normalizarHex(c.primario ?? c.primary, 'primario'),
         acento: normalizarHex(c.acento ?? c.accent ?? c.primario ?? c.primary, 'acento'),
     };
-    await negocio.update({ colores, id_paleta: paleta.id_paleta });
+    await Models.sequelize.transaction((t) => negocio.update({ colores, id_paleta: paleta.id_paleta }, { transaction: t }));
     return { colores, id_paleta: paleta.id_paleta, nombre: paleta.nombre };
 }
 
 /** Vuelve a la identidad por defecto de EscalApp. */
 async function restablecerColores(idNegocio) {
     const negocio = await getNegocio(idNegocio);
-    await negocio.update({ colores: null, id_paleta: null });
+    await Models.sequelize.transaction((t) => negocio.update({ colores: null, id_paleta: null }, { transaction: t }));
     return null;
 }
 
@@ -115,7 +115,7 @@ async function guardarLogo({ idNegocio, buffer, mimetype }) {
         buffer,
         mimetype,
     });
-    await negocio.update({ logo_url: url });
+    await Models.sequelize.transaction((t) => negocio.update({ logo_url: url }, { transaction: t }));
     return { logo_url: url, bytes };
 }
 
@@ -123,7 +123,7 @@ async function guardarLogo({ idNegocio, buffer, mimetype }) {
 async function eliminarLogo(idNegocio) {
     const negocio = await getNegocio(idNegocio);
     ImagenService.eliminar({ tipo: 'logo', idNegocio, idEntidad: idNegocio });
-    await negocio.update({ logo_url: null });
+    await Models.sequelize.transaction((t) => negocio.update({ logo_url: null }, { transaction: t }));
     return true;
 }
 
@@ -139,14 +139,14 @@ async function guardarBanner({ idNegocio, buffer, mimetype }) {
     const { url, bytes } = ImagenService.guardar({
         tipo: 'banner', idNegocio, idEntidad: idNegocio, buffer, mimetype,
     });
-    await negocio.update({ banner_url: url });
+    await Models.sequelize.transaction((t) => negocio.update({ banner_url: url }, { transaction: t }));
     return { banner_url: url, bytes };
 }
 
 async function eliminarBanner(idNegocio) {
     const negocio = await getNegocio(idNegocio);
     ImagenService.eliminar({ tipo: 'banner', idNegocio, idEntidad: idNegocio });
-    await negocio.update({ banner_url: null });
+    await Models.sequelize.transaction((t) => negocio.update({ banner_url: null }, { transaction: t }));
     return true;
 }
 

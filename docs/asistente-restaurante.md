@@ -459,6 +459,132 @@ nombres se comen el largo disponible.
 > dos archivos se citan mutuamente. Verificado rompiéndolo: cambiar el formato del parser tumba 6
 > pruebas.
 
+### Cómo pide, barrio y mesa: los modificadores del código (2026-09-24)
+
+Antes de los productos, la carta pregunta **cómo quieres pedir**: en el local, a domicilio o
+recoger. Lo elegido viaja en el mismo código, como modificadores opcionales `~<letra>=<valor>`
+detrás de los productos:
+
+```
+#P12-4x2,9x1~m=D~z=7        domicilio al barrio 7
+#P12-4x2,9x1~m=D~z=0        domicilio, «Otro barrio» (el restaurante confirma el valor)
+#P12-4x2,9x1~m=R            recoger en el local
+#P12-4x2,9x1~m=L~t=3        en el local, mesa 3
+```
+
+| Modificador | Valores | Lo lee el bot como |
+|---|---|---|
+| `m` | `D` · `R` · `L` | `tipo_pedido`: `DOMICILIO` · `LLEVAR` · `MESA` |
+| `z` | id de `restaurante.rest_barrio_domicilio`; `0` = otro barrio | `id_barrio` (0 → sin valor de domicilio) |
+| `t` | id de `restaurante.rest_mesa` | `id_mesa` |
+
+| Lado | Archivo |
+|---|---|
+| Escribe | `restaurante_app/.../menu-publico/carrito.service.ts` (`codigoCompacto`, `modificadores`) |
+| Lee | `admin_ws/intelligence/adapters/restaurante/codigoPedido.js` (`leer`, `leerModificadores`) |
+
+**Reglas del contrato** (cada una tiene su prueba):
+
+- **Retrocompatible.** Un código sin modificadores —todos los generados antes de esta fecha— se lee
+  con el objeto de siempre, sin claves nuevas (`{ idNegocio, items }`), y el bot pregunta
+  «¿domicilio o recoger?» como antes.
+- **Lo desconocido se ignora, no se rechaza.** Un modificador que no se conoce o con valor basura
+  (`~q=9`, `~z=abc`, `~m=X`) se descarta; el pedido se toma igual.
+- **Es una sugerencia del cliente, nunca una verdad.** El mensaje se puede editar antes de
+  enviarlo. El servidor **relee** el barrio (y con él el valor del domicilio) y la mesa desde la
+  base, exige que sean de ESTE negocio y estén activos, y calcula el valor él mismo: un precio
+  que venga en el mensaje no se lee en ningún sitio.
+- **Errores tipados.** Barrio inválido → `ZONA_INVALIDA` (400); mesa inválida → `MESA_INVALIDA`
+  (400). Cuando llegan del código, el flujo **no pierde el carrito**: vuelve a preguntar el barrio
+  (o la mesa) con la lista. Si el barrio se borra entre el «sí» y la ejecución, `tomar_pedido`
+  contesta `ZONA_INVALIDA` y la confirmación se cierra con ese mensaje.
+- **La confirmación enseña el domicilio ANTES del «sí»**: una línea `Domicilio (Barrio) — $X` y el
+  total ya sumado. Con «Otro barrio», el bot avisa que el restaurante confirma el valor y el
+  domicilio entra en 0 para que el cajero lo ajuste.
+- **`permite_pago_domicilio` manda.** Apagado, la carta no pide barrio y no se cobra domicilio
+  (comportamiento de siempre); `barrioService.valorDomicilioDe` devuelve 0 y `crearOrden` lo
+  vuelve a aplicar.
+- **«En el local»** solo se ofrece si el negocio tiene mesas activas (`estado = 'A'`; que estén
+  ocupadas no las descarta). Se identifica por `?mesa=<id_mesa>` en la URL (QR por mesa) o eligiendo
+  de la lista. La orden entra como `MESA` con `id_mesa`, **sin dirección ni teléfono obligatorios**
+  y sin aviso de «listo» ni paso por Despacho. Solo entra desde la carta: por chat el bot sigue
+  ofreciendo dos opciones.
+- **Mesa con cuenta abierta: se suma, y queda marcado.** Mesas y cobro asumen UNA cuenta activa por
+  mesa, así que un pedido «en el local» sobre una mesa con cuenta abierta se AÑADE a ella (misma vía
+  que `agregar_items_pedido`, con la mesa bloqueada para que dos comensales hagan fila) y la
+  confirmación lo dice antes del «sí». Cada línea añadida lleva la nota `WhatsApp: <nombre>`; la nota
+  de la orden, que es del mesero, no se toca. Al abrir una cuenta nueva la mesa pasa a OCUPADA.
+  **Riesgo aceptado:** la presencia del cliente en la mesa no se verifica (quien edite `~t=` podría
+  añadir a la cuenta de otra mesa); el «sí» del cliente y la visibilidad en Mesas —donde el mesero ve
+  y quita la línea— son la defensa. No se muestra lo ya consumido en la confirmación: filtraría la
+  cuenta de otra mesa.
+- **Cerrado no se pregunta nada.** Con el negocio fuera de horario, la carta se ve y los botones
+  quedan desactivados; el selector no aparece.
+
+Barrios: tabla `restaurante.rest_barrio_domicilio` (`npm run migrate:restaurante-barrios-domicilio`),
+CRUD en `GET/POST/PUT/DELETE /restaurante/barrios-domicilio` (escribe solo el administrador) y
+lectura pública `GET /restaurante/public/negocios/:id/barrios` (`{habilitado, barrios[]}`). Las
+mesas públicas, `GET /restaurante/public/negocios/:id/mesas` (solo id, nombre y número). Pantalla:
+Configuración → Operación, visible solo con «Cobrar valor del domicilio» encendido.
+
+> ⚠️ **Orden de despliegue: migración → backend → frontend.** Un código con `~m=…` contra un
+> backend viejo no lo entiende (el patrón anclado a fin de línea no casa y el pedido cae al
+> modelo). Con el backend nuevo delante, los códigos viejos siguen funcionando, así que el
+> frontend puede salir después sin ventana de riesgo.
+
+### Ingredientes que se quitan: `-r` por línea (2026-09-24)
+
+Al agregar un producto con ingredientes que se pueden quitar, la carta abre un modal («¿quieres
+quitar algún ingrediente?») y lo quitado viaja **por línea**, como ids de ingrediente separados por
+punto:
+
+```
+#P12-4x1-r12.15,9x2~m=D~z=7     1 × producto 4 SIN los ingredientes 12 y 15; 2 × producto 9 con todo
+```
+
+| Lado | Archivo |
+|---|---|
+| Escribe | `restaurante_app/.../menu-publico/carrito.service.ts` (`codigoCompacto`, `claveLinea`) |
+| Lee | `admin_ws/intelligence/adapters/restaurante/codigoPedido.js` (`leer`, `leerExclusiones`) |
+| Valida | `admin_ws/intelligence/adapters/restaurante/exclusiones.js` (`resolver`) |
+
+**Reglas del contrato** (cada una tiene su prueba, en los dos repos):
+
+- **Retrocompatible.** Un código sin `-r` se lee con el objeto de siempre; `exclusiones` solo aparece
+  en la línea que las lleva. Un `-r` con basura (`-rzz`, `-r12zz.7`) se ignora por id y el pedido se
+  toma. Tope de 12 ingredientes por línea.
+- **Líneas distintas.** «Una sin cebolla» y «una con todo» son dos líneas (`4x1-r12,4x1`); solo se
+  suman las que coinciden en producto Y exclusiones. En el carrito la identidad es
+  `claveLinea = id_producto:ids ordenados`.
+- **Nunca se guarda un id que no sea removible de ese producto en ese negocio.** Válido = está en la
+  receta del producto (`carta_producto_ingred`, estado `A`), `es_removible`, y el ingrediente es del
+  negocio y está activo. El id que llega en el mensaje es una sugerencia editable.
+- **Se relee en tres momentos.** (1) Al leer el código, el flujo deja solo las válidas y guarda los
+  nombres de las descartadas. (2) La CONFIRMACIÓN vuelve a leer y muestra solo las válidas
+  —`• 1 × Hamburguesa (sin cebolla, sin tomate) — $X`—; si se descartó alguna añade
+  `(no pudimos quitar: X)` ANTES del «sí». (3) `tomar_pedido.ejecutar` vuelve a validar y es
+  estricto: si algo de lo confirmado dejó de valer (ventana de segundos) lanza `EXCLUSION_INVALIDA`
+  (400) y no crea nada. Un ingrediente desactivado no tumba el pedido entero en la confirmación;
+  solo se avisa.
+- **En `tomar_pedido`** el elemento de `items` lleva `sin: "12.15"` (texto, porque el motor de
+  argumentos no anida listas de escalares) y hay un `sin_descartadas` informativo. `crearOrden` y
+  `agregarItemsPorCliente` reciben `exclusiones: [ids]` y las guardan en `pedid_detalle_exclu`,
+  igual que el POS; `consumirIngredientesPorItems` **no descuenta lo quitado**. El precio no cambia
+  por quitar un ingrediente.
+- **Carta pública.** `GET /public/carta/completa` lleva por producto `ingredientes_removibles:
+  [{id_ingrediente, nombre}]`: solo los removibles activos, sin porciones, stock ni costos y sin los
+  que no se pueden quitar. Vacío/ausente = el «+» agrega directo, sin modal.
+- **Interacción.** Con removibles, el «+» abre SIEMPRE el modal (todos incluidos; se marca «quitar»;
+  «Agregar» confirma con un toque; foco atrapado, Esc cierra). El «−» de la tarjeta resta de la línea
+  más reciente de ese producto y el «n» es la suma de todas sus líneas; el pre-pedido ajusta cada
+  línea por separado con su «sin X».
+- **Texto legible.** `• 1 × Hamburguesa (sin cebolla)`. Si el texto pasa de ~1.500 caracteres se
+  recorta **solo lo legible** («• … y N más»); la línea `#P…` va siempre completa. El carrito
+  guardado con el formato anterior (v2, sin exclusiones) se sigue leyendo.
+
+> ⚠️ **Orden de despliegue: backend antes que frontend.** Un código con `-r` contra un backend viejo
+> no casa el patrón anclado y el pedido cae al modelo. No hay migración de base de datos.
+
 ### Tres decisiones del lado del bot
 
 1. **El código se lee lo PRIMERO.** El mensaje empieza por «Hola, quiero pedir», y si se mirara

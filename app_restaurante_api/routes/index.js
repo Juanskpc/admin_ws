@@ -16,6 +16,7 @@ const MesaController       = require('../controllers/mesaController');
 const InventarioController = require('../controllers/inventarioController');
 const ReporteController    = require('../controllers/reporteController');
 const ConfiguracionController = require('../controllers/configuracionController');
+const BarrioController = require('../controllers/barrioController');
 const CajaController       = require('../controllers/cajaController');
 const PuntoCajaController  = require('../controllers/puntoCajaController');
 const MetodoPagoController = require('../controllers/metodoPagoController');
@@ -76,6 +77,8 @@ router.post('/auth/canjear-codigo',
 // --- Carta / Menú público ---
 router.get('/public/negocios/:id', [param('id').isInt({ min: 1 })], PublicoController.getNegocio);
 router.get('/public/negocios/:id/paleta', [param('id').isInt({ min: 1 })], PublicoController.getPaleta);
+router.get('/public/negocios/:id/barrios', [param('id').isInt({ min: 1 })], PublicoController.getBarrios);
+router.get('/public/negocios/:id/mesas', [param('id').isInt({ min: 1 })], PublicoController.getMesas);
 router.get('/public/carta/categorias', PublicoController.getCategorias);
 router.get('/public/carta/productos', PublicoController.getProductos);
 router.get('/public/carta/completa', PublicoController.getCartaCompleta);
@@ -380,6 +383,24 @@ router.get('/domiciliarios', [
 	query('id_negocio').isInt({ min: 1 }),
 ], PedidoController.getDomiciliarios);
 
+// --- Barrios con precio de domicilio (Configuración; escribe solo el administrador) ---
+router.get('/barrios-domicilio', [query('id_negocio').optional().isInt({ min: 1 })], BarrioController.listar);
+router.post('/barrios-domicilio', [
+	body('id_negocio').optional({ nullable: true }).isInt({ min: 1 }),
+	body('nombre').isString().trim().isLength({ min: 2, max: 100 }),
+	body('valor').isFloat({ min: 0, max: 1000000 }),
+], BarrioController.crear);
+router.put('/barrios-domicilio/:id', [
+	param('id').isInt({ min: 1 }),
+	body('id_negocio').optional({ nullable: true }).isInt({ min: 1 }),
+	body('nombre').optional().isString().trim().isLength({ min: 2, max: 100 }),
+	body('valor').optional().isFloat({ min: 0, max: 1000000 }),
+], BarrioController.editar);
+router.delete('/barrios-domicilio/:id', [
+	param('id').isInt({ min: 1 }),
+	query('id_negocio').optional().isInt({ min: 1 }),
+], BarrioController.eliminar);
+
 // --- Horarios (del negocio y de sus domiciliarios) ---
 router.get('/horarios', [query('id_negocio').isInt({ min: 1 })], HorarioController.listar);
 router.put('/horarios', [
@@ -399,6 +420,11 @@ router.patch('/inventario/ingredientes/:id/ajuste', [
 	body('delta').optional().isNumeric(),
 	body('stock_actual').optional().isNumeric(),
 ], InventarioController.ajustarStockIngrediente);
+// Deja el stock de un insumo en 0 como un ajuste con historia (auditoría con usuario y motivo).
+router.post('/inventario/ingredientes/:id/restablecer', [
+	param('id').isInt({ min: 1 }).withMessage('Insumo inválido'),
+	body('id_negocio').isInt({ min: 1 }).withMessage('id_negocio inválido'),
+], InventarioController.restablecerStockACero);
 
 // --- Reportes ---
 router.get('/reportes', [

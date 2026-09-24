@@ -256,7 +256,8 @@ async function listarConversaciones(req, res) {
 async function cargarConversacionPermitida(idConversacion, idUsuario) {
     const [conversacion] = await Models.sequelize.query(
         `
-        SELECT c.*, n.nombre AS negocio, pn.nombre_mostrado AS persona, pn.telefono_e164
+        SELECT c.*, n.nombre AS negocio, n.reactivar_asistente_min,
+               pn.nombre_mostrado AS persona, pn.telefono_e164
           FROM intelligence.conversacion c
           LEFT JOIN general.gener_negocio n      ON n.id_negocio = c.id_negocio
           LEFT JOIN platform.persona_negocio pn  ON pn.id_persona_negocio = c.id_persona_negocio
@@ -295,10 +296,32 @@ async function detalleConversacion(req, res) {
             { replacements: { id: req.params.id }, ...SELECT }
         );
 
+        // Cuándo el asistente retomó la conversación, y quién lo decidió: el sistema (por el plazo
+        // del negocio) o una persona (el botón). Va en el hilo para que quien lea entienda por
+        // qué el asistente vuelve a contestar. Se lee de la auditoría, que ya lo guarda.
+        const retomadas = await Models.sequelize.query(
+            `
+            SELECT e.fecha, e.accion,
+                   CASE WHEN e.accion = 'asistente_retomo_automatico' THEN 'automatico'
+                        ELSE 'manual' END AS origen,
+                   TRIM(COALESCE(u.primer_nombre, '') || ' ' || COALESCE(u.primer_apellido, '')) AS quien
+              FROM auditoria.audit_evento e
+              LEFT JOIN general.gener_usuario u ON u.id_usuario = e.id_usuario
+             WHERE e.modulo = 'intelligence'
+               AND e.accion IN ('asistente_retomo_automatico', 'conversacion_devuelta_al_asistente')
+               AND e.id_negocio = :idNegocio
+               AND e.detalle ->> 'id_conversacion' = :id
+             ORDER BY e.fecha ASC
+             LIMIT 100;
+            `,
+            { replacements: { id: req.params.id, idNegocio: conversacion.id_negocio }, ...SELECT }
+        );
+
         return Respuesta.success(res, 'Conversación', {
             disponible: true,
             conversacion,
             mensajes,
+            retomadas,
             ventana: await estadoVentana(req.params.id),
         });
     } catch (err) {
@@ -402,7 +425,7 @@ async function responder(req, res) {
         // que la lista de lo que espera solo podía crecer.
         await Models.sequelize.query(
             `UPDATE intelligence.conversacion
-                SET estado = :handoff, atendida_en = now()
+                SET estado = :handoff, atendida_en = now(), humano_ultimo_en = now()
               WHERE id_conversacion = :id;`,
             {
                 replacements: { id: conversacion.id_conversacion, handoff: ESTADO_HANDOFF },
@@ -469,8 +492,8 @@ async function atender(req, res) {
 
         await Models.sequelize.query(
             `UPDATE intelligence.conversacion
-                SET atendida_en = now()
-              WHERE id_conversacion = :id AND atendida_en IS NULL;`,
+                SET atendida_en = COALESCE(atendida_en, now()), humano_ultimo_en = now()
+              WHERE id_conversacion = :id;`,
             { replacements: { id: conversacion.id_conversacion } }
         );
 
@@ -561,6 +584,126 @@ async function devolverAlAsistente(req, res) {
     } catch (err) {
         console.error('Error en bandeja.devolverAlAsistente:', err);
         return Respuesta.error(res, 'Error al devolver la conversación al asistente');
+    }
+}
+
+// ── Reactivación del asistente (ADR-023, Enmienda 2) ────────────────────────────────────────
+
+/** ¿Puede este usuario CAMBIAR la configuración de ESE negocio? Administrador de él, o super admin. */
+async function esAdministradorDelNegocio(idUsuario, idNegocio) {
+    const alcance = await alcanceDeNegocios(idUsuario);
+    if (alcance.superAdmin) return true;
+
+    const filas = await Models.sequelize.query(
+        `SELECT 1
+           FROM general.gener_usuario_rol ur
+           JOIN general.gener_rol r ON r.id_rol = ur.id_rol AND r.estado = 'A'
+          WHERE ur.id_usuario = :idUsuario
+            AND ur.id_negocio = :idNegocio
+            AND ur.estado = 'A'
+            AND UPPER(r.descripcion) LIKE '%ADMINISTRADOR%'
+          LIMIT 1;`,
+        { replacements: { idUsuario, idNegocio }, ...SELECT }
+    );
+    return filas.length > 0;
+}
+
+/** El negocio que se pide, comprobado contra lo que el usuario puede ver. Nunca se cree el id. */
+async function negocioVisible(idUsuario, idNegocio) {
+    const alcance = await alcanceDeNegocios(idUsuario);
+    return alcance.superAdmin || alcance.idNegocios.includes(Number(idNegocio));
+}
+
+/**
+ * GET /admin/intelligence/bandeja/configuracion?id_negocio=
+ *
+ * Los minutos tras los cuales el asistente vuelve solo a una conversación que atendió una persona
+ * (0 = nunca) y si este usuario puede cambiarlos. Un negocio ajeno contesta 404, no 403: un 403
+ * confirmaría que existe.
+ */
+async function leerConfiguracion(req, res) {
+    try {
+        if (!revisar(req, res)) return;
+        const idNegocio = Number(req.query.id_negocio);
+        if (!(await negocioVisible(req.usuario.id_usuario, idNegocio))) {
+            return Respuesta.error(res, 'Negocio no encontrado', 404);
+        }
+        const [fila] = await Models.sequelize.query(
+            `SELECT id_negocio, nombre, reactivar_asistente_min
+               FROM general.gener_negocio WHERE id_negocio = :idNegocio;`,
+            { replacements: { idNegocio }, ...SELECT }
+        );
+        if (!fila) return Respuesta.error(res, 'Negocio no encontrado', 404);
+
+        return Respuesta.success(res, 'Configuración', {
+            id_negocio: fila.id_negocio,
+            reactivar_asistente_min: fila.reactivar_asistente_min,
+            puede_editar: await esAdministradorDelNegocio(req.usuario.id_usuario, idNegocio),
+        });
+    } catch (err) {
+        console.error('Error en bandeja.leerConfiguracion:', err);
+        return Respuesta.error(res, 'Error al leer la configuración');
+    }
+}
+
+/**
+ * PUT /admin/intelligence/bandeja/configuracion   { id_negocio, reactivar_asistente_min }
+ *
+ * Es la decisión EXPLÍCITA del negocio de la Enmienda 2: el asistente vuelve solo a una
+ * conversación que atendió una persona, pasados N minutos desde su última intervención. 0 = nunca
+ * (el valor de fábrica). Exige ser ADMINISTRADOR de ese negocio: un administrador de otro recibe
+ * 403, y queda auditado quién lo cambió y de cuánto a cuánto.
+ */
+async function guardarConfiguracion(req, res) {
+    try {
+        if (!revisar(req, res)) return;
+        const idNegocio = Number(req.body.id_negocio);
+        const minutos = Number(req.body.reactivar_asistente_min);
+
+        // Quien no es administrador de ESE negocio recibe 403, sea de otro negocio o del mismo con
+        // un rol menor: que el id de un negocio exista no es un secreto, y un mensaje único para
+        // los dos casos no filtra nada. La lectura (GET) sí contesta 404 a los ajenos.
+        if (!(await esAdministradorDelNegocio(req.usuario.id_usuario, idNegocio))) {
+            return Respuesta.error(
+                res,
+                'Solo un administrador de este negocio puede cambiar cuándo vuelve el asistente.',
+                403
+            );
+        }
+
+        const [antes] = await Models.sequelize.query(
+            `SELECT reactivar_asistente_min FROM general.gener_negocio WHERE id_negocio = :idNegocio;`,
+            { replacements: { idNegocio }, ...SELECT }
+        );
+        if (!antes) return Respuesta.error(res, 'Negocio no encontrado', 404);
+
+        await Models.sequelize.query(
+            `UPDATE general.gener_negocio SET reactivar_asistente_min = :minutos
+              WHERE id_negocio = :idNegocio;`,
+            { replacements: { idNegocio, minutos } }
+        );
+
+        await Audit.registrarEvento({
+            modulo: 'intelligence',
+            accion: 'reactivacion_asistente_configurada',
+            idUsuario: req.usuario.id_usuario,
+            idNegocio,
+            detalle: {
+                minutos_antes: antes.reactivar_asistente_min,
+                minutos_despues: minutos,
+                adr: 'ADR-023 Enmienda 2',
+            },
+        });
+
+        return Respuesta.success(res, minutos === 0
+            ? 'El asistente no volverá solo a las conversaciones que atienda una persona'
+            : `El asistente volverá solo a los ${minutos} minutos de la última respuesta de una persona`, {
+            id_negocio: idNegocio,
+            reactivar_asistente_min: minutos,
+        });
+    } catch (err) {
+        console.error('Error en bandeja.guardarConfiguracion:', err);
+        return Respuesta.error(res, 'Error al guardar la configuración');
     }
 }
 
@@ -695,4 +838,6 @@ module.exports = {
     devolverAlAsistente,
     bloquear,
     desbloquear,
+    leerConfiguracion,
+    guardarConfiguracion,
 };

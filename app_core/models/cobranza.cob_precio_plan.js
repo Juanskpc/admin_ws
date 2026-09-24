@@ -16,6 +16,8 @@ module.exports = (sequelize, DataTypes) => {
             ciclo: { type: DataTypes.STRING(10), allowNull: false, defaultValue: 'mensual' },
             precio: { type: DataTypes.DECIMAL(12, 2), allowNull: false },
             estado: { type: DataTypes.CHAR(1), defaultValue: 'A' },
+            /** Aplicativo al que aplica el precio; NULL = por defecto. Ver migrate_cobranza_precio_aplicativo.js. */
+            id_tipo_modulo: { type: DataTypes.INTEGER, allowNull: true },
         },
         {
             tableName: 'cob_precio_plan',

@@ -135,6 +135,68 @@ Sin ellas, esto sí sería revocar el ADR:
 - Ninguna ruta automática puede cambiar `estado` de `handoff_humano` a `activa`. La única que lo
   hace es la que nace de un clic.
 
+## Enmienda 2 (2026-09-23) — el negocio puede decidir que el asistente vuelva **solo**
+
+**Estado: Aceptada por el usuario (2026-09-23).** No revoca la decisión original ni la Enmienda 1: añade
+una **segunda** forma, opcional y explícita, de que una conversación vuelva al asistente. Lo que existe
+por defecto sigue siendo exactamente lo de la Enmienda 1.
+
+### Qué cambia
+
+Hasta ahora una conversación en `handoff_humano` solo volvía al asistente si una persona pulsaba
+«Ya terminé, que siga el asistente». El usuario pidió que, **si el negocio lo decide**, vuelva sola pasado
+un plazo. La Enmienda 1 lo prohibía expresamente («el bot vuelve solo pasadas unas horas → NO»); esta
+Enmienda lo permite bajo las salvaguardas de abajo, y por eso es una enmienda y no un detalle de
+implementación.
+
+### Por qué (decisión del usuario)
+
+Un negocio que atiende a mano una consulta puntual no quiere que esa conversación quede en manos de una
+persona para siempre: al día siguiente el mismo cliente vuelve con algo que el asistente sabe hacer y
+nadie le contesta. La Enmienda 1 lo resolvía con un botón; en la práctica se olvida. El usuario prefiere
+que sea el propio negocio quien decida, por su cuenta, que el olvido no deje al cliente colgado.
+
+### Las salvaguardas, que son lo que la hace aceptable
+
+1. **Explícita y por negocio.** La configuración vive en `general.gener_negocio.reactivar_asistente_min`
+   y **nace en 0 = «nunca»**. Ningún negocio cambia de comportamiento por desplegar esto: hasta que uno
+   la active en la Bandeja, el asistente no vuelve solo. Solo un ADMINISTRADOR de ese negocio (o un super
+   admin) puede cambiarla; queda auditada (`reactivacion_asistente_configurada`, con minutos antes y
+   después). La pantalla propone 30 minutos al activarla, pero 30 no es un valor guardado por nadie.
+2. **El plazo cuenta desde la última intervención humana, no desde que se abrió el handoff.** Cada
+   mensaje que escribe una persona del negocio —desde la Bandeja o desde su propio WhatsApp— lo reinicia
+   (`conversacion.humano_ultimo_en`). Marcar la conversación como atendida **sin escribir** también
+   cuenta: es una persona diciendo «me ocupé». Si el asistente escaló y **nadie ha hecho nada**, no hay
+   reloj y **no vuelve solo**: la promesa que se le hizo al cliente («te responde una persona») sigue sin
+   cumplirse, y devolverle el hilo al bot en ese caso sí contradiría la decisión original.
+3. **Evaluación perezosa: solo cuando escribe el CLIENTE.** No hay temporizador ni scheduler. La regla se
+   comprueba en `repositorio.asegurarConversacion`, cuando entra un mensaje entrante y solo a petición del
+   motor (`reactivarPorPlazo`): si el negocio la activó y ya pasó el plazo, la conversación vuelve a
+   `activa` **antes** de procesar ese mensaje. Así el asistente nunca le habla solo a alguien que no
+   escribió. Los recordatorios y avisos llaman a la misma función y **no** pasan la opción: ahí no escribió
+   ningún cliente, y cambiar el estado sería justo lo que esta Enmienda no permite. Una reentrega duplicada
+   del canal tampoco reactiva nada.
+4. **Opción «nunca» siempre disponible**, y es el valor de fábrica.
+5. **Deja constancia.** Cada reactivación automática se escribe en `auditoria.audit_evento`
+   (`asistente_retomo_automatico`, `origen: 'automatico'`) **en la misma transacción** que recibe el
+   mensaje, y el hilo de la Bandeja lo enseña: «El asistente retomó la conversación (automático, por el
+   plazo del negocio)». La reactivación manual ya quedaba (`conversacion_devuelta_al_asistente`) y se
+   muestra como «manual, por <quién>».
+
+Las condiciones 2 y 3 de la Enmienda 1 siguen valiendo tal cual para el asistente que vuelve: hereda el
+contexto con los mensajes humanos marcados (`crudo.origen = 'humano'`) y, si vuelve a no saber, vuelve a
+escalar.
+
+### Qué sigue prohibido
+
+- Que el asistente vuelva **sin que el negocio lo haya activado** (el valor de fábrica es «nunca»).
+- Que le **hable primero** a un cliente que no escribió: no hay temporizador; solo se decide al llegar su
+  mensaje.
+- Que vuelva una conversación donde **nadie intervino** (no hay reloj).
+- Tocar `bloqueada` (STOP/BAJA o bloqueo del negocio) o cualquier estado que no sea `handoff_humano`.
+- Que marcar como atendida **por sí solo** devuelva la conversación: sigue siendo otra pregunta. Lo que
+  cambia es que atender reinicia el reloj *si el negocio activó el plazo*.
+
 ## Impacto futuro
 
 Es el reconocimiento de que la seguridad de datos no basta para un producto que vende "un empleado que

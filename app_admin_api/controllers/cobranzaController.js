@@ -117,6 +117,23 @@ async function getComplementos(req, res) {
     }
 }
 
+/**
+ * POST /admin/cobranza/negocios/:id_negocio/total-mensual — vista previa: cuánto valdría al mes un
+ * plan con unos complementos. No guarda nada.
+ */
+async function postTotalMensual(req, res) {
+    if (!check(req, res)) return;
+    try {
+        const datos = await CobranzaService.previsualizarTotalMensual(Number(req.params.id_negocio), {
+            idPlan: req.body.id_plan != null ? Number(req.body.id_plan) : null,
+            complementos: req.body.complementos ?? [],
+        });
+        return Respuesta.success(res, 'Total mensual', datos);
+    } catch (err) {
+        return fallo(res, err, 'postTotalMensual', 'Error al calcular el total mensual.');
+    }
+}
+
 /** PUT /admin/cobranza/negocios/:id_negocio/complementos — fija cantidades y qué se cobra. */
 async function putComplementos(req, res) {
     if (!check(req, res)) return;
@@ -303,6 +320,44 @@ async function elegirPlan(req, res) {
     }
 }
 
+/**
+ * GET /admin/cobranza/mi-plan/simular — cuánto se cobraría por un cambio, sin hacerlo.
+ *
+ * Solo lectura. Los complementos viajan como `complementos=CODIGO:cantidad,CODIGO:cantidad` porque
+ * es un GET; el dueño del negocio se comprueba igual que al cambiar el plan de verdad.
+ */
+async function simularCambio(req, res) {
+    if (!check(req, res)) return;
+    try {
+        const idNegocio = Number(req.query.id_negocio);
+
+        const alcance = await alcanceDeNegocios(req.usuario?.id_usuario);
+        const esSuyo =
+            alcance.superAdmin ||
+            (await CobranzaService.usuarioAdministraNegocio(req.usuario.id_usuario, idNegocio));
+        if (!esSuyo) return Respuesta.error(res, 'No tienes acceso a la suscripción de este negocio', 403);
+
+        const complementos =
+            req.query.complementos == null
+                ? null
+                : String(req.query.complementos)
+                      .split(',')
+                      .filter(Boolean)
+                      .map((par) => {
+                          const [codigo, cantidad] = par.split(':');
+                          return { codigo, cantidad: Number(cantidad) };
+                      });
+
+        const resultado = await CobranzaService.simularCambioPlan(idNegocio, {
+            idPlan: req.query.id_plan != null ? Number(req.query.id_plan) : null,
+            complementos,
+        });
+        return Respuesta.success(res, 'Simulación del cambio', resultado);
+    } catch (err) {
+        return fallo(res, err, 'simularCambio', 'No se pudo simular el cambio.');
+    }
+}
+
 /** POST /admin/publico/cobranza/consultar — sin sesión. */
 async function consultarPublico(req, res) {
     if (!check(req, res)) return;
@@ -390,6 +445,7 @@ async function verificarPagoWompi(req, res) {
 module.exports = {
     getComplementos,
     putComplementos,
+    postTotalMensual,
     getMiSuscripcion,
     getCartera,
     getIngresos,
@@ -402,6 +458,7 @@ module.exports = {
     getMiPlan,
     pagarFactura,
     elegirPlan,
+    simularCambio,
     consultarPublico,
     pagarPublico,
     confirmarRetorno,

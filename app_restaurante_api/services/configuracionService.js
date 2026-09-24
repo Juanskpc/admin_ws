@@ -293,7 +293,11 @@ async function updateConfiguracionNegocio(idUsuario, payload = {}) {
                 );
             });
         } else {
-            await negocio.update(patch);
+            // En transacción para que la auditoría sepa quién cambió la configuración: las GUC de
+            // actor solo existen dentro de una.
+            await Models.sequelize.transaction(async (t) => {
+                await negocio.update(patch, { transaction: t });
+            });
         }
     } catch (err) {
         if (err?.name === 'SequelizeUniqueConstraintError') {

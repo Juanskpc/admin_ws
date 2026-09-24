@@ -6,6 +6,7 @@ const cuentaService = require('./cuentaService');
 const horarioService = require('./horarioService');
 const personaNegocioDao = require('../../app_core/dao/personaNegocioDao');
 const usuarioAsistenteDao = require('../../app_core/dao/usuarioAsistenteDao');
+const { fijarActor, fijarActorAsistente } = require('../../app_core/helpers/auditActor');
 // La costura de entitlements (ADR-021). Es lo único que este servicio sabe de lo comercial, y
 // pregunta por la FEATURE, nunca por el nombre del plan.
 const features = require('../../intelligence/core/features');
@@ -782,7 +783,10 @@ async function agregarItemsOrden({
  * llega tarde y a medias — el negocio tiene que enterarse por teléfono, no por una comanda
  * fantasma apareciendo sola en la pantalla de cocina.
  */
-async function agregarItemsPorCliente(idOrden, { idNegocio, items, transaction }) {
+async function agregarItemsPorCliente(
+    idOrden,
+    { idNegocio, items, transaction, permitirEnCocina = false }
+) {
     const orden = await Models.PedidOrden.findOne({
         where: { id_orden: idOrden, id_negocio: idNegocio },
         transaction,
@@ -793,6 +797,8 @@ async function agregarItemsPorCliente(idOrden, { idNegocio, items, transaction }
         e.code = 'PEDIDO_NO_ENCONTRADO'; e.statusCode = 404;
         throw e;
     }
+    // El bot no tiene request: el actor de los UPDATE de esta transacción es el usuario asistente.
+    await fijarActorAsistente(transaction, idNegocio);
     if (orden.estado !== 'ABIERTA') {
         const e = new Error('Ese pedido ya no está abierto y no le puedo agregar nada. Llama al restaurante.');
         e.code = 'ORDEN_NO_ABIERTA'; e.statusCode = 409;
@@ -806,7 +812,11 @@ async function agregarItemsPorCliente(idOrden, { idNegocio, items, transaction }
     // Misma regla y mismo comentario que en `cancelarPorCliente`: `estado_cocina` es NULL
     // hasta que el restaurante lo manda a preparar, y solo entonces avanza a
     // EN_PREPARACION/LISTO. NULL o PENDIENTE = todavía no se ha tocado nada en cocina.
-    if (['EN_PREPARACION', 'LISTO'].includes(orden.estado_cocina)) {
+    //
+    // `permitirEnCocina` es para la CUENTA DE UNA MESA (pedido «en el local» desde la carta): ahí
+    // el POS ya permite añadir con la cocina andando —`agregarItemsOrden` solo exige ABIERTA— y
+    // una mesa que sigue pidiendo mientras come es lo normal, no una comanda fantasma.
+    if (!permitirEnCocina && ['EN_PREPARACION', 'LISTO'].includes(orden.estado_cocina)) {
         const e = new Error(
             'Tu pedido ya está en preparación y no le puedo agregar nada. Llama al restaurante.'
         );
@@ -1192,7 +1202,8 @@ async function listarDomiciliarios(idNegocio, { transaction } = {}) {
             where: { id_negocio: idNegocio, estado: 'A' },
             include: [{
                 model: Models.GenerUsuario, as: 'usuario',
-                where: { estado: 'A' },
+                // El asistente del bot no es una persona a la que asignar un domicilio.
+                where: { estado: 'A', ...usuarioAsistenteDao.whereSinAsistente() },
                 attributes: ['id_usuario', 'primer_nombre', 'primer_apellido', 'num_identificacion', 'telefono'],
             }],
             transaction,
@@ -1288,14 +1299,18 @@ async function getOrdenesAbiertas(idNegocio) {
  * Envía una orden a cocina (cambia estado_cocina → PENDIENTE y detalles → EN_COCINA).
  */
 async function enviarACocina(idOrden) {
-    await Models.PedidDetalle.update(
-        { estado: 'EN_COCINA' },
-        { where: { id_orden: idOrden, estado: 'PENDIENTE' } }
-    );
-    await Models.PedidOrden.update(
-        { estado_cocina: 'PENDIENTE' },
-        { where: { id_orden: idOrden } }
-    );
+    // En transacción: dentro de un request abrirla fija el actor (ALS) y el cambio de estado de
+    // cocina queda en auditoría con su usuario.
+    await Models.sequelize.transaction(async (t) => {
+        await Models.PedidDetalle.update(
+            { estado: 'EN_COCINA' },
+            { where: { id_orden: idOrden, estado: 'PENDIENTE' }, transaction: t }
+        );
+        await Models.PedidOrden.update(
+            { estado_cocina: 'PENDIENTE' },
+            { where: { id_orden: idOrden }, transaction: t }
+        );
+    });
 
     const orden = await getOrdenById(idOrden);
     avisar(orden?.id_negocio, TEMAS.COCINA, TEMAS.PEDIDOS);
@@ -1309,19 +1324,22 @@ async function enviarACocina(idOrden) {
  */
 async function cambiarEstadoCocina(idOrden, nuevoEstado) {
     const updateOrden = { estado_cocina: nuevoEstado };
-    await Models.PedidOrden.update(updateOrden, { where: { id_orden: idOrden } });
-    if (nuevoEstado === 'LISTO') {
-        await Models.PedidDetalle.update(
-            { estado: 'LISTO' },
-            { where: { id_orden: idOrden, estado: 'EN_COCINA' } }
-        );
-    } else if (nuevoEstado === 'EN_PREPARACION') {
-        // Si se deshace desde LISTO → EN_PREPARACION, revertir detalles LISTO → EN_COCINA
-        await Models.PedidDetalle.update(
-            { estado: 'EN_COCINA' },
-            { where: { id_orden: idOrden, estado: 'LISTO' } }
-        );
-    }
+    // En transacción: el actor de auditoría solo se fija dentro de una (ALS del request).
+    await Models.sequelize.transaction(async (t) => {
+        await Models.PedidOrden.update(updateOrden, { where: { id_orden: idOrden }, transaction: t });
+        if (nuevoEstado === 'LISTO') {
+            await Models.PedidDetalle.update(
+                { estado: 'LISTO' },
+                { where: { id_orden: idOrden, estado: 'EN_COCINA' }, transaction: t }
+            );
+        } else if (nuevoEstado === 'EN_PREPARACION') {
+            // Si se deshace desde LISTO → EN_PREPARACION, revertir detalles LISTO → EN_COCINA
+            await Models.PedidDetalle.update(
+                { estado: 'EN_COCINA' },
+                { where: { id_orden: idOrden, estado: 'LISTO' }, transaction: t }
+            );
+        }
+    });
 
     const orden = await getOrdenById(idOrden);
     // También `pedidos`: Despacho muestra qué está listo para salir, y es justo la pantalla
@@ -1827,7 +1845,15 @@ async function cancelarOrden(idOrden, { idUsuario } = {}) {
         e.code = 'ORDEN_CERRADA'; e.statusCode = 409;
         throw e;
     }
-    await orden.update({ estado: 'CANCELADA', cancelado_por: 'negocio', fecha_cierre: new Date() });
+    // Dentro de una transacción con el actor fijado: un `update` suelto no deja quién canceló en
+    // `auditoria.audit_dato` (las GUC de actor solo existen dentro de una transacción).
+    await Models.sequelize.transaction(async (t) => {
+        await fijarActor(t, { idUsuario, idNegocio: orden.id_negocio });
+        await orden.update(
+            { estado: 'CANCELADA', cancelado_por: 'negocio', fecha_cierre: new Date() },
+            { transaction: t }
+        );
+    });
     avisar(orden.id_negocio, TEMAS.PEDIDOS, TEMAS.MESAS, TEMAS.COCINA);
     return orden;
 }
@@ -1883,6 +1909,7 @@ async function cancelarPorCliente(idOrden, { idNegocio, transaction }) {
         throw e;
     }
 
+    await fijarActorAsistente(transaction, idNegocio);
     await orden.update(
         { estado: 'CANCELADA', cancelado_por: 'cliente', fecha_cierre: new Date() },
         { transaction }

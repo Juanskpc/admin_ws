@@ -340,7 +340,10 @@ async function actualizarPunto({ idNegocio, idUsuario, idPuntoCaja, nombre, desc
     }
 
     punto.actualizado_en = new Date();
-    await punto.save();
+    // En transacción: el actor de auditoría solo se fija dentro de una.
+    await sequelize.transaction(async (t) => {
+        await punto.save({ transaction: t });
+    });
     avisar(idNegocio, TEMAS.CAJA);
     return punto.toJSON();
 }

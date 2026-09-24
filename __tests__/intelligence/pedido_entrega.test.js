@@ -241,7 +241,7 @@ describe('la confirmación de tomar_pedido', () => {
         // El tipo de entrega, en cambio, sí: sin valor por defecto, para que nadie suponga
         // un domicilio que nadie pidió.
         expect(parametros.tipo_entrega.requerido).toBe(true);
-        expect(parametros.tipo_entrega.valores).toEqual(['DOMICILIO', 'LLEVAR']);
+        expect(parametros.tipo_entrega.valores).toEqual(['DOMICILIO', 'LLEVAR', 'MESA']);
     });
 });
 
