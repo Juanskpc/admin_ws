@@ -924,7 +924,12 @@ function registrarCapacidades() {
                             // y en cocina se ve qué añadió WhatsApp y se puede quitar con las
                             // herramientas de siempre. La presencia del cliente no se verifica; el
                             // «sí» y esta visibilidad son la defensa.
-                            nota: `WhatsApp: ${args.cliente_nombre}`.slice(0, 200),
+                            //
+                            // La nota especial del cliente («sin sal en todo») va en la MISMA marca:
+                            // al crear una cuenta nueva se guarda en `pedid_orden.nota`, pero aquí esa
+                            // nota es del mesero y no se toca, así que sin esto se perdía en silencio
+                            // — el cliente la escribió, confirmó, y nadie en el negocio la veía.
+                            nota: `WhatsApp: ${args.cliente_nombre}${args.nota ? ` — ${args.nota}` : ''}`.slice(0, 200),
                         })),
                         transaction: contexto.transaction,
                         permitirEnCocina: true,

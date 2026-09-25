@@ -356,6 +356,25 @@ describe('pedido en el local sobre una mesa que YA tiene cuenta abierta', () => 
         expect(Number(total)).toBeGreaterThan(Number(cuenta.total));
     });
 
+    it('la nota especial del cliente («sin sal en todo») viaja en la marca de cada línea que suma', async () => {
+        const m = await mesaNueva();
+        const cuenta = await meseroAbreCuenta(m);
+
+        await pedir({
+            tipo_entrega: 'MESA',
+            id_mesa: m,
+            nota: 'sin sal en todo',
+            items: [{ id_producto: idProducto, cantidad: 1 }],
+        });
+
+        const notas = await sequelize.query(
+            `SELECT nota FROM restaurante.pedid_detalle WHERE id_orden = :o ORDER BY id_detalle;`,
+            { replacements: { o: cuenta.id_orden }, type: sequelize.QueryTypes.SELECT }
+        );
+        // Sin esto la nota se perdía: la de la orden es del mesero y no se toca.
+        expect(notas.map((x) => x.nota)).toContain('WhatsApp: BOT Barrio — sin sal en todo');
+    });
+
     it('aunque la cocina ya esté preparando la cuenta de la mesa (el POS también lo permite)', async () => {
         const m = await mesaNueva();
         const cuenta = await meseroAbreCuenta(m);
