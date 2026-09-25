@@ -40,16 +40,17 @@ async function crearMesa(req, res) {
     }
 
     try {
-        const { id_negocio, nombre, numero, capacidad, seccion } = req.body;
+        const { id_negocio, nombre, numero, capacidad, id_seccion } = req.body;
         const mesa = await MesaService.crearMesa({
             idNegocio: Number(id_negocio),
             nombre: String(nombre).trim(),
             ...(numero ? { numero: Number(numero) } : {}),
             ...(capacidad ? { capacidad: Number(capacidad) } : {}),
-            ...(seccion ? { seccion: String(seccion).trim() } : {}),
+            ...(id_seccion ? { idSeccion: Number(id_seccion) } : {}),
         });
         return Respuesta.success(res, 'Mesa creada', mesa, 201);
     } catch (err) {
+        if (err.code && err.statusCode) return Respuesta.error(res, err.message, err.statusCode, { code: err.code });
         console.error('[Mesas] Error crearMesa:', err.message);
         return Respuesta.error(res, 'No se pudo crear la mesa.');
     }
@@ -64,17 +65,18 @@ async function editarMesa(req, res) {
 
     try {
         const idMesa = Number(req.params.id);
-        const { nombre, numero, capacidad, seccion } = req.body;
+        const { nombre, numero, capacidad, id_seccion } = req.body;
         const mesa = await MesaService.actualizarMesa(idMesa, {
             nombre: nombre ? String(nombre).trim() : undefined,
             numero: numero ? Number(numero) : undefined,
             capacidad: capacidad ? Number(capacidad) : undefined,
-            // Sin la clave = no se toca; vacia o `null` = quitarle la seccion.
-            seccion: seccion === undefined ? undefined : String(seccion ?? '').trim(),
+            // Sin la clave = no se toca; `null` = quitarle la seccion; un id = asignarla.
+            idSeccion: id_seccion === undefined ? undefined : (id_seccion === null ? null : Number(id_seccion)),
         });
         if (!mesa) return Respuesta.error(res, 'Mesa no encontrada', 404);
         return Respuesta.success(res, 'Mesa actualizada', mesa);
     } catch (err) {
+        if (err.code && err.statusCode) return Respuesta.error(res, err.message, err.statusCode, { code: err.code });
         console.error('[Mesas] Error editarMesa:', err.message);
         return Respuesta.error(res, 'No se pudo actualizar la mesa.');
     }

@@ -5,8 +5,9 @@ module.exports = (sequelize, DataTypes) => {
         nombre:         { type: DataTypes.STRING(100), allowNull: false },
         numero:         { type: DataTypes.INTEGER, allowNull: false },
         capacidad:      { type: DataTypes.INTEGER, defaultValue: 4 },
-        // Texto libre y opcional («Piso 1», «Patio»…): NULL = sin seccion. Ver migrate_mesa_seccion.js.
-        seccion:        { type: DataTypes.STRING(60), allowNull: true },
+        // La seccion es una ENTIDAD (`rest_mesa_seccion`): NULL = sin seccion. La columna de texto
+        // `seccion` de la primera version sigue en la base (el codigo anterior la lee) pero ya no se usa.
+        id_seccion:     { type: DataTypes.INTEGER, allowNull: true },
         estado:         { type: DataTypes.CHAR(1), defaultValue: 'A' },
         estado_servicio:{ type: DataTypes.STRING(20), defaultValue: 'DISPONIBLE' },
         fecha_inicio_servicio: { type: DataTypes.DATE, allowNull: true },
@@ -20,6 +21,7 @@ module.exports = (sequelize, DataTypes) => {
     RestMesa.associate = (models) => {
         RestMesa.belongsTo(models.GenerNegocio, { foreignKey: 'id_negocio', as: 'negocio' });
         RestMesa.hasMany(models.PedidOrden, { foreignKey: 'id_mesa', as: 'ordenes' });
+        RestMesa.belongsTo(models.RestMesaSeccion, { foreignKey: 'id_seccion', as: 'seccionRef' });
     };
 
     return RestMesa;

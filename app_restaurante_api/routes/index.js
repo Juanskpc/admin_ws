@@ -13,6 +13,7 @@ const EventosController    = require('../controllers/eventosController');
 const CuentaController     = require('../controllers/cuentaController');
 const PedidoController     = require('../controllers/pedidoController');
 const MesaController       = require('../controllers/mesaController');
+const MesaSeccionController = require('../controllers/mesaSeccionController');
 const InventarioController = require('../controllers/inventarioController');
 const ReporteController    = require('../controllers/reporteController');
 const ConfiguracionController = require('../controllers/configuracionController');
@@ -301,19 +302,47 @@ router.delete('/carta/admin/ingredientes/:id', [
 // --- Mesas ---
 router.get('/mesas', MesaController.getMesas);
 router.get('/mesas/dashboard', MesaController.getMesasDashboard);
+// --- Secciones del salon («Piso 1», «Terraza»…) ---
+// Van ANTES de `/mesas/:id`: `secciones` no es un id, y el orden de declaracion decide.
+router.get('/mesas/secciones', [
+	query('id_negocio').isInt({ min: 1 }),
+], MesaSeccionController.listar);
+router.post('/mesas/secciones', [
+	body('id_negocio').isInt({ min: 1 }),
+	body('nombre').isString().isLength({ min: 1, max: 120 }),
+], MesaSeccionController.crear);
+router.put('/mesas/secciones/orden', [
+	body('id_negocio').isInt({ min: 1 }),
+	body('ids').isArray(),
+], MesaSeccionController.reordenar);
+router.put('/mesas/secciones/:id', [
+	param('id').isInt({ min: 1 }),
+	body('id_negocio').isInt({ min: 1 }),
+	body('nombre').isString().isLength({ min: 1, max: 120 }),
+], MesaSeccionController.renombrar);
+router.put('/mesas/secciones/:id/mesas', [
+	param('id').isInt({ min: 1 }),
+	body('id_negocio').isInt({ min: 1 }),
+	body('ids_mesas').isArray(),
+], MesaSeccionController.asignarMesas);
+router.delete('/mesas/secciones/:id', [
+	param('id').isInt({ min: 1 }),
+	query('id_negocio').isInt({ min: 1 }),
+], MesaSeccionController.eliminar);
+
 router.post('/mesas', [
 	body('id_negocio').isInt({ min: 1 }),
 	body('nombre').isString().isLength({ min: 2, max: 100 }),
 	body('numero').optional().isInt({ min: 1 }),
 	body('capacidad').optional().isInt({ min: 1, max: 20 }),
-	body('seccion').optional({ nullable: true }).isString().isLength({ max: 60 }),
+	body('id_seccion').optional({ nullable: true }).isInt({ min: 1 }),
 ], MesaController.crearMesa);
 router.put('/mesas/:id', [
 	param('id').isInt({ min: 1 }),
 	body('nombre').optional().isString().isLength({ min: 2, max: 100 }),
 	body('numero').optional().isInt({ min: 1 }),
 	body('capacidad').optional().isInt({ min: 1, max: 20 }),
-	body('seccion').optional({ nullable: true }).isString().isLength({ max: 60 }),
+	body('id_seccion').optional({ nullable: true }).isInt({ min: 1 }),
 ], MesaController.editarMesa);
 router.patch('/mesas/:id/estado', [
 	param('id').isInt({ min: 1 }),

@@ -1,5 +1,14 @@
 const Models = require('../../app_core/models/conection');
 const { avisar, TEMAS } = require('./avisoService');
+const mesaSeccionService = require('./mesaSeccionService');
+
+/** Lo que se le pide a la seccion de una mesa (nombre y orden para agrupar y ordenar). */
+const INCLUIR_SECCION = {
+    model: Models.RestMesaSeccion,
+    as: 'seccionRef',
+    attributes: ['id_seccion', 'nombre', 'orden'],
+    required: false,
+};
 
 /**
  * mesaService — Lógica de negocio para las mesas del restaurante.
@@ -42,9 +51,16 @@ async function inferMesaServiceStart(idMesa, { transaction, allowLastOrderFallba
 async function getMesas(idNegocio) {
     return Models.RestMesa.findAll({
         where: { id_negocio: idNegocio, estado: 'A' },
-        attributes: ['id_mesa', 'nombre', 'numero', 'capacidad', 'seccion', 'estado', 'estado_servicio', 'fecha_inicio_servicio'],
+        attributes: ['id_mesa', 'nombre', 'numero', 'capacidad', 'id_seccion', 'estado', 'estado_servicio', 'fecha_inicio_servicio'],
+        include: [INCLUIR_SECCION],
         order: [['numero', 'ASC']],
-    });
+    }).then((mesas) => mesas.map((m) => {
+        const plana = m.toJSON();
+        plana.seccion = plana.seccionRef?.nombre ?? null;
+        plana.seccion_orden = plana.seccionRef?.orden ?? null;
+        delete plana.seccionRef;
+        return plana;
+    }));
 }
 
 async function getMesasDashboard(idNegocio) {
@@ -73,14 +89,14 @@ async function getMesasDashboard(idNegocio) {
             'nombre',
             'numero',
             'capacidad',
-            'seccion',
+            'id_seccion',
             'estado',
             'estado_servicio',
             'fecha_inicio_servicio',
             [Models.Sequelize.literal(elapsedMinutesExpr), 'minutos_servicio'],
         ],
         order: [['numero', 'ASC']],
-        include: [{
+        include: [INCLUIR_SECCION, {
             model: Models.PedidOrden,
             as: 'ordenes',
             where: { estado: 'ABIERTA' },
@@ -156,7 +172,10 @@ async function getMesasDashboard(idNegocio) {
             nombre: mesa.nombre,
             numero: mesa.numero,
             capacidad: mesa.capacidad,
-            seccion: mesa.seccion ?? null,
+            id_seccion: mesa.id_seccion ?? null,
+            // El nombre y el orden viajan con la mesa para agrupar sin otra consulta.
+            seccion: mesa.seccionRef?.nombre ?? null,
+            seccion_orden: mesa.seccionRef?.orden ?? null,
             estado: mesa.estado,
             estado_servicio: mesa.estado_servicio,
             status,
@@ -190,7 +209,9 @@ async function getMesasDashboard(idNegocio) {
     });
 }
 
-async function crearMesa({ idNegocio, nombre, numero, capacidad, seccion }) {
+async function crearMesa({ idNegocio, nombre, numero, capacidad, idSeccion }) {
+    // Una seccion de OTRO negocio nunca puede quedar escrita en la mesa.
+    const seccionValida = await mesaSeccionService.validarDelNegocio(idSeccion ?? null, idNegocio);
     let nextNumero = Number(numero);
     if (!Number.isInteger(nextNumero) || nextNumero < 1) {
         const maxNumero = await Models.RestMesa.max('numero', {
@@ -204,7 +225,7 @@ async function crearMesa({ idNegocio, nombre, numero, capacidad, seccion }) {
         nombre,
         numero: nextNumero,
         capacidad: capacidad || 4,
-        seccion: seccion || null,
+        id_seccion: seccionValida,
         estado: 'A',
         estado_servicio: 'DISPONIBLE',
         fecha_inicio_servicio: null,
@@ -214,16 +235,20 @@ async function crearMesa({ idNegocio, nombre, numero, capacidad, seccion }) {
     return mesa;
 }
 
-async function actualizarMesa(idMesa, { nombre, numero, capacidad, seccion }) {
+async function actualizarMesa(idMesa, { nombre, numero, capacidad, idSeccion }) {
     const mesa = await Models.RestMesa.findByPk(idMesa);
     if (!mesa) return null;
+
+    // `undefined` = no tocar la seccion; `null` = quitarsela; un id = cambiarla (de este negocio).
+    const seccionNueva = idSeccion === undefined
+        ? mesa.id_seccion
+        : await mesaSeccionService.validarDelNegocio(idSeccion, mesa.id_negocio);
 
     await mesa.update({
         nombre: nombre ?? mesa.nombre,
         numero: numero ?? mesa.numero,
         capacidad: capacidad ?? mesa.capacidad,
-        // `undefined` = no tocar; texto vacio = quitarle la seccion (NULL).
-        seccion: seccion === undefined ? mesa.seccion : (seccion || null),
+        id_seccion: seccionNueva,
     });
 
     avisar(mesa.id_negocio, TEMAS.MESAS);
