@@ -485,7 +485,7 @@ function registrarCapacidades() {
                  *
                  * Pedido por el dueño el 2026-09-08, y no es un formalismo: el cliente que ve
                  * «$45.000» y paga $48.000 en la puerta siente que le cobraron de más, aunque
-                 * los desechables siempre se hayan cobrado. Decirlo antes cuesta una línea;
+                 * el empaque siempre se hayan cobrado. Decirlo antes cuesta una línea;
                  * no decirlo cuesta la discusión con el domiciliario delante.
                  *
                  * El domicilio solo se nombra cuando lo hay: avisar de un recargo imposible a
@@ -493,8 +493,8 @@ function registrarCapacidades() {
                  */
                 const aviso =
                     recoge || enMesa || domicilio
-                        ? '_El total es aproximado: puede variar por desechables._'
-                        : '_El total es aproximado: no incluye el domicilio y puede variar por desechables._';
+                        ? '_El total es aproximado: puede variar por el empaque._'
+                        : '_El total es aproximado: no incluye el domicilio y puede variar por el empaque._';
 
                 /**
                  * La lista de productos, con su precio y el total.

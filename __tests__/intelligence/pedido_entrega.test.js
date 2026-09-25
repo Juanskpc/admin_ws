@@ -343,10 +343,10 @@ describe('la confirmación enumera los productos', () => {
 
     test('avisa de que el total es aproximado, y nombra el domicilio SOLO si lo hay', async () => {
         // Pedido por el dueño: quien ve «$45.000» y paga $48.000 en la puerta siente que le
-        // cobraron de más, aunque los desechables siempre se hayan cobrado.
+        // cobraron de más, aunque el empaque siempre se hayan cobrado.
         const recoger = await preguntar({ tipo_entrega: 'LLEVAR' });
         expect(recoger).toMatch(/aproximado/i);
-        expect(recoger).toMatch(/desechables/i);
+        expect(recoger).toMatch(/empaque/i);
         // Avisar de un recargo imposible a quien va a pasar por el local resta credibilidad.
         expect(recoger).not.toMatch(/domicilio/i);
 

@@ -214,7 +214,7 @@ suyo**, que es lo único que esa frase tiene que dejarle hacer. Ahora dice:
 • 1 × Limonada de coco — $9.000
 
 Total: $45.000
-El total es aproximado: puede variar por desechables.
+El total es aproximado: puede variar por el empaque.
 ```
 
 **Los productos y el total se releen del catálogo**, por lo mismo que los relee `ejecutar`: si la
@@ -234,7 +234,7 @@ los que sí están: un pedido de tres líneas confirmado con dos es peor que uno
 #### El aviso de que el total es aproximado
 
 Pedido por el dueño el 2026-09-08, y no es un formalismo: quien ve «$45.000» y paga $48.000 en la
-puerta siente que le cobraron de más, aunque los desechables siempre se hayan cobrado.
+puerta siente que le cobraron de más, aunque el empaque siempre se hayan cobrado.
 
 El domicilio **solo se nombra cuando lo hay** — avisar de un recargo imposible a quien va a pasar
 por el local es ruido que le resta credibilidad al resto del mensaje. En la **carta digital** se
