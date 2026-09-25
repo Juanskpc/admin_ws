@@ -265,7 +265,7 @@ async function createUsuario(req, res) {
         if (transaction) await transaction.rollback();
         console.error('Error en createUsuario:', error);
         const mapped = resolvePersistenceError(error, 'crear');
-        return Respuesta.error(res, mapped.message, mapped.status, null, { code: mapped.code });
+        return Respuesta.error(res, mapped.message, mapped.status, null, { code: mapped.code, data: mapped.limite });
     }
 }
 
@@ -315,7 +315,7 @@ async function updateUsuario(req, res) {
         if (transaction) await transaction.rollback();
         console.error('Error en updateUsuario:', error);
         const mapped = resolvePersistenceError(error, 'actualizar');
-        return Respuesta.error(res, mapped.message, mapped.status, null, { code: mapped.code });
+        return Respuesta.error(res, mapped.message, mapped.status, null, { code: mapped.code, data: mapped.limite });
     }
 }
 
@@ -380,7 +380,7 @@ async function updatePerfilUsuario(req, res) {
         if (transaction) await transaction.rollback();
         console.error('Error en updatePerfilUsuario:', error);
         const mapped = resolvePersistenceError(error, 'actualizar');
-        return Respuesta.error(res, mapped.message, mapped.status, null, { code: mapped.code });
+        return Respuesta.error(res, mapped.message, mapped.status, null, { code: mapped.code, data: mapped.limite });
     }
 }
 

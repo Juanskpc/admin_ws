@@ -83,6 +83,26 @@
 const ITEM = String.raw`\d+x\d+(?:-r[0-9A-Za-z.]*)?`;
 const PATRON = new RegExp(String.raw`#P(\d+)-(${ITEM}(?:,${ITEM})*)((?:~[a-z]=[A-Za-z0-9]*)*)\s*$`, 'im');
 
+/**
+ * Igual que `PATRON`, pero con `g`: sirve para recorrer TODAS las coincidencias del mensaje y
+ * quedarse con la ÚLTIMA (`buscarUltimo`), que es donde vive el código de verdad.
+ *
+ * Hace falta desde que el bloque de datos del cliente (`datosCliente.js`) se antepuso al código:
+ * un valor libre —una dirección, una nota— puede contener algo con forma `#P12-4x1` al final de
+ * su línea, y con `im` a secas `PATRON.exec` se habría quedado con la PRIMERA coincidencia del
+ * mensaje, que ya no es necesariamente la real.
+ */
+const PATRON_GLOBAL = new RegExp(PATRON.source, 'gim');
+
+/** La última coincidencia de `PATRON` en el texto, o `null`. El código real es siempre la última línea. */
+function buscarUltimo(texto) {
+    const cadena = String(texto || '');
+    let ultimo = null;
+    // `matchAll` reinicia el índice en cada llamada; no comparte estado con `PATRON` (que no lleva `g`).
+    for (const m of cadena.matchAll(PATRON_GLOBAL)) ultimo = m;
+    return ultimo;
+}
+
 /** Máximo de ingredientes quitados por línea: más que esto no viene de una persona. */
 const MAX_EXCLUSIONES = 12;
 
@@ -128,7 +148,7 @@ const MAX_ITEMS = 30;
  * @returns {{idNegocio: number, items: Array<{id_producto: number, cantidad: number}>}|null}
  */
 function leer(texto) {
-    const encontrado = PATRON.exec(String(texto || ''));
+    const encontrado = buscarUltimo(texto);
     if (!encontrado) return null;
 
     const idNegocio = Number(encontrado[1]);

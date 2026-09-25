@@ -258,9 +258,15 @@ async function recibir(entrada) {
         // reactivación por plazo (ADR-023, Enmienda 2): si su negocio la activó y ya pasó el
         // tiempo desde la última intervención humana, la conversación vuelve al asistente ANTES
         // de procesar este mensaje. Una reentrega duplicada no debe reactivar nada.
+        //
+        // Por lo mismo es el único sitio que pide el reinicio por inactividad: si lleva más de
+        // `CONVERSACION_INACTIVIDAD_RESET_MIN` en silencio, este mensaje abandona (sin ejecutar)
+        // lo que hubiera quedado a medias y empieza de cero. Los recordatorios y avisos —que
+        // también aseguran la conversación, pero sin que el cliente haya escrito nada— no pasan
+        // esta opción, igual que no pasan `reactivarPorPlazo`.
         const conversacion = await repositorio.asegurarConversacion(
             { idNegocio, canal, idExterno },
-            { transaction: t, reactivarPorPlazo: !duplicado }
+            { transaction: t, reactivarPorPlazo: !duplicado, reiniciarPorInactividad: !duplicado }
         );
 
         if (duplicado) {

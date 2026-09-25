@@ -585,6 +585,72 @@ punto:
 > ⚠️ **Orden de despliegue: backend antes que frontend.** Un código con `-r` contra un backend viejo
 > no casa el patrón anclado y el pedido cae al modelo. No hay migración de base de datos.
 
+### Datos del cliente antes de WhatsApp: un bloque legible (2026-09-25)
+
+Para no gastar mensajes preguntando uno a uno lo que el cliente ya puede escribir en la carta, el
+panel «Tu pedido» pide nombre, teléfono, dirección y nota **antes** de abrir WhatsApp, y esos
+datos viajan en un bloque de etiquetas FIJAS, antes de la línea `#P…`:
+
+```
+Nombre: Ana Pérez
+Teléfono: 3001234567
+Dirección: Cra 3 #21-10, apto 201
+Nota: sin cebolla en todo
+
+#P12-4x1~m=D~z=7
+```
+
+| Lado | Archivo |
+|---|---|
+| Escribe | `restaurante_app/.../menu-publico/datos-cliente.ts` (`ETIQUETAS`, `lineasDelBloque`) |
+| Lee | `admin_ws/intelligence/adapters/restaurante/datosCliente.js` (`leerBloque`) |
+| Siembra | `intelligence/adapters/restaurante/flujo.js` (`sembrarDatosCliente`) |
+
+Qué se pide según la modalidad (la nota es solo de domicilio):
+
+| Modalidad | Nombre | Teléfono | Dirección | Nota |
+|---|---|---|---|---|
+| Domicilio | obligatorio | obligatorio | obligatoria | opcional |
+| Recoger | obligatorio | opcional | — | — |
+| En el local (mesa) | obligatorio | — | — | — |
+
+**Reglas del contrato:**
+
+- **Parser por etiqueta, determinista.** `Etiqueta: valor` solo cuenta al **principio de una
+  línea**; una etiqueta que aparezca dentro del VALOR de otra —una nota con «Dirección: ...»
+  pegado— no se lee como dato: no hay forma de inyectar un campo falso desde dentro de otro.
+  La primera aparición de una etiqueta manda; una repetida después se ignora.
+- **Una etiqueta ausente o vacía → el bot pregunta SOLO esa.** El resto de lo sembrado no se
+  vuelve a pedir. Un mensaje sin el bloque (el código de siempre) se comporta exactamente igual
+  que antes.
+- **Es una SUGERENCIA editable, como el barrio o la mesa.** Con el bloque completo, el bot no
+  pregunta nada y pasa directo a la CONFIRMACIÓN —camino feliz: carrito → confirmación → «sí», dos
+  intercambios—; el «sí» del cliente sigue siendo obligatorio (ADR-010), y es ahí donde puede
+  corregir lo que haya venido mal.
+- **El teléfono se normaliza con el país del negocio** (`normalizarE164`, `gener_negocio.pais`).
+  Si no da un móvil válido, se ignora: se sigue usando el que probó el canal, o se pregunta.
+  **Nunca pisa un teléfono que el canal ya probó** — ese es el que autoriza; decir uno distinto en
+  el formulario no lo cambia.
+- **Se sanea:** se recortan longitudes, se quitan saltos de línea y caracteres de control dentro
+  de cada valor, y no hay forma de repetir una etiqueta con un valor distinto.
+- **Nada de esto viaja dentro de la línea `#P`.**
+- El panel recuerda nombre, teléfono y dirección en el navegador (`localStorage`, 90 días,
+  `isPlatformBrowser` + `try/catch`) para que quien repite no vuelva a escribirlos. La nota no se
+  recuerda: es de ese pedido.
+- **El bloque solo se lee en el mismo mensaje que trae el código del carrito.** `sembrarDatosCliente`
+  vive dentro de `recibirPedidoDelMenu`, que solo se invoca cuando `codigoPedido.leer(texto)`
+  encuentra un `#P…` en ESE mensaje. Un «Nombre: …» escrito a mano en cualquier otro punto de la
+  conversación (contestando una pregunta del flujo, o por curiosidad) nunca pasa por este lector:
+  lo trata `seguirPedido` como el texto libre de siempre, tal cual —incluidas las etiquetas, si las
+  escribió—.
+- **⚠️ El bloque va ANTES de la línea `#P…`, y eso importaba para el lector del código
+  (2026-09-25).** `codigoPedido.leer` usaba `PATRON.exec` (primera coincidencia); con datos libres
+  por delante, una dirección o una nota que contuviera algo con forma `#P12-9x9` se habría leído
+  como el pedido en lugar del real. Arreglado en las dos puntas: el lector ahora recorre TODAS las
+  coincidencias del mensaje (`buscarUltimo`) y se queda con la ÚLTIMA —el código de verdad es
+  siempre la última línea—; y `sanear` (front) borra cualquier `#P<dígito>` de lo que escribe el
+  cliente, así el mensaje que ve una persona tampoco muestra un código falso.
+
 ### Tres decisiones del lado del bot
 
 1. **El código se lee lo PRIMERO.** El mensaje empieza por «Hola, quiero pedir», y si se mirara

@@ -123,7 +123,7 @@ function exigirConfiguracion() {
     }
 }
 
-async function llamar(ruta, { metodo = 'GET', cuerpo = null, privada = true } = {}) {
+async function llamar(ruta, { metodo = 'GET', cuerpo = null, privada = true, timeoutMs = 20_000 } = {}) {
     const llave = privada ? process.env.WOMPI_PRIVATE_KEY : process.env.WOMPI_PUBLIC_KEY;
 
     const respuesta = await fetch(`${baseUrl()}${ruta}`, {
@@ -133,7 +133,7 @@ async function llamar(ruta, { metodo = 'GET', cuerpo = null, privada = true } = 
             'Content-Type': 'application/json',
         },
         body: cuerpo ? JSON.stringify(cuerpo) : undefined,
-        signal: AbortSignal.timeout(20_000),
+        signal: AbortSignal.timeout(timeoutMs),
     });
 
     const texto = await respuesta.text();
@@ -314,13 +314,11 @@ async function cobrar({ referencia, monto, moneda = 'COP', token, email, urlReto
     };
 }
 
-async function consultarTransaccion(idExterno) {
-    exigirConfiguracion();
-    const datos = await llamar(`/transactions/${encodeURIComponent(idExterno)}`);
-    const tx = datos?.data;
+/** Una transacción de Wompi al vocabulario del servicio (misma forma que `consultarTransaccion`). */
+function normalizarTransaccion(tx, idExternoPorDefecto = null) {
     return {
         estado: traducirEstado(tx?.status),
-        idExterno: tx?.id ? String(tx.id) : idExterno,
+        idExterno: tx?.id ? String(tx.id) : idExternoPorDefecto,
         codigoRespuesta: tx?.status ?? null,
         mensaje: tx?.status_message || null,
         // Monto y moneda viajan para que quien aplica el pago compruebe que coinciden con la
@@ -334,6 +332,38 @@ async function consultarTransaccion(idExterno) {
             currency: tx?.currency ?? null,
         },
     };
+}
+
+async function consultarTransaccion(idExterno) {
+    exigirConfiguracion();
+    const datos = await llamar(`/transactions/${encodeURIComponent(idExterno)}`);
+    return normalizarTransaccion(datos?.data, idExterno);
+}
+
+/**
+ * Las transacciones de Wompi que llevan esta REFERENCIA (la del link de checkout, con su sufijo
+ * de intento). Existe porque el webhook no siempre llega y el cliente no siempre vuelve: con la
+ * referencia que nosotros mismos guardamos al abrir el checkout se puede preguntar a Wompi qué
+ * pasó, sin depender de nadie.
+ *
+ * `GET /v1/transactions?reference=<ref>` con la llave PRIVADA. Puede devolver varias (un cliente
+ * que reintenta con la misma referencia) o ninguna (abrió el checkout y nunca pagó). Devuelve
+ * siempre un arreglo, vacío si no hay ninguna; nunca lanza por «no encontrada».
+ *
+ * ⚠️ Escrito contra la documentación, **no ejecutado contra el sandbox** (la documentación de
+ * Wompi no estaba accesible al escribirlo): la respuesta se lee tolerando `data` como arreglo
+ * o como objeto.
+ *
+ * @returns {Promise<Array<{estado, idExterno, codigoRespuesta, mensaje, payload}>>}
+ */
+async function consultarPorReferencia(referencia) {
+    exigirConfiguracion();
+    if (!referencia) return [];
+    const datos = await llamar(`/transactions?reference=${encodeURIComponent(referencia)}`, {
+        timeoutMs: 8_000,
+    });
+    const lista = Array.isArray(datos?.data) ? datos.data : datos?.data ? [datos.data] : [];
+    return lista.map((tx) => normalizarTransaccion(tx));
 }
 
 /**
@@ -395,5 +425,6 @@ module.exports = {
     tokenizarMetodo,
     cobrar,
     consultarTransaccion,
+    consultarPorReferencia,
     verificarFirmaWebhook,
 };

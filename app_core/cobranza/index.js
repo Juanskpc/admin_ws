@@ -14,6 +14,11 @@
  *                               → { estado, idExterno, codigoRespuesta, mensaje, urlPago?, payload }
  *   consultarTransaccion(idExterno) → igual que cobrar()
  *   verificarFirmaWebhook(req)  → { valida, idEvento, tipo, idExterno?, referencia?, payload }
+ *   consultarPorReferencia(referencia)  → arreglo de transacciones con la forma de
+ *                               `consultarTransaccion` (vacío si no hay ninguna). OPCIONAL: solo
+ *                               las pasarelas que abren el checkout SIN devolvernos el id de la
+ *                               transacción la necesitan (Wompi); dLocal guarda el id al crear el
+ *                               cobro y la conciliación usa `consultarTransaccion`.
  *
  * `estado` solo puede ser: 'aprobada' · 'pendiente' · 'rechazada'. Esos tres valores son el
  * vocabulario del servicio; traducir el de cada pasarela (APPROVED, PAID, DECLINED, EXPIRED…)

@@ -248,5 +248,7 @@ module.exports = {
     tokenizarMetodo,
     cobrar,
     consultarTransaccion,
+    // Sin `consultarPorReferencia` a propósito: `cobrar()` guarda el id del pago (`id_externo`) al
+    // crear el cobro, así que la conciliación pregunta con `consultarTransaccion(id_externo)`.
     verificarFirmaWebhook,
 };

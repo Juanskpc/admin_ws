@@ -358,6 +358,42 @@ async function simularCambio(req, res) {
     }
 }
 
+/**
+ * POST /admin/cobranza/conciliar-pendientes — el admin lo llama al iniciar sesión, al abrir la app
+ * con sesión y al volver a la pestaña.
+ *
+ * Concilia los pagos pendientes de los negocios que el usuario ADMINISTRA (un super admin puede
+ * pasar `id_negocio`): le pregunta a la pasarela por cada intento y aplica lo que ya esté aprobado.
+ * Sin intentos pendientes responde al instante y no llama a nadie. Responde
+ * `{ aplicados: [{id_negocio, referencia}], pendientes }`.
+ */
+async function conciliarPendientes(req, res) {
+    if (!check(req, res)) return;
+    try {
+        const idUsuario = req.usuario.id_usuario;
+        let idNegocios;
+
+        if (req.body?.id_negocio != null) {
+            const idNegocio = Number(req.body.id_negocio);
+            const alcance = await alcanceDeNegocios(idUsuario);
+            const esSuyo =
+                alcance.superAdmin || (await CobranzaService.usuarioAdministraNegocio(idUsuario, idNegocio));
+            if (!esSuyo) return Respuesta.error(res, 'No tienes acceso a este negocio', 403);
+            idNegocios = [idNegocio];
+        } else {
+            idNegocios = await CobranzaService.negociosQueAdministra(idUsuario);
+        }
+
+        const ConciliacionService = require('../services/cobranzaConciliacionService');
+        const resultado = await ConciliacionService.conciliarPendientes(idNegocios, {
+            via: req.body?.origen === 'al_volver' ? 'al_volver' : 'al_iniciar_sesion',
+        });
+        return Respuesta.success(res, 'Pagos conciliados', resultado);
+    } catch (err) {
+        return fallo(res, err, 'conciliarPendientes', 'No se pudo conciliar los pagos.');
+    }
+}
+
 /** POST /admin/publico/cobranza/consultar — sin sesión. */
 async function consultarPublico(req, res) {
     if (!check(req, res)) return;
@@ -429,6 +465,7 @@ async function verificarPagoWompi(req, res) {
         const WebhookService = require('../services/cobranzaWebhookService');
         const resultado = await WebhookService.confirmarPorRetorno('wompi', req.body.id_transaccion, {
             ip: req.ip,
+            via: 'manual',
         });
         const mensajes = {
             aprobada: 'Pago confirmado: el plan quedó extendido',
@@ -459,6 +496,7 @@ module.exports = {
     pagarFactura,
     elegirPlan,
     simularCambio,
+    conciliarPendientes,
     consultarPublico,
     pagarPublico,
     confirmarRetorno,

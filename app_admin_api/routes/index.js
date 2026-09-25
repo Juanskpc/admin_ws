@@ -591,6 +591,13 @@ router.get('/cobranza/mi-plan/simular', [
         .withMessage('Complementos inválidos'),
 ], CobranzaController.simularCambio);
 
+// El admin lo llama al iniciar sesión / volver a la pestaña: pregunta a la pasarela por los pagos
+// pendientes de los negocios del usuario y aplica los ya aprobados. Sin pendientes no llama a nadie.
+router.post('/cobranza/conciliar-pendientes', [
+    body('id_negocio').optional({ nullable: true }).isInt({ min: 1 }).withMessage('id_negocio inválido'),
+    body('origen').optional().isIn(['al_iniciar_sesion', 'al_volver']).withMessage('Origen inválido'),
+], CobranzaController.conciliarPendientes);
+
 router.post('/cobranza/facturas/:id/pagar', [
     param('id').isInt({ min: 1 }).withMessage('ID de factura inválido'),
     body('pasarela').isIn(['manual', 'dlocal', 'wompi']).withMessage('Medio de pago inválido'),

@@ -39,6 +39,19 @@ const SELECT = { type: sequelize.QueryTypes.SELECT };
  */
 const ESTADOS_PROCESABLES = ['activa', 'dormida'];
 
+/**
+ * Cuánto tiene que estar en silencio una conversación para que el próximo mensaje la reinicie
+ * en vez de retomarla. 60 minutos por defecto: el orden de magnitud de «se fue a hacer algo y
+ * vuelve», frente a las 3 h de `manejadorEscalera.TAREA_VIDA_MS` (que cubre «al día siguiente»)
+ * y los 10 min de `confirmacion.VIDA_MS` (que solo decide si el sí/no todavía cuenta). Los tres
+ * relojes miden cosas distintas y a propósito no comparten variable.
+ *
+ * Vive en una variable de entorno, como los otros dos: es el patrón que ya usa este mismo
+ * archivo y no hace falta una columna ni una migración para algo que hoy es igual para todos
+ * los negocios.
+ */
+const INACTIVIDAD_RESET_MIN = Number(process.env.CONVERSACION_INACTIVIDAD_RESET_MIN) || 60;
+
 /** Código de Postgres para «no pude tomar el lock y me dijiste que no esperara». */
 const LOCK_NO_DISPONIBLE = '55P03';
 
@@ -123,10 +136,16 @@ async function reservarIngesta({ idNegocio, canal, idExternoMensaje }, { transac
  */
 async function asegurarConversacion(
     { idNegocio, canal, idExterno },
-    { transaction, reactivarPorPlazo = false }
+    { transaction, reactivarPorPlazo = false, reiniciarPorInactividad = false }
 ) {
     const reactivada = reactivarPorPlazo
         ? await reactivarSiVencioElPlazo({ idNegocio, canal, idExterno }, { transaction })
+        : null;
+
+    // Antes de tocar `ultimo_mensaje_en`: el reinicio necesita el silencio de ANTES de este
+    // mensaje, y `asegurarConversacionSinReglas` lo pisa con `now()` en la misma línea.
+    const reiniciada = reiniciarPorInactividad
+        ? await reiniciarSiInactivaMucho({ idNegocio, canal, idExterno }, { transaction })
         : null;
 
     const conversacion = await asegurarConversacionSinReglas(
@@ -134,7 +153,89 @@ async function asegurarConversacion(
         { transaction }
     );
     if (reactivada) conversacion.reactivada_automaticamente = true;
+    if (reiniciada) conversacion.reiniciada_por_inactividad = reiniciada;
     return conversacion;
+}
+
+/**
+ * ¿Lleva la conversación más de `INACTIVIDAD_RESET_MIN` en silencio? Si sí —y no está en manos
+ * de una persona—, lo que sigue es una conversación LIMPIA: la tarea que hubiera quedada a
+ * medias (agendar, un pedido, incluso una confirmación con el sí a medio escribir) se abandona
+ * SIN ejecutarla, y la memoria (`variables`) se descarta. El turno que sigue ve una conversación
+ * en blanco — que es justo la condición que hace que el flujo de cada vertical salude de nuevo
+ * (`!variables.turnos` en `manejadorDeterminista`, `!variables?.turnos` en el flujo de
+ * restaurante): no hace falta que este archivo sepa nada de sus saludos ni de sus enlaces.
+ *
+ * Un código de carrito del menú digital sigue entrando como pedido nuevo: `tarea_actual` queda
+ * en null y el flujo de restaurante mira primero si el texto es un código, antes de mirar si
+ * hay que saludar.
+ *
+ * **`handoff_humano` no se toca.** Esa conversación no se reinicia sola por inactividad: la
+ * regla es `gener_negocio.reactivar_asistente_min` (ADR-023, Enmienda 2), y son cosas distintas
+ * a propósito — una persona puede tardar más de una hora en contestar sin que eso signifique
+ * que hay que soltarle el hilo al cliente.
+ *
+ * No hay temporizador: es la misma evaluación perezosa que `reactivarSiVencioElPlazo`, y por
+ * la misma razón — que el asistente reinicie una conversación que nadie ha vuelto a tocar sería
+ * escribir sin que haya un mensaje que responder.
+ *
+ * Deja registro en `auditoria.audit_evento` (no se borra nada del historial de mensajes; lo que
+ * se marca es el CIERRE de la tarea vieja) para que se pueda ver qué se abandonó y cuándo.
+ */
+async function reiniciarSiInactivaMucho({ idNegocio, canal, idExterno }, { transaction }) {
+    const previa = await unaFila(
+        `
+        SELECT id_conversacion, estado, tarea_actual, tarea_datos, ultimo_mensaje_en
+          FROM intelligence.conversacion
+         WHERE id_negocio = :idNegocio AND canal = :canal AND id_externo = :idExterno;
+        `,
+        { idNegocio, canal, idExterno },
+        transaction
+    );
+    // Sin conversación previa (primer mensaje de siempre) o sin tarea que abandonar, reiniciar
+    // no cambiaría nada: no hay ruido que meter en la auditoría por un no-op.
+    if (!previa || previa.estado === 'handoff_humano' || !previa.tarea_actual) return null;
+
+    const sello = Date.parse(previa.ultimo_mensaje_en || '');
+    if (!Number.isFinite(sello)) return null;
+
+    const inactivaMs = Date.now() - sello;
+    // «Más de N minutos»: en el umbral exacto todavía no. La comparación va en minutos y no en
+    // ms para no depender de la fracción de segundo que tarda esta misma consulta.
+    if (Math.floor(inactivaMs / 60_000) <= INACTIVIDAD_RESET_MIN) return null;
+
+    await sequelize.query(
+        `
+        UPDATE intelligence.conversacion
+           SET tarea_actual = NULL, tarea_datos = '{}'::jsonb, variables = '{}'::jsonb
+         WHERE id_conversacion = :idConversacion;
+        `,
+        { replacements: { idConversacion: previa.id_conversacion }, transaction }
+    );
+
+    const minutos = Math.round(inactivaMs / 60_000);
+    await sequelize.query(
+        `
+        INSERT INTO auditoria.audit_evento (modulo, accion, resultado, id_negocio, detalle)
+        VALUES ('intelligence', 'conversacion_reiniciada_por_inactividad', 'ok', :idNegocio,
+                CAST(:detalle AS jsonb));
+        `,
+        {
+            replacements: {
+                idNegocio,
+                detalle: JSON.stringify({
+                    id_conversacion: previa.id_conversacion,
+                    tarea_abandonada: previa.tarea_actual,
+                    datos_abandonados: previa.tarea_datos ?? null,
+                    minutos_inactiva: minutos,
+                    umbral_min: INACTIVIDAD_RESET_MIN,
+                }),
+            },
+            transaction,
+        }
+    );
+
+    return { id_conversacion: previa.id_conversacion, tarea_abandonada: previa.tarea_actual, minutos };
 }
 
 /**
@@ -1100,6 +1201,8 @@ module.exports = {
     esErrorDeLock,
     reservarIngesta,
     asegurarConversacion,
+    reiniciarSiInactivaMucho,
+    INACTIVIDAD_RESET_MIN,
     marcarIntervencionHumana,
     buscarConversacion,
     cambiarEstadoConversacion,

@@ -513,6 +513,21 @@ Fecha de registro: ${datos.fechaRegistro}
     console.info(`✉️  Notificación admin enviada a ${adminEmail}`);
 }
 
+/**
+ * Alerta operativa al super admin (MAIL_ADMIN): algo del sistema necesita que una persona lo mire.
+ * Nunca lanza por falta de configuración: sin correo configurado solo avisa en consola.
+ */
+async function sendAlertaAdminEmail({ asunto, texto }) {
+    const adminEmail = process.env.MAIL_ADMIN || process.env.MAIL_FROM;
+    if (!adminEmail || !process.env.MAIL_USER || !process.env.MAIL_PASS) {
+        console.warn('⚠️  Alerta al admin (sin correo configurado):', asunto);
+        return;
+    }
+    const from = process.env.MAIL_FROM || '"EscalApp" <escalappsystem@gmail.com>';
+    await transporter.sendMail({ from, to: adminEmail, subject: asunto, text: texto });
+    console.info(`✉️  Alerta enviada a ${adminEmail}: ${asunto}`);
+}
+
 // ============================================================
 // Correo de advertencia de vencimiento de plan
 // ============================================================
@@ -779,4 +794,4 @@ async function sendConversacionEscaladaEmail(email, datos) {
     console.info(`✉️  Aviso de conversacion escalada enviado a ${email} — messageId: ${info.messageId}`);
 }
 
-module.exports = { sendPasswordResetEmail, sendRegistroVerificationEmail, sendWelcomeEmail, sendAdminNotificationEmail, sendPlanExpiryWarningEmail, sendConversacionEscaladaEmail, verifyTransport };
+module.exports = { sendPasswordResetEmail, sendRegistroVerificationEmail, sendWelcomeEmail, sendAdminNotificationEmail, sendAlertaAdminEmail, sendPlanExpiryWarningEmail, sendConversacionEscaladaEmail, verifyTransport };

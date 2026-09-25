@@ -655,6 +655,77 @@ de tarjeta **solo vive 15 minutos**.
 
 ---
 
+### Un pago aprobado SIEMPRE se aplica: la conciliación (2026-09-24)
+
+**El problema.** Wompi nunca envió un evento a producción (0 filas reales en `cob_evento_webhook`, 0
+en los logs de Caddy; las llaves `prod_` sí están). Un pago solo se confirmaba si el cliente volvía
+del checkout por la redirect-url con `?id=`. El Callejero (negocio 13, factura 3) pagó desde un
+iPhone, no volvió, y se quedó sin plan con la plata ya cobrada. No existía nada que preguntara a la
+pasarela por los pagos que nadie le confirmó.
+
+**Las cinco vías, UNA sola función.** Toda aprobación —webhook, retorno con `?id=`, «Verificar pago
+Wompi», y la conciliación al iniciar sesión / al volver— termina en
+`cobranzaWebhookService.resolverEstadoReal`. Es idempotente y segura ante concurrencia:
+
+1. lee la factura con `SELECT … FOR UPDATE` dentro de una transacción (si ya está pagada, no hace
+   nada: otra vía llegó primero);
+2. valida contra la factura la **referencia** (base `EA-<negocio>-<AAAAMM>` y, si guardamos los
+   intentos que abrimos, una de ellas), el **monto en centavos** y la **moneda** (una aprobación sin
+   monto no se aplica). Si algo no coincide: NO se aplica, se anota `audit_evento`
+   `pago_no_coincide` (resultado `error`) y se alerta al super admin;
+3. un **id de transacción de la pasarela que ya pagó algo** nunca se aplica otra vez (aunque sea
+   de otra transacción nuestra);
+4. cierra el intento pendiente (`cob_transaccion`: `estado`, `id_externo`, `codigo_respuesta`) en
+   vez de crear una segunda fila «aprobada», y llama a `aplicarPagoAprobado`. Actor = sistema (NULL);
+5. escribe `audit_evento` `pago_conciliado` con la vía: `webhook` · `retorno` · `al_iniciar_sesion` ·
+   `al_volver` · `manual`.
+
+Si la factura **ya estaba pagada** y la pasarela trae una aprobación: si es el mismo `id_externo`
+que pagó la factura, el intento pendiente se cierra como «ya conciliada» (con nota) y no pasa nada;
+si NO es el que pagó (pago manual + el cliente además pagó), se registra
+`pago_duplicado_detectado` y se alerta: puede haber que devolverle plata.
+
+**Cuándo se pregunta a la pasarela (no hay cron).** El admin llama
+`POST /admin/cobranza/conciliar-pendientes` (verificarToken; solo los negocios que el usuario
+ADMINISTRA; un super admin puede pasar `id_negocio`) cuando el usuario **inicia sesión**, abre la
+app con sesión, o **vuelve a la pestaña** (`ConciliacionPagosService`, `admin_app-v21`). El backend
+busca las `cob_transaccion` `pendiente` de las facturas de esos negocios y pregunta a la pasarela de
+cada una:
+
+| Pasarela | Cómo se pregunta | Estados |
+|---|---|---|
+| Wompi | `GET /v1/transactions?reference=<ref del intento>` con la llave **privada** (`consultarPorReferencia`), o por id si ya lo hay | APPROVED → aprobada · DECLINED/VOIDED/ERROR → rechazada · PENDING → pendiente |
+| dLocal Go | `GET /v1/payments/<id>` (`consultarTransaccion`); el id del pago **sí se guarda** en `cob_transaccion.id_externo` al crear el cobro | PAID → aprobada · REJECTED/CANCELLED/EXPIRED → rechazada · PENDING → pendiente |
+
+Aprobada → se aplica (una vez); rechazada → el intento se marca `rechazada` y la factura sigue
+pendiente (como hoy con un rechazo); pendiente → se espera; un intento de **más de 7 días** que no
+pagó pasa a `expirada` (la factura no se toca). Sin pendientes responde `{aplicados: [], pendientes: 0}`
+**al instante y sin llamar a ninguna pasarela**. Responde `{aplicados: [{id_negocio, referencia}],
+pendientes}`. Límites: como mucho **una consulta a la pasarela por negocio cada 60 s** (en memoria),
+tope de ~3 s (lo que no termine sigue en segundo plano) y un error de la pasarela en un intento no
+detiene los demás.
+
+**Alerta.** Cuando un pago se recupera por una vía que NO es el webhook (ni el «manual», que lo hace una
+persona), se manda un correo al super admin (`MAIL_ADMIN`): «Pago de <negocio> recuperado sin webhook —
+revisa la URL de eventos de Wompi». Máximo **una por tipo y por día** (el límite vive en
+`audit_evento`, así sobrevive a reinicios).
+
+**⚠️ Configurar la URL de eventos en Wompi.** La conciliación es la red de seguridad, no el camino
+principal: el webhook sigue siendo lo normal y hay que ponerlo. En el panel de Wompi → Desarrolladores →
+Eventos, la URL debe ser exactamente
+
+    https://api.escalapp.cloud/admin/cobranza/webhook/wompi
+
+(y el «secreto de eventos» del panel es `WOMPI_EVENTS_SECRET`). Mientras Wompi siga sin enviar eventos,
+cada pago que no vuelva por la redirect-url se recuperará al siguiente inicio de sesión / regreso a la pestaña.
+
+**Lo que NO se verificó.** `consultarPorReferencia` se escribió contra la documentación de Wompi
+(`GET /v1/transactions?reference=`) pero **no se ejecutó contra el sandbox** (la documentación no estaba
+accesible al escribirlo). Antes de confiar en ella: un pago de prueba con llaves `test_` que no vuelva por
+la redirect-url y comprobar que el siguiente inicio de sesión lo aplica. La respuesta se lee tolerando
+`data` como arreglo u objeto. Tampoco se registra la comisión de la pasarela: la API de transacciones de
+Wompi no la devuelve (no verificado), así que `comision_pasarela` sigue en 0 como hasta ahora.
+
 ## 7. Lo que este documento NO decide
 
 1. **Precio para Chile.** CLP 9.900 es un ejemplo. Decisión comercial del dueño.

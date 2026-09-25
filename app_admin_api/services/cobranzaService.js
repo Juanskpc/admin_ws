@@ -806,18 +806,21 @@ async function aplicarPagoAprobado(factura, suscripcion, datos, transaction) {
         { transaction }
     );
 
-    await Dao.registrarTransaccion(
-        {
-            id_factura: factura.id_factura,
-            pasarela: factura.pasarela,
-            estado: 'aprobada',
-            id_externo: datos.id_externo ?? null,
-            codigo_respuesta: datos.codigo_respuesta ?? 'CONFIRMACION_MANUAL',
-            mensaje: datos.medio_pago_texto || 'Pago confirmado.',
-            payload: { referencia: factura.referencia, confirmado_en: fechaPago.toISOString() },
-        },
-        { transaction }
-    );
+    // Quien ya cerró el intento pendiente de la pasarela (la conciliación) pide no duplicar la fila.
+    if (!datos.omitir_registro_transaccion) {
+        await Dao.registrarTransaccion(
+            {
+                id_factura: factura.id_factura,
+                pasarela: factura.pasarela,
+                estado: 'aprobada',
+                id_externo: datos.id_externo ?? null,
+                codigo_respuesta: datos.codigo_respuesta ?? 'CONFIRMACION_MANUAL',
+                mensaje: datos.medio_pago_texto || 'Pago confirmado.',
+                payload: { referencia: factura.referencia, confirmado_en: fechaPago.toISOString() },
+            },
+            { transaction }
+        );
+    }
 
     // Quien paga vuelve a estar al día: se sale de gracia/suspensión y se limpian reintentos. El
     // próximo cobro automático, si lo hay, es el día siguiente al vencimiento que acaba de comprar.
@@ -1178,15 +1181,9 @@ async function usuarioAdministraNegocio(idUsuario, idNegocio) {
  *        tiene ningún plan vigente. El portal público no: solo cuenta a quien tiene algo que pagar,
  *        y para él la lista sigue siendo la de siempre.
  */
-async function cobrosDeUsuario(idUsuario, { incluirSinSuscripcion = false } = {}) {
-    // Antes de mirar nada, se pone al día lo que el negocio deba: si su plan venció —o vence
-    // dentro de la ventana— y no hay cobro, se genera aquí mismo. Esperar al cron de las 08:00
-    // dejaba al cliente con «aún no hay un cobro» justo cuando entraba a pagar.
-    //
-    // Va sobre los negocios que ADMINISTRA, leídos aparte y no de la consulta de abajo: esa cruza
-    // `cob_suscripcion` y deja fuera precisamente a los que todavía no la tienen, que son los que
-    // nunca verían un cobro. `asegurarCobroPendiente` se la estrena.
-    const administrados = await sequelize.query(
+/** Los negocios activos en los que el usuario tiene el rol ADMINISTRADOR. */
+async function negociosQueAdministra(idUsuario) {
+    const filas = await sequelize.query(
         `SELECT DISTINCT ur.id_negocio
            FROM general.gener_usuario_rol ur
            JOIN general.gener_rol r     ON r.id_rol = ur.id_rol AND r.estado = 'A'
@@ -1196,6 +1193,18 @@ async function cobrosDeUsuario(idUsuario, { incluirSinSuscripcion = false } = {}
             AND UPPER(TRIM(r.descripcion)) = 'ADMINISTRADOR';`,
         { replacements: { idUsuario }, type: sequelize.QueryTypes.SELECT }
     );
+    return filas.map((f) => Number(f.id_negocio));
+}
+
+async function cobrosDeUsuario(idUsuario, { incluirSinSuscripcion = false } = {}) {
+    // Antes de mirar nada, se pone al día lo que el negocio deba: si su plan venció —o vence
+    // dentro de la ventana— y no hay cobro, se genera aquí mismo. Esperar al cron de las 08:00
+    // dejaba al cliente con «aún no hay un cobro» justo cuando entraba a pagar.
+    //
+    // Va sobre los negocios que ADMINISTRA, leídos aparte y no de la consulta de abajo: esa cruza
+    // `cob_suscripcion` y deja fuera precisamente a los que todavía no la tienen, que son los que
+    // nunca verían un cobro. `asegurarCobroPendiente` se la estrena.
+    const administrados = (await negociosQueAdministra(idUsuario)).map((id_negocio) => ({ id_negocio }));
     for (const { id_negocio } of administrados) {
         await asegurarCobroPendiente(id_negocio);
     }
@@ -2366,6 +2375,7 @@ module.exports = {
     cobrarFactura,
     anularFactura,
     cobrosDeUsuario,
+    negociosQueAdministra,
     usuarioAdministraNegocio,
     iniciarPago,
     consultarPublico,

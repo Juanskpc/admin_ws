@@ -37,6 +37,13 @@ jest.mock('../../app_admin_api/services/cobranzaService', () => ({
     },
 }));
 jest.mock('../../app_core/cobranza', () => ({ getAdaptador: jest.fn() }));
+// El alta pagada y las alertas al super admin tocan correo y base: aquí no se prueban.
+jest.mock('../../app_admin_api/services/adquirirService', () => ({
+    notificarAltaPagada: jest.fn(async () => ({ enviado: false })),
+}));
+jest.mock('../../app_admin_api/services/mailService', () => ({
+    sendAlertaAdminEmail: jest.fn(async () => undefined),
+}));
 jest.mock('../../app_core/helpers/auditHelper', () => ({ registrarEvento: jest.fn() }));
 jest.mock('../../app_core/middleware/auditContext', () => ({ setAuditNegocio: jest.fn() }));
 
