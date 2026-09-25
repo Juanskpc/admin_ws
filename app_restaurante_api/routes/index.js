@@ -306,12 +306,14 @@ router.post('/mesas', [
 	body('nombre').isString().isLength({ min: 2, max: 100 }),
 	body('numero').optional().isInt({ min: 1 }),
 	body('capacidad').optional().isInt({ min: 1, max: 20 }),
+	body('seccion').optional({ nullable: true }).isString().isLength({ max: 60 }),
 ], MesaController.crearMesa);
 router.put('/mesas/:id', [
 	param('id').isInt({ min: 1 }),
 	body('nombre').optional().isString().isLength({ min: 2, max: 100 }),
 	body('numero').optional().isInt({ min: 1 }),
 	body('capacidad').optional().isInt({ min: 1, max: 20 }),
+	body('seccion').optional({ nullable: true }).isString().isLength({ max: 60 }),
 ], MesaController.editarMesa);
 router.patch('/mesas/:id/estado', [
 	param('id').isInt({ min: 1 }),

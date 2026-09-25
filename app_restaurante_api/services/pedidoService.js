@@ -1079,7 +1079,23 @@ async function getOrdenesDespacho({ idNegocio, idUsuario }) {
                 { model: Models.GenerUsuario, as: 'domiciliario', attributes: ['id_usuario', 'primer_nombre', 'primer_apellido'], required: false },
                             { model: Models.PedidDetalle, as: 'detalles',
                                 attributes: ['id_detalle', 'cantidad', 'precio_unitario', 'nota'],
-                                include: [{ model: Models.CartaProducto, as: 'producto', attributes: ['id_producto', 'nombre'] }] },
+                                // Los ingredientes que el cliente pidió quitar. Sin esto Despacho
+                                // los perdía: la orden se guardaba bien, pero la tarjeta, el
+                                // tiquete y «Editar pedido» la veían como si se hubiera pedido
+                                // normal (y editarla desemparejaba las líneas con exclusiones).
+                                include: [
+                                    { model: Models.CartaProducto, as: 'producto', attributes: ['id_producto', 'nombre'] },
+                                    {
+                    model: Models.PedidDetalleExclu,
+                    as: 'exclusiones',
+                    required: false,
+                    include: [{
+                        model: Models.CartaIngrediente,
+                        as: 'ingrediente',
+                        attributes: ['id_ingrediente', 'nombre'],
+                    }],
+                },
+                                ] },
                 // Desglose de multipago: el elegido al tomar el pedido (aún sin cobrar) o
                 // el ya cobrado. Despacho lo pinta para poder revisarlo y ajustarlo.
                 { model: Models.RestPagoOrden, as: 'pagos',

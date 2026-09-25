@@ -646,7 +646,7 @@ function seguirOConfirmar(ctx, datos, pasos, { apertura = '', solicitarConfirmac
                 ? { id_barrio: datos.id_barrio }
                 : {}),
             ...(datos.entrega === ENTREGA.MESA && datos.id_mesa ? { id_mesa: datos.id_mesa } : {}),
-            // La nota que dejó en el paso «tus datos» de la carta (solo domicilio). Es la misma
+            // La nota que dejó en el paso «tus datos» de la carta (cualquier tipo de pedido; opcional). Es la misma
             // que se puede decir por chat; si ya vino de la carta no hace falta preguntarla.
             ...(datos.nota ? { nota: datos.nota } : {}),
         },

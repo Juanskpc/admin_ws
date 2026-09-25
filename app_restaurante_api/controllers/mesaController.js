@@ -40,12 +40,13 @@ async function crearMesa(req, res) {
     }
 
     try {
-        const { id_negocio, nombre, numero, capacidad } = req.body;
+        const { id_negocio, nombre, numero, capacidad, seccion } = req.body;
         const mesa = await MesaService.crearMesa({
             idNegocio: Number(id_negocio),
             nombre: String(nombre).trim(),
             ...(numero ? { numero: Number(numero) } : {}),
             ...(capacidad ? { capacidad: Number(capacidad) } : {}),
+            ...(seccion ? { seccion: String(seccion).trim() } : {}),
         });
         return Respuesta.success(res, 'Mesa creada', mesa, 201);
     } catch (err) {
@@ -63,11 +64,13 @@ async function editarMesa(req, res) {
 
     try {
         const idMesa = Number(req.params.id);
-        const { nombre, numero, capacidad } = req.body;
+        const { nombre, numero, capacidad, seccion } = req.body;
         const mesa = await MesaService.actualizarMesa(idMesa, {
             nombre: nombre ? String(nombre).trim() : undefined,
             numero: numero ? Number(numero) : undefined,
             capacidad: capacidad ? Number(capacidad) : undefined,
+            // Sin la clave = no se toca; vacia o `null` = quitarle la seccion.
+            seccion: seccion === undefined ? undefined : String(seccion ?? '').trim(),
         });
         if (!mesa) return Respuesta.error(res, 'Mesa no encontrada', 404);
         return Respuesta.success(res, 'Mesa actualizada', mesa);

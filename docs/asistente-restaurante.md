@@ -606,13 +606,13 @@ Nota: sin cebolla en todo
 | Lee | `admin_ws/intelligence/adapters/restaurante/datosCliente.js` (`leerBloque`) |
 | Siembra | `intelligence/adapters/restaurante/flujo.js` (`sembrarDatosCliente`) |
 
-Qué se pide según la modalidad (la nota es solo de domicilio):
+Qué se pide según la modalidad (la nota especial es OPCIONAL en las tres desde 2026-09-25; antes era solo de domicilio, y quien pedía en mesa o para recoger no tenía dónde decir «sin cebolla en todo»):
 
 | Modalidad | Nombre | Teléfono | Dirección | Nota |
 |---|---|---|---|---|
 | Domicilio | obligatorio | obligatorio | obligatoria | opcional |
-| Recoger | obligatorio | opcional | — | — |
-| En el local (mesa) | obligatorio | — | — | — |
+| Recoger | obligatorio | opcional | — | opcional |
+| En el local (mesa) | obligatorio | — | — | opcional |
 
 **Reglas del contrato:**
 

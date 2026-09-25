@@ -5,6 +5,8 @@ module.exports = (sequelize, DataTypes) => {
         nombre:         { type: DataTypes.STRING(100), allowNull: false },
         numero:         { type: DataTypes.INTEGER, allowNull: false },
         capacidad:      { type: DataTypes.INTEGER, defaultValue: 4 },
+        // Texto libre y opcional («Piso 1», «Patio»…): NULL = sin seccion. Ver migrate_mesa_seccion.js.
+        seccion:        { type: DataTypes.STRING(60), allowNull: true },
         estado:         { type: DataTypes.CHAR(1), defaultValue: 'A' },
         estado_servicio:{ type: DataTypes.STRING(20), defaultValue: 'DISPONIBLE' },
         fecha_inicio_servicio: { type: DataTypes.DATE, allowNull: true },

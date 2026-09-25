@@ -42,7 +42,7 @@ async function inferMesaServiceStart(idMesa, { transaction, allowLastOrderFallba
 async function getMesas(idNegocio) {
     return Models.RestMesa.findAll({
         where: { id_negocio: idNegocio, estado: 'A' },
-        attributes: ['id_mesa', 'nombre', 'numero', 'capacidad', 'estado', 'estado_servicio', 'fecha_inicio_servicio'],
+        attributes: ['id_mesa', 'nombre', 'numero', 'capacidad', 'seccion', 'estado', 'estado_servicio', 'fecha_inicio_servicio'],
         order: [['numero', 'ASC']],
     });
 }
@@ -73,6 +73,7 @@ async function getMesasDashboard(idNegocio) {
             'nombre',
             'numero',
             'capacidad',
+            'seccion',
             'estado',
             'estado_servicio',
             'fecha_inicio_servicio',
@@ -93,6 +94,15 @@ async function getMesasDashboard(idNegocio) {
                     model: Models.CartaProducto,
                     as: 'producto',
                     attributes: ['nombre', 'precio'],
+                }, {
+                    model: Models.PedidDetalleExclu,
+                    as: 'exclusiones',
+                    required: false,
+                    include: [{
+                        model: Models.CartaIngrediente,
+                        as: 'ingrediente',
+                        attributes: ['id_ingrediente', 'nombre'],
+                    }],
                 }],
             }, {
                 // Desglose de multipago elegido al tomar el pedido: la mesa lo muestra
@@ -123,6 +133,10 @@ async function getMesasDashboard(idNegocio) {
                 price: Number(d.producto.precio ?? 0),
                 cantidad: Number(d.cantidad ?? 1),
                 nota: d.nota ?? null,
+                // «Sin cebolla»: lo que el cliente pidió quitar. La cocina ya lo veía; la mesa, no.
+                sin: (d.exclusiones ?? [])
+                    .map((e) => e.ingrediente?.nombre)
+                    .filter(Boolean),
             }];
         });
 
@@ -142,6 +156,7 @@ async function getMesasDashboard(idNegocio) {
             nombre: mesa.nombre,
             numero: mesa.numero,
             capacidad: mesa.capacidad,
+            seccion: mesa.seccion ?? null,
             estado: mesa.estado,
             estado_servicio: mesa.estado_servicio,
             status,
@@ -175,7 +190,7 @@ async function getMesasDashboard(idNegocio) {
     });
 }
 
-async function crearMesa({ idNegocio, nombre, numero, capacidad }) {
+async function crearMesa({ idNegocio, nombre, numero, capacidad, seccion }) {
     let nextNumero = Number(numero);
     if (!Number.isInteger(nextNumero) || nextNumero < 1) {
         const maxNumero = await Models.RestMesa.max('numero', {
@@ -189,6 +204,7 @@ async function crearMesa({ idNegocio, nombre, numero, capacidad }) {
         nombre,
         numero: nextNumero,
         capacidad: capacidad || 4,
+        seccion: seccion || null,
         estado: 'A',
         estado_servicio: 'DISPONIBLE',
         fecha_inicio_servicio: null,
@@ -198,7 +214,7 @@ async function crearMesa({ idNegocio, nombre, numero, capacidad }) {
     return mesa;
 }
 
-async function actualizarMesa(idMesa, { nombre, numero, capacidad }) {
+async function actualizarMesa(idMesa, { nombre, numero, capacidad, seccion }) {
     const mesa = await Models.RestMesa.findByPk(idMesa);
     if (!mesa) return null;
 
@@ -206,6 +222,8 @@ async function actualizarMesa(idMesa, { nombre, numero, capacidad }) {
         nombre: nombre ?? mesa.nombre,
         numero: numero ?? mesa.numero,
         capacidad: capacidad ?? mesa.capacidad,
+        // `undefined` = no tocar; texto vacio = quitarle la seccion (NULL).
+        seccion: seccion === undefined ? mesa.seccion : (seccion || null),
     });
 
     avisar(mesa.id_negocio, TEMAS.MESAS);
