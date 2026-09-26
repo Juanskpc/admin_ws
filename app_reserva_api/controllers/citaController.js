@@ -89,6 +89,12 @@ async function crearManual(req, res) {
             clienteEmail:       req.body.cliente_email || null,
             notas:              req.body.notas || null,
             creadoPorIdUsuario: req.usuario?.id_usuario,
+            // Perfiles de rubro: variante por servicio, precio/duración acordados en los
+            // servicios «a cotizar» y la mascota. Opcionales; el servicio valida cada uno.
+            variantes:          req.body.variantes || null,
+            ajustes:            req.body.ajustes || null,
+            idMascota:          req.body.id_mascota || null,
+            mascota:            req.body.mascota || null,
         });
         return Respuesta.success(res, 'Cita creada', cita, 201);
     } catch (err) {
@@ -118,6 +124,10 @@ async function actualizar(req, res) {
             idProfesional:      req.body.id_profesional ? Number(req.body.id_profesional) : null,
             fechaHoraInicioISO: req.body.fecha_hora_inicio ? String(req.body.fecha_hora_inicio) : null,
             idUsuario:          req.usuario?.id_usuario,
+            variantes:          req.body.variantes || null,
+            ajustes:            req.body.ajustes || null,
+            // `undefined` conserva la mascota actual; solo se cambia si llega el campo.
+            idMascota:          req.body.id_mascota === undefined ? undefined : req.body.id_mascota,
         });
         return Respuesta.success(res, 'Cita actualizada', cita);
     } catch (err) {
@@ -196,12 +206,41 @@ async function aprobarPago(req, res) {
     try {
         const c = await CitaService.aprobarPago(
             Number(req.params.id), Number(req.body.id_negocio), req.usuario?.id_usuario,
+            { idMetodoPago: req.body.id_metodo_pago ? Number(req.body.id_metodo_pago) : null },
         );
         return Respuesta.success(res, 'Pago aprobado', c);
     } catch (err) {
         if (err.statusCode) return Respuesta.error(res, err.message, err.statusCode);
         console.error('[Reserva/Citas] aprobarPago:', err.message);
         return Respuesta.error(res, 'Error al aprobar el pago.');
+    }
+}
+
+/** POST /reserva/citas/:id/abono/asentar — abono retenido de una cita que no se completará. */
+async function asentarAbono(req, res) {
+    if (!check(req, res)) return;
+    try {
+        const c = await CitaService.asentarAbono(
+            Number(req.params.id), Number(req.body.id_negocio), req.usuario?.id_usuario,
+            { idMetodoPago: req.body.id_metodo_pago ? Number(req.body.id_metodo_pago) : null },
+        );
+        return Respuesta.success(res, 'Abono asentado en la caja', c);
+    } catch (err) {
+        return fallo(res, err, 'asentarAbono', 'Error al asentar el abono.');
+    }
+}
+
+/** POST /reserva/citas/:id/abono/devolver — devolución del abono de una cita cancelada. */
+async function devolverAbono(req, res) {
+    if (!check(req, res)) return;
+    try {
+        const c = await CitaService.devolverAbono(
+            Number(req.params.id), Number(req.body.id_negocio), req.usuario?.id_usuario,
+            { idMetodoPago: req.body.id_metodo_pago ? Number(req.body.id_metodo_pago) : null },
+        );
+        return Respuesta.success(res, 'Abono devuelto', c);
+    } catch (err) {
+        return fallo(res, err, 'devolverAbono', 'Error al devolver el abono.');
     }
 }
 
@@ -265,4 +304,5 @@ module.exports = {
     listar, listarPendientesPago, getById, crearManual, actualizar,
     confirmar, completar, noShow, cancelarPorNegocio,
     aprobarPago, rechazarPago, descargarComprobante, eliminar,
+    asentarAbono, devolverAbono,
 };

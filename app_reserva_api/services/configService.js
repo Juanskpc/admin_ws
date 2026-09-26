@@ -1,6 +1,7 @@
 'use strict';
 const Models = require('../../app_core/models/conection');
 const { codigoPais, monedaDePais, paisesParaSeleccion } = require('../../app_core/helpers/paises');
+const Perfiles = require('../perfiles');
 
 /**
  * Ajustes del vertical de reserva.
@@ -26,7 +27,20 @@ const { codigoPais, monedaDePais, paisesParaSeleccion } = require('../../app_cor
  */
 async function get(idNegocio) {
     let cfg = await Models.ReservaConfig.findByPk(idNegocio);
-    if (!cfg) cfg = await Models.ReservaConfig.create({ id_negocio: idNegocio });
+    if (cfg) return cfg;
+
+    // Primer acceso: la fila nace con los valores de arranque del perfil del rubro (un spa con
+    // abono del 30 % y paso de 30 min, un tatuador con 24 h de anticipación…). Es el ÚNICO sitio
+    // donde se crea, así que un negocio que ya tiene fila no cambia nunca por esto. El perfil
+    // BASE no trae valores: la barbería nace con los defaults de la tabla, como siempre.
+    const { perfil } = await Perfiles.perfilBase(idNegocio);
+    try {
+        cfg = await Models.ReservaConfig.create({ id_negocio: idNegocio, ...perfil.config_inicial });
+    } catch (err) {
+        // Dos primeras peticiones a la vez: la otra la creó. Se lee la suya.
+        if (err?.name !== 'SequelizeUniqueConstraintError') throw err;
+        cfg = await Models.ReservaConfig.findByPk(idNegocio);
+    }
     return cfg;
 }
 
@@ -36,10 +50,18 @@ async function getPantalla(idNegocio) {
     const negocio = await Models.GenerNegocio.findByPk(idNegocio, { attributes: ['pais'] });
     const pais = codigoPais(negocio?.pais) || 'CO';
 
+    const { perfil, rubro } = await Perfiles.perfilBase(idNegocio);
+    const elegidas = cfg.funciones || {};
+
     return {
         ...cfg.toJSON(),
         pais,
         moneda: monedaDePais(pais),
+        // El perfil ya resuelto, para que la pantalla refresque la sesión al cambiar una función
+        // sin volver a pedir el token.
+        perfil: Perfiles.describirPerfil(perfil, elegidas, rubro),
+        // Las funciones que el dueño puede encender o apagar, con su texto.
+        funciones_config: Perfiles.funcionesConfigurables(perfil, elegidas),
         // El catálogo viaja con la respuesta para que el selector no tenga su propia copia de
         // los países: la lista buena es la del backend, que además es la que valida.
         paises: paisesParaSeleccion(),
@@ -54,11 +76,18 @@ async function getPantalla(idNegocio) {
  * cambio que no ocurrió.
  */
 async function actualizar(idNegocio, data) {
-    const { pais, ...ajustes } = data;
+    const { pais, funciones, ...ajustes } = data;
     delete ajustes.id_negocio; delete ajustes.fecha_creacion;
     ajustes.fecha_actualizacion = new Date();
 
     const cfg = await get(idNegocio);
+
+    // Las funciones se fusionan con lo que ya había decidido el dueño y se validan contra el
+    // perfil: una función fija no se apaga y una de otro rubro no se enciende.
+    if (funciones && typeof funciones === 'object') {
+        const { perfil } = await Perfiles.perfilBase(idNegocio);
+        ajustes.funciones = Perfiles.normalizarEleccion(perfil, funciones, cfg.funciones || {});
+    }
 
     await Models.sequelize.transaction(async (t) => {
         await cfg.update(ajustes, { transaction: t });

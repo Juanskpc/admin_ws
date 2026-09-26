@@ -6,6 +6,8 @@ module.exports = (sequelize, DataTypes) => {
     monto:          { type: DataTypes.DECIMAL(12, 2), allowNull: false },
     concepto:       DataTypes.STRING(255),
     id_cita:        DataTypes.INTEGER,
+    /** Anticipo, saldo o cargo de una estancia (alojamiento, hotel de mascotas). */
+    id_estancia:    DataTypes.INTEGER,
     // Quién PRESTÓ el servicio, no quién cobró. Es lo que permite liquidar al final del día
     // sin reconstruirlo desde la cita, que puede haber cambiado de profesional.
     id_profesional: DataTypes.INTEGER,
@@ -19,6 +21,7 @@ module.exports = (sequelize, DataTypes) => {
   ReservaMovimientoCaja.associate = (models) => {
     ReservaMovimientoCaja.belongsTo(models.ReservaCaja,        { foreignKey: 'id_caja',        as: 'caja' });
     ReservaMovimientoCaja.belongsTo(models.ReservaCita,        { foreignKey: 'id_cita',        as: 'cita' });
+    ReservaMovimientoCaja.belongsTo(models.ReservaEstancia,    { foreignKey: 'id_estancia',    as: 'estancia' });
     ReservaMovimientoCaja.belongsTo(models.ReservaProfesional, { foreignKey: 'id_profesional', as: 'profesional' });
     ReservaMovimientoCaja.belongsTo(models.ReservaMetodoPago,  { foreignKey: 'id_metodo_pago', as: 'metodoPago' });
     ReservaMovimientoCaja.belongsTo(models.GenerUsuario,       { foreignKey: 'id_usuario',     as: 'usuario' });

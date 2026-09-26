@@ -26,7 +26,12 @@ const Respuesta = require('../../app_core/helpers/respuesta');
  * El **super administrador** entra siempre: es quien tiene que poder desatascar un negocio cuyo
  * dueño se ha quedado sin permisos.
  */
+/**
+ * @param {string|string[]} codigo  Una acción, o varias de las que basta con tener una (la ficha
+ *        se lee con `clientes_ficha_ver` desde Clientes o con `agenda_ficha` desde la cita).
+ */
 function exigirAccion(codigo) {
+    const codigos = Array.isArray(codigo) ? codigo : [codigo];
     return async function comprobar(req, res, next) {
         try {
             const idUsuario = req.usuario?.id_usuario;
@@ -62,7 +67,7 @@ function exigirAccion(codigo) {
                 rolesNegocio: roles.map(r => ({ id_rol: r.rol?.id_rol ?? r.id_rol })),
             });
 
-            const concedida = permisos.some(p => p.codigo === codigo && p.puede_ver);
+            const concedida = permisos.some(p => codigos.includes(p.codigo) && p.puede_ver);
             if (!concedida) {
                 return Respuesta.error(
                     res,
@@ -72,7 +77,7 @@ function exigirAccion(codigo) {
             }
             return next();
         } catch (err) {
-            console.error(`[Reserva/Accion] ${codigo}:`, err.message);
+            console.error(`[Reserva/Accion] ${codigos.join('|')}:`, err.message);
             return Respuesta.error(res, 'Error al verificar el permiso.');
         }
     };

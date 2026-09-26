@@ -1195,6 +1195,112 @@ async function conversacionesConPendientes({ ventanaDias, transaction = null }) 
     );
 }
 
+// ── Reportes de mal uso ─────────────────────────────────────────────────────────────────
+
+/**
+ * Lo que se sabe de una conversación para decidir si alguien la está usando para nada.
+ *
+ * Una sola consulta, y toda acotada por `creado_en`: `turno`, `paso` y `costo` están
+ * particionadas por mes y sin ese acotado la pregunta barre las quince particiones en cada
+ * turno. Quien decide qué significan estos números es `reporteAutomatico.js`; aquí solo se
+ * cuentan.
+ *
+ * `capacidades_ok` es la señal que más pesa y merece explicación: es cuántas veces el asistente
+ * llegó a **hacer** algo —crear un pedido, agendar una cita, consultar un saldo—. Hablar mucho
+ * no es sospechoso; hablar mucho sin que nunca pase nada, sí.
+ */
+async function senalesDeUso(idConversacion, { horas, transaction = null }) {
+    const fila = await unaFila(
+        `
+        WITH t AS (
+            SELECT id_turno, nivel, resultado
+              FROM intelligence.turno
+             WHERE id_conversacion = :id
+               AND creado_en > now() - (:horas || ' hours')::interval
+        )
+        SELECT
+            (SELECT count(*) FROM t)                                          AS turnos,
+            (SELECT count(*) FROM t WHERE nivel = 'llm')                      AS turnos_llm,
+            (SELECT count(*) FROM t WHERE resultado = 'resuelto')             AS resueltos,
+            (SELECT COALESCE(sum(costo_usd), 0) FROM intelligence.costo
+              WHERE id_conversacion = :id
+                AND creado_en > now() - (:horas || ' hours')::interval)       AS costo_usd,
+            (SELECT count(*) FROM intelligence.invocacion_capacidad i
+               JOIN t ON t.id_turno = i.id_turno
+              WHERE i.resultado = 'ok'
+                AND i.creado_en > now() - (:horas || ' hours')::interval)     AS capacidades_ok,
+            (SELECT count(*) FROM intelligence.mensaje
+              WHERE id_conversacion = :id AND direccion = 'entrante'
+                AND creado_en > now() - (:horas || ' hours')::interval)       AS entrantes,
+            -- El entrante que más se repite, ya normalizado. Copiar y pegar el mismo texto
+            -- veinte veces es la forma más barata de tener un bot contestando gratis.
+            (SELECT max(veces) FROM (
+                SELECT count(*) AS veces
+                  FROM intelligence.mensaje
+                 WHERE id_conversacion = :id AND direccion = 'entrante'
+                   AND creado_en > now() - (:horas || ' hours')::interval
+                 GROUP BY lower(btrim(contenido))
+             ) AS repetidos)                                                  AS repeticion_maxima
+        `,
+        { id: idConversacion, horas: String(horas) },
+        transaction
+    );
+
+    return {
+        turnos: Number(fila?.turnos ?? 0),
+        turnos_llm: Number(fila?.turnos_llm ?? 0),
+        resueltos: Number(fila?.resueltos ?? 0),
+        costo_usd: Number(fila?.costo_usd ?? 0),
+        capacidades_ok: Number(fila?.capacidades_ok ?? 0),
+        entrantes: Number(fila?.entrantes ?? 0),
+        repeticion_maxima: Number(fila?.repeticion_maxima ?? 0),
+    };
+}
+
+/**
+ * Deja el reporte del asistente, si no había ya uno abierto en esta conversación.
+ *
+ * El «si no había» no se comprueba antes: lo garantiza `uq_reporte_asistente_abierto` y aquí se
+ * traduce en `ON CONFLICT DO NOTHING`. Comprobar primero sería una carrera entre dos turnos de
+ * la misma conversación — improbable con el lock, pero la base ya lo sabe hacer bien.
+ *
+ * Un reporte **no bloquea nada**: no toca el estado de la conversación, el asistente sigue
+ * contestando y el cliente no nota nada. Es una nota para el dueño del negocio, que es quien
+ * decide. Ver la cabecera de `migrate_intelligence_reportes.js`.
+ *
+ * @returns {Promise<boolean>} si se llegó a insertar.
+ */
+async function reportarAutomaticamente(
+    { conversacion, motivo, senales },
+    { transaction = null } = {}
+) {
+    const filas = await sequelize.query(
+        `
+        INSERT INTO intelligence.reporte
+            (id_conversacion, id_negocio, canal, id_externo, id_persona_negocio,
+             origen, motivo, senales)
+        VALUES (:idConversacion, :idNegocio, :canal, :idExterno, :idPersonaNegocio,
+                'asistente', :motivo, CAST(:senales AS jsonb))
+        ON CONFLICT DO NOTHING
+        RETURNING id_reporte;
+        `,
+        {
+            replacements: {
+                idConversacion: conversacion.id_conversacion,
+                idNegocio: conversacion.id_negocio,
+                canal: conversacion.canal,
+                idExterno: conversacion.id_externo,
+                idPersonaNegocio: conversacion.id_persona_negocio ?? null,
+                motivo,
+                senales: JSON.stringify(senales ?? {}),
+            },
+            transaction,
+            ...SELECT,
+        }
+    );
+    return filas.length > 0;
+}
+
 module.exports = {
     ESTADOS_PROCESABLES,
     ESTADOS_CONVERSACION,
@@ -1223,4 +1329,6 @@ module.exports = {
     registrarCosto,
     recuperarTurnosColgados,
     conversacionesConPendientes,
+    senalesDeUso,
+    reportarAutomaticamente,
 };

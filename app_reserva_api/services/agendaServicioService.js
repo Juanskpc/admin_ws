@@ -1,6 +1,20 @@
 'use strict';
 const Models = require('../../app_core/models/conection');
 const Disponibilidad = require('./disponibilidadService');
+const Perfiles = require('../perfiles');
+
+/**
+ * Duración efectiva del servicio con la variante elegida (largo, tamaño, zona). Sin variante, o
+ * con la función apagada, la de lista: lo de siempre.
+ */
+async function duracionCon(idNegocio, servicio, idVariante, funciones) {
+    if (!idVariante || !funciones.includes('variantes')) return servicio.duracion_min;
+    const v = await Models.ReservaServicioVariante.findOne({
+        where: { id_variante: idVariante, id_servicio: servicio.id_servicio, id_negocio: idNegocio, estado: 'A' },
+        attributes: ['duracion_min'],
+    });
+    return v ? v.duracion_min : servicio.duracion_min;
+}
 
 /**
  * Disponibilidad de **un servicio** vista desde el portal público.
@@ -96,9 +110,11 @@ function cabeAlgo(fechaISO, rangos, duracionMin, desdeMs) {
 }
 
 /** Días del rango en los que atiende alguien que hace el servicio. */
-async function diasDelServicio({ idNegocio, idServicio, desde, hasta }) {
+async function diasDelServicio({ idNegocio, idServicio, desde, hasta, idVariante = null }) {
     const { servicio, profesionales } = await profesionalesDe(idNegocio, idServicio);
     if (!profesionales.length) return [];
+    const { funciones } = await Perfiles.perfilDeNegocio(idNegocio);
+    const duracion = await duracionCon(idNegocio, servicio, idVariante, funciones);
 
     const cfg = await Disponibilidad.getConfig(idNegocio);
     const desdeMs = Date.now() + (cfg.anticipacion_min_horas || 0) * 3_600_000;
@@ -117,7 +133,7 @@ async function diasDelServicio({ idNegocio, idServicio, desde, hasta }) {
             if (!porFecha.has(d.fecha)) {
                 porFecha.set(d.fecha, { fecha: d.fecha, abierto: false, id_profesionales: [] });
             }
-            if (d.abierto && cabeAlgo(d.fecha, d.rangos, servicio.duracion_min, desdeMs)) {
+            if (d.abierto && cabeAlgo(d.fecha, d.rangos, duracion, desdeMs)) {
                 const acumulado = porFecha.get(d.fecha);
                 acumulado.abierto = true;
                 acumulado.id_profesionales.push(idProfesional);
@@ -135,14 +151,20 @@ async function diasDelServicio({ idNegocio, idServicio, desde, hasta }) {
  * enterarse de cuáles están ocupadas. Un profesional sin ninguno se devuelve igualmente con la
  * lista vacía, para poder decir «hoy no atiende» en vez de hacerlo desaparecer sin explicación.
  */
-async function slotsDelServicio({ idNegocio, idServicio, fechaISO }) {
+async function slotsDelServicio({ idNegocio, idServicio, fechaISO, idVariante = null }) {
     const { servicio, profesionales } = await profesionalesDe(idNegocio, idServicio);
+    // El perfil se lee una vez y se pasa a cada cálculo: con diez profesionales serían veinte
+    // consultas repetidas para responder lo mismo.
+    const { funciones } = await Perfiles.perfilDeNegocio(idNegocio);
+    const variantes = idVariante ? { [idServicio]: idVariante } : null;
+    const duracion = await duracionCon(idNegocio, servicio, idVariante, funciones);
 
     const resultados = await Promise.all(profesionales.map(async (p) => {
         try {
             const data = await Disponibilidad.calcularSlots({
                 idNegocio, idServicios: [idServicio],
                 idProfesional: p.id_profesional, fechaISO,
+                variantes, funciones,
             });
             return { profesional: p, slots: data.slots.filter(s => s.disponible).map(s => s.hora) };
         } catch {
@@ -154,7 +176,7 @@ async function slotsDelServicio({ idNegocio, idServicio, fechaISO }) {
 
     return {
         fecha: fechaISO,
-        duracion_min: servicio.duracion_min,
+        duracion_min: duracion,
         profesionales: resultados.map(r => ({
             id_profesional: r.profesional.id_profesional,
             nombre: r.profesional.nombre,

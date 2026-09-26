@@ -30,7 +30,10 @@
 const Models = require('../../app_core/models/conection');
 
 /** Lo que se enseña cuando el negocio no se puede leer. Neutro y sin mentir. */
-const GENERICO = { id: null, nombre: null, tratamiento: 'el negocio', atencion: null, tipoNegocio: null };
+const GENERICO = {
+    id: null, nombre: null, tratamiento: 'el negocio', atencion: null,
+    tipoNegocio: null, rubro: null, perfilReserva: null,
+};
 
 /**
  * Horario de atención del negocio — hoy **siempre `null`**, y es un estado correcto.
@@ -74,10 +77,24 @@ async function obtener(idNegocio) {
     const id = Number(idNegocio);
     if (!Number.isInteger(id) || id < 1) return GENERICO;
 
+    // Tres lecturas del catálogo de tipos, porque la misma columna ha significado cosas distintas:
+    //
+    // - `t` es el tipo guardado en el negocio. Desde los rubros (2026-09-10) es el **módulo**,
+    //   pero los negocios anteriores pueden tener un oficio ahí (el primer cliente de reserva se
+    //   creó como BARBERIA). `m` traduce ese oficio a su módulo, que es lo que el enrutado
+    //   necesita: una lista blanca de oficios en cada adaptador era una segunda fuente de verdad
+    //   que fallaba en silencio con el primer rubro nuevo.
+    // - `r` es el **rubro**: cómo se llama el negocio para su cliente («Salón de belleza»), y
+    //   su perfil de reserva. Sin él el asistente solo sabía que hablaba con un «RESERVA».
     const filas = await Models.sequelize.query(
-        `SELECT n.id_negocio, n.nombre, t.nombre AS tipo_negocio
+        `SELECT n.id_negocio, n.nombre,
+                COALESCE(m.nombre, t.nombre) AS tipo_negocio,
+                COALESCE(r.descripcion, r.nombre) AS rubro,
+                r.perfil_reserva
            FROM general.gener_negocio n
            LEFT JOIN general.gener_tipo_negocio t ON t.id_tipo_negocio = n.id_tipo_negocio
+           LEFT JOIN general.gener_tipo_negocio m ON m.id_tipo_negocio = t.id_tipo_modulo
+           LEFT JOIN general.gener_tipo_negocio r ON r.id_tipo_negocio = COALESCE(n.id_rubro, n.id_tipo_negocio)
           WHERE n.id_negocio = :id AND n.estado = 'A'`,
         { replacements: { id }, type: Models.sequelize.QueryTypes.SELECT }
     );
@@ -98,8 +115,25 @@ async function obtener(idNegocio) {
         // verticales existen y no debe saberlo (ADR-009). Devuelve el nombre del tipo tal como
         // está en el catálogo —`RESTAURANTE`, `RESERVA`— y quien enruta lo traduce con lo que
         // los adaptadores hayan declarado.
-        tipoNegocio: String(fila.tipo_negocio || '').trim().toUpperCase() || null,
+        tipoNegocio: tipoParaEnrutar(fila),
+        // El oficio con el que el cliente conoce al negocio. Es texto para frases, no una clave:
+        // enrutar por él devolvería la lista blanca que la columna `tipoNegocio` acaba de quitar.
+        rubro: String(fila.rubro || '').trim() || null,
+        perfilReserva: String(fila.perfil_reserva || '').trim().toUpperCase() || null,
     };
+}
+
+/**
+ * El tipo por el que se elige el flujo de conversación.
+ *
+ * Es el módulo, salvo en un caso: un alojamiento usa el módulo de reserva pero **no agenda
+ * citas** —reserva noches—. Enviarlo al flujo de citas le ofrecería horas a quien pregunta por
+ * una habitación. Se le da un tipo propio para que lo atienda el flujo que sí sabe de estancias.
+ */
+function tipoParaEnrutar(fila) {
+    const modulo = String(fila.tipo_negocio || '').trim().toUpperCase() || null;
+    if (String(fila.perfil_reserva || '').trim().toUpperCase() === 'ALOJAMIENTO') return 'ALOJAMIENTO';
+    return modulo;
 }
 
 module.exports = { obtener, GENERICO };

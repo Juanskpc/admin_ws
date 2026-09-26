@@ -1,6 +1,9 @@
 'use strict';
 const Models = require('../../app_core/models/conection');
 const Reglas = require('./reglasAgenda');
+const ConfigService = require('./configService');
+const Composicion = require('./composicionCita');
+const Perfiles = require('../perfiles');
 
 /**
  * Calcula los slots disponibles para unos servicios + profesional + fecha.
@@ -37,22 +40,40 @@ const Reglas = require('./reglasAgenda');
  * @param {number} [params.excluirCita] — id de cita que NO debe contar como ocupada.
  *        Al editar una cita, su propia hora tiene que seguir ofreciéndose: sin esto el
  *        formulario de edición mostraría como tomado justo el hueco que ya es suyo.
+ * @param {Object|Array} [params.variantes] — variante elegida por servicio (`{ id_servicio:
+ *        id_variante }`). Cambia la duración, y con ella las horas que caben.
+ * @param {Array} [params.ajustes] — duración acordada de un servicio «a cotizar».
+ * @param {string[]} [params.funciones] — funciones activas del negocio. Si no llega se lee del
+ *        perfil; quien calcula para varios profesionales la pasa para no releerla cada vez.
+ *
+ * ## Dos caminos, y por qué el viejo sigue intacto
+ *
+ * Si la cita no tiene tiempo de proceso ni necesita cabina —siempre, en una barbería— se
+ * generan los slots **exactamente como antes**: huecos reservables partidos en pasos. Solo
+ * cuando hay tramos de espera o recurso se usa el camino nuevo, que comprueba cada hora contra
+ * los trozos en que el profesional trabaja y contra las cabinas libres. La prueba dorada
+ * (`__tests__/reserva/motor_dorado.test.js`) vigila que el primero no cambie.
  */
-async function calcularSlots({ idNegocio, idServicio, idServicios, idProfesional, fechaISO, excluirCita = null }) {
+async function calcularSlots({
+    idNegocio, idServicio, idServicios, idProfesional, fechaISO, excluirCita = null,
+    variantes = null, ajustes = null, funciones = null,
+}) {
     const ids = normalizarIdsServicio(idServicios, idServicio);
     if (!idNegocio || ids.length === 0 || !idProfesional || !fechaISO) {
         const e = new Error('Parámetros incompletos'); e.statusCode = 400; throw e;
     }
 
     const cfg = await getConfig(idNegocio);
-    const servicios = await Models.ReservaServicio.findAll({
+    const filas = await Models.ReservaServicio.findAll({
         where: { id_servicio: ids, id_negocio: idNegocio, estado: 'A' },
-        attributes: ['id_servicio', 'duracion_min'],
+        attributes: ['id_servicio', 'nombre', 'duracion_min', 'precio', 'proceso_desde_min',
+                     'proceso_min', 'a_cotizar', 'id_tipo_recurso', 'requiere_consentimiento'],
     });
-    if (servicios.length !== ids.length) {
+    if (filas.length !== ids.length) {
         const e = new Error('Servicio no encontrado'); e.statusCode = 404; throw e;
     }
-    const duracion = servicios.reduce((acc, s) => acc + s.duracion_min, 0);
+    // En el orden pedido: con tiempo de proceso, dónde cae la espera depende de qué va primero.
+    const servicios = ids.map((id) => filas.find((s) => s.id_servicio === id));
 
     const profesional = await Models.ReservaProfesional.findOne({
         where: { id_profesional: idProfesional, id_negocio: idNegocio, estado: 'A' },
@@ -62,6 +83,14 @@ async function calcularSlots({ idNegocio, idServicio, idServicios, idProfesional
         const e = new Error('Profesional no encontrado'); e.statusCode = 404; throw e;
     }
 
+    const activas = funciones ?? (await Perfiles.perfilDeNegocio(idNegocio)).funciones;
+    const comp = Composicion.componer(servicios, {
+        funciones: activas,
+        variantes: await variantesElegidas(idNegocio, Composicion.normalizarVariantes(variantes)),
+        ajustes: Composicion.normalizarAjustes(ajustes),
+    });
+    const duracion = comp.duracion;
+
     const vacio = {
         fecha: fechaISO,
         duracion_servicio_min: duracion,
@@ -70,31 +99,73 @@ async function calcularSlots({ idNegocio, idServicio, idServicios, idProfesional
         slots: [],
     };
 
-    const huecos = await Reglas.huecosReservables(
-        {
-            idNegocio,
-            idProfesional,
-            fechaISO,
-            bufferMin: cfg.buffer_limpieza_min,
-        },
-        { excluirCita },
-    );
-    if (huecos.length === 0) return vacio;
-
     const minimoInicio = Reglas.addMinutes(new Date(), cfg.anticipacion_min_horas * 60);
     const paso = cfg.paso_slot_min;
     const slots = [];
+    const empujar = (t) => {
+        const disponible = t >= minimoInicio;
+        slots.push({
+            hora: formatearHoraLocal(t),
+            disponible,
+            ...(disponible ? {} : { motivo: 'anticipacion' }),
+        });
+    };
 
-    for (const [desde, hasta] of huecos) {
-        let t = redondearHaciaArriba(desde, paso);
-        while (Reglas.addMinutes(t, duracion) <= hasta) {
-            const disponible = t >= minimoInicio;
-            slots.push({
-                hora: formatearHoraLocal(t),
-                disponible,
-                ...(disponible ? {} : { motivo: 'anticipacion' }),
-            });
-            t = Reglas.addMinutes(t, paso);
+    if (!comp.tramos && !comp.idTipoRecurso) {
+        // ── Camino de siempre ──
+        const huecos = await Reglas.huecosReservables(
+            {
+                idNegocio,
+                idProfesional,
+                fechaISO,
+                bufferMin: cfg.buffer_limpieza_min,
+            },
+            { excluirCita },
+        );
+        if (huecos.length === 0) return vacio;
+
+        for (const [desde, hasta] of huecos) {
+            let t = redondearHaciaArriba(desde, paso);
+            while (Reglas.addMinutes(t, duracion) <= hasta) {
+                empujar(t);
+                t = Reglas.addMinutes(t, paso);
+            }
+        }
+    } else {
+        // ── Con espera o con cabina ──
+        const laborales = await Reglas.intervalosLaborales({ idNegocio, idProfesional, fechaISO });
+        if (laborales.length === 0) return vacio;
+        const ocupados = await Reglas.intervalosOcupados(
+            { idNegocio, idProfesional, fechaISO, bufferMin: cfg.buffer_limpieza_min },
+            { excluirCita },
+        );
+
+        let idsRecurso = [];
+        let ocupacionRecursos = new Map();
+        if (comp.idTipoRecurso) {
+            idsRecurso = (await Reglas.recursosDelTipo(idNegocio, comp.idTipoRecurso)).map((r) => r.id_recurso);
+            if (idsRecurso.length === 0) return { ...vacio, motivo: 'sin_recurso' };
+            ocupacionRecursos = await Reglas.intervalosRecursos({
+                idNegocio,
+                idRecursos: idsRecurso,
+                desde: laborales[0][0],
+                hasta: laborales[laborales.length - 1][1],
+                bufferMin: cfg.buffer_limpieza_min,
+            }, { excluirCita });
+        }
+
+        for (const [desde, hasta] of laborales) {
+            let t = redondearHaciaArriba(desde, paso);
+            while (Reglas.addMinutes(t, duracion) <= hasta) {
+                const fin = Reglas.addMinutes(t, duracion);
+                const partes = Reglas.partesOcupadas(t, fin, comp.tramos);
+                let libre = partes.every((p) => !ocupados.some((o) => Reglas.seSolapan(p, o)));
+                if (libre && idsRecurso.length) {
+                    libre = Reglas.recursoLibreEn(ocupacionRecursos, idsRecurso, t, fin) != null;
+                }
+                if (libre) empujar(t);
+                t = Reglas.addMinutes(t, paso);
+            }
         }
     }
 
@@ -103,6 +174,25 @@ async function calcularSlots({ idNegocio, idServicio, idServicios, idProfesional
     slots.sort((a, b) => a.hora.localeCompare(b.hora));
 
     return { ...vacio, slots };
+}
+
+/**
+ * Las filas de variante elegidas, validadas contra el negocio. Una variante inactiva o de otro
+ * negocio se descarta aquí y `componer` usa el precio de lista: ofrecer horas no debe fallar por
+ * un enlace viejo.
+ */
+async function variantesElegidas(idNegocio, mapa) {
+    if (!mapa || mapa.size === 0) return new Map();
+    const filas = await Models.ReservaServicioVariante.findAll({
+        where: { id_variante: [...mapa.values()], id_negocio: idNegocio, estado: 'A' },
+    });
+    const porId = new Map(filas.map((v) => [v.id_variante, v]));
+    const salida = new Map();
+    for (const [idServicio, idVariante] of mapa) {
+        const v = porId.get(idVariante);
+        if (v && Number(v.id_servicio) === idServicio) salida.set(idServicio, v);
+    }
+    return salida;
 }
 
 /**
@@ -199,12 +289,16 @@ function enumerarFechas(desde, hasta) {
     return out;
 }
 
+/**
+ * La configuración del negocio como objeto plano.
+ *
+ * Delega en `configService.get`, que es el **único** sitio donde nace la fila: antes había dos
+ * `create` (aquí y allí), y los valores de arranque de cada rubro se habrían aplicado en uno y
+ * no en el otro según qué pantalla abriera el negocio primero.
+ */
 async function getConfig(idNegocio) {
-    const cfg = await Models.ReservaConfig.findByPk(idNegocio);
-    if (cfg) return cfg.toJSON();
-    // Crear config por defecto si no existe (idempotente)
-    const created = await Models.ReservaConfig.create({ id_negocio: idNegocio });
-    return created.toJSON();
+    const cfg = await ConfigService.get(idNegocio);
+    return cfg.toJSON();
 }
 
-module.exports = { calcularSlots, diasDisponibles, getConfig };
+module.exports = { calcularSlots, diasDisponibles, getConfig, variantesElegidas };

@@ -20,6 +20,17 @@ module.exports = (sequelize, DataTypes) => {
     descripcion_publica:       DataTypes.TEXT,
     /** Publica o esconde la página pública. Por defecto publicada. */
     publico_activo:            { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
+    /**
+     * Qué opciones de su perfil encendió o apagó el negocio: `{ deposito: true, ficha: false }`.
+     * Una clave ausente toma el valor por defecto del perfil. Ver app_reserva_api/perfiles.
+     */
+    funciones:                 { type: DataTypes.JSONB, allowNull: false, defaultValue: {} },
+    /** Abono para reservar desde el portal, en % del total. 0 = sin abono (cobro de siempre). */
+    deposito_pct:              { type: DataTypes.SMALLINT, allowNull: false, defaultValue: 0 },
+    deposito_reembolsable:     { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
+    /** Estancias: hora de entrada y salida del negocio (las noches no llevan hora). */
+    hora_checkin:              { type: DataTypes.TIME, allowNull: false, defaultValue: '15:00' },
+    hora_checkout:             { type: DataTypes.TIME, allowNull: false, defaultValue: '12:00' },
     fecha_creacion:            { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
     fecha_actualizacion:       { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
   }, {

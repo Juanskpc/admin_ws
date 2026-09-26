@@ -27,4 +27,7 @@
 module.exports = {
     testEnvironment: 'node',
     maxWorkers: 1,
+    // `_apoyo/` guarda utilidades compartidas por las suites (modelos falsos, fixtures): no
+    // son pruebas, y sin esto Jest las correría como suites vacías y fallaría.
+    testPathIgnorePatterns: ['/node_modules/', '/__tests__/_apoyo/'],
 };

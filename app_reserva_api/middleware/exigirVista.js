@@ -1,6 +1,7 @@
 'use strict';
 const Models = require('../../app_core/models/conection');
 const DashboardService = require('../services/dashboardService');
+const Perfiles = require('../perfiles');
 const Respuesta = require('../../app_core/helpers/respuesta');
 
 /**
@@ -56,7 +57,10 @@ function exigirVista(url) {
                 rolesNegocio: roles.map((r) => ({ id_rol: r.rol?.id_rol ?? r.id_rol })),
             });
 
-            const vista = vistas.find((v) => v.url === url);
+            // Mismo recorte que la sesión: una vista que el perfil del rubro no usa (Unidades en
+            // una barbería) no existe para ese negocio, aunque el rol la tenga en su plantilla.
+            const perfil = await Perfiles.perfilDeNegocio(idNegocio);
+            const vista = Perfiles.filtrarVistas(vistas, perfil).find((v) => v.url === url);
             if (!vista?.puede_ver) {
                 return Respuesta.error(
                     res,

@@ -12,6 +12,8 @@ module.exports = (sequelize, DataTypes) => {
     // Sequelize descarta en silencio los atributos no declarados: si esta línea falta, el
     // `create()` guardaría el hold SIN los servicios y confirmar no sabría qué reservar.
     id_servicios:      { type: DataTypes.ARRAY(DataTypes.INTEGER), defaultValue: [] },
+    /** Cabina apartada junto con el hueco, si los servicios la necesitan. */
+    id_recurso:        { type: DataTypes.INTEGER, allowNull: true },
     creado_en:         { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
   }, {
     tableName: 'reserva_hold', schema: 'reserva', timestamps: false,

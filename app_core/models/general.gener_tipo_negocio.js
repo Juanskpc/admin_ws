@@ -15,6 +15,12 @@ module.exports = (sequelize, DataTypes) => {
         id_tipo_modulo: { type: DataTypes.INTEGER, allowNull: true },
         /** Orden en que se le enseñan al cliente. No es alfabético a propósito. */
         orden: { type: DataTypes.SMALLINT, allowNull: false, defaultValue: 999 },
+        /**
+         * Perfil de reserva que adapta la app al oficio (SALON, SPA, ESTETICA, TATUAJE,
+         * MASCOTAS, ALOJAMIENTO). `null` = BASE, la barbería de siempre. Ver
+         * app_reserva_api/perfiles y migrations/catalogo_rubros.js.
+         */
+        perfil_reserva: { type: DataTypes.STRING(20), allowNull: true },
         estado: { type: DataTypes.CHAR(1), allowNull: false, defaultValue: 'A' },
         fecha_creacion: { type: DataTypes.DATE, allowNull: false, defaultValue: DataTypes.NOW },
         fecha_actualizacion: { type: DataTypes.DATE, allowNull: false, defaultValue: DataTypes.NOW }

@@ -30,6 +30,9 @@ const Respuesta = require('../../app_core/helpers/respuesta');
 const { verificarToken } = require('../../app_core/middleware/auth');
 const { exigirAccion } = require('../middleware/exigirAccion');
 const { exigirVista } = require('../middleware/exigirVista');
+const { exigirFuncion } = require('../middleware/exigirFuncion');
+const Perfil       = require('../controllers/perfilController');
+const Estancias    = require('../controllers/estanciaController');
 
 // ───────── Multer: comprobantes de pago ─────────
 const COMPROBANTES_BASE = path.resolve(path.join(__dirname, '..', '..', 'uploads', 'reserva', 'comprobantes'));
@@ -67,6 +70,48 @@ const uploadImagen = multer({
         else cb(Object.assign(new Error('Formato no admitido. Usa WEBP, JPG o PNG.'), { statusCode: 400 }));
     },
     limits: { fileSize: 3 * 1024 * 1024 },
+});
+
+// ───────── Campos de los perfiles de rubro en una cita ─────────
+//
+// Variante por servicio, precio/duración acordados («a cotizar») y mascota. Todos opcionales:
+// sin ellos la cita es la de siempre. Aquí solo se valida la forma; qué se permite lo decide
+// `citaService` según las funciones del negocio.
+const validadoresPerfilCita = [
+    body('variantes').optional({ nullable: true }).custom(v => typeof v === 'object'),
+    body('ajustes').optional({ nullable: true }).isArray(),
+    body('ajustes.*.id_servicio').optional().isInt({ min: 1 }),
+    body('ajustes.*.precio').optional({ nullable: true }).isFloat({ min: 0 }),
+    body('ajustes.*.duracion_min').optional({ nullable: true }).isInt({ min: 5, max: 1440 }),
+    body('id_mascota').optional({ nullable: true, checkFalsy: true }).isUUID(),
+    body('mascota').optional({ nullable: true }).isObject(),
+    body('mascota.nombre').optional().isString().isLength({ max: 80 }),
+];
+
+// Campos de un servicio que solo usan algunos perfiles (espera, cotizar, consentimiento, cabina,
+// variantes). Con los valores por defecto el servicio es el de siempre.
+const validadoresPerfilServicio = [
+    body('proceso_desde_min').optional({ nullable: true }).isInt({ min: 0, max: 600 }),
+    body('proceso_min').optional({ nullable: true }).isInt({ min: 0, max: 600 }),
+    body('a_cotizar').optional().isBoolean(),
+    body('requiere_consentimiento').optional().isBoolean(),
+    body('id_tipo_recurso').optional({ nullable: true, checkFalsy: true }).isInt({ min: 1 }),
+    body('variantes').optional({ nullable: true }).isArray({ max: 20 }),
+    body('variantes.*.nombre').optional().isString().isLength({ max: 80 }),
+    body('variantes.*.duracion_min').optional().isInt({ min: 5, max: 600 }),
+    body('variantes.*.precio').optional().isFloat({ min: 0 }),
+];
+
+// ───────── Multer: archivos de la ficha del cliente (privados) ─────────
+// A memoria: `fichaService` los escribe en `uploads/reserva/fichas`, que no se sirve como
+// estático. Admite PDF porque un consentimiento escaneado suele serlo.
+const uploadFicha = multer({
+    storage: multer.memoryStorage(),
+    fileFilter(_req, file, cb) {
+        if (['image/webp', 'image/jpeg', 'image/png', 'application/pdf'].includes(file.mimetype)) cb(null, true);
+        else cb(Object.assign(new Error('Formato no admitido. Usa JPG, PNG, WEBP o PDF.'), { statusCode: 400 }));
+    },
+    limits: { fileSize: 8 * 1024 * 1024 },
 });
 
 // ═════════ RUTAS PÚBLICAS (sin token) ═════════
@@ -122,12 +167,14 @@ router.get('/publico/:id_negocio/servicio/:id_servicio/dias', [
     param('id_servicio').isInt({ min: 1 }),
     query('desde').matches(/^\d{4}-\d{2}-\d{2}$/).withMessage('desde YYYY-MM-DD requerida'),
     query('hasta').matches(/^\d{4}-\d{2}-\d{2}$/).withMessage('hasta YYYY-MM-DD requerida'),
+    query('id_variante').optional().isInt({ min: 1 }),
 ], Publico.getDiasDeServicio);
 
 router.get('/publico/:id_negocio/servicio/:id_servicio/slots', [
     param('id_negocio').isInt({ min: 1 }),
     param('id_servicio').isInt({ min: 1 }),
     query('fecha').matches(/^\d{4}-\d{2}-\d{2}$/).withMessage('fecha YYYY-MM-DD requerida'),
+    query('id_variante').optional().isInt({ min: 1 }),
 ], Publico.getSlotsDeServicio);
 
 // Crear cita: multipart si lleva comprobante; multer.single tolera ambos casos.
@@ -153,6 +200,33 @@ router.post('/publico/:id_negocio/cita',
 // encarga de normalizar antes de buscar.
 const codigoValido = param('codigo_publico').custom(v => CodigoCita.esValido(v))
     .withMessage('Código de reserva inválido');
+
+// Estancias desde el portal (alojamiento, hotel de mascotas): qué hay libre para unas fechas y
+// reservar con el comprobante del anticipo. El servicio responde 403 si el negocio no usa
+// estancias.
+const fechaISO = (campo, donde = query) => donde(campo).matches(/^\d{4}-\d{2}-\d{2}$/).withMessage(`${campo} AAAA-MM-DD`);
+router.get('/publico/:id_negocio/estancias/disponibilidad', [
+    param('id_negocio').isInt({ min: 1 }),
+    fechaISO('entrada'), fechaISO('salida'),
+    query('huespedes').optional().isInt({ min: 1, max: 50 }),
+], Estancias.publicoDisponibilidad);
+router.post('/publico/:id_negocio/estancia',
+    uploadComprobante.single('comprobante'),
+    [
+        param('id_negocio').isInt({ min: 1 }),
+        body('id_unidad_tipo').isInt({ min: 1 }),
+        fechaISO('fecha_entrada', body), fechaISO('fecha_salida', body),
+        body('huespedes').optional().isInt({ min: 1, max: 50 }),
+        body('cliente_nombre').trim().notEmpty().isLength({ max: 150 }),
+        body('cliente_telefono').trim().notEmpty().isLength({ max: 30 }),
+        body('cliente_email').optional({ nullable: true, checkFalsy: true }).isEmail(),
+        body('cliente_documento').optional({ nullable: true, checkFalsy: true }).isString().isLength({ max: 30 }),
+        body('notas').optional({ nullable: true }).isString().isLength({ max: 2000 }),
+    ],
+    Estancias.publicoCrear,
+);
+// Calendario exportado de una unidad, para pegar en Airbnb/Booking. El token es el secreto.
+router.get('/publico/ical/:token', Estancias.icalExportar);
 
 router.get('/publico/cita/:codigo_publico', [codigoValido], Publico.consultarCita);
 router.post('/publico/cita/:codigo_publico/cancelar', [codigoValido], Publico.cancelarCitaPublica);
@@ -191,6 +265,7 @@ router.post('/servicios', [
     body('color_hex').optional({ nullable: true }).matches(/^#?[0-9a-fA-F]{6}$/),
     body('imagen_url').optional({ nullable: true }).isString().isLength({ max: 500 }),
     body('id_categoria').optional({ nullable: true }).isInt({ min: 1 }),
+    ...validadoresPerfilServicio,
 ], Servicios.crear);
 router.put('/servicios/:id', [
     param('id').isInt({ min: 1 }),
@@ -199,6 +274,7 @@ router.put('/servicios/:id', [
     body('duracion_min').optional().isInt({ min: 5, max: 600 }),
     body('precio').optional().isFloat({ min: 0 }),
     body('id_categoria').optional({ nullable: true }).isInt({ min: 1 }),
+    ...validadoresPerfilServicio,
 ], Servicios.actualizar);
 router.patch('/servicios/:id/inactivar', [
     param('id').isInt({ min: 1 }),
@@ -337,6 +413,7 @@ router.post('/citas', [
     body('fecha_hora_inicio').notEmpty(),
     body('cliente_nombre').trim().notEmpty().isLength({ max: 150 }),
     body('cliente_email').optional({ nullable: true, checkFalsy: true }).isEmail(),
+    ...validadoresPerfilCita,
 ], Citas.crearManual);
 
 // Editar una cita ya agendada: servicios, profesional y hora. `id_servicios` es la lista
@@ -348,6 +425,7 @@ router.put('/citas/:id', [
     body('id_servicios.*').isInt({ min: 1 }),
     body('id_profesional').optional({ nullable: true }).isInt({ min: 1 }),
     body('fecha_hora_inicio').optional({ nullable: true, checkFalsy: true }).notEmpty(),
+    ...validadoresPerfilCita,
 ], exigirAccion('citas_editar'), Citas.actualizar);
 
 router.post('/citas/:id/confirmar', [
@@ -376,7 +454,20 @@ router.post('/citas/:id/cancelar', [
 router.post('/citas/:id/pago/aprobar', [
     param('id').isInt({ min: 1 }),
     body('id_negocio').isInt({ min: 1 }),
+    // Por dónde llegó el abono (perfiles con depósito). Opcional.
+    body('id_metodo_pago').optional({ nullable: true, checkFalsy: true }).isInt({ min: 1 }),
 ], exigirAccion('citas_validar_pago'), Citas.aprobarPago);
+// Abonos: asentar el retenido de una cita que no se completará, o devolverlo. Mueven la caja.
+router.post('/citas/:id/abono/asentar', [
+    param('id').isInt({ min: 1 }),
+    body('id_negocio').isInt({ min: 1 }),
+    body('id_metodo_pago').optional({ nullable: true, checkFalsy: true }).isInt({ min: 1 }),
+], exigirAccion('citas_abonos'), Citas.asentarAbono);
+router.post('/citas/:id/abono/devolver', [
+    param('id').isInt({ min: 1 }),
+    body('id_negocio').isInt({ min: 1 }),
+    body('id_metodo_pago').optional({ nullable: true, checkFalsy: true }).isInt({ min: 1 }),
+], exigirAccion('citas_abonos'), Citas.devolverAbono);
 router.post('/citas/:id/pago/rechazar', [
     param('id').isInt({ min: 1 }),
     body('id_negocio').isInt({ min: 1 }),
@@ -625,6 +716,200 @@ router.get('/informes', [
     query('id_profesional').optional({ nullable: true, checkFalsy: true }).isInt({ min: 1 }),
 ], Informes.getInforme);
 
+// ═════════ Perfiles de rubro (docs/perfiles-de-reserva.md) ═════════
+//
+// Cada grupo cuelga de la función que lo sostiene (`exigirFuncion`): si el negocio no la tiene
+// encendida, la ruta responde 403 aunque el rol tenga la vista.
+const idNeg = (donde = 'query') => (donde === 'body' ? body('id_negocio') : query('id_negocio')).isInt({ min: 1 });
+
+router.get('/perfil-negocio', [idNeg()], Perfil.getPerfil);
+
+// Catálogo de arranque (solo sobre vacío).
+router.get('/catalogo/vista-previa', [idNeg()], Perfil.catalogoVistaPrevia);
+router.post('/catalogo/servicios', [idNeg('body')],
+    exigirVista('/servicios'), Perfil.catalogoSembrarServicios);
+router.post('/catalogo/unidades', [idNeg('body')],
+    exigirVista('/unidades'), exigirFuncion('estancias'), Perfil.catalogoSembrarUnidades);
+
+// Cabinas y equipos.
+router.get('/recursos', [idNeg()], exigirFuncion('recursos'), Perfil.recursosListar);
+router.post('/recursos', [
+    idNeg('body'),
+    body('nombre').trim().notEmpty().isLength({ max: 80 }),
+    body('cantidad').optional().isInt({ min: 1, max: 50 }),
+], exigirVista('/recursos'), exigirFuncion('recursos'), Perfil.recursosCrearTipo);
+router.put('/recursos/:id', [param('id').isInt({ min: 1 }), idNeg('body')],
+    exigirVista('/recursos'), exigirFuncion('recursos'), Perfil.recursosActualizarTipo);
+router.delete('/recursos/:id', [param('id').isInt({ min: 1 }), idNeg()],
+    exigirVista('/recursos'), exigirFuncion('recursos'), Perfil.recursosInactivarTipo);
+router.post('/recursos/:id/unidades', [
+    param('id').isInt({ min: 1 }), idNeg('body'), body('nombre').trim().notEmpty().isLength({ max: 80 }),
+], exigirVista('/recursos'), exigirFuncion('recursos'), Perfil.recursosCrearUnidad);
+router.put('/recursos/unidades/:id', [param('id').isInt({ min: 1 }), idNeg('body')],
+    exigirVista('/recursos'), exigirFuncion('recursos'), Perfil.recursosActualizarUnidad);
+router.delete('/recursos/unidades/:id', [param('id').isInt({ min: 1 }), idNeg()],
+    exigirVista('/recursos'), exigirFuncion('recursos'), Perfil.recursosInactivarUnidad);
+
+// Mascotas. Las del cliente las necesita quien agenda (formulario de cita), aunque no tenga la
+// vista Mascotas; el listado completo y la edición sí la piden.
+router.get('/mascotas', [idNeg(), query('q').optional().isString().isLength({ max: 80 })],
+    exigirVista('/mascotas'), exigirFuncion('mascotas'), Perfil.mascotasListar);
+router.get('/clientes/:id_persona/mascotas', [param('id_persona').isUUID(), idNeg()],
+    exigirFuncion('mascotas'), Perfil.mascotasDeCliente);
+router.post('/mascotas', [
+    idNeg('body'),
+    body('id_persona_negocio').isUUID(),
+    body('nombre').trim().notEmpty().isLength({ max: 80 }),
+], exigirFuncion('mascotas'), Perfil.mascotasCrear);
+router.put('/mascotas/:id', [param('id').isUUID(), idNeg('body')],
+    exigirVista('/mascotas'), exigirFuncion('mascotas'), Perfil.mascotasActualizar);
+router.delete('/mascotas/:id', [param('id').isUUID(), idNeg()],
+    exigirVista('/mascotas'), exigirFuncion('mascotas'), Perfil.mascotasInactivar);
+
+// Ficha del cliente. Se lee desde Clientes (`clientes_ficha_ver`) o desde la cita que se atiende
+// (`agenda_ficha`); la usan la ficha, el consentimiento y las vacunas de las mascotas.
+const FUNCIONES_FICHA = ['ficha', 'consentimiento', 'mascotas'];
+router.get('/ficha', [
+    idNeg(),
+    query('id_persona_negocio').optional().isUUID(),
+    query('id_mascota').optional().isUUID(),
+    query('id_cita').optional().isInt({ min: 1 }),
+], exigirAccion(['clientes_ficha_ver', 'agenda_ficha']), exigirFuncion(FUNCIONES_FICHA), Perfil.fichaListar);
+router.post('/ficha', uploadFicha.single('archivo'), [
+    idNeg('body'),
+    body('tipo').isIn(['NOTA', 'FORMULA', 'CONTRAINDICACION', 'CONSENTIMIENTO', 'VACUNA', 'REFERENCIA']),
+    body('id_persona_negocio').optional({ checkFalsy: true }).isUUID(),
+    body('id_mascota').optional({ checkFalsy: true }).isUUID(),
+    body('id_cita').optional({ checkFalsy: true }).isInt({ min: 1 }),
+    body('titulo').optional({ nullable: true }).isString().isLength({ max: 150 }),
+    body('contenido').optional({ nullable: true }).isString().isLength({ max: 5000 }),
+    body('vence_en').optional({ checkFalsy: true }).isISO8601(),
+], exigirAccion(['clientes_ficha_editar', 'agenda_ficha']), exigirFuncion(FUNCIONES_FICHA), Perfil.fichaCrear);
+router.delete('/ficha/:id', [param('id').isInt({ min: 1 }), idNeg()],
+    exigirAccion('clientes_ficha_editar'), exigirFuncion(FUNCIONES_FICHA), Perfil.fichaEliminar);
+router.get('/ficha/:id/archivo', [param('id').isInt({ min: 1 }), idNeg()],
+    exigirAccion(['clientes_ficha_ver', 'agenda_ficha']), Perfil.fichaArchivo);
+
+// Portafolio por profesional (público en el portal; se edita desde Profesionales).
+router.get('/profesionales/:id/portafolio', [param('id').isInt({ min: 1 }), idNeg()],
+    exigirFuncion('portafolio'), Perfil.portafolioListar);
+router.post('/profesionales/:id/portafolio', uploadImagen.single('imagen'), [
+    param('id').isInt({ min: 1 }), idNeg('body'),
+    body('descripcion').optional({ nullable: true }).isString().isLength({ max: 200 }),
+], exigirVista('/profesionales'), exigirFuncion('portafolio'), Perfil.portafolioAgregar);
+router.delete('/portafolio/:id', [param('id').isInt({ min: 1 }), idNeg()],
+    exigirVista('/profesionales'), exigirFuncion('portafolio'), Perfil.portafolioEliminar);
+
+// ═════════ Estancias por noches (alojamiento, hotel de mascotas) ═════════
+//
+// Todo cuelga de la función `estancias` del perfil. Las acciones que mueven dinero o cierran la
+// estancia llevan su propio permiso (`migrate_reserva_subniveles.js`).
+const FX_ESTANCIAS = exigirFuncion('estancias');
+const idParam = param('id').isInt({ min: 1 });
+const pagosValidos = [
+    body('id_metodo_pago').optional({ nullable: true, checkFalsy: true }).isInt({ min: 1 }),
+    body('pagos').optional().isArray({ min: 1 }),
+    body('pagos.*.id_metodo_pago').optional().isInt({ min: 1 }),
+    body('pagos.*.valor').optional().isFloat({ gt: 0 }),
+];
+
+router.get('/estancias/disponibilidad', [idNeg(), fechaISO('entrada'), fechaISO('salida'), query('huespedes').optional().isInt({ min: 1 })],
+    exigirVista('/estancias'), FX_ESTANCIAS, Estancias.disponibilidad);
+router.get('/estancias/ocupacion', [idNeg(), fechaISO('desde'), fechaISO('hasta')],
+    exigirVista('/ocupacion'), FX_ESTANCIAS, Estancias.ocupacion);
+router.get('/estancias/resumen-dia', [idNeg()], FX_ESTANCIAS, Estancias.resumenDia);
+router.get('/estancias/informe', [idNeg(), fechaISO('desde'), fechaISO('hasta')],
+    exigirVista('/informes'), FX_ESTANCIAS, Estancias.informe);
+router.get('/estancias', [
+    idNeg(),
+    query('desde').optional().matches(/^\d{4}-\d{2}-\d{2}$/),
+    query('hasta').optional().matches(/^\d{4}-\d{2}-\d{2}$/),
+    query('estado').optional().isIn(['pendiente', 'confirmada', 'en_curso', 'finalizada', 'cancelada', 'no_show']),
+    query('q').optional().isString().isLength({ max: 80 }),
+], exigirVista('/estancias'), FX_ESTANCIAS, Estancias.listar);
+router.get('/estancias/:id', [idParam, idNeg()], FX_ESTANCIAS, Estancias.getById);
+router.get('/estancias/:id/comprobante', [idParam, idNeg()], FX_ESTANCIAS, Estancias.comprobante);
+router.post('/estancias', [
+    idNeg('body'),
+    body('id_unidad_tipo').isInt({ min: 1 }),
+    body('id_unidad').optional({ nullable: true, checkFalsy: true }).isInt({ min: 1 }),
+    fechaISO('fecha_entrada', body), fechaISO('fecha_salida', body),
+    body('huespedes').optional().isInt({ min: 1, max: 50 }),
+    body('cliente_nombre').trim().notEmpty().isLength({ max: 150 }),
+    body('cliente_email').optional({ nullable: true, checkFalsy: true }).isEmail(),
+    body('id_mascota').optional({ nullable: true, checkFalsy: true }).isUUID(),
+], exigirAccion('estancias_crear'), FX_ESTANCIAS, Estancias.crear);
+router.put('/estancias/:id', [
+    idParam, idNeg('body'),
+    body('fecha_entrada').optional().matches(/^\d{4}-\d{2}-\d{2}$/),
+    body('fecha_salida').optional().matches(/^\d{4}-\d{2}-\d{2}$/),
+    body('huespedes').optional().isInt({ min: 1, max: 50 }),
+    body('id_unidad').optional().isInt({ min: 1 }),
+], exigirAccion('estancias_crear'), FX_ESTANCIAS, Estancias.actualizar);
+router.post('/estancias/:id/confirmar', [idParam, idNeg('body')], exigirAccion('estancias_crear'), FX_ESTANCIAS, Estancias.confirmar);
+router.post('/estancias/:id/checkin', [idParam, idNeg('body')], exigirAccion('estancias_checkin'), FX_ESTANCIAS, Estancias.checkin);
+router.post('/estancias/:id/no-show', [idParam, idNeg('body')], exigirAccion('estancias_checkin'), FX_ESTANCIAS, Estancias.noShow);
+router.post('/estancias/:id/checkout', [idParam, idNeg('body'), ...pagosValidos],
+    exigirAccion('estancias_checkout'), FX_ESTANCIAS, Estancias.checkout);
+router.post('/estancias/:id/pagos', [idParam, idNeg('body'), ...pagosValidos, body('valor').optional().isFloat({ gt: 0 })],
+    exigirAccion('estancias_checkout'), FX_ESTANCIAS, Estancias.registrarPago);
+router.post('/estancias/:id/cargos', [
+    idParam, idNeg('body'), body('concepto').trim().notEmpty().isLength({ max: 150 }), body('valor').isFloat({ gt: 0 }),
+], exigirAccion('estancias_checkout'), FX_ESTANCIAS, Estancias.agregarCargo);
+router.delete('/estancias/:id/cargos/:idCargo', [idParam, param('idCargo').isInt({ min: 1 }), idNeg()],
+    exigirAccion('estancias_checkout'), FX_ESTANCIAS, Estancias.eliminarCargo);
+router.post('/estancias/:id/cancelar', [idParam, idNeg('body'), body('motivo').optional({ nullable: true }).isString()],
+    exigirAccion('estancias_cancelar'), FX_ESTANCIAS, Estancias.cancelar);
+router.post('/estancias/:id/devolver', [idParam, idNeg('body'), body('valor').optional().isFloat({ gt: 0 }),
+    body('id_metodo_pago').optional({ nullable: true, checkFalsy: true }).isInt({ min: 1 })],
+exigirAccion('estancias_cancelar'), FX_ESTANCIAS, Estancias.devolver);
+router.post('/estancias/:id/pago/aprobar', [idParam, idNeg('body'), body('id_metodo_pago').optional({ checkFalsy: true }).isInt({ min: 1 })],
+    exigirAccion('estancias_validar_pago'), FX_ESTANCIAS, Estancias.aprobarPago);
+router.post('/estancias/:id/pago/rechazar', [idParam, idNeg('body'), body('motivo').optional({ nullable: true }).isString()],
+    exigirAccion('estancias_validar_pago'), FX_ESTANCIAS, Estancias.rechazarPago);
+
+// Unidades: tipos (con tarifas y temporadas), unidades, bloqueos y calendarios externos.
+const VISTA_UNIDADES = exigirVista('/unidades');
+router.get('/unidades', [idNeg()], FX_ESTANCIAS, Estancias.unidadesListar);
+router.post('/unidades/tipos', [
+    idNeg('body'), body('nombre').trim().notEmpty().isLength({ max: 100 }),
+    body('tarifa_base').isFloat({ min: 0 }), body('capacidad_max').optional().isInt({ min: 1, max: 50 }),
+    body('cantidad').optional().isInt({ min: 1, max: 100 }), body('unidades').optional().isArray({ max: 100 }),
+], VISTA_UNIDADES, exigirAccion('unidades_tarifas'), FX_ESTANCIAS, Estancias.tipoCrear);
+router.put('/unidades/tipos/:id', [idParam, idNeg('body'), body('tarifa_base').optional().isFloat({ min: 0 })],
+    VISTA_UNIDADES, exigirAccion('unidades_tarifas'), FX_ESTANCIAS, Estancias.tipoActualizar);
+router.delete('/unidades/tipos/:id', [idParam, idNeg()], VISTA_UNIDADES, FX_ESTANCIAS, Estancias.tipoInactivar);
+router.post('/unidades/tipos/:id/imagen', uploadImagen.single('imagen'), [idParam, idNeg('body')],
+    VISTA_UNIDADES, FX_ESTANCIAS, Estancias.tipoImagen);
+router.delete('/unidades/tipos/:id/imagen', [idParam, idNeg()], VISTA_UNIDADES, FX_ESTANCIAS, Estancias.tipoImagenEliminar);
+router.post('/unidades/tipos/:id/temporadas', [
+    idParam, idNeg('body'), body('nombre').trim().notEmpty().isLength({ max: 80 }),
+    fechaISO('desde', body), fechaISO('hasta', body), body('precio_noche').isFloat({ min: 0 }),
+    body('min_noches').optional({ nullable: true, checkFalsy: true }).isInt({ min: 1 }),
+], VISTA_UNIDADES, exigirAccion('unidades_tarifas'), FX_ESTANCIAS, Estancias.temporadaCrear);
+router.put('/unidades/tipos/:id/temporadas/:idTarifa', [
+    idParam, param('idTarifa').isInt({ min: 1 }), idNeg('body'),
+    fechaISO('desde', body), fechaISO('hasta', body), body('precio_noche').isFloat({ min: 0 }),
+], VISTA_UNIDADES, exigirAccion('unidades_tarifas'), FX_ESTANCIAS, Estancias.temporadaActualizar);
+router.delete('/unidades/temporadas/:id', [idParam, idNeg()],
+    VISTA_UNIDADES, exigirAccion('unidades_tarifas'), FX_ESTANCIAS, Estancias.temporadaEliminar);
+router.post('/unidades/tipos/:id/unidades', [idParam, idNeg('body'), body('nombre').trim().notEmpty().isLength({ max: 60 })],
+    VISTA_UNIDADES, FX_ESTANCIAS, Estancias.unidadCrear);
+router.put('/unidades/:id', [idParam, idNeg('body')], VISTA_UNIDADES, FX_ESTANCIAS, Estancias.unidadActualizar);
+router.delete('/unidades/:id', [idParam, idNeg()], VISTA_UNIDADES, FX_ESTANCIAS, Estancias.unidadInactivar);
+router.post('/unidades/:id/ical-token', [idParam, idNeg('body')], VISTA_UNIDADES, FX_ESTANCIAS, Estancias.unidadToken);
+router.post('/unidades/:id/bloqueos', [
+    idParam, idNeg('body'), fechaISO('fecha_desde', body), fechaISO('fecha_hasta', body),
+    body('motivo').optional({ nullable: true }).isString().isLength({ max: 255 }),
+], exigirAccion('estancias_crear'), FX_ESTANCIAS, Estancias.bloqueoCrear);
+router.delete('/unidades/bloqueos/:id', [idParam, idNeg()], exigirAccion('estancias_crear'), FX_ESTANCIAS, Estancias.bloqueoEliminar);
+router.post('/unidades/:id/calendarios', [
+    idParam, idNeg('body'), body('nombre').trim().notEmpty().isLength({ max: 60 }), body('url_ical').isURL({ protocols: ['https'] }),
+], VISTA_UNIDADES, FX_ESTANCIAS, Estancias.calendarioCrear);
+router.delete('/unidades/calendarios/:id', [idParam, idNeg()], VISTA_UNIDADES, FX_ESTANCIAS, Estancias.calendarioEliminar);
+router.post('/unidades/sincronizar', [idNeg('body'), body('id_unidad').optional().isInt({ min: 1 })],
+    FX_ESTANCIAS, Estancias.sincronizar);
+
 // Configuración
 router.get('/config', [query('id_negocio').isInt({ min: 1 })], Config.get);
 router.put('/config', [
@@ -637,6 +922,14 @@ router.put('/config', [
     body('instrucciones_pago').optional({ nullable: true }).isString(),
     body('permite_cobro_profesional').optional().isBoolean(),
     body('permite_multipago').optional().isBoolean(),
+    // Perfiles de rubro. `funciones` es `{ clave: boolean }` y el servicio lo valida contra el
+    // perfil del negocio (una función de otro rubro se rechaza con 422).
+    body('funciones').optional().isObject(),
+    body('funciones.*').optional().isBoolean(),
+    body('deposito_pct').optional().isInt({ min: 0, max: 100 }),
+    body('deposito_reembolsable').optional().isBoolean(),
+    body('hora_checkin').optional().matches(/^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/),
+    body('hora_checkout').optional().matches(/^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/),
     // La lista sale del catálogo, no de una constante escrita aquí: ofrecer en la pantalla un
     // país que el normalizador de teléfonos no entiende es el fallo mudo que ya se pagó una vez.
     body('pais').optional({ nullable: true, checkFalsy: true })

@@ -10,6 +10,48 @@ const Reglas = require('./reglasAgenda');
 const EstadoCita = require('./estadoCita');
 const CodigoCita = require('./codigoCita');
 const Audit = require('../../app_core/helpers/auditHelper');
+const Composicion = require('./composicionCita');
+const MascotaService = require('./mascotaService');
+const { abonoExigible } = require('./abono');
+const Perfiles = require('../perfiles');
+
+function errorDominio(mensaje, code, statusCode = 400) {
+    const e = new Error(mensaje);
+    e.code = code;
+    e.statusCode = statusCode;
+    return e;
+}
+
+/**
+ * Compone la cita (duración, precio, tramos de espera, recurso) a partir de los servicios ya
+ * validados, **en el orden en que se pidieron**. Ver `composicionCita.js`.
+ */
+async function componerCita({ idNegocio, idServicios, servicios, variantes, ajustes, funciones }) {
+    const ordenados = idServicios.map((id) => servicios.find((s) => s.id_servicio === Number(id))).filter(Boolean);
+    return Composicion.componer(ordenados, {
+        funciones,
+        variantes: await Disponibilidad.variantesElegidas(idNegocio, Composicion.normalizarVariantes(variantes)),
+        ajustes: Composicion.normalizarAjustes(ajustes),
+    });
+}
+
+/**
+ * Aparta la cabina o equipo que necesita la cita, si alguno de sus servicios lo pide.
+ *
+ * Toma el bloqueo del **tipo** de recurso además del del profesional: dos terapeutas distintos
+ * no comparten bloqueo, pero sí cabina, y sin esto los dos podrían llevarse la misma a la vez.
+ */
+async function apartarRecurso({ idNegocio, comp, inicio, fin, bufferMin, preferido = null }, opciones) {
+    if (!comp.idTipoRecurso) return null;
+    await Models.sequelize.query('SELECT pg_advisory_xact_lock(:espacio, :tipo);', {
+        replacements: { espacio: Reglas.ESPACIO_BLOQUEO_RECURSO, tipo: comp.idTipoRecurso },
+        transaction: opciones.transaction,
+    });
+    return Reglas.asignarRecurso(
+        { idNegocio, idTipoRecurso: comp.idTipoRecurso, inicio, fin, bufferMin, preferido },
+        opciones,
+    );
+}
 
 /**
  * Un código corto que todavía no tiene ninguna cita. `generar()` es aleatorio (32^8
@@ -126,6 +168,8 @@ async function crearCita(params, { transaction: transaccionExterna = null } = {}
         idNegocio, idProfesional, idServicios = [],
         fechaHoraInicioISO, clienteNombre, clienteTelefono, clienteEmail, notas,
         comprobantePath, creadoPorIdUsuario, consumirHoldId = null,
+        // Perfiles de rubro. Todos opcionales: sin ellos la cita es la de siempre.
+        variantes = null, ajustes = null, idMascota = null, mascota = null,
     } = params;
 
     if (!idNegocio || !idProfesional || !idServicios.length || !fechaHoraInicioISO || !clienteNombre) {
@@ -133,14 +177,36 @@ async function crearCita(params, { transaction: transaccionExterna = null } = {}
     }
 
     const cfg = await Disponibilidad.getConfig(idNegocio);
+    const funciones = new Set((await Perfiles.perfilDeNegocio(idNegocio)).funciones);
+    const esPublico = creadoPorIdUsuario == null;
 
     const { profesional, servicios } = await validarProfesionalYServicios(
         { idNegocio, idProfesional, idServicios },
     );
 
-    // Calcular duración total y monto total
-    const duracionTotal = servicios.reduce((acc, s) => acc + s.duracion_min, 0);
-    const montoTotal = servicios.reduce((acc, s) => acc + Number(s.precio), 0);
+    // Un servicio «a cotizar» no tiene precio hasta que el artista lo fija: desde el portal se
+    // pide por WhatsApp y lo agenda el negocio, que es quien puede poner el precio acordado.
+    if (esPublico && funciones.has('a_cotizar') && servicios.some((s) => s.a_cotizar)) {
+        throw errorDominio(
+            'Ese servicio se cotiza antes de agendarlo. Escríbenos por WhatsApp y te damos precio y fecha.',
+            'SERVICIO_A_COTIZAR',
+        );
+    }
+
+    // Duración, monto, tramos de espera y recurso. Con las funciones apagadas —la barbería— es la
+    // suma de duraciones y precios de lista de siempre.
+    const comp = await componerCita({
+        idNegocio, idServicios, servicios, variantes,
+        // El precio acordado solo lo pone el negocio, nunca el formulario público.
+        ajustes: esPublico ? null : ajustes,
+        funciones,
+    });
+    const duracionTotal = comp.duracion;
+    const montoTotal = comp.monto;
+
+    if (funciones.has('mascotas') && !idMascota && !String(mascota?.nombre || '').trim()) {
+        throw errorDominio('Indica para qué mascota es la cita.', 'MASCOTA_REQUERIDA');
+    }
 
     const fechaInicio = parsearInicio(fechaHoraInicioISO);
     const fechaFin = new Date(fechaInicio.getTime() + duracionTotal * 60_000);
@@ -153,8 +219,11 @@ async function crearCita(params, { transaction: transaccionExterna = null } = {}
         e.statusCode = 400; e.code = 'ANTICIPACION_INSUFICIENTE'; throw e;
     }
 
-    // Validar pago adelantado
-    const requierePago = !!cfg.cobro_adelantado && creadoPorIdUsuario == null;
+    // Validar pago adelantado. Con abono (perfiles con depósito) se pide un porcentaje; sin él,
+    // el cobro adelantado de siempre, por el total. Un servicio gratis (la valoración) no pide
+    // comprobante aunque el negocio cobre abono: no hay nada que abonar.
+    const abono = esPublico ? abonoExigible({ cfg, funciones, monto: montoTotal }) : null;
+    const requierePago = esPublico && (abono != null ? abono > 0 : !!cfg.cobro_adelantado);
     if (requierePago && !comprobantePath) {
         const e = new Error('Debe adjuntar el comprobante de pago');
         e.statusCode = 400; e.code = 'COMPROBANTE_REQUERIDO'; throw e;
@@ -183,10 +252,23 @@ async function crearCita(params, { transaction: transaccionExterna = null } = {}
                 inicio: fechaInicio,
                 fin: fechaFin,
                 bufferMin: cfg.buffer_limpieza_min,
+                tramos: comp.tramos,
             },
             // Si esta cita viene de un hold, su propio hold no cuenta como conflicto: es
             // precisamente el hueco que estaba guardando.
             { transaction: t, excluirHold: consumirHoldId }
+        );
+
+        // La cabina, si hace falta. Si el hold ya apartó una, se prefiere esa.
+        const holdPrevio = consumirHoldId && comp.idTipoRecurso
+            ? await Models.ReservaHold.findByPk(consumirHoldId, { attributes: ['id_recurso'], transaction: t })
+            : null;
+        const idRecurso = await apartarRecurso(
+            {
+                idNegocio, comp, inicio: fechaInicio, fin: fechaFin,
+                bufferMin: cfg.buffer_limpieza_min, preferido: holdPrevio?.id_recurso ?? null,
+            },
+            { transaction: t, excluirHold: consumirHoldId },
         );
 
         // El cliente del negocio (platform.persona_negocio), resuelto por teléfono. Este es
@@ -197,12 +279,37 @@ async function crearCita(params, { transaction: transaccionExterna = null } = {}
         // con `id_persona_negocio = NULL`. Nadie se queda sin cita porque el módulo de
         // clientes tenga un problema — y devuelve null también, sin ser un error, cuando el
         // teléfono no es un móvil colombiano utilizable.
-        const idPersonaNegocio = clienteTelefono
+        let idPersonaNegocio = clienteTelefono
             ? await personaNegocioDao.resolverOCrearBestEffort(
                   { idNegocio, telefono: clienteTelefono, nombre: clienteNombre },
                   { transaction: t }
               )
             : null;
+
+        // La mascota (perfil MASCOTAS). El negocio la elige de la lista del cliente; el portal
+        // la describe y se reconoce por nombre si el dueño ya la había traído. Si el teléfono no
+        // identifica a nadie no hay a quién colgarla: la cita se agenda igual con el nombre en
+        // las notas, que es mejor que dejar al cliente sin cita (misma regla que ADR-006).
+        let idMascotaFinal = null;
+        let notasFinales = notas || null;
+        if (funciones.has('mascotas')) {
+            if (idMascota) {
+                const m = await MascotaService.obtener(idNegocio, idMascota, { transaction: t });
+                if (idPersonaNegocio && m.id_persona_negocio !== idPersonaNegocio) {
+                    throw errorDominio('Esa mascota es de otro cliente.', 'MASCOTA_DE_OTRO_CLIENTE');
+                }
+                idPersonaNegocio = idPersonaNegocio || m.id_persona_negocio;
+                idMascotaFinal = m.id_mascota;
+            } else if (idPersonaNegocio) {
+                idMascotaFinal = (await MascotaService.resolverOCrear(
+                    idNegocio, idPersonaNegocio, mascota, { transaction: t },
+                )).id_mascota;
+            } else {
+                const m = mascota || {};
+                const detalle = [m.nombre, m.raza, m.tamano].filter(Boolean).join(' · ');
+                notasFinales = [`Mascota: ${detalle}`, notasFinales].filter(Boolean).join('\n');
+            }
+        }
 
         const codigoPublico = await generarCodigoLibre({ transaction: t });
 
@@ -217,21 +324,21 @@ async function crearCita(params, { transaction: transaccionExterna = null } = {}
             cliente_nombre: clienteNombre,
             cliente_telefono: clienteTelefono || null,
             cliente_email: clienteEmail || null,
-            notas: notas || null,
+            notas: notasFinales,
             creado_por_id_usuario: creadoPorIdUsuario || null,
             requiere_pago: requierePago,
             monto_total: montoTotal,
             comprobante_pago_url: comprobantePath || null,
             pago_estado: requierePago ? 'pendiente_validacion' : 'no_aplica',
+            proceso_tramos: comp.tramos,
+            monto_abono: requierePago && abono != null ? abono : null,
+            id_mascota: idMascotaFinal,
+            id_recurso: idRecurso,
         }, { transaction: t });
 
-        // Detalle de servicios con snapshot
-        const detalles = servicios.map(s => ({
-            id_cita: cita.id_cita,
-            id_servicio: s.id_servicio,
-            precio_snapshot: Number(s.precio),
-            duracion_snapshot_min: s.duracion_min,
-        }));
+        // Detalle de servicios con snapshot: precio, duración y variante del momento, para que
+        // cambiar la tarifa mañana no reescriba lo que ya se prometió.
+        const detalles = comp.lineas.map(l => ({ id_cita: cita.id_cita, ...l }));
         await Models.ReservaCitaServicio.bulkCreate(detalles, { transaction: t });
 
         // El primer evento de dominio que emite una vertical (ADR-013). Va DENTRO de la
@@ -290,9 +397,45 @@ async function getCitaConDetalle(idCita, { transaction = null } = {}) {
               attributes: ['id_profesional', 'nombre', 'foto_url', 'color_hex', 'especialidad'] },
             { model: Models.ReservaCitaServicio, as: 'servicios',
               include: [{ model: Models.ReservaServicio, as: 'servicio',
-                          attributes: ['id_servicio', 'nombre'] }] },
+                          attributes: ['id_servicio', 'nombre', 'requiere_consentimiento', 'a_cotizar'] }] },
+            { model: Models.ReservaMascota, as: 'mascota', required: false,
+              attributes: ['id_mascota', 'nombre', 'especie', 'raza', 'tamano', 'comportamiento'] },
+            { model: Models.ReservaRecurso, as: 'recurso', required: false,
+              attributes: ['id_recurso', 'nombre'] },
         ],
     });
+}
+
+/**
+ * Recompone una cita ya existente a partir de sus líneas: mismos servicios, mismas variantes y,
+ * en los servicios «a cotizar», la duración y el precio que se acordaron. Lo usa reagendar, que
+ * mueve la cita sin cambiar lo que se va a prestar.
+ */
+async function recomponerDesdeLineas(idNegocio, idCita, funciones, transaction) {
+    const lineas = await Models.ReservaCitaServicio.findAll({
+        where: { id_cita: idCita },
+        attributes: ['id_servicio', 'id_variante', 'precio_snapshot', 'duracion_snapshot_min'],
+        transaction,
+    });
+    const idServicios = lineas.map((l) => l.id_servicio);
+    const servicios = await Models.ReservaServicio.findAll({
+        where: { id_servicio: idServicios, id_negocio: idNegocio },
+        transaction,
+    });
+    const variantes = Object.fromEntries(
+        lineas.filter((l) => l.id_variante).map((l) => [l.id_servicio, l.id_variante]),
+    );
+    // Solo con la función encendida: si el dueño la apagó, esos servicios vuelven a su precio y
+    // duración de lista, igual que al crear.
+    const ajustes = lineas
+        .filter((l) => funciones.has('a_cotizar')
+            && servicios.find((s) => s.id_servicio === l.id_servicio)?.a_cotizar)
+        .map((l) => ({
+            id_servicio: l.id_servicio,
+            precio: Number(l.precio_snapshot),
+            duracion_min: l.duracion_snapshot_min,
+        }));
+    return componerCita({ idNegocio, idServicios, servicios, variantes, ajustes, funciones });
 }
 
 async function getCitaPorCodigo(codigoPublico) {
@@ -413,17 +556,11 @@ async function reagendarCita(
             e.statusCode = 409; e.code = 'TRANSICION_INVALIDA'; throw e;
         }
 
-        const lineas = await Models.ReservaCitaServicio.findAll({
-            where: { id_cita: idCita },
-            attributes: ['id_servicio'],
-            transaction: t,
-        });
-        const servicios = await Models.ReservaServicio.findAll({
-            where: { id_servicio: lineas.map(l => l.id_servicio), id_negocio: idNegocio },
-            attributes: ['duracion_min'],
-            transaction: t,
-        });
-        const duracionTotal = servicios.reduce((acc, s) => acc + s.duracion_min, 0);
+        // La duración sale de las líneas de la cita: con variantes o precio acordado no es la del
+        // catálogo. Sin ellas (la barbería) es exactamente la suma de duraciones de lista de antes.
+        const funciones = new Set((await Perfiles.perfilDeNegocio(idNegocio, { transaction: t })).funciones);
+        const comp = await recomponerDesdeLineas(idNegocio, idCita, funciones, t);
+        const duracionTotal = comp.duracion;
 
         const inicio = parsearInicio(nuevaFechaHoraInicioISO);
         const fin = new Date(inicio.getTime() + duracionTotal * 60_000);
@@ -435,10 +572,21 @@ async function reagendarCita(
         });
 
         await Reglas.verificarReservable(
-            { idNegocio, idProfesional: profesionalDestino, inicio, fin, bufferMin: cfg.buffer_limpieza_min },
+            {
+                idNegocio, idProfesional: profesionalDestino, inicio, fin,
+                bufferMin: cfg.buffer_limpieza_min, tramos: comp.tramos,
+            },
             // La propia cita no cuenta como conflicto consigo misma: mover una cita 15
             // minutos dentro de su propio buffer es legítimo y si no se excluyera fallaría.
             { transaction: t, excluirCita: idCita, excluirHold: consumirHoldId }
+        );
+
+        const idRecurso = await apartarRecurso(
+            {
+                idNegocio, comp, inicio, fin, bufferMin: cfg.buffer_limpieza_min,
+                preferido: cita.id_recurso,
+            },
+            { transaction: t, excluirCita: idCita, excluirHold: consumirHoldId },
         );
 
         await cita.update(
@@ -446,6 +594,8 @@ async function reagendarCita(
                 id_profesional: profesionalDestino,
                 fecha_hora_inicio: inicio,
                 fecha_hora_fin: fin,
+                proceso_tramos: comp.tramos,
+                id_recurso: idRecurso,
                 fecha_actualizacion: new Date(),
             },
             { transaction: t }
@@ -503,7 +653,10 @@ async function reagendarCita(
  * @param {number=}  params.idUsuario            Quién edita, para el evento de auditoría.
  */
 async function actualizarCita(
-    { idCita, idNegocio, idServicios = [], idProfesional = null, fechaHoraInicioISO = null, idUsuario = null },
+    {
+        idCita, idNegocio, idServicios = [], idProfesional = null, fechaHoraInicioISO = null, idUsuario = null,
+        variantes = null, ajustes = null, idMascota,
+    },
     { transaction: transaccionExterna = null } = {},
 ) {
     if (!idCita || !idNegocio || !idServicios.length) {
@@ -535,8 +688,24 @@ async function actualizarCita(
             { transaction: t },
         );
 
-        const duracionTotal = servicios.reduce((acc, s) => acc + s.duracion_min, 0);
-        const montoTotal = servicios.reduce((acc, s) => acc + Number(s.precio), 0);
+        const funciones = new Set((await Perfiles.perfilDeNegocio(idNegocio, { transaction: t })).funciones);
+        const comp = await componerCita({ idNegocio, idServicios, servicios, variantes, ajustes, funciones });
+        const duracionTotal = comp.duracion;
+        const montoTotal = comp.monto;
+
+        // Cambiar la mascota (o quitarla) solo si viene en la petición: `undefined` la conserva.
+        let idMascotaFinal = cita.id_mascota;
+        if (idMascota !== undefined && funciones.has('mascotas')) {
+            if (idMascota) {
+                const m = await MascotaService.obtener(idNegocio, idMascota, { transaction: t });
+                if (cita.id_persona_negocio && m.id_persona_negocio !== cita.id_persona_negocio) {
+                    throw errorDominio('Esa mascota es de otro cliente.', 'MASCOTA_DE_OTRO_CLIENTE');
+                }
+                idMascotaFinal = m.id_mascota;
+            } else {
+                throw errorDominio('Indica para qué mascota es la cita.', 'MASCOTA_REQUERIDA');
+            }
+        }
 
         const inicio = fechaHoraInicioISO
             ? parsearInicio(fechaHoraInicioISO)
@@ -550,7 +719,15 @@ async function actualizarCita(
         });
 
         await Reglas.verificarReservable(
-            { idNegocio, idProfesional: profesionalDestino, inicio, fin, bufferMin: cfg.buffer_limpieza_min },
+            {
+                idNegocio, idProfesional: profesionalDestino, inicio, fin,
+                bufferMin: cfg.buffer_limpieza_min, tramos: comp.tramos,
+            },
+            { transaction: t, excluirCita: idCita },
+        );
+
+        const idRecurso = await apartarRecurso(
+            { idNegocio, comp, inicio, fin, bufferMin: cfg.buffer_limpieza_min, preferido: cita.id_recurso },
             { transaction: t, excluirCita: idCita },
         );
 
@@ -572,12 +749,7 @@ async function actualizarCita(
         // realmente se va a prestar.
         await Models.ReservaCitaServicio.destroy({ where: { id_cita: idCita }, transaction: t });
         await Models.ReservaCitaServicio.bulkCreate(
-            servicios.map(s => ({
-                id_cita: idCita,
-                id_servicio: s.id_servicio,
-                precio_snapshot: Number(s.precio),
-                duracion_snapshot_min: s.duracion_min,
-            })),
+            comp.lineas.map(l => ({ id_cita: idCita, ...l })),
             { transaction: t },
         );
 
@@ -587,6 +759,9 @@ async function actualizarCita(
                 fecha_hora_inicio: inicio,
                 fecha_hora_fin: fin,
                 monto_total: montoTotal,
+                proceso_tramos: comp.tramos,
+                id_recurso: idRecurso,
+                id_mascota: idMascotaFinal,
                 fecha_actualizacion: new Date(),
             },
             { transaction: t },
@@ -605,7 +780,7 @@ async function actualizarCita(
                     fecha_hora_inicio: inicio,
                     fecha_hora_fin: fin,
                     monto_total: montoTotal,
-                    servicios: servicios.map(s => s.id_servicio),
+                    servicios: comp.lineas.map(l => l.id_servicio),
                 },
             },
             transaction: t,
@@ -626,26 +801,127 @@ async function actualizarCita(
     }
 }
 
-async function aprobarPago(idCita, idNegocio, idUsuario) {
-    const cita = await Models.ReservaCita.findOne({ where: { id_cita: idCita, id_negocio: idNegocio } });
-    if (!cita) { const e = new Error('Cita no encontrada'); e.statusCode = 404; throw e; }
-    if (cita.pago_estado !== 'pendiente_validacion') {
-        const e = new Error('La cita no está pendiente de validación de pago'); e.statusCode = 409; throw e;
-    }
-    EstadoCita.exigirTransicion(cita.estado, EstadoCita.ESTADO.CONFIRMADA);
-    // En transacción: el actor de auditoría solo se fija dentro de una (ALS del request).
-    await Models.sequelize.transaction((t) => cita.update({
-        pago_estado: 'aprobado',
-        estado: 'confirmada',
-        pago_validado_por_id_usuario: idUsuario,
-        pago_validado_en: new Date(),
-        fecha_actualizacion: new Date(),
-    }, { transaction: t }));
+/**
+ * Aprueba el comprobante del cliente.
+ *
+ * Con **abono** (perfiles con depósito) la aprobación también dice por dónde llegó el dinero
+ * (`idMetodoPago`) y, si hay un turno de caja abierto, lo asienta en él en ese momento: es
+ * dinero que ya está en la cuenta del negocio. Si la caja está cerrada se aprueba igual y el
+ * abono queda por asentar; `completarYCobrar` lo mete en el turno en que se cobre el saldo. Así
+ * el abono entra en una caja exactamente una vez.
+ *
+ * Sin abono (el cobro adelantado de siempre, por el total) no toca la caja, como antes.
+ */
+async function aprobarPago(idCita, idNegocio, idUsuario, { idMetodoPago = null } = {}) {
+    const cita = await Models.sequelize.transaction(async (t) => {
+        const c = await Models.ReservaCita.findOne({
+            where: { id_cita: idCita, id_negocio: idNegocio }, transaction: t, lock: t.LOCK.UPDATE,
+        });
+        if (!c) { const e = new Error('Cita no encontrada'); e.statusCode = 404; throw e; }
+        if (c.pago_estado !== 'pendiente_validacion') {
+            const e = new Error('La cita no está pendiente de validación de pago'); e.statusCode = 409; throw e;
+        }
+        EstadoCita.exigirTransicion(c.estado, EstadoCita.ESTADO.CONFIRMADA);
+
+        const cambios = {
+            pago_estado: 'aprobado',
+            estado: 'confirmada',
+            pago_validado_por_id_usuario: idUsuario,
+            pago_validado_en: new Date(),
+            fecha_actualizacion: new Date(),
+        };
+
+        if (c.monto_abono != null && Number(c.monto_abono) > 0) {
+            if (idMetodoPago) {
+                await require('./metodoPagoService').validarDelNegocio(idNegocio, [Number(idMetodoPago)], { transaction: t });
+                cambios.id_metodo_pago_abono = Number(idMetodoPago);
+            }
+            const CajaService = require('./cajaService');
+            const caja = await CajaService.getCajaAbiertaRaw(idNegocio, { transaction: t });
+            if (caja) {
+                await CajaService.registrarMovimiento({
+                    idCaja: caja.id_caja,
+                    tipo: 'INGRESO',
+                    monto: Number(c.monto_abono),
+                    concepto: `Abono cita #${c.id_cita} · ${c.cliente_nombre}`,
+                    idUsuario,
+                    idCita: c.id_cita,
+                    idProfesional: c.id_profesional,
+                    idMetodoPago: cambios.id_metodo_pago_abono ?? c.id_metodo_pago_abono ?? null,
+                    transaction: t,
+                });
+                cambios.id_caja_abono = caja.id_caja;
+            }
+        }
+
+        return c.update(cambios, { transaction: t });
+    });
 
     Notificacion.enviar('pago_aprobado', { cita: cita.toJSON() })
         .catch(err => console.error('[Reserva] notif error:', err.message));
 
     return cita;
+}
+
+/**
+ * Asienta en la caja abierta un abono aprobado que aún no entró en ningún turno: el de una cita
+ * cancelada o sin asistencia cuyo abono **no se devuelve** (el tatuador que pierde seis horas
+ * se queda la seña), o el de una aprobada con la caja cerrada que no se va a completar.
+ */
+async function asentarAbono(idCita, idNegocio, idUsuario, { idMetodoPago = null } = {}) {
+    return Models.sequelize.transaction(async (t) => {
+        const c = await Models.ReservaCita.findOne({
+            where: { id_cita: idCita, id_negocio: idNegocio }, transaction: t, lock: t.LOCK.UPDATE,
+        });
+        if (!c) throw errorDominio('Cita no encontrada', 'CITA_NO_ENCONTRADA', 404);
+        if (c.monto_abono == null || c.pago_estado !== 'aprobado') {
+            throw errorDominio('Esta cita no tiene un abono aprobado.', 'SIN_ABONO', 409);
+        }
+        if (c.id_caja_abono) throw errorDominio('El abono ya está en la caja.', 'ABONO_YA_ASENTADO', 409);
+
+        const CajaService = require('./cajaService');
+        const caja = await CajaService.requireCajaAbierta(idNegocio, { transaction: t });
+        const metodo = idMetodoPago ?? c.id_metodo_pago_abono ?? null;
+        if (metodo) await require('./metodoPagoService').validarDelNegocio(idNegocio, [Number(metodo)], { transaction: t });
+        await CajaService.registrarMovimiento({
+            idCaja: caja.id_caja, tipo: 'INGRESO', monto: Number(c.monto_abono),
+            concepto: `Abono retenido cita #${c.id_cita} · ${c.cliente_nombre}`,
+            idUsuario, idCita: c.id_cita, idProfesional: c.id_profesional,
+            idMetodoPago: metodo, transaction: t,
+        });
+        return c.update({ id_caja_abono: caja.id_caja, id_metodo_pago_abono: metodo }, { transaction: t });
+    });
+}
+
+/**
+ * Devuelve un abono ya asentado de una cita cancelada: un egreso en la caja abierta. Solo una
+ * vez por cita —se reconoce por el egreso ya registrado— porque devolver dos veces es regalar.
+ */
+async function devolverAbono(idCita, idNegocio, idUsuario, { idMetodoPago = null } = {}) {
+    return Models.sequelize.transaction(async (t) => {
+        const c = await Models.ReservaCita.findOne({
+            where: { id_cita: idCita, id_negocio: idNegocio }, transaction: t, lock: t.LOCK.UPDATE,
+        });
+        if (!c) throw errorDominio('Cita no encontrada', 'CITA_NO_ENCONTRADA', 404);
+        if (!['cancelada', 'no_show'].includes(c.estado)) {
+            throw errorDominio('Solo se devuelve el abono de una cita cancelada o sin asistencia.', 'TRANSICION_INVALIDA', 409);
+        }
+        if (!c.id_caja_abono) throw errorDominio('El abono no está en ninguna caja: no hay nada que devolver.', 'ABONO_NO_ASENTADO', 409);
+        const yaDevuelto = await Models.ReservaMovimientoCaja.count({
+            where: { id_cita: c.id_cita, tipo: 'EGRESO' }, transaction: t,
+        });
+        if (yaDevuelto > 0) throw errorDominio('Ese abono ya se devolvió.', 'ABONO_YA_DEVUELTO', 409);
+
+        const CajaService = require('./cajaService');
+        const caja = await CajaService.requireCajaAbierta(idNegocio, { transaction: t });
+        await CajaService.registrarMovimiento({
+            idCaja: caja.id_caja, tipo: 'EGRESO', monto: Number(c.monto_abono),
+            concepto: `Devolución abono cita #${c.id_cita} · ${c.cliente_nombre}`,
+            idUsuario, idCita: c.id_cita, idProfesional: c.id_profesional,
+            idMetodoPago: idMetodoPago ?? c.id_metodo_pago_abono ?? null, transaction: t,
+        });
+        return c;
+    });
 }
 
 async function rechazarPago(idCita, idNegocio, idUsuario, motivo) {
@@ -730,4 +1006,5 @@ async function eliminarCita(idCita, idNegocio, { idUsuario = null } = {}) {
 module.exports = {
     crearCita, actualizarCita, reagendarCita, getCitaConDetalle, getCitaPorCodigo,
     cancelarPorCliente, aprobarPago, rechazarPago, eliminarCita,
+    asentarAbono, devolverAbono, componerCita,
 };

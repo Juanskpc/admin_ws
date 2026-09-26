@@ -35,6 +35,22 @@ module.exports = (sequelize, DataTypes) => {
     // dependería de las fechas de la cita, que se mueven al reagendar.
     id_metodo_pago:                DataTypes.INTEGER,
     id_caja:                       DataTypes.INTEGER,
+    /**
+     * Tramos `[[desde_min, hasta_min], …]`, relativos al inicio, en los que el profesional
+     * queda libre (tiempo de proceso). NULL = ocupa la cita entera, lo de siempre.
+     */
+    proceso_tramos:                { type: DataTypes.JSONB, allowNull: true },
+    /**
+     * Abono exigido para reservar (perfiles con depósito). NULL = sin abono: si hay cobro
+     * adelantado es el de siempre, por el total.
+     */
+    monto_abono:                   { type: DataTypes.DECIMAL(14, 2), allowNull: true },
+    id_metodo_pago_abono:          { type: DataTypes.INTEGER, allowNull: true },
+    /** Turno en que entró el abono a la caja. NULL con abono aprobado = aún por asentar. */
+    id_caja_abono:                 { type: DataTypes.INTEGER, allowNull: true },
+    id_mascota:                    { type: DataTypes.UUID, allowNull: true },
+    /** Cabina o sala asignada, si alguno de sus servicios la necesita. */
+    id_recurso:                    { type: DataTypes.INTEGER, allowNull: true },
     fecha_creacion:                { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
     fecha_actualizacion:           { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
   }, {
@@ -49,6 +65,9 @@ module.exports = (sequelize, DataTypes) => {
     ReservaCita.hasMany(models.ReservaCitaServicio,  { foreignKey: 'id_cita', as: 'servicios' });
     ReservaCita.belongsTo(models.ReservaMetodoPago,  { foreignKey: 'id_metodo_pago', as: 'metodoPago' });
     ReservaCita.belongsTo(models.ReservaCaja,        { foreignKey: 'id_caja', as: 'caja' });
+    ReservaCita.belongsTo(models.ReservaMascota,     { foreignKey: 'id_mascota', as: 'mascota' });
+    ReservaCita.belongsTo(models.ReservaRecurso,     { foreignKey: 'id_recurso', as: 'recurso' });
+    ReservaCita.belongsTo(models.ReservaMetodoPago,  { foreignKey: 'id_metodo_pago_abono', as: 'metodoPagoAbono' });
     ReservaCita.belongsToMany(models.ReservaServicio, {
       through: models.ReservaCitaServicio,
       foreignKey: 'id_cita',

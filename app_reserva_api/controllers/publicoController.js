@@ -6,6 +6,17 @@ const CitaService = require('../services/citaService');
 const VitrinaService = require('../services/vitrinaService');
 const AgendaServicio = require('../services/agendaServicioService');
 const Respuesta = require('../../app_core/helpers/respuesta');
+const Perfiles = require('../perfiles');
+const EstanciaService = require('../services/estancia/estanciaService');
+const EstanciaCtrl = require('./estanciaController');
+const { politicaDePago } = require('../services/abono');
+
+/** Un campo que en multipart llega como texto JSON y en JSON como objeto. */
+function objetoDe(valor) {
+    if (valor == null || valor === '') return null;
+    if (typeof valor === 'object') return valor;
+    try { return JSON.parse(String(valor)); } catch { return null; }
+}
 
 function check(req, res) {
     const e = validationResult(req);
@@ -21,15 +32,22 @@ async function getInfoNegocio(req, res) {
             where: { id_negocio: idNegocio, estado: 'A' },
             attributes: ['id_negocio', 'nombre', 'email_contacto', 'id_paleta', 'logo_url', 'colores'],
             include: [
-                { model: Models.GenerTipoNegocio, as: 'tipoNegocio',
-                  attributes: ['nombre'], where: { nombre: 'RESERVA' }, required: true },
+                // El módulo, no el nombre: un negocio anterior a los rubros guarda aquí su
+                // oficio (BARBERIA) y con el filtro por nombre su página salía «no disponible».
+                { model: Models.GenerTipoNegocio, as: 'tipoNegocio', attributes: ['nombre'], required: true,
+                  include: [{ model: Models.GenerTipoNegocio, as: 'modulo', attributes: ['nombre'], required: false }] },
                 { model: Models.GenerPaletaColor, as: 'paletaColor',
                   attributes: ['id_paleta', 'nombre', 'colores'] },
             ],
         });
-        if (!negocio) return Respuesta.error(res, 'Negocio no disponible', 404);
+        const tipo = negocio?.tipoNegocio;
+        if (!negocio || !(tipo?.nombre === 'RESERVA' || tipo?.modulo?.nombre === 'RESERVA')) {
+            return Respuesta.error(res, 'Negocio no disponible', 404);
+        }
 
         const cfg = await DisponibilidadService.getConfig(idNegocio);
+        const perfil = await Perfiles.perfilDeNegocio(idNegocio, { funciones: cfg.funciones || {} });
+        const pago = politicaDePago({ cfg, funciones: perfil.funciones });
         return Respuesta.success(res, 'Info del negocio', {
             id_negocio: negocio.id_negocio,
             nombre: negocio.nombre,
@@ -40,9 +58,11 @@ async function getInfoNegocio(req, res) {
             colores: negocio.colores ?? null,
             paleta: negocio.paletaColor || null,
             cobro_adelantado: cfg.cobro_adelantado,
-            instrucciones_pago: cfg.cobro_adelantado ? cfg.instrucciones_pago : null,
+            instrucciones_pago: pago.modo !== 'ninguno' ? cfg.instrucciones_pago : null,
+            pago,
             anticipacion_min_horas: cfg.anticipacion_min_horas,
             ventana_cancelacion_horas: cfg.ventana_cancelacion_horas,
+            perfil: { clave: perfil.clave, modos: perfil.modos, terminos: perfil.terminos, portal: perfil.portal },
         });
     } catch (err) {
         console.error('[Reserva/Publico] info:', err.message);
@@ -175,6 +195,7 @@ async function getDiasDeServicio(req, res) {
             idServicio: Number(req.params.id_servicio),
             desde: String(req.query.desde),
             hasta: String(req.query.hasta),
+            idVariante: req.query.id_variante ? Number(req.query.id_variante) : null,
         });
         return Respuesta.success(res, 'Días del servicio', data);
     } catch (err) {
@@ -192,6 +213,7 @@ async function getSlotsDeServicio(req, res) {
             idNegocio: Number(req.params.id_negocio),
             idServicio: Number(req.params.id_servicio),
             fechaISO: String(req.query.fecha),
+            idVariante: req.query.id_variante ? Number(req.query.id_variante) : null,
         });
         return Respuesta.success(res, 'Horas disponibles', data);
     } catch (err) {
@@ -229,6 +251,10 @@ async function crearCitaPublica(req, res) {
             notas:              req.body.notas ? String(req.body.notas) : null,
             comprobantePath,
             creadoPorIdUsuario: null,    // flujo público
+            // Perfiles de rubro: la variante elegida (largo, tamaño) y la mascota descrita por
+            // el dueño. En multipart llegan como texto JSON.
+            variantes:          objetoDe(req.body.variantes),
+            mascota:            objetoDe(req.body.mascota),
         });
 
         return Respuesta.success(res, 'Cita creada', formatearCitaPublica(cita), 201);
@@ -246,8 +272,12 @@ async function crearCitaPublica(req, res) {
 async function consultarCita(req, res) {
     try {
         const cita = await CitaService.getCitaPorCodigo(String(req.params.codigo_publico));
-        if (!cita) return Respuesta.error(res, 'Cita no encontrada', 404);
-        return Respuesta.success(res, 'Cita encontrada', formatearCitaPublica(cita));
+        if (cita) return Respuesta.success(res, 'Cita encontrada', formatearCitaPublica(cita));
+        // El mismo código sirve para una estancia (alojamiento): «Mi reserva» no tiene por qué
+        // saber de antemano cuál de las dos es. Los códigos son únicos entre ambas tablas.
+        const estancia = await EstanciaService.porCodigo(String(req.params.codigo_publico));
+        if (estancia) return Respuesta.success(res, 'Reserva encontrada', EstanciaCtrl.formatearPublica(estancia));
+        return Respuesta.error(res, 'Cita no encontrada', 404);
     } catch (err) {
         console.error('[Reserva/Publico] consultar:', err.message);
         return Respuesta.error(res, 'Error al consultar la cita.');
@@ -258,7 +288,12 @@ async function consultarCita(req, res) {
 async function cancelarCitaPublica(req, res) {
     try {
         const motivo = req.body?.motivo ? String(req.body.motivo) : null;
-        const cita = await CitaService.cancelarPorCliente(String(req.params.codigo_publico), motivo);
+        const codigo = String(req.params.codigo_publico);
+        if (!(await CitaService.getCitaPorCodigo(codigo)) && (await EstanciaService.porCodigo(codigo))) {
+            const e = await EstanciaService.cancelarPorCliente(codigo, motivo);
+            return Respuesta.success(res, 'Reserva cancelada', { id_estancia: e.id_estancia, estado: e.estado });
+        }
+        const cita = await CitaService.cancelarPorCliente(codigo, motivo);
         return Respuesta.success(res, 'Cita cancelada', { id_cita: cita.id_cita, estado: cita.estado });
     } catch (err) {
         if (err.statusCode) return Respuesta.error(res, err.message, err.statusCode,
@@ -283,10 +318,13 @@ function formatearCitaPublica(cita) {
         cliente_email: j.cliente_email,
         notas: j.notas,
         monto_total: Number(j.monto_total || 0),
+        monto_abono: j.monto_abono == null ? null : Number(j.monto_abono),
         profesional: j.profesional,
+        mascota: j.mascota ? { nombre: j.mascota.nombre, especie: j.mascota.especie } : null,
         servicios: (j.servicios || []).map(cs => ({
             id_servicio: cs.id_servicio,
             nombre: cs.servicio?.nombre,
+            variante: cs.variante_snapshot || null,
             precio: Number(cs.precio_snapshot),
             duracion_min: cs.duracion_snapshot_min,
         })),

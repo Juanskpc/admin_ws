@@ -3,6 +3,7 @@ const Models = require('../../app_core/models/conection');
 const EstadoCita = require('./estadoCita');
 const CajaService = require('./cajaService');
 const MetodoPagoService = require('./metodoPagoService');
+const Perfiles = require('../perfiles');
 
 /**
  * Completar una cita **es** cobrarla.
@@ -119,8 +120,20 @@ async function completarYCobrar({ idCita, idNegocio, idUsuario, idMetodoPago, pa
 
         EstadoCita.exigirTransicion(cita.estado, 'completada');
 
+        // Consentimiento informado: un servicio que lo exige no se completa sin él registrado en
+        // la ficha de esta cita. Solo con la función encendida; la barbería no la tiene.
+        const funciones = new Set((await Perfiles.perfilDeNegocio(idNegocio, { transaction: t })).funciones);
+        if (funciones.has('consentimiento')) await exigirConsentimiento(cita, t);
+
+        // Con abono aprobado se cobra el SALDO: el abono ya se pagó. Sin abono (`monto_abono`
+        // nulo, el caso de siempre) el saldo es el total y todo lo de abajo es lo de antes.
         const total = Number(cita.monto_total ?? 0);
-        const { modo, lista } = normalizarPagos({ idMetodoPago, pagos, total });
+        const abono = cita.monto_abono != null && cita.pago_estado === 'aprobado'
+            ? Math.min(Number(cita.monto_abono), total)
+            : 0;
+        const abonoPorAsentar = abono > 0 && !cita.id_caja_abono;
+        const saldo = Math.max(0, total - abono);
+        const { modo, lista } = normalizarPagos({ idMetodoPago, pagos, total: saldo });
 
         if (modo === 'multi' && !permiteMultipago) {
             throw errorValidacion('Este negocio no tiene habilitado el pago con varias formas.');
@@ -133,17 +146,36 @@ async function completarYCobrar({ idCita, idNegocio, idUsuario, idMetodoPago, pa
 
         // Una cita con importe se cobra: exigir la forma de pago es lo que hace que la caja
         // cuadre. Sin importe, no hay nada que preguntar.
-        if (total > 0 && lista.length === 0) {
+        if (saldo > 0 && lista.length === 0) {
             throw errorValidacion('Indica con qué forma de pago se cobró la cita.', 'PAGO_REQUERIDO');
         }
 
         let idCaja = null;
-        if (total > 0 && lista.length > 0) {
+        if (saldo > 0 && lista.length > 0) {
             const caja = await CajaService.requireCajaAbierta(idNegocio, { transaction: t });
             await CajaService.registrarCobroCita({
                 idNegocio, cita, pagos: lista, idUsuario, transaction: t,
             });
             idCaja = caja.id_caja;
+        }
+
+        // El abono que se aprobó con la caja cerrada entra ahora, en el mismo turno que el saldo.
+        let idCajaAbono = cita.id_caja_abono;
+        if (abonoPorAsentar) {
+            const caja = await CajaService.requireCajaAbierta(idNegocio, { transaction: t });
+            await CajaService.registrarMovimiento({
+                idCaja: caja.id_caja,
+                tipo: 'INGRESO',
+                monto: abono,
+                concepto: `Abono cita #${cita.id_cita} · ${cita.cliente_nombre}`,
+                idUsuario,
+                idCita: cita.id_cita,
+                idProfesional: cita.id_profesional,
+                idMetodoPago: cita.id_metodo_pago_abono ?? null,
+                transaction: t,
+            });
+            idCajaAbono = caja.id_caja;
+            idCaja = idCaja ?? caja.id_caja;
         }
 
         // El desglose solo se guarda en multipago; en pago simple `id_metodo_pago` ya lo dice
@@ -160,9 +192,37 @@ async function completarYCobrar({ idCita, idNegocio, idUsuario, idMetodoPago, pa
             estado: 'completada',
             id_metodo_pago: modo === 'simple' ? lista[0].id_metodo_pago : null,
             id_caja: idCaja,
+            ...(abonoPorAsentar ? { id_caja_abono: idCajaAbono } : {}),
             fecha_actualizacion: new Date(),
         }, { transaction: t });
     });
+}
+
+/**
+ * Falla si la cita tiene un servicio que exige consentimiento y no hay uno registrado para ella
+ * en la ficha. Se registra desde el detalle de la cita (foto del documento firmado o constancia
+ * de que se firmó en papel).
+ */
+async function exigirConsentimiento(cita, transaction) {
+    const lineas = await Models.ReservaCitaServicio.findAll({
+        where: { id_cita: cita.id_cita },
+        include: [{ model: Models.ReservaServicio, as: 'servicio', attributes: ['requiere_consentimiento', 'nombre'] }],
+        transaction,
+    });
+    const exigen = lineas.filter((l) => l.servicio?.requiere_consentimiento);
+    if (exigen.length === 0) return;
+    const registrado = await Models.ReservaFicha.count({
+        where: { id_cita: cita.id_cita, tipo: 'CONSENTIMIENTO', estado: 'A' },
+        transaction,
+    });
+    if (registrado > 0) return;
+    const e = new Error(
+        `Falta el consentimiento informado de «${exigen[0].servicio.nombre}». `
+        + 'Regístralo en el detalle de la cita antes de completarla.',
+    );
+    e.statusCode = 409;
+    e.code = 'CONSENTIMIENTO_PENDIENTE';
+    throw e;
 }
 
 module.exports = { completarYCobrar, normalizarPagos };

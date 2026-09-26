@@ -587,14 +587,21 @@ function formatearWallTime(fecha) {
  * que había— y no se mueve hoy para no tocar un flujo que funciona. Lo que sí se declara aquí
  * es a QUIÉN atiende, que es lo que el motor necesita preguntar.
  *
- * `BARBERIA` y `SALON DE BELLEZA` van con `RESERVA`: son negocios de cita previa y el catálogo
- * los tiene como tipos aparte por razones de producto, no de dominio.
+ * Basta con `RESERVA`: `contextoNegocio` ya traduce el tipo guardado en el negocio a su módulo,
+ * así que un rubro nuevo (spa, tatuajes, peluquería canina…) llega aquí como `RESERVA` sin que
+ * nadie tenga que acordarse de listarlo. `BARBERIA` y `SALON DE BELLEZA` se quedan solo como
+ * red de seguridad para una base a la que todavía no se le haya corrido `migrate:rubros-negocio`.
+ *
+ * Los alojamientos NO entran: usan el módulo de reserva pero reservan noches, y los atiende su
+ * propio flujo (`flujoEstancia.js`), que `contextoNegocio` elige con el tipo `ALOJAMIENTO`.
  */
 const TIPOS_NEGOCIO = ['RESERVA', 'BARBERIA', 'SALON DE BELLEZA'];
 
 function registrarFlujo({ flujos }) {
     const { manejarDeterminista } = require('../../engine/manejadorDeterminista');
     flujos.registrar({ vertical: VERTICAL, tipos: TIPOS_NEGOCIO, manejar: manejarDeterminista });
+    // Alojamientos: mismo módulo, otro flujo (reservan noches, no citas).
+    require('./flujoEstancia').registrarFlujo({ flujos });
 }
 
 module.exports = {

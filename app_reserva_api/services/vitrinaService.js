@@ -3,6 +3,22 @@ const Models = require('../../app_core/models/conection');
 const ConfigService = require('./configService');
 const { monedaDePais } = require('../../app_core/helpers/paises');
 const { urlWhatsapp } = require('../../app_core/helpers/telefono');
+const Perfiles = require('../perfiles');
+const { politicaDePago } = require('./abono');
+
+/**
+ * ¿El tipo guardado en el negocio es el módulo de reserva? Lo es si se llama RESERVA o si es un
+ * oficio que el módulo atiende (los negocios anteriores a los rubros tienen ahí BARBERIA): con el
+ * filtro por nombre a secas, la página del primer cliente de reserva salía «no disponible».
+ */
+function esModuloReserva(tipo) {
+    return tipo?.nombre === 'RESERVA' || tipo?.modulo?.nombre === 'RESERVA';
+}
+
+const INCLUDE_TIPO_RESERVA = {
+    model: Models.GenerTipoNegocio, as: 'tipoNegocio', attributes: ['nombre', 'id_tipo_modulo'], required: true,
+    include: [{ model: Models.GenerTipoNegocio, as: 'modulo', attributes: ['nombre'], required: false }],
+};
 
 /**
  * La página pública del negocio: lo que ve un cliente que llega desde un enlace o un QR.
@@ -105,22 +121,31 @@ async function getVitrina(idNegocio) {
             'logo_url', 'banner_url', 'colores', 'id_paleta', 'pais',
         ],
         include: [
-            { model: Models.GenerTipoNegocio, as: 'tipoNegocio',
-              attributes: ['nombre'], where: { nombre: 'RESERVA' }, required: true },
+            INCLUDE_TIPO_RESERVA,
             { model: Models.GenerPaletaColor, as: 'paletaColor',
               attributes: ['id_paleta', 'nombre', 'colores'], required: false },
         ],
     });
-    if (!negocio) throw error('Página no disponible.');
+    if (!negocio || !esModuloReserva(negocio.tipoNegocio)) throw error('Página no disponible.');
 
     const cfg = await ConfigService.get(idNegocio);
     if (cfg.publico_activo === false) throw error('Página no disponible.');
+
+    // El perfil del rubro decide cómo se presenta la página: los términos (estilista, artista,
+    // huésped), el titular, y qué se muestra (variantes, portafolio, mascota, habitaciones).
+    const perfil = await Perfiles.perfilDeNegocio(idNegocio, { funciones: cfg.funciones || {} });
+    const fx = new Set(perfil.funciones);
 
     const [servicios, profesionales, horarios, categorias] = await Promise.all([
         Models.ReservaServicio.findAll({
             where: { id_negocio: idNegocio, estado: 'A' },
             attributes: ['id_servicio', 'nombre', 'descripcion', 'duracion_min', 'precio',
-                         'color_hex', 'imagen_url', 'id_categoria'],
+                         'color_hex', 'imagen_url', 'id_categoria', 'a_cotizar'],
+            include: fx.has('variantes')
+                ? [{ model: Models.ReservaServicioVariante, as: 'variantes', required: false,
+                     where: { estado: 'A' },
+                     attributes: ['id_variante', 'nombre', 'clave', 'duracion_min', 'precio', 'orden'] }]
+                : [],
             order: [['nombre', 'ASC']],
         }),
         Models.ReservaProfesional.findAll({
@@ -213,7 +238,50 @@ async function getVitrina(idNegocio) {
         imagen_url: s.imagen_url,
         id_categoria: s.id_categoria ?? null,
         id_profesionales: profesionalesPorServicio.get(s.id_servicio) || [],
+        // Solo con la función encendida: sin ella el servicio se reserva con su precio de lista.
+        a_cotizar: fx.has('a_cotizar') && !!s.a_cotizar,
+        variantes: fx.has('variantes')
+            ? (s.variantes || [])
+                .sort((a, b) => a.orden - b.orden || a.duracion_min - b.duracion_min)
+                .map(v => ({
+                    id_variante: v.id_variante, nombre: v.nombre, clave: v.clave,
+                    duracion_min: v.duracion_min, precio: Number(v.precio),
+                }))
+            : [],
     }));
+
+    // Portafolio: hasta doce trabajos por profesional, en su orden.
+    const portafolios = new Map();
+    if (fx.has('portafolio') && idsProfesionales.length) {
+        const imagenes = await Models.ReservaProfesionalImagen.findAll({
+            where: { id_profesional: idsProfesionales, id_negocio: idNegocio },
+            attributes: ['id_profesional', 'url', 'descripcion'],
+            order: [['orden', 'ASC'], ['id_imagen', 'ASC']],
+            raw: true,
+        });
+        for (const i of imagenes) {
+            if (!portafolios.has(i.id_profesional)) portafolios.set(i.id_profesional, []);
+            const lista = portafolios.get(i.id_profesional);
+            if (lista.length < 12) lista.push({ url: i.url, descripcion: i.descripcion });
+        }
+    }
+    for (const p of profesionalesSalida) p.portafolio = portafolios.get(p.id_profesional) || [];
+
+    // Alojamiento y hotel de mascotas: los tipos de unidad que se reservan por noches.
+    const unidadesTipo = perfil.modos.includes('ESTANCIA')
+        ? (await Models.ReservaUnidadTipo.findAll({
+            where: { id_negocio: idNegocio, estado: 'A' },
+            attributes: ['id_unidad_tipo', 'nombre', 'descripcion', 'ocupacion_base', 'capacidad_max',
+                         'tarifa_base', 'tarifa_fin_semana', 'tarifa_persona_extra', 'min_noches',
+                         'comodidades', 'imagen_url', 'orden'],
+            order: [['orden', 'ASC'], ['nombre', 'ASC']],
+        })).map(u => ({
+            ...u.toJSON(),
+            tarifa_base: Number(u.tarifa_base),
+            tarifa_fin_semana: u.tarifa_fin_semana == null ? null : Number(u.tarifa_fin_semana),
+            tarifa_persona_extra: Number(u.tarifa_persona_extra),
+        }))
+        : [];
 
     // Secciones del portal, en el orden que fijó el negocio. Una categoría sin servicios activos
     // no se publica —una sección vacía solo hace ruido— y los servicios sin clasificar caen en
@@ -266,8 +334,24 @@ async function getVitrina(idNegocio) {
             ventana_cancelacion_horas: cfg.ventana_cancelacion_horas,
             paso_slot_min: cfg.paso_slot_min,
             cobro_adelantado: cfg.cobro_adelantado,
-            instrucciones_pago: cfg.cobro_adelantado ? limpio(cfg.instrucciones_pago) : null,
+            // Abono (perfiles con depósito) o total (el cobro adelantado de siempre). El portal
+            // lo lee de aquí en vez de mirar solo `cobro_adelantado`.
+            pago: politicaDePago({ cfg, funciones: fx }),
+            instrucciones_pago: politicaDePago({ cfg, funciones: fx }).modo !== 'ninguno'
+                ? limpio(cfg.instrucciones_pago) : null,
+            requiere_mascota: fx.has('mascotas'),
+            hora_checkin: String(cfg.hora_checkin || '15:00').slice(0, 5),
+            hora_checkout: String(cfg.hora_checkout || '12:00').slice(0, 5),
         },
+        perfil: {
+            clave: perfil.clave,
+            rubro: perfil.rubro,
+            modos: perfil.modos,
+            funciones: perfil.funciones,
+            terminos: perfil.terminos,
+            portal: perfil.portal,
+        },
+        unidades_tipo: unidadesTipo,
         horario_negocio: horarioEfectivo([], horariosGenerales),
         // `servicios` va plano **además** de `secciones`: el buscador y la página de un servicio
         // suelto lo necesitan sin tener que recorrer las secciones. Las secciones son la misma

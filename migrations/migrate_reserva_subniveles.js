@@ -68,6 +68,24 @@ const ACCIONES = [
     // Configuración
     ['/configuracion', '/configuracion/cobros', 'Cambiar los ajustes de cobro y caja', ['ADMINISTRADOR']],
     ['/configuracion', '/configuracion/metodos-pago', 'Gestionar las formas de pago', ['ADMINISTRADOR']],
+
+    // ── Perfiles de rubro (docs/perfiles-de-reserva.md) ──
+    // La ficha guarda datos de salud en estética y en mascotas: por defecto solo el dueño la ve
+    // desde Clientes. El profesional la consulta y anota desde la cita que está atendiendo, que
+    // es donde la necesita, sin tener acceso a la cartera entera.
+    ['/clientes', '/clientes/ficha-ver', 'Ver la ficha del cliente', ['ADMINISTRADOR']],
+    ['/clientes', '/clientes/ficha-editar', 'Anotar en la ficha del cliente', ['ADMINISTRADOR']],
+    ['/agenda', '/agenda/ficha', 'Ver y anotar la ficha desde la cita', ['ADMINISTRADOR', 'PROFESIONAL']],
+    // Asentar un abono retenido o devolverlo mueve la caja: mismo criterio que cerrarla.
+    ['/citas', '/citas/abonos', 'Asentar y devolver abonos', ['ADMINISTRADOR']],
+
+    // ── Estancias (alojamiento, hotel de mascotas). Requieren migrate:reserva-estancias ──
+    ['/estancias', '/estancias/crear', 'Crear y editar estancias', ['ADMINISTRADOR', 'RECEPCIONISTA']],
+    ['/estancias', '/estancias/checkin', 'Registrar la llegada', ['ADMINISTRADOR', 'RECEPCIONISTA']],
+    ['/estancias', '/estancias/checkout', 'Cobrar y registrar la salida', ['ADMINISTRADOR', 'RECEPCIONISTA']],
+    ['/estancias', '/estancias/cancelar', 'Cancelar estancias', ['ADMINISTRADOR']],
+    ['/estancias', '/estancias/validar-pago', 'Validar anticipos', ['ADMINISTRADOR']],
+    ['/unidades', '/unidades/tarifas', 'Cambiar tarifas y temporadas', ['ADMINISTRADOR']],
 ];
 
 async function migrar() {

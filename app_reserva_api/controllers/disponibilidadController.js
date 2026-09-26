@@ -31,6 +31,10 @@ async function getSlots(req, res) {
             fechaISO:      String(req.query.fecha),
             // Al editar una cita se excluye a sí misma, o su propia hora saldría ocupada.
             excluirCita:   req.query.excluir_cita ? Number(req.query.excluir_cita) : null,
+            // Perfiles de rubro: la variante y la duración acordada cambian qué horas caben.
+            // Llegan como JSON en la consulta; el servicio los normaliza y valida.
+            variantes:     req.query.variantes || null,
+            ajustes:       req.query.ajustes || null,
         });
         return Respuesta.success(res, 'Slots calculados', data);
     } catch (err) {

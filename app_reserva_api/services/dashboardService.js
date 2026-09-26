@@ -3,6 +3,7 @@ const Models = require('../../app_core/models/conection');
 const Reglas = require('./reglasAgenda');
 const { getEstadosPlanPorNegocio } = require('../../app_core/helpers/planHelper');
 const { monedaDePais } = require('../../app_core/helpers/paises');
+const Perfiles = require('../perfiles');
 const { Op } = Models.Sequelize;
 
 /**
@@ -270,6 +271,11 @@ async function verificarAccesoReserva(idUsuario) {
     // el detalle de esa gracia viaja en `plan` para poder avisar «te quedan N días».
     const estadosPlan = await getEstadosPlanPorNegocio(idNegocios);
 
+    // El perfil del rubro de cada negocio: qué funciones tiene, cómo se llaman las cosas y qué
+    // vistas usa. Viaja con la sesión por lo mismo que los colores —la app se adapta en el
+    // primer render— y recorta `permisos_vista` para que menú, guard y API digan lo mismo.
+    const perfiles = await Perfiles.perfilesDeNegocios(idNegocios);
+
     const negocios = await Promise.all(negociosUsuario.map(async (nu) => {
         const neg = nu.negocio;
         const roles = rolesUsuario
@@ -277,7 +283,7 @@ async function verificarAccesoReserva(idUsuario) {
             .map(r => ({ id_rol: r.rol.id_rol, descripcion: r.rol.descripcion }));
         const rolesContexto = [...roles, ...rolesGlobalesMap];
 
-        const [permisos_vista, permisos_subnivel] = await Promise.all([
+        const [permisosVistaRol, permisos_subnivel] = await Promise.all([
             getPermisosVistaNegocio({
                 idNegocio: neg.id_negocio,
                 idTipoNegocio: neg.id_tipo_negocio,
@@ -290,10 +296,15 @@ async function verificarAccesoReserva(idUsuario) {
             }),
         ]);
 
+        const perfil = perfiles.get(neg.id_negocio) || null;
+        const permisos_vista = Perfiles.filtrarVistas(permisosVistaRol, perfil);
+
         return {
             id_negocio: neg.id_negocio,
             nombre: neg.nombre,
             tipo_negocio: neg.tipoNegocio?.nombre || null,
+            rubro: perfil?.rubro || null,
+            perfil,
             paleta: neg.paletaColor || null,
             // Identidad visual. Viaja con la sesión para que el tema se aplique en el primer
             // pintado: pedirla aparte haría que la app arrancara en índigo y cambiara de color
@@ -554,6 +565,11 @@ async function topServiciosDelPeriodo(idNegocio, desde, hasta) {
  *
  * Sin horario configurado el porcentaje es `null`, no 0: «no sé» y «vacío» son cosas distintas
  * y la interfaz las muestra distinto.
+ *
+ * Y cuando es `null`, `motivo` dice **por qué**. Antes no lo decía y el dashboard sacaba la
+ * única conclusión que sabía sacar —«aún no has definido el horario»— también un domingo en un
+ * negocio que cierra los domingos, con su horario impecable. Mandar a alguien a arreglar lo que
+ * ya está bien es peor que no decir nada.
  */
 async function ocupacionDelDia(idNegocio, fechaISO, desde, hasta) {
     const profesionales = await Models.ReservaProfesional.findAll({
@@ -587,7 +603,35 @@ async function ocupacionDelDia(idNegocio, fechaISO, desde, hasta) {
         porcentaje: minutosDisponibles > 0
             ? Math.min(100, Math.round((minutosOcupados / minutosDisponibles) * 100))
             : null,
+        motivo: minutosDisponibles > 0
+            ? null
+            : await motivoSinJornada(idNegocio, fechaISO, profesionales.length),
     };
+}
+
+/**
+ * Por qué hoy no hay minutos que vender. En orden de «qué tiene que hacer el dueño»:
+ *
+ * - `SIN_PROFESIONALES`: no hay a quién agendar. Se arregla en Profesionales.
+ * - `SIN_HORARIO`: el negocio no tiene ni una franja en toda la semana. Se arregla en Horarios.
+ * - `CERRADO_HOY`: hoy no se abre, y eso **no es un problema**. No se arregla nada.
+ * - `JORNADA_BLOQUEADA`: el negocio abre hoy y los bloqueos se comen el día entero (vacaciones,
+ *   festivo, un evento). Tampoco hay nada roto: se ve en Horarios → bloqueos.
+ */
+async function motivoSinJornada(idNegocio, fechaISO, totalProfesionales) {
+    if (totalProfesionales === 0) return 'SIN_PROFESIONALES';
+
+    const totalFranjas = await Models.ReservaHorario.count({ where: { id_negocio: idNegocio } });
+    if (totalFranjas === 0) return 'SIN_HORARIO';
+
+    const diaSemana = Reglas.diaSemanaLocal(Reglas.inicioDelDia(fechaISO));
+    const franjasGenerales = await Models.ReservaHorario.count({
+        where: { id_negocio: idNegocio, id_profesional: null, dia_semana: diaSemana },
+    });
+    // Con franja general y aun así cero minutos, lo que queda es que el día esté bloqueado: el
+    // horario propio de un profesional solo se consulta para SU día, y si no lo tiene hereda el
+    // general, así que «abierto hoy» y «nadie trabaja» solo conviven si hay un bloqueo encima.
+    return franjasGenerales === 0 ? 'CERRADO_HOY' : 'JORNADA_BLOQUEADA';
 }
 
 module.exports = {

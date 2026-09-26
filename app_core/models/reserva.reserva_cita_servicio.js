@@ -4,6 +4,8 @@ module.exports = (sequelize, DataTypes) => {
     id_servicio:           { type: DataTypes.INTEGER, primaryKey: true },
     precio_snapshot:       { type: DataTypes.DECIMAL(14, 2), allowNull: false },
     duracion_snapshot_min: { type: DataTypes.INTEGER, allowNull: false },
+    id_variante:           { type: DataTypes.INTEGER, allowNull: true },
+    variante_snapshot:     { type: DataTypes.STRING(80), allowNull: true },
   }, {
     tableName: 'reserva_cita_servicio', schema: 'reserva', timestamps: false,
   });

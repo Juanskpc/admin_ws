@@ -54,34 +54,10 @@ const db = require('../app_core/models/conection');
 const sequelize = db.sequelize;
 
 /**
- * Los oficios que ofrecemos, agrupados por el módulo que los atiende.
- *
- * `icono` es un nombre de icono de lucide y lo consumen tanto la consola como la landing; si se
- * añade uno nuevo hay que importarlo también en `landing.component.ts`, que registra los iconos
- * de uno en uno y no falla al compilar, solo deja el hueco vacío.
+ * Los oficios y los módulos viven en `catalogo_rubros.js` (con su perfil de reserva) para que
+ * se puedan leer sin ejecutar esta migración.
  */
-const RUBROS = [
-    // ── Los atiende el módulo de RESTAURANTE ──
-    { modulo: 'RESTAURANTE', nombre: 'RESTAURANTE',            etiqueta: 'Restaurante',            icono: 'utensils-crossed', orden: 10 },
-    { modulo: 'RESTAURANTE', nombre: 'CAFETERIA',              etiqueta: 'Cafetería',              icono: 'coffee',           orden: 20 },
-    { modulo: 'RESTAURANTE', nombre: 'PANADERIA Y REPOSTERIA', etiqueta: 'Panadería / Repostería', icono: 'croissant',        orden: 30 },
-    { modulo: 'RESTAURANTE', nombre: 'HELADERIA',              etiqueta: 'Heladería',              icono: 'ice-cream-cone',   orden: 40 },
-    { modulo: 'RESTAURANTE', nombre: 'BAR',                    etiqueta: 'Bar',                    icono: 'beer',             orden: 50 },
-    { modulo: 'RESTAURANTE', nombre: 'COMIDAS RAPIDAS',        etiqueta: 'Comidas rápidas',        icono: 'sandwich',         orden: 60 },
-    { modulo: 'RESTAURANTE', nombre: 'PIZZERIA',               etiqueta: 'Pizzería',               icono: 'pizza',            orden: 70 },
-
-    // ── Los atiende el módulo de RESERVA ──
-    { modulo: 'RESERVA',     nombre: 'BARBERIA',               etiqueta: 'Barbería',               icono: 'scissors',         orden: 110 },
-    { modulo: 'RESERVA',     nombre: 'SALON DE BELLEZA',       etiqueta: 'Salón de belleza',       icono: 'sparkles',         orden: 120 },
-    { modulo: 'RESERVA',     nombre: 'PELUQUERIA',             etiqueta: 'Peluquería',             icono: 'scissors',         orden: 130 },
-    { modulo: 'RESERVA',     nombre: 'SPA Y ESTETICA',         etiqueta: 'Spa / Estética',         icono: 'flower-2',         orden: 140 },
-    { modulo: 'RESERVA',     nombre: 'MANICURE Y PEDICURE',    etiqueta: 'Uñas',                   icono: 'hand',             orden: 150 },
-    { modulo: 'RESERVA',     nombre: 'MASAJES',                etiqueta: 'Masajes',                icono: 'hand-heart',       orden: 160 },
-    { modulo: 'RESERVA',     nombre: 'CONSULTORIO',            etiqueta: 'Consultorio',            icono: 'stethoscope',      orden: 170 },
-];
-
-/** Los módulos que existen de verdad. El resto de tipos se queda sin `id_tipo_modulo`. */
-const MODULOS = ['RESTAURANTE', 'RESERVA'];
+const { RUBROS, RETIRADOS, MODULOS } = require('./catalogo_rubros');
 
 async function existeColumna(tabla, columna, transaction) {
     const [filas] = await sequelize.query(
@@ -118,6 +94,19 @@ async function migrate() {
             console.log('   orden creada.\n');
         } else {
             console.log('   orden ya existe.\n');
+        }
+
+        // Qué perfil de reserva adapta la app al oficio (`app_reserva_api/perfiles`). NULL es el
+        // perfil BASE —la barbería tal como funcionaba—, así que la columna no cambia nada para
+        // ningún negocio que ya exista.
+        if (!await existeColumna('gener_tipo_negocio', 'perfil_reserva', t)) {
+            await sequelize.query(`
+                ALTER TABLE general.gener_tipo_negocio
+                ADD COLUMN perfil_reserva VARCHAR(20) NULL;
+            `, { transaction: t });
+            console.log('   perfil_reserva creada.\n');
+        } else {
+            console.log('   perfil_reserva ya existe.\n');
         }
 
         console.log('2. Columna en general.gener_negocio...');
@@ -159,13 +148,14 @@ async function migrate() {
             const [filas] = await sequelize.query(
                 `
                 INSERT INTO general.gener_tipo_negocio
-                       (nombre, descripcion, icono, orden, id_tipo_modulo, estado)
-                VALUES (:nombre, :etiqueta, :icono, :orden, :modulo, 'A')
+                       (nombre, descripcion, icono, orden, id_tipo_modulo, perfil_reserva, estado)
+                VALUES (:nombre, :etiqueta, :icono, :orden, :modulo, :perfil, 'A')
                 ON CONFLICT (nombre) DO UPDATE SET
                     descripcion         = EXCLUDED.descripcion,
                     icono               = EXCLUDED.icono,
                     orden               = EXCLUDED.orden,
                     id_tipo_modulo      = EXCLUDED.id_tipo_modulo,
+                    perfil_reserva      = EXCLUDED.perfil_reserva,
                     estado              = 'A',
                     fecha_actualizacion = CURRENT_TIMESTAMP
                 RETURNING id_tipo_negocio, (xmax = 0) AS insertado;
@@ -173,7 +163,7 @@ async function migrate() {
                 {
                     replacements: {
                         nombre: r.nombre, etiqueta: r.etiqueta, icono: r.icono,
-                        orden: r.orden, modulo: idPorNombre[r.modulo],
+                        orden: r.orden, modulo: idPorNombre[r.modulo], perfil: r.perfil ?? null,
                     },
                     transaction: t,
                 },
@@ -199,6 +189,39 @@ async function migrate() {
             { replacements: { nombres: RUBROS.map((r) => r.nombre) }, transaction: t },
         );
         console.log(`   ${sinModulo.length} tipo(s) sin módulo${sinModulo.length ? ': ' + sinModulo.map((f) => f.nombre).join(', ') : ''}.\n`);
+
+        // ── 4b. Oficios retirados ─────────────────────────────────────────────
+        //
+        // Primero se mueven los negocios al sucesor y después se apaga la fila: al revés, entre
+        // las dos sentencias habría negocios apuntando a un rubro inactivo, y el perfil sale de
+        // ahí. La fila no se borra nunca porque `gener_negocio.id_rubro` la referencia.
+        console.log('5b. Retirando los oficios que ya no se ofrecen...');
+        for (const r of RETIRADOS) {
+            const [movidos] = await sequelize.query(
+                `
+                UPDATE general.gener_negocio n
+                   SET id_rubro = (SELECT id_tipo_negocio FROM general.gener_tipo_negocio WHERE nombre = :sucesor)
+                 WHERE n.id_rubro = (SELECT id_tipo_negocio FROM general.gener_tipo_negocio WHERE nombre = :nombre)
+                RETURNING n.id_negocio;
+                `,
+                { replacements: { nombre: r.nombre, sucesor: r.sucesor }, transaction: t },
+            );
+
+            const [apagados] = await sequelize.query(
+                `
+                UPDATE general.gener_tipo_negocio
+                   SET estado = 'I', id_tipo_modulo = NULL, fecha_actualizacion = CURRENT_TIMESTAMP
+                 WHERE nombre = :nombre AND (estado <> 'I' OR id_tipo_modulo IS NOT NULL)
+                RETURNING nombre;
+                `,
+                { replacements: { nombre: r.nombre }, transaction: t },
+            );
+
+            if (movidos.length || apagados.length) {
+                console.log(`   ${r.nombre} → ${r.sucesor}: ${movidos.length} negocio(s) movidos${apagados.length ? ', rubro inactivado' : ''}.`);
+            }
+        }
+        console.log('');
 
         // ── 5. Backfill del rubro de los negocios que ya existen ──────────────
         //

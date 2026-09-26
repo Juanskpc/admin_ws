@@ -107,6 +107,27 @@ function contenido([hijoIni, hijoFin], [padreIni, padreFin]) {
     return hijoIni >= padreIni && hijoFin <= padreFin;
 }
 
+/**
+ * Los tramos de `[inicio, fin]` en los que el profesional **sí** está ocupado, dado el tiempo de
+ * proceso de la cita (`tramos`: `[[desde_min, hasta_min], …]` relativos al inicio, en los que
+ * queda libre mientras actúa el producto).
+ *
+ * Sin tramos devuelve la cita entera, que es lo de siempre: una barbería nunca llega a la otra
+ * rama porque sus servicios no tienen tiempo de proceso.
+ */
+function partesOcupadas(inicio, fin, tramos) {
+    const ini = new Date(inicio);
+    const fn = new Date(fin);
+    if (!Array.isArray(tramos) || tramos.length === 0) return [[ini, fn]];
+
+    let partes = [[ini, fn]];
+    for (const [desde, hasta] of tramos) {
+        const libre = [addMinutes(ini, Number(desde)), addMinutes(ini, Number(hasta))];
+        partes = partes.flatMap((p) => restarIntervalo(p, libre));
+    }
+    return partes.length ? partes : [[ini, fn]];
+}
+
 // ─────────────────────────── Primitiva 1: cuándo se trabaja ───────────────────────────
 
 /**
@@ -199,7 +220,7 @@ async function intervalosOcupados(
 
     const citas = await Models.ReservaCita.findAll({
         where: whereCitas,
-        attributes: ['id_cita', 'fecha_hora_inicio', 'fecha_hora_fin'],
+        attributes: ['id_cita', 'fecha_hora_inicio', 'fecha_hora_fin', 'proceso_tramos'],
         transaction,
     });
 
@@ -227,8 +248,20 @@ async function intervalosOcupados(
         addMinutes(new Date(fin), +bufferMin),
     ];
 
+    // Una cita con tiempo de proceso ocupa al profesional en varios trozos: el buffer va solo en
+    // los extremos (antes de empezar y al terminar), no alrededor de la espera, que es justo el
+    // rato en que puede atender a otra persona. Sin tramos es un único trozo con buffer a cada
+    // lado: exactamente el cálculo de antes.
+    const deCita = (c) => {
+        const partes = partesOcupadas(c.fecha_hora_inicio, c.fecha_hora_fin, c.proceso_tramos);
+        return partes.map(([a, b], i) => [
+            i === 0 ? addMinutes(a, -bufferMin) : a,
+            i === partes.length - 1 ? addMinutes(b, +bufferMin) : b,
+        ]);
+    };
+
     return [
-        ...citas.map((c) => expandir(c.fecha_hora_inicio, c.fecha_hora_fin)),
+        ...citas.flatMap(deCita),
         ...holds.map((h) => expandir(h.fecha_hora_inicio, h.fecha_hora_fin)),
     ];
 }
@@ -264,7 +297,7 @@ async function huecosReservables({ idNegocio, idProfesional, fechaISO, bufferMin
  * @throws FUERA_DE_HORARIO · SOBRE_BLOQUEO · SLOT_NO_DISPONIBLE
  */
 async function verificarReservable(
-    { idNegocio, idProfesional, inicio, fin, bufferMin },
+    { idNegocio, idProfesional, inicio, fin, bufferMin, tramos = null },
     opciones = {}
 ) {
     const fechaISO = fechaISOLocal(inicio);
@@ -313,16 +346,133 @@ async function verificarReservable(
         opciones
     );
 
-    if (ocupados.some((o) => seSolapan(candidato, o))) {
+    // Con tiempo de proceso solo se exige que estén libres los trozos en que el profesional
+    // trabaja; la espera puede solaparse con otra cita. Sin tramos, `partesOcupadas` devuelve el
+    // candidato entero y la comprobación es la de siempre.
+    const partes = partesOcupadas(inicio, fin, tramos);
+    if (partes.some((p) => ocupados.some((o) => seSolapan(p, o)))) {
         throw error('SLOT_NO_DISPONIBLE', 'Ese horario ya no está disponible.');
     }
 }
+
+// ─────────────────────────── Recursos: cabinas, salas, equipos ───────────────────────────
+
+/** Los recursos activos de un tipo. */
+async function recursosDelTipo(idNegocio, idTipoRecurso, { transaction } = {}) {
+    return Models.ReservaRecurso.findAll({
+        where: { id_negocio: idNegocio, id_tipo_recurso: idTipoRecurso, estado: 'A' },
+        attributes: ['id_recurso', 'nombre'],
+        order: [['id_recurso', 'ASC']],
+        transaction,
+    });
+}
+
+/**
+ * Intervalos ocupados de cada recurso entre `desde` y `hasta`: citas activas y holds vigentes
+ * que lo tienen asignado, con el buffer completo a cada lado (preparar la cabina es parte de
+ * usarla). El recurso se ocupa la cita entera, esperas incluidas: la clienta sigue en la cabina.
+ *
+ * @returns {Map<number, Date[][]>}
+ */
+async function intervalosRecursos(
+    { idNegocio, idRecursos, desde, hasta, bufferMin },
+    { transaction, excluirCita = null, excluirHold = null } = {},
+) {
+    const porRecurso = new Map(idRecursos.map((id) => [id, []]));
+    if (idRecursos.length === 0) return porRecurso;
+
+    const ventanaIni = addMinutes(new Date(desde), -bufferMin);
+    const ventanaFin = addMinutes(new Date(hasta), bufferMin);
+
+    const whereCitas = {
+        id_negocio: idNegocio,
+        id_recurso: { [Op.in]: idRecursos },
+        estado: { [Op.in]: ESTADOS_QUE_OCUPAN },
+        fecha_hora_inicio: { [Op.lt]: ventanaFin },
+        fecha_hora_fin: { [Op.gt]: ventanaIni },
+    };
+    if (excluirCita) whereCitas.id_cita = { [Op.ne]: excluirCita };
+    const whereHolds = {
+        id_negocio: idNegocio,
+        id_recurso: { [Op.in]: idRecursos },
+        estado: 'activo',
+        expira_en: { [Op.gt]: new Date() },
+        fecha_hora_inicio: { [Op.lt]: ventanaFin },
+        fecha_hora_fin: { [Op.gt]: ventanaIni },
+    };
+    if (excluirHold) whereHolds.id_hold = { [Op.ne]: excluirHold };
+
+    const [citas, holds] = await Promise.all([
+        Models.ReservaCita.findAll({
+            where: whereCitas, attributes: ['id_recurso', 'fecha_hora_inicio', 'fecha_hora_fin'], transaction,
+        }),
+        Models.ReservaHold.findAll({
+            where: whereHolds, attributes: ['id_recurso', 'fecha_hora_inicio', 'fecha_hora_fin'], transaction,
+        }),
+    ]);
+    for (const x of [...citas, ...holds]) {
+        porRecurso.get(x.id_recurso)?.push([
+            addMinutes(new Date(x.fecha_hora_inicio), -bufferMin),
+            addMinutes(new Date(x.fecha_hora_fin), +bufferMin),
+        ]);
+    }
+    return porRecurso;
+}
+
+/** El primer recurso de la lista libre en `[inicio, fin]`, o `null`. */
+function recursoLibreEn(ocupacion, idRecursos, inicio, fin, preferido = null) {
+    const orden = preferido && idRecursos.includes(preferido)
+        ? [preferido, ...idRecursos.filter((id) => id !== preferido)]
+        : idRecursos;
+    const candidato = [inicio, fin];
+    return orden.find((id) => !(ocupacion.get(id) || []).some((o) => seSolapan(candidato, o))) ?? null;
+}
+
+/**
+ * Elige un recurso libre del tipo para `[inicio, fin]` o falla con `RECURSO_NO_DISPONIBLE`.
+ *
+ * La llaman `crearCita`, `actualizarCita`, `reagendarCita` y `tomarHold` dentro de su
+ * transacción y **después** de `verificarReservable`: primero que el profesional pueda, luego
+ * que haya cabina. Quien llama toma antes el bloqueo del tipo de recurso (`claveBloqueoRecurso`)
+ * para que dos profesionales no se lleven la misma cabina a la vez.
+ */
+async function asignarRecurso(
+    { idNegocio, idTipoRecurso, inicio, fin, bufferMin, preferido = null },
+    opciones = {},
+) {
+    const recursos = await recursosDelTipo(idNegocio, idTipoRecurso, opciones);
+    if (recursos.length === 0) {
+        throw error('RECURSO_NO_CONFIGURADO', 'Ese servicio necesita una cabina o equipo y el negocio no tiene ninguno activo.');
+    }
+    const ids = recursos.map((r) => r.id_recurso);
+    const ocupacion = await intervalosRecursos(
+        { idNegocio, idRecursos: ids, desde: inicio, hasta: fin, bufferMin }, opciones,
+    );
+    const libre = recursoLibreEn(ocupacion, ids, inicio, fin, preferido);
+    if (!libre) throw error('RECURSO_NO_DISPONIBLE', 'No hay cabina o equipo libre a esa hora.');
+    return libre;
+}
+
+/**
+ * Clave del bloqueo consultivo por tipo de recurso. Se usa la forma de dos enteros de
+ * `pg_advisory_xact_lock`, que es un espacio de claves distinto al de un solo entero donde vive
+ * el bloqueo por profesional: no pueden chocar.
+ */
+const ESPACIO_BLOQUEO_RECURSO = 7301;
 
 module.exports = {
     intervalosLaborales,
     intervalosOcupados,
     huecosReservables,
     verificarReservable,
+    partesOcupadas,
+    recursosDelTipo,
+    intervalosRecursos,
+    recursoLibreEn,
+    asignarRecurso,
+    ESPACIO_BLOQUEO_RECURSO,
+    seSolapan,
+    contenido,
     ESTADOS_QUE_OCUPAN,
     // Exportados para que `disponibilidadService` y los tests compartan la aritmética de
     // tiempo en vez de reimplementarla, que es como empezó la divergencia del buffer.

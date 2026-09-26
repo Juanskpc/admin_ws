@@ -52,6 +52,9 @@ const { ColaParticionada, numeroDeEntorno } = require('./cola');
 // `handoff.js`; el motor únicamente necesita reconocer cuándo una conversación ACABA de pasar a
 // manos de una persona, para que alguien pueda enterarse.
 const { ESTADO_HANDOFF } = require('./handoff');
+// El asistente puede dejar constancia de que alguien lo está usando para nada. No bloquea a
+// nadie ni cambia el estado de la conversación: ver la cabecera del módulo.
+const reporteAutomatico = require('./reporteAutomatico');
 
 const sequelize = Models.sequelize;
 
@@ -707,6 +710,33 @@ async function decidir({ conversacion, mensajes, turno, transaction }) {
     // Gastar tokens y declararse determinista no puede pasar: la pregunta 12 del Ledger es
     // justamente el ratio entre los dos, y sería la primera en mentir.
     if (consumo.costos.length > 0 && salida.nivel !== 'llm') salida.nivel = 'llm';
+
+    // ¿Alguien está usando el asistente para nada? Va aquí, después del `nivel` definitivo y en
+    // la transacción del turno, por tres razones: solo se mira cuando el turno costó tokens (el
+    // determinista es gratis y no hay nada que vigilar), la fila del reporte queda atómica con
+    // el turno que la provocó, y el fallo de esto NO puede costar la respuesta del cliente —por
+    // eso `evaluar()` se traga sus propios errores y esto no tiene `await` colgando de un catch.
+    //
+    // Reportar no calla al bot ni bloquea a nadie: es una nota para el dueño del negocio. Ver
+    // `reporteAutomatico.js`.
+    const reporte = await reporteAutomatico.evaluar({
+        conversacion,
+        nivel: salida.nivel,
+        transaction,
+    });
+    if (reporte.reportado) {
+        await repositorio.registrarPaso(
+            {
+                idTurno: turno.id_turno,
+                idNegocio: conversacion.id_negocio,
+                secuencia: 98,
+                tipo: 'regla',
+                decision: 'reporte_automatico',
+                motivo: { motivo: reporte.motivo },
+            },
+            { transaction }
+        );
+    }
 
     return salida;
 }

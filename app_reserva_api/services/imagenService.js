@@ -37,6 +37,11 @@ const TIPOS = {
     servicio:    { carpeta: 'servicios',    prefijo: 'servicio' },
     profesional: { carpeta: 'profesionales', prefijo: 'profesional' },
     banner:      { carpeta: 'banners',       prefijo: 'banner' },
+    // Perfiles de rubro. El portafolio va por imagen (un profesional tiene varias) y la unidad
+    // por tipo de unidad (la foto de la «Habitación doble»). Las dos son públicas: se ven en el
+    // portal. Los archivos de la ficha NO pasan por aquí: son privados (ver fichaService).
+    portafolio:  { carpeta: 'portafolio',    prefijo: 'trabajo' },
+    unidad:      { carpeta: 'unidades',      prefijo: 'unidad' },
 };
 
 const EXTENSIONES = { 'image/webp': 'webp', 'image/jpeg': 'jpg', 'image/png': 'png' };

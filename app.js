@@ -176,7 +176,10 @@ app.use(
 // Logos, fotos de servicio y fotos de profesional del vertical `reserva`. Igual que el menú: se
 // exponen SOLO estas subcarpetas, nunca `/uploads/reserva` entero — ahí viven los comprobantes
 // de pago, que son privados. Cross-origin porque la página pública se sirve desde otro dominio.
-for (const carpeta of ['logos', 'servicios', 'profesionales', 'banners']) {
+// `portafolio` y `unidades` son de los perfiles de rubro (trabajos de un tatuador, fotos de
+// una habitación). Las fichas de clientes (`uploads/reserva/fichas`) NO se listan aquí: llevan
+// consentimientos firmados y se descargan por una ruta con token.
+for (const carpeta of ['logos', 'servicios', 'profesionales', 'banners', 'portafolio', 'unidades']) {
     app.use(
         `/uploads/reserva/${carpeta}`,
         express.static(path.join(__dirname, 'uploads', 'reserva', carpeta), {
@@ -278,6 +281,10 @@ app.use(errorHandler);
             // cobre tiene que ser una decisión de una persona.
             const cobranzaScheduler = require('./app_admin_api/services/cobranzaScheduler');
             cobranzaScheduler.iniciar();
+
+            // Importación de calendarios de Airbnb/Booking para alojamientos (cada 15 min). Sin
+            // calendarios configurados no hace nada; se apaga con RESERVA_ICAL_ENABLED=false.
+            require('./app_reserva_api/services/estancia/icalService').iniciar();
 
             // Modo de autorización multi-inquilino (ADR-002, ADR-010). Se anuncia siempre:
             // creer que se está bloqueando cuando solo se observa es el peor error posible aquí.

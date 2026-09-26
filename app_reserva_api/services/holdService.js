@@ -27,6 +27,8 @@ const Models = require('../../app_core/models/conection');
 const { Op } = Models.Sequelize;
 const Disponibilidad = require('./disponibilidadService');
 const Reglas = require('./reglasAgenda');
+const Composicion = require('./composicionCita');
+const Perfiles = require('../perfiles');
 
 /** Cuánto dura un hold si nadie dice otra cosa. */
 const TTL_MINUTOS_POR_DEFECTO = 10;
@@ -66,7 +68,8 @@ async function tomar(
 
     const servicios = await Models.ReservaServicio.findAll({
         where: { id_servicio: { [Op.in]: idServicios }, id_negocio: idNegocio, estado: 'A' },
-        attributes: ['id_servicio', 'duracion_min'],
+        attributes: ['id_servicio', 'nombre', 'duracion_min', 'precio', 'proceso_desde_min', 'proceso_min',
+                     'a_cotizar', 'id_tipo_recurso', 'requiere_consentimiento'],
     });
     if (servicios.length !== idServicios.length) {
         throw error('SERVICIO_NO_VALIDO', 'Algún servicio no es válido para este negocio.', 400);
@@ -80,8 +83,13 @@ async function tomar(
         throw error('PROFESIONAL_NO_VALIDO', 'Profesional no válido.', 404);
     }
 
+    // Misma composición que al crear la cita: si el hold midiera distinto, apartaría un hueco
+    // que la confirmación después rechazaría. Sin funciones (la barbería) es la suma de siempre.
+    const { funciones } = await Perfiles.perfilDeNegocio(idNegocio);
+    const ordenados = idServicios.map((id) => servicios.find((s) => s.id_servicio === Number(id)));
+    const comp = Composicion.componer(ordenados, { funciones });
     const inicio = parsearInicio(fechaHoraInicioISO);
-    const duracion = servicios.reduce((acc, s) => acc + s.duracion_min, 0);
+    const duracion = comp.duracion;
     const fin = Reglas.addMinutes(inicio, duracion);
 
     // Si quien llama ya tiene una transacción abierta, se trabaja dentro de la suya y NO se
@@ -100,9 +108,23 @@ async function tomar(
         });
 
         await Reglas.verificarReservable(
-            { idNegocio, idProfesional, inicio, fin, bufferMin: cfg.buffer_limpieza_min },
+            { idNegocio, idProfesional, inicio, fin, bufferMin: cfg.buffer_limpieza_min, tramos: comp.tramos },
             { transaction: t }
         );
+
+        // La cabina también se aparta: sin esto, el hold protegería al profesional pero no la
+        // sala, y otra terapeuta podría llevársela mientras el cliente confirma.
+        let idRecurso = null;
+        if (comp.idTipoRecurso) {
+            await Models.sequelize.query('SELECT pg_advisory_xact_lock(:espacio, :tipo);', {
+                replacements: { espacio: Reglas.ESPACIO_BLOQUEO_RECURSO, tipo: comp.idTipoRecurso },
+                transaction: t,
+            });
+            idRecurso = await Reglas.asignarRecurso(
+                { idNegocio, idTipoRecurso: comp.idTipoRecurso, inicio, fin, bufferMin: cfg.buffer_limpieza_min },
+                { transaction: t },
+            );
+        }
 
         const hold = await Models.ReservaHold.create(
             {
@@ -113,6 +135,7 @@ async function tomar(
                 expira_en: new Date(Date.now() + ttl * 60_000),
                 estado: 'activo',
                 id_servicios: idServicios,
+                id_recurso: idRecurso,
             },
             { transaction: t }
         );
