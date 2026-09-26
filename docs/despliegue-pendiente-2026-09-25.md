@@ -1,8 +1,11 @@
-# Despliegue pendiente — Mesas, Despacho, Pedidos, Caja y carta digital (2026-09-25)
+# Despliegue — Mesas, Despacho, Pedidos, Caja y carta digital (2026-09-25)
 
-> **Estado:** construido y probado en local (frontend `ng build` + Vitest; backend Jest contra la base
-> local). **Nada commiteado ni desplegado** desde el despliegue de la mañana del 2026-09-25
-> (`admin_ws` `d805d5c`, `restaurante_app` `9959540`, `admin_app-v21` `086400a`).
+> **Estado: DESPLEGADO** (2026-09-25, tarde). Este documento nació como la guía de la subida pendiente; todo
+> lo que describe ya está en producción. La versión definitiva de las **secciones de mesas** (entidad, no
+> texto libre) está en `secciones-de-mesas.md`, y el resumen completo de la sesión —despliegues, decisiones,
+> trampas y pendientes— en `sesion-2026-09-25-restaurante-y-carta.md`. **Ojo:** la migración
+> `migrate:restaurante-mesa-seccion` de aquí (texto libre) quedó **reemplazada** por
+> `migrate:restaurante-mesa-secciones`; la columna de texto se conserva pero ya no se usa.
 
 ## Qué entra
 

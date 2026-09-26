@@ -1,7 +1,9 @@
 # Secciones de las mesas («Piso 1», «Terraza»…)
 
-> **Estado (2026-09-25):** construido y probado en local (backend Jest 1360/1360 en verde; frontend Vitest
-> 215/215). **NADA desplegado todavía.**
+> **Estado (2026-09-25): DESPLEGADO en producción** (`admin_ws` `194171d`, `restaurante_app` `9c369ac`).
+> Migración corrida antes de reiniciar el backend; producción no tenía datos de la versión de texto libre
+> (0 de 27 mesas), así que no se movió ningún dato. Además de las secciones hay **pestañas** por sección en
+> Mesas («Todas» = vista agrupada; contadores por pestaña; la pestaña se recuerda por equipo y negocio).
 
 ## Qué es y por qué
 
