@@ -1,8 +1,10 @@
 # Despliegue 2026-09-26 — cobro duplicado, multipago, iconos de producto y perfiles de reserva
 
-> **Estado: EN CURSO.** Este documento se escribió antes de desplegar y se actualiza con lo que
-> pasó de verdad en la §7. Producción entra en `admin_ws` `a6948be` (+ los commits de esta tanda),
-> `negocio_app` `fb235b9` (+ esta tanda) y `admin_app_v21` `7c1bf58` (+ facturación).
+> **Estado: DESPLEGADO PARCIALMENTE (2026-09-26, 12:05–12:07).** Entró lo de **restaurante** y el
+> admin. **Los perfiles de reserva (§1.5), `reserva_app` y sus endpoints NO se desplegaron: decisión
+> del dueño.** Lo que pasó de verdad está en la §7. Este documento se escribió antes de desplegar y
+> planeaba subir reserva; las §3 y §5 describen ese plan completo, que sigue vigente para cuando se
+> decida subirla (ver §7.3).
 
 ## 1. Qué entra
 
@@ -190,7 +192,53 @@ restaura el respaldo en una base descartable (`sudo -u postgres createdb`, el ro
 
 ## 7. Registro de lo que pasó
 
-*(se completa durante el despliegue)*
+### 7.1 Qué se desplegó
+
+| Pieza | Producción antes | Producción ahora |
+|---|---|---|
+| `admin_ws` | `194171d` (rama `master`) | **`a944ea6`**, en la rama `prod-sin-reserva` |
+| `negocio_app` (`/restaurante/`) | `9c369ac` | `cebe303` |
+| `admin_app_v21` (`/admin/`) | `086400a` | `5888390` |
+| `reserva_app` (`/reserva/`) | sin cambios | sin cambios |
+
+Migración corrida en prod: `restaurante-iconos-productos` (10 de 10 negocios con iconos activos).
+Respaldos previos: `db_2026-09-26_1203.dump`, `uploads_2026-09-26_1203.tar.gz` y
+`front_{admin,restaurante}_pre-deploy_2026-09-26_1203.tar.gz` en `/home/escalapp/backups/`.
+Reversa rápida de los frontends: `/var/www/html/{admin,restaurante}.old` (el swap fue con dos `mv`).
+
+**Por qué `a944ea6` y no `master`.** `master` ya llevaba el trabajo de reserva (`71f9cd5`) encima del
+fix. Ese código declara columnas nuevas en los modelos de reserva: en producción, sin sus
+migraciones, las consultas de la barbería habrían fallado. `a944ea6` es hijo directo de `a6948be` y
+contiene solo 9 archivos de restaurante. El VPS quedó en la rama local `prod-sin-reserva` **sin
+upstream a propósito**: un `git pull` ahí falla en vez de traer reserva sin querer.
+
+### 7.2 Ensayo previo (copia de prod en `escalapp_ensayo`, ya borrada)
+
+- Migraciones dos veces: idempotentes.
+- Prueba funcional del guard con datos reales (10 controles, todos OK): recobrar el ORD-0555 → 409
+  `ORDEN_YA_COBRADA` sin crear INGRESO; cobrar el ORD-0655 (cancelado) → 409 `ORDEN_ANULADA`; un pedido
+  abierto SÍ se cobra, con 1 solo INGRESO firmado por quien cobra; segundo cobro → 409; **dos cobros
+  simultáneos: uno gana y el otro se rechaza**.
+- Tras el reinicio: 0 errores en el journal; un único 502 a las 12:05:38, la reconexión SSE en el
+  instante del reinicio. Línea base de duplicados en caja: **14** (no debe crecer).
+
+### 7.3 Pendiente de decisión
+
+1. **`migrate:restaurante-domiciliario-solo-suyos` NO se corrió.** El ensayo con datos reales mostró
+   que apagaría el permiso `despacho_ver_todos` en 4 filas por negocio con `puede_ver=true`:
+   ZONA BURGER (id 6, cliente pagador, 5 usuarios DOMICILIARIO), ICONIC (id 15, 3), El Callejero
+   (13, 0) y La Esquina del Barril (14, 0). `sesion-2026-09-25-26` §4 daba por hecho que ningún
+   negocio ajustaba ese permiso; los datos dicen lo contrario. Puede que esas filas las creara
+   `resolveDefaultSubnivelPermission` al abrir Roles (no deliberadas) o que sean elecciones reales:
+   hay que preguntarlo a los negocios antes de correrla. Hasta entonces sus repartidores siguen
+   viendo todo Despacho (statu quo, sin regresión).
+2. **Perfiles de reserva / `reserva_app`.** Para subirlos: el orden de la §3 (respaldo, ensayo,
+   `rubros-negocio` → `reserva-perfiles` → `reserva-estancias` → `reserva-subniveles` →
+   `intelligence-reportes`, `RESERVA_PORTAL_URL`, backend, frontends). `reserva_app` local tiene
+   2 merges sin empujar (`853045e`, `72447eb`). **El fix `fix/hora-chile` está en prod pero no en
+   `origin/main`** hasta que se empuje ese merge: mientras tanto, un deploy de `reserva_app` desde
+   `origin/main` lo revertiría.
+3. Retirar `/var/www/html/{admin,restaurante}.old` cuando se confirme que todo va bien.
 
 ## 8. Pendientes que NO entran aquí
 
