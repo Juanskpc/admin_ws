@@ -37,6 +37,12 @@ module.exports = (sequelize, DataTypes) => {
          */
         controla_inventario: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
         /**
+         * ¿Pedidos lista los productos con su icono, o solo con el nombre? Opt-OUT como
+         * `controla_inventario`: nace ENCENDIDO porque los iconos son lo que todos los
+         * negocios ven hoy, y lo que se activa aquí es quitarlos.
+         */
+        muestra_iconos_productos: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
+        /**
          * Opt-in: ¿el propio personal del negocio (mesero, cajero, administrador) puede
          * elegirse como domiciliario? Encendido, `listarDomiciliarios` lista a todo el
          * personal activo del negocio en vez de solo a quien tenga el rol DOMICILIARIO.

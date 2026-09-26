@@ -360,7 +360,13 @@ async function marcarPagado(req, res) {
         if (err.code === 'METODO_PAGO_REQUERIDO' || err.code === 'METODO_PAGO_INVALIDO') {
             return Respuesta.error(res, err.message, err.statusCode || 422, { code: err.code });
         }
-        if (['CAJA_CERRADA', 'CUENTA_REQUERIDA', 'CUENTA_SIN_SALDO', 'CUENTA_NO_EXISTE', 'CUENTA_INACTIVA'].includes(err.code)) {
+        if ([
+            'CAJA_CERRADA', 'CUENTA_REQUERIDA', 'CUENTA_SIN_SALDO', 'CUENTA_NO_EXISTE', 'CUENTA_INACTIVA',
+            // El pedido ya entró a caja o está anulado: no es un fallo del servidor, es que la
+            // pantalla de quien cobra venía vieja. Se reenvía el código para que el frontend
+            // refresque y lo diga con sus palabras.
+            'ORDEN_YA_COBRADA', 'ORDEN_ANULADA',
+        ].includes(err.code)) {
             return Respuesta.error(res, err.message, err.statusCode || 409, { code: err.code });
         }
         console.error('[Despacho] Error marcarPagado:', err.message);
@@ -471,6 +477,7 @@ async function cerrarOrden(req, res) {
         if ([
             'CAJA_CERRADA', 'METODO_PAGO_INVALIDO', 'METODO_PAGO_REQUERIDO',
             'CUENTA_REQUERIDA', 'CUENTA_SIN_SALDO', 'CUENTA_NO_EXISTE', 'CUENTA_INACTIVA',
+            'ORDEN_ANULADA',
         ].includes(err.code)) {
             return Respuesta.error(res, err.message, err.statusCode || 409, { code: err.code });
         }

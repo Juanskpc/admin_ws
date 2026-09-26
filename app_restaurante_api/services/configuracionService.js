@@ -112,6 +112,7 @@ async function getConfiguracionNegocio(idUsuario, idNegocio = null) {
             'pregunta_cobro_envio',
             'permite_cuentas_cliente',
             'controla_inventario',
+            'muestra_iconos_productos',
             'permite_domicilio_personal',
             'fecha_registro',
         ],
@@ -157,6 +158,7 @@ async function getConfiguracionNegocio(idUsuario, idNegocio = null) {
         pregunta_cobro_envio: !!negocio.pregunta_cobro_envio,
         permite_cuentas_cliente: !!negocio.permite_cuentas_cliente,
         controla_inventario: negocio.controla_inventario !== false,
+        muestra_iconos_productos: negocio.muestra_iconos_productos !== false,
         permite_domicilio_personal: !!negocio.permite_domicilio_personal,
         fecha_registro: negocio.fecha_registro,
         roles: acceso.roles,
@@ -246,6 +248,13 @@ async function updateConfiguracionNegocio(idUsuario, payload = {}) {
     if (payload.controla_inventario !== undefined) {
         patch.controla_inventario =
             payload.controla_inventario === true || payload.controla_inventario === 'true';
+    }
+
+    // Opt-OUT, como el de arriba: nace encendido porque los iconos son lo que el POS
+    // enseña hoy en todos los negocios. Lo que se activa aquí es quitarlos.
+    if (payload.muestra_iconos_productos !== undefined) {
+        patch.muestra_iconos_productos =
+            payload.muestra_iconos_productos === true || payload.muestra_iconos_productos === 'true';
     }
 
     if (payload.permite_domicilio_personal !== undefined) {

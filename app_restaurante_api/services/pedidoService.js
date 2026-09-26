@@ -1577,6 +1577,33 @@ async function marcarPagado(idOrden, { idMetodoPago, pagos, origenCobro = 'CAJA'
             return null;
         }
 
+        // Un pedido se cobra UNA vez. Sin esta guarda, volver a pulsar Cobrar sobre un pedido
+        // que ya entró a caja anota un segundo INGRESO por el mismo dinero: el turno cuadra de
+        // más y el cierre reporta una forma de pago inflada. Pasó de verdad (ORD-0555 de
+        // El Callejero, 2026-09-24): un cajero cobró el pedido desde su equipo y otro, con el
+        // detalle abierto desde antes y por tanto sin enterarse, volvió a cobrarlo tres
+        // minutos después.
+        //
+        // La comprobación va contra la fila ya bloqueada (`LOCK.UPDATE`), así que también
+        // cubre el caso rápido: dos peticiones a la vez se serializan y la segunda ve lo que
+        // dejó la primera.
+        //
+        // `id_caja` es la marca de «este pedido ya dejó plata en un turno», pero se mira
+        // también `estado_pago`, porque el cobro del domiciliario en la calle marca pagado sin
+        // caja (su plata entra después, al transferir) y repetirlo tampoco tiene sentido.
+        if (orden.id_caja || orden.estado_pago === 'pagado') {
+            const e = new Error(`El pedido ${orden.numero_orden} ya fue cobrado.`);
+            e.code = 'ORDEN_YA_COBRADA'; e.statusCode = 409;
+            throw e;
+        }
+        // Y lo que ya no existe no se cobra: un pedido cancelado devolvió sus insumos y no
+        // tiene contrapartida en el mostrador.
+        if (orden.estado === 'CANCELADA' || orden.estado === 'ANULADA') {
+            const e = new Error(`El pedido ${orden.numero_orden} está anulado y no se puede cobrar.`);
+            e.code = 'ORDEN_ANULADA'; e.statusCode = 409;
+            throw e;
+        }
+
         const esMultipago = Array.isArray(pagos) && pagos.length > 0;
 
         if (esMultipago) {
@@ -1621,7 +1648,11 @@ async function marcarPagado(idOrden, { idMetodoPago, pagos, origenCobro = 'CAJA'
             ? await cajaService.registrarIngresoOrden({
                 idNegocio:   orden.id_negocio,
                 idOrden:     orden.id_orden,
-                idUsuario:   orden.id_usuario,
+                // Quien COBRA, no quien tomó el pedido: el movimiento es la firma del cajero.
+                // Hasta el 2026-09-25 iba `orden.id_usuario`, y la caja atribuía el cobro al
+                // mesero que digitó la orden aunque lo hubiera cobrado otro — eso fue lo que
+                // despistó al auditar el ORD-0555 duplicado.
+                idUsuario:   idUsuario || orden.id_usuario,
                 monto:       orden.total,
                 numeroOrden: orden.numero_orden,
                 valorDomicilio: orden.valor_domicilio,
@@ -2012,6 +2043,13 @@ async function cerrarOrden(idOrden, { idUsuario, idMetodoPago, pagos, idCuenta =
         if (orden.estado === 'CERRADA') {
             await t.commit();
             return getOrdenById(idOrden);
+        }
+        // Un pedido cancelado o anulado ya devolvió sus insumos: cerrarlo le metería a la caja
+        // una venta que no existe. Misma regla que en `marcarPagado`.
+        if (orden.estado === 'CANCELADA' || orden.estado === 'ANULADA') {
+            const e = new Error(`El pedido ${orden.numero_orden} está anulado y no se puede cobrar.`);
+            e.code = 'ORDEN_ANULADA'; e.statusCode = 409;
+            throw e;
         }
 
         // Multipago: llega el desglose ahora, o la orden ya fue cobrada con

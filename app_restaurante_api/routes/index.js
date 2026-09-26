@@ -208,6 +208,7 @@ router.patch('/configuracion', [
 	body('pregunta_cobro_envio').optional().isBoolean(),
 	body('permite_cuentas_cliente').optional().isBoolean(),
 	body('controla_inventario').optional().isBoolean(),
+	body('muestra_iconos_productos').optional().isBoolean(),
 	body('id_paleta').optional({ nullable: true }).isInt({ min: 1 }),
 ], ConfiguracionController.updateConfiguracion);
 
