@@ -241,8 +241,11 @@ async function getVitrina(idNegocio) {
         id_profesionales: profesionalesPorServicio.get(s.id_servicio) || [],
         // Solo con la función encendida: sin ella el servicio se reserva con su precio de lista.
         a_cotizar: fx.has('a_cotizar') && !!s.a_cotizar,
-        precio_min: fx.has('a_cotizar') && s.precio_min != null ? Number(s.precio_min) : null,
-        precio_max: fx.has('a_cotizar') && s.precio_max != null ? Number(s.precio_max) : null,
+        // El rango NO depende de la función «a cotizar»: es una forma de presentar el precio
+        // («$25.000 - $40.000» según el largo del cabello) que cualquier negocio puede querer,
+        // tenga o no servicios que se cotizan aparte. Lo enciende el servicio, no el rubro.
+        precio_min: s.precio_min != null ? Number(s.precio_min) : null,
+        precio_max: s.precio_max != null ? Number(s.precio_max) : null,
         variantes: fx.has('variantes')
             ? (s.variantes || [])
                 .sort((a, b) => a.orden - b.orden || a.duracion_min - b.duracion_min)

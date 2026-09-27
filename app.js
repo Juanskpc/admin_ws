@@ -185,7 +185,10 @@ app.use(
 // `portafolio` y `unidades` son de los perfiles de rubro (trabajos de un tatuador, fotos de
 // una habitación). Las fichas de clientes (`uploads/reserva/fichas`) NO se listan aquí: llevan
 // consentimientos firmados y se descargan por una ruta con token.
-for (const carpeta of ['logos', 'servicios', 'profesionales', 'banners', 'portafolio', 'unidades']) {
+// `servicios_galeria` son las fotos extra de un servicio (el carrusel de su detalle). Faltaba
+// aquí desde que se creó la galería: los archivos se guardaban bien pero nadie los podía pedir,
+// así que el navegador pintaba el icono de imagen rota tanto en el editor como en el portal.
+for (const carpeta of ['logos', 'servicios', 'servicios_galeria', 'profesionales', 'banners', 'portafolio', 'unidades']) {
     app.use(
         `/uploads/reserva/${carpeta}`,
         express.static(path.join(__dirname, 'uploads', 'reserva', carpeta), {
