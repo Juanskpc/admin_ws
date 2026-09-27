@@ -56,7 +56,7 @@ async function migrar() {
               JOIN general.gener_rol r     ON r.id_rol = nn.id_rol
              WHERE nn.estado = 'A'
              GROUP BY nn.id_negocio, nn.id_rol, n.nombre, r.descripcion
-            HAVING bool_and(nv.url = ANY(:nuevas));
+            HAVING bool_and(nv.url IN (:nuevas));
         `, { replacements: { nuevas: VISTAS_NUEVAS }, type: sequelize.QueryTypes.SELECT, transaction: t });
 
         if (huerfanos.length === 0) {
@@ -92,7 +92,7 @@ async function migrar() {
                      SELECT id_tipo_negocio FROM general.gener_tipo_negocio WHERE nombre = 'RESERVA')
              GROUP BY n.nombre, r.descripcion
             HAVING COUNT(*) FILTER (WHERE nn.puede_ver) = 0
-                OR bool_and(nv.url = ANY(:nuevas));
+                OR bool_and(nv.url IN (:nuevas));
         `, { replacements: { nuevas: VISTAS_NUEVAS }, type: sequelize.QueryTypes.SELECT });
 
         console.log('=== Resultado ===');
