@@ -6,11 +6,19 @@
  *
  * 1. La fila de `gener_nivel` (tipo 1) colgando del raíz `/reserva`.
  * 2. La plantilla por rol (`gener_rol_nivel`).
- * 3. El ajuste por negocio (`gener_nivel_negocio`) **solo en los negocios que ya tienen
- *    ajustes**. Esa condición importa: `getPermisosVistaNegocio` trata la presencia de ajustes
- *    como «este negocio decide qué ve cada rol», así que sembrar una fila en un negocio sin
- *    ajustes le haría perder todas las demás vistas. La receta de `/clientes` no la tenía porque
+ * 3. El ajuste por negocio (`gener_nivel_negocio`) **solo en los pares (negocio, rol) que ya
+ *    tienen ajustes**. Esa condición importa: `getPermisosVistaNegocio` trata la presencia de
+ *    ajustes como «este negocio decide qué ve cada rol», así que sembrar una fila donde no había
+ *    ninguna le haría perder todas las demás vistas. La receta de `/clientes` no la tenía porque
  *    en ese momento todos los negocios tenían ajustes; aquí se pone por escrito.
+ *
+ *    **Por rol, no por negocio** (2026-09-27): la condición miraba solo el negocio, y la
+ *    resolución de permisos es por (negocio, rol). Un negocio con ajustes de PROFESIONAL y
+ *    ninguno de ADMINISTRADOR pasaba el filtro, se le sembraban las vistas nuevas al
+ *    ADMINISTRADOR —que hasta entonces heredaba las 16 de la plantilla— y se quedaba viendo
+ *    solo esas. Le pasó a D'ALEX BARBERIA al desplegar perfiles y estancias: su administrador
+ *    entró a «Sin acceso al módulo de reservas». Lo repara
+ *    `migrate_reserva_reparar_vistas_negocio.js`.
  *
  * Que la vista exista para todo el módulo no significa que todos la vean: el perfil del rubro
  * la quita de la sesión si su función no está activa (`app_reserva_api/perfiles`).
@@ -89,7 +97,7 @@ async function publicarVista(sequelize, t, { url, descripcion, icono, roles }) {
           WHERE neg.id_tipo_negocio = :tipo AND neg.estado = 'A'
             AND EXISTS (
                 SELECT 1 FROM general.gener_nivel_negocio x
-                 WHERE x.id_negocio = neg.id_negocio AND x.estado = 'A'
+                 WHERE x.id_negocio = neg.id_negocio AND x.id_rol = rn.id_rol AND x.estado = 'A'
             )
          ON CONFLICT (id_negocio, id_rol, id_nivel) DO NOTHING;`,
         { replacements: { tipo: idTipo, url }, transaction: t },

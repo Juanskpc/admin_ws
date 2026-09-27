@@ -28,6 +28,7 @@
     "migrate:reserva-caja": "node migrations/migrate_reserva_caja.js",
     "migrate:reserva-caja-anular": "node migrations/migrate_reserva_caja_anular_movimiento.js",
     "migrate:negocio-slug": "node migrations/migrate_negocio_slug.js",
+    "migrate:reserva-reparar-vistas": "node migrations/migrate_reserva_reparar_vistas_negocio.js",
     "migrate:reserva-usuarios": "node migrations/migrate_reserva_usuarios.js",
     "migrate:reserva-subniveles": "node migrations/migrate_reserva_subniveles.js",
     "migrate:reserva-eliminar": "node migrations/migrate_reserva_eliminar.js",
