@@ -28,16 +28,22 @@ const sequelize = db.sequelize;
  * @param {number}  datos.idNegocio
  * @param {string}  datos.telefono   — en crudo, tal como lo capturó el formulario.
  * @param {string}  [datos.nombre]
+ * @param {string}  [datos.pais]     — país del propio cliente (ISO alfa-2), si el formulario lo
+ *                  capturó. Sin él, se asume el país del negocio (lo de siempre).
  * @param {Object}  [opciones]
  * @param {Object}  [opciones.transaction]
  * @returns {Promise<string|null>} id_persona_negocio, o null si el teléfono no es utilizable.
  */
-async function resolverOCrear({ idNegocio, telefono, nombre = null }, { transaction } = {}) {
-    // El país lo decide el negocio, no la plataforma: un salón chileno guarda +56 y uno
-    // colombiano +57. Sin esto, el móvil de un cliente chileno se consideraba basura y la
+async function resolverOCrear({ idNegocio, telefono, nombre = null, pais = null }, { transaction } = {}) {
+    // El país lo decide el negocio por defecto, no la plataforma: un salón chileno guarda +56 y
+    // uno colombiano +57. Sin esto, el móvil de un cliente chileno se consideraba basura y la
     // cita se guardaba sin ficha, en silencio. Ver helpers/telefono.js.
-    const pais = await paisDeNegocio(idNegocio, { transaction });
-    const telefonoE164 = normalizarE164(telefono, pais);
+    //
+    // Si el propio formulario capturó el país del cliente (portal público con selector), ese
+    // manda: un turista peruano agendando en un negocio colombiano no es un teléfono colombiano
+    // mal escrito, es un teléfono peruano bueno.
+    const paisResuelto = pais || await paisDeNegocio(idNegocio, { transaction });
+    const telefonoE164 = normalizarE164(telefono, paisResuelto);
     if (!telefonoE164) return null;
 
     const nombreLimpio = nombre ? String(nombre).trim() || null : null;

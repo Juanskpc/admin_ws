@@ -5,6 +5,20 @@ const planHelper = require('../helpers/planHelper');
 const usuarioAdminDao = require('./usuarioAdminDao');
 const datosFiscales = require('../facturacion/datosFiscales');
 const tipoOperativo = require('../helpers/tipoNegocioOperativo');
+const { generarSlugUnico } = require('../helpers/slug');
+
+/** Slug único para un negocio nuevo, a partir de su nombre. Comparte generador con el backfill de `migrate_negocio_slug.js`. */
+async function slugParaNegocioNuevo(nombre, t) {
+    return generarSlugUnico(nombre, async (candidato) => {
+        const existente = await Models.GenerNegocio.findOne({
+            where: Models.sequelize.where(
+                Models.sequelize.fn('lower', Models.sequelize.col('slug')), candidato,
+            ),
+            transaction: t, attributes: ['id_negocio'],
+        });
+        return !!existente;
+    });
+}
 
 /**
  * Obtiene la lista de negocios activos.
@@ -48,6 +62,9 @@ async function createNegocio(negocio, t) {
         datos.id_rubro = idRubro;
         datos.id_tipo_negocio = idModulo;
     }
+    // No pisa un slug que el caller ya haya puesto a mano; si no trae ninguno, se genera aquí
+    // para que ningún negocio nazca sin URL propia.
+    if (!datos.slug) datos.slug = await slugParaNegocioNuevo(datos.nombre, t);
     const creado = await Models.GenerNegocio.create(datos, options);
     // Todo negocio nace con su ficha fiscal, en modo NINGUNO: no le pide nada al cliente, pero
     // evita que existan negocios sin ficha, que es un segundo estado posible para lo mismo.
@@ -443,6 +460,7 @@ async function registrarCliente({ negocio, plan, admin, id_usuario_existente }) 
     const transaction = await initTransaction();
     try {
         // 1. Negocio
+        const slug = await slugParaNegocioNuevo(negocio.nombre, transaction);
         const nuevo = await Models.GenerNegocio.create({
             nombre: negocio.nombre,
             nit: negocio.nit ?? null,
@@ -451,6 +469,7 @@ async function registrarCliente({ negocio, plan, admin, id_usuario_existente }) 
             direccion: negocio.direccion ?? null,
             id_tipo_negocio: idModulo,
             id_rubro: idRubro,
+            slug,
             // Sin país explícito queda 'CO' por el DEFAULT de la columna: es lo que eran
             // todos los negocios hasta que apareció el primero chileno.
             ...(negocio.pais ? { pais: String(negocio.pais).toUpperCase() } : {}),

@@ -19,6 +19,13 @@ module.exports = (sequelize, DataTypes) => {
     proceso_min:         { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
     /** El precio y la duración se fijan en la cita (tatuajes): el catálogo da una referencia. */
     a_cotizar:           { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+    /**
+     * Rango de referencia de un servicio «a cotizar» («$80.000 - $150.000»): orienta al cliente
+     * en el portal sin fijar el precio, que se acuerda al atender. NULL = sin pista de precio,
+     * lo de siempre. Ver `servicioService.validarRangoPrecio`.
+     */
+    precio_min:          { type: DataTypes.DECIMAL(14, 2), allowNull: true },
+    precio_max:          { type: DataTypes.DECIMAL(14, 2), allowNull: true },
     requiere_consentimiento: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
     /** Cabina, sala o equipo que ocupa el servicio. NULL = no consulta ningún recurso. */
     id_tipo_recurso:     { type: DataTypes.INTEGER, allowNull: true },

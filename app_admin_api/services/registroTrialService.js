@@ -22,6 +22,7 @@ const datosFiscales = require('../../app_core/facturacion/datosFiscales');
 const { asegurarCajaPrincipal } = require('../../app_core/helpers/cajaPrincipal');
 const { syncUsuarioRolActivo, rebuildNivelesUsuario } = require('../../app_core/dao/usuarioAdminDao');
 const tipoOperativo = require('../../app_core/helpers/tipoNegocioOperativo');
+const { generarSlugUnico } = require('../../app_core/helpers/slug');
 
 const TIPO        = 'REGISTRO';
 const MAX_ATTEMPTS = parseInt(process.env.OTP_MAX_ATTEMPTS || '5', 10);
@@ -189,12 +190,27 @@ async function verificarYCrearCuentaTrial(email, code) {
         // aparte: así el que se registra como pizzería ve «Mi Pizzería» y no «Mi Restaurante»,
         // que es lo que veía antes y le hacía dudar de si se había equivocado.
         const nombreNegocio = rubro?.etiqueta ? `Mi ${rubro.etiqueta}` : 'Mi Sucursal';
+        // Slug desde ya, aunque el nombre sea genérico («mi-heladeria-8»): así la URL propia y
+        // el icono del portal (ver `manifest.webmanifest`) funcionan desde el primer día, sin
+        // esperar a que el dueño entre a Configuración a ponerle su nombre real. Puede
+        // personalizarlo luego desde ahí sin perder lo que ya haya compartido — no se regenera
+        // solo porque cambie `nombre`.
+        const slug = await generarSlugUnico(nombreNegocio, async (candidato) => {
+            const existente = await Models.GenerNegocio.findOne({
+                where: Models.sequelize.where(
+                    Models.sequelize.fn('lower', Models.sequelize.col('slug')), candidato,
+                ),
+                transaction, attributes: ['id_negocio'],
+            });
+            return !!existente;
+        });
         const nuevoNegocio  = await Models.GenerNegocio.create({
             nombre:          nombreNegocio,
             // El módulo manda sobre roles y permisos; el rubro es lo que el cliente dijo ser.
             id_tipo_negocio: idTipoNegocio,
             id_rubro:        rubro?.id_tipo_negocio ?? null,
             email_contacto:  normalizedEmail,
+            slug,
             estado:          'A',
         }, { transaction });
         idNegocio = nuevoNegocio.id_negocio;

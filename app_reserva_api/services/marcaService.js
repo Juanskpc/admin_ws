@@ -1,6 +1,7 @@
 'use strict';
 const Models = require('../../app_core/models/conection');
 const ImagenService = require('./imagenService');
+const { slugificar, esSlugValido, RESERVADOS } = require('../../app_core/helpers/slug');
 
 /**
  * Identidad visual del negocio: logo y colores.
@@ -39,7 +40,7 @@ function normalizarHex(valor, campo) {
 
 async function getNegocio(idNegocio) {
     const negocio = await Models.GenerNegocio.findByPk(idNegocio, {
-        attributes: ['id_negocio', 'nombre', 'logo_url', 'banner_url', 'colores', 'id_paleta'],
+        attributes: ['id_negocio', 'nombre', 'logo_url', 'banner_url', 'colores', 'id_paleta', 'slug'],
     });
     if (!negocio) throw error('Negocio no encontrado.', 404);
     return negocio;
@@ -62,12 +63,54 @@ async function getMarca(idNegocio) {
         banner_url: negocio.banner_url,
         colores: negocio.colores ?? null,
         id_paleta: negocio.id_paleta ?? null,
+        slug: negocio.slug ?? null,
         paletas: paletas.map(p => ({
             id_paleta: p.id_paleta,
             nombre: p.nombre,
             colores: p.colores,
         })),
     };
+}
+
+/**
+ * Cambia la URL propia del negocio (`<slug>.escalapp.cloud`).
+ *
+ * A mano, no solo al crearlo: el slug automático de un trial sale del nombre genérico
+ * («mi-barberia-8»), y el dueño quiere algo con su marca de verdad («dalex-barberia»). Se valida
+ * la forma aquí (minúsculas, dígitos, guiones, sin uno al borde) y la unicidad la vuelve a
+ * comprobar el índice de la base — la carrera entre dos peticiones la gana él, no esta función.
+ */
+async function actualizarSlug({ idNegocio, slug }) {
+    const negocio = await getNegocio(idNegocio);
+    const limpio = slugificar(String(slug || '').toLowerCase());
+
+    if (!esSlugValido(limpio)) {
+        throw error('La URL debe tener entre 2 y 50 caracteres: minúsculas, números y guiones, sin empezar ni terminar en guion.');
+    }
+    if (RESERVADOS.has(limpio)) {
+        throw error('Esa URL está reservada. Elige otra.');
+    }
+    if (limpio === negocio.slug) return { slug: limpio };
+
+    const choque = await Models.GenerNegocio.findOne({
+        where: Models.sequelize.and(
+            Models.sequelize.where(Models.sequelize.fn('lower', Models.sequelize.col('slug')), limpio),
+            { id_negocio: { [Models.Sequelize.Op.ne]: idNegocio } },
+        ),
+        attributes: ['id_negocio'],
+    });
+    if (choque) throw error('Esa URL ya la tiene otro negocio. Elige otra.', 409);
+
+    try {
+        await Models.sequelize.transaction((t) => negocio.update({ slug: limpio }, { transaction: t }));
+    } catch (err) {
+        // El índice único es la autoridad final frente a una carrera entre dos peticiones con
+        // el mismo slug a la vez; la comprobación de arriba es solo para el caso normal, que da
+        // un mensaje más claro que un 23505 crudo.
+        if (err?.original?.code === '23505') throw error('Esa URL ya la tiene otro negocio. Elige otra.', 409);
+        throw err;
+    }
+    return { slug: limpio };
 }
 
 /** Guarda colores propios. `id_paleta` queda a null: a partir de aquí manda lo elegido a mano. */
@@ -159,4 +202,5 @@ module.exports = {
     eliminarLogo,
     guardarBanner,
     eliminarBanner,
+    actualizarSlug,
 };

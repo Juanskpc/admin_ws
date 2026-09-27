@@ -61,6 +61,12 @@ app.use(cors((req, callback) => {
             if (!origin) return cb(null, true);
             if (origin === origenPropio) return cb(null, true);
             if (allowedOrigins.includes(origin)) return cb(null, true);
+            // Subdominio propio de un negocio (dalex-barberia.escalapp.cloud): son ilimitados y
+            // se crean solos (ver migrate_negocio_slug.js), así que no pueden vivir en la lista
+            // fija de CORS_ORIGIN — habría que tocarla por cada negocio nuevo, justo lo que esta
+            // función existe para evitar. Solo HTTPS y solo bajo escalapp.cloud, nunca un dominio
+            // cualquiera que decida llamarse igual.
+            if (/^https:\/\/[a-z0-9-]+\.escalapp\.cloud$/i.test(origin)) return cb(null, true);
 
             const error = new Error(`CORS: origen no permitido — ${origin}`);
             error.code = 'CORS_ORIGEN_NO_PERMITIDO';

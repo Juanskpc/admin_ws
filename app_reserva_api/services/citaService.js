@@ -92,6 +92,8 @@ async function generarCodigoLibre({ transaction } = {}) {
  * @param {string}   params.fechaHoraInicioISO   "2026-05-08T10:00:00" (hora Bogotá)
  * @param {string}   params.clienteNombre
  * @param {string=}  params.clienteTelefono
+ * @param {string=}  params.clientePais    ISO alfa-2 del teléfono del cliente. Sin él, se asume
+ *                   el país del negocio (lo de siempre; ver personaNegocioDao.resolverOCrear).
  * @param {string=}  params.clienteEmail
  * @param {string=}  params.notas
  * @param {string=}  params.comprobantePath     Ruta relativa del archivo subido
@@ -166,7 +168,7 @@ async function validarProfesionalYServicios(
 async function crearCita(params, { transaction: transaccionExterna = null } = {}) {
     const {
         idNegocio, idProfesional, idServicios = [],
-        fechaHoraInicioISO, clienteNombre, clienteTelefono, clienteEmail, notas,
+        fechaHoraInicioISO, clienteNombre, clienteTelefono, clientePais = null, clienteEmail, notas,
         comprobantePath, creadoPorIdUsuario, consumirHoldId = null,
         // Perfiles de rubro. Todos opcionales: sin ellos la cita es la de siempre.
         variantes = null, ajustes = null, idMascota = null, mascota = null,
@@ -281,7 +283,7 @@ async function crearCita(params, { transaction: transaccionExterna = null } = {}
         // teléfono no es un móvil colombiano utilizable.
         let idPersonaNegocio = clienteTelefono
             ? await personaNegocioDao.resolverOCrearBestEffort(
-                  { idNegocio, telefono: clienteTelefono, nombre: clienteNombre },
+                  { idNegocio, telefono: clienteTelefono, nombre: clienteNombre, pais: clientePais },
                   { transaction: t }
               )
             : null;
@@ -323,6 +325,7 @@ async function crearCita(params, { transaction: transaccionExterna = null } = {}
             estado: 'pendiente',
             cliente_nombre: clienteNombre,
             cliente_telefono: clienteTelefono || null,
+            cliente_pais: clientePais || null,
             cliente_email: clienteEmail || null,
             notas: notasFinales,
             creado_por_id_usuario: creadoPorIdUsuario || null,

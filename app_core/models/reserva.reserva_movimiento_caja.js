@@ -14,6 +14,11 @@ module.exports = (sequelize, DataTypes) => {
     id_metodo_pago: DataTypes.INTEGER,
     id_usuario:     { type: DataTypes.INTEGER, allowNull: false },
     fecha:          { type: DataTypes.DATE, allowNull: false, defaultValue: DataTypes.NOW },
+    // Anular, no borrar: el movimiento se queda en la tabla para trazabilidad, pero deja de
+    // sumar en `getTotales` / `getDesglosePorMetodo` / `getResumenPorProfesional`.
+    anulado:           { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+    fecha_anulado:     DataTypes.DATE,
+    id_usuario_anulo:  DataTypes.INTEGER,
   }, {
     tableName: 'reserva_movimiento_caja', schema: 'reserva', timestamps: false,
   });
@@ -25,6 +30,7 @@ module.exports = (sequelize, DataTypes) => {
     ReservaMovimientoCaja.belongsTo(models.ReservaProfesional, { foreignKey: 'id_profesional', as: 'profesional' });
     ReservaMovimientoCaja.belongsTo(models.ReservaMetodoPago,  { foreignKey: 'id_metodo_pago', as: 'metodoPago' });
     ReservaMovimientoCaja.belongsTo(models.GenerUsuario,       { foreignKey: 'id_usuario',     as: 'usuario' });
+    ReservaMovimientoCaja.belongsTo(models.GenerUsuario,       { foreignKey: 'id_usuario_anulo', as: 'usuarioAnulo' });
   };
 
   return ReservaMovimientoCaja;

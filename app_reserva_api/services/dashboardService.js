@@ -249,6 +249,15 @@ async function verificarAccesoReserva(idUsuario) {
 
     const idNegocios = negociosUsuario.map(nu => nu.negocio.id_negocio);
 
+    // Con qué ficha de agenda queda enlazado este usuario en cada negocio, si con alguna. La
+    // usa el permiso «editar solo mi horario»: sin esto el frontend no tendría forma de saber
+    // cuál, de todas las filas de `reserva_profesional`, es «la del que entró».
+    const misFichas = await Models.ReservaProfesional.findAll({
+        where: { id_usuario: idUsuario, id_negocio: idNegocios },
+        attributes: ['id_profesional', 'id_negocio', 'nombre'],
+    });
+    const fichaPorNegocio = new Map(misFichas.map(f => [f.id_negocio, f]));
+
     const rolesUsuario = await Models.GenerUsuarioRol.findAll({
         where: { id_usuario: idUsuario, estado: 'A', id_negocio: idNegocios },
         include: [{ model: Models.GenerRol, as: 'rol', attributes: ['id_rol', 'descripcion'] }],
@@ -316,6 +325,10 @@ async function verificarAccesoReserva(idUsuario) {
             // colombianos antes de corregirse.
             pais: neg.pais || null,
             moneda: monedaDePais(neg.pais),
+            mi_profesional: (() => {
+                const f = fichaPorNegocio.get(neg.id_negocio);
+                return f ? { id_profesional: f.id_profesional, nombre: f.nombre } : null;
+            })(),
             roles,
             permisos_vista,
             permisos_subnivel,

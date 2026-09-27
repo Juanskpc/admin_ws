@@ -57,6 +57,20 @@ async function aplicarPaleta(req, res) {
     }
 }
 
+/** PUT /reserva/marca/slug */
+async function actualizarSlug(req, res) {
+    if (!check(req, res)) return;
+    try {
+        const data = await MarcaService.actualizarSlug({
+            idNegocio: Number(req.body.id_negocio),
+            slug: req.body.slug,
+        });
+        return Respuesta.success(res, 'URL actualizada', data);
+    } catch (err) {
+        return fallo(res, err, 'actualizarSlug', 'Error al actualizar la URL.');
+    }
+}
+
 /** DELETE /reserva/marca/colores?id_negocio=N */
 async function restablecerColores(req, res) {
     if (!check(req, res)) return;
@@ -230,4 +244,5 @@ module.exports = {
     subirBanner, eliminarBanner,
     subirImagenServicio, eliminarImagenServicio,
     subirFotoProfesional, eliminarFotoProfesional,
+    actualizarSlug,
 };

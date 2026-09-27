@@ -42,6 +42,9 @@ const TIPOS = {
     // portal. Los archivos de la ficha NO pasan por aquí: son privados (ver fichaService).
     portafolio:  { carpeta: 'portafolio',    prefijo: 'trabajo' },
     unidad:      { carpeta: 'unidades',      prefijo: 'unidad' },
+    // Galería de un servicio: varias fotos aparte de la portada (`servicio`). Carpeta propia
+    // porque comparten prefijo de id con `servicio` y se pisarían si fueran la misma carpeta.
+    servicio_galeria: { carpeta: 'servicios_galeria', prefijo: 'foto' },
 };
 
 const EXTENSIONES = { 'image/webp': 'webp', 'image/jpeg': 'jpg', 'image/png': 'png' };

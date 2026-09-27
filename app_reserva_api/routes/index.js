@@ -33,6 +33,7 @@ const { exigirVista } = require('../middleware/exigirVista');
 const { exigirFuncion } = require('../middleware/exigirFuncion');
 const Perfil       = require('../controllers/perfilController');
 const Estancias    = require('../controllers/estanciaController');
+const ServicioGaleria = require('../controllers/servicioImagenController');
 
 // ───────── Multer: comprobantes de pago ─────────
 const COMPROBANTES_BASE = path.resolve(path.join(__dirname, '..', '..', 'uploads', 'reserva', 'comprobantes'));
@@ -94,6 +95,8 @@ const validadoresPerfilServicio = [
     body('proceso_desde_min').optional({ nullable: true }).isInt({ min: 0, max: 600 }),
     body('proceso_min').optional({ nullable: true }).isInt({ min: 0, max: 600 }),
     body('a_cotizar').optional().isBoolean(),
+    body('precio_min').optional({ nullable: true, checkFalsy: true }).isFloat({ min: 0 }),
+    body('precio_max').optional({ nullable: true, checkFalsy: true }).isFloat({ min: 0 }),
     body('requiere_consentimiento').optional().isBoolean(),
     body('id_tipo_recurso').optional({ nullable: true, checkFalsy: true }).isInt({ min: 1 }),
     body('variantes').optional({ nullable: true }).isArray({ max: 20 }),
@@ -126,6 +129,14 @@ router.post('/auth/canjear-codigo',
 );
 
 // Flujo cliente público
+//
+// `/publico/dominio/:slug` y `/publico/verificar-dominio` van ANTES que `/publico/:id_negocio/*`:
+// con el orden inverso, Express probaría a leer "dominio" como si fuera un `id_negocio`.
+router.get('/publico/dominio/:slug', Publico.getPorDominio);
+router.get('/publico/verificar-dominio', Publico.verificarDominio);
+router.get('/publico/:id_negocio/manifest.webmanifest',
+    [param('id_negocio').isInt({ min: 1 })],
+    Publico.getManifest);
 router.get('/publico/:id_negocio/info',
     [param('id_negocio').isInt({ min: 1 })],
     Publico.getInfoNegocio);
@@ -231,6 +242,16 @@ router.get('/publico/ical/:token', Estancias.icalExportar);
 router.get('/publico/cita/:codigo_publico', [codigoValido], Publico.consultarCita);
 router.post('/publico/cita/:codigo_publico/cancelar', [codigoValido], Publico.cancelarCitaPublica);
 
+// Catálogo de países: código, nombre, indicativo telefónico y moneda.
+//
+// Existe como ruta suelta porque el selector de indicativo del teléfono vive en Usuarios y en
+// Profesionales, que no cargan la configuración del negocio — y también en el portal público al
+// agendar, que no tiene sesión. La alternativa era escribir la lista de prefijos en el frontend,
+// y entonces añadir un país en `helpers/paises.js` dejaría de bastar. No lleva `id_negocio`: es
+// catálogo de plataforma, igual para todos. Va ANTES de `verificarToken` a propósito: sin
+// sesión el portal público también necesita pintar el selector con bandera e indicativo.
+router.get('/paises', (_req, res) => Respuesta.success(res, 'Países', paisesParaSeleccion()));
+
 // ═════════ RUTAS PROTEGIDAS ═════════
 router.use(verificarToken);
 
@@ -241,14 +262,6 @@ router.use(exigirPertenenciaNegocio);
 
 router.get('/dashboard/resumen', [query('id_negocio').isInt({ min: 1 })], Dashboard.getResumen);
 router.get('/perfil', Dashboard.getPerfil);
-
-// Catálogo de países: código, nombre, indicativo telefónico y moneda.
-//
-// Existe como ruta suelta porque el selector de indicativo del teléfono vive en Usuarios y en
-// Profesionales, que no cargan la configuración del negocio. La alternativa era escribir la
-// lista de prefijos en el frontend, y entonces añadir un país en `helpers/paises.js` dejaría
-// de bastar. No lleva `id_negocio`: es catálogo de plataforma, igual para todos.
-router.get('/paises', (_req, res) => Respuesta.success(res, 'Países', paisesParaSeleccion()));
 
 // Servicios
 router.get('/servicios', [query('id_negocio').isInt({ min: 1 })], Servicios.listar);
@@ -509,6 +522,12 @@ router.post('/marca/logo',
 router.delete('/marca/logo', [
     query('id_negocio').isInt({ min: 1 }),
 ], exigirAccion('configuracion_cobros'), Marca.eliminarLogo);
+// URL propia del negocio (`<slug>.escalapp.cloud`). La forma se valida otra vez en el servicio
+// (`esSlugValido`); aquí solo se exige longitud y que no llegue vacío.
+router.put('/marca/slug', [
+    body('id_negocio').isInt({ min: 1 }),
+    body('slug').isString().trim().isLength({ min: 2, max: 63 }),
+], exigirAccion('configuracion_cobros'), Marca.actualizarSlug);
 
 // ── Imagen de un servicio ──
 router.post('/servicios/:id/imagen',
@@ -520,6 +539,18 @@ router.delete('/servicios/:id/imagen', [
     param('id').isInt({ min: 1 }),
     query('id_negocio').isInt({ min: 1 }),
 ], Marca.eliminarImagenServicio);
+
+// ── Galería de un servicio (varias fotos, aparte de la portada de arriba) ──
+router.get('/servicios/:id/galeria', [
+    param('id').isInt({ min: 1 }), query('id_negocio').isInt({ min: 1 }),
+], ServicioGaleria.listar);
+router.post('/servicios/:id/galeria', uploadImagen.single('imagen'), [
+    param('id').isInt({ min: 1 }), body('id_negocio').isInt({ min: 1 }),
+    body('descripcion').optional({ nullable: true }).isString().isLength({ max: 200 }),
+], exigirVista('/servicios'), ServicioGaleria.agregar);
+router.delete('/servicios/galeria/:idImagen', [
+    param('idImagen').isInt({ min: 1 }), query('id_negocio').isInt({ min: 1 }),
+], exigirVista('/servicios'), ServicioGaleria.eliminar);
 
 // ── Categorías del catálogo ──
 //
@@ -573,6 +604,7 @@ router.get('/vitrina', [query('id_negocio').isInt({ min: 1 })], Vitrina.get);
 router.put('/vitrina', [
     body('id_negocio').isInt({ min: 1 }),
     body('telefono').optional({ nullable: true }).isString().isLength({ max: 30 }),
+    body('pais').optional({ nullable: true, checkFalsy: true }).isIn(paisesSoportados()),
     body('direccion').optional({ nullable: true }).isString().isLength({ max: 255 }),
     body('url_whatsapp').optional({ nullable: true }).isString().isLength({ max: 300 }),
     body('url_facebook').optional({ nullable: true }).isString().isLength({ max: 300 }),
@@ -689,9 +721,11 @@ router.post('/caja/movimiento', [
     body('tipo').isIn(['INGRESO', 'EGRESO', 'ingreso', 'egreso']),
     body('monto').isFloat({ gt: 0 }),
     body('concepto').optional({ nullable: true }).isString().isLength({ max: 255 }),
-    body('id_metodo_pago').optional({ nullable: true, checkFalsy: true }).isInt({ min: 1 }),
+    // Obligatoria en ingreso y egreso: sin forma de pago no hay de qué método restar o sumar al
+    // cuadrar el cajón, y el movimiento quedaba huérfano en «Sin forma de pago».
+    body('id_metodo_pago').isInt({ min: 1 }),
 ], exigirAccion('caja_movimiento'), Caja.registrarMovimiento);
-// Borrar un movimiento del turno abierto: el error de dedo que descuadra la caja. Va antes de
+// Anular un movimiento del turno abierto: el error de dedo que descuadra la caja. Va antes de
 // `/caja/:id` para que Express no lea «movimiento» como un id.
 router.delete('/caja/movimiento/:id', [
     param('id').isInt({ min: 1 }),

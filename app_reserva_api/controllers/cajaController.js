@@ -121,23 +121,24 @@ async function getDetalle(req, res) {
 }
 
 /**
- * DELETE /reserva/caja/movimiento/:id?id_negocio= — borra un movimiento del turno abierto.
+ * DELETE /reserva/caja/movimiento/:id?id_negocio= — anula un movimiento del turno abierto.
  *
  * Protegida por `exigirAccion('caja_eliminar')` en la ruta. El servicio exige que el turno siga
- * abierto y deja el rastro en auditoría.
+ * abierto, deja el movimiento en la tabla (marcado `anulado`, para trazabilidad) y deja el rastro
+ * en auditoría.
  */
 async function eliminarMovimiento(req, res) {
     if (!check(req, res)) return;
     try {
-        const borrado = await CajaService.eliminarMovimiento({
+        const anulado = await CajaService.eliminarMovimiento({
             idMovimiento: Number(req.params.id),
             idNegocio: Number(req.query.id_negocio),
             idUsuario: req.usuario?.id_usuario,
         });
-        if (!borrado) return Respuesta.error(res, 'Movimiento no encontrado en el turno abierto.', 404);
-        return Respuesta.success(res, 'Movimiento eliminado', borrado);
+        if (!anulado) return Respuesta.error(res, 'Movimiento no encontrado en el turno abierto.', 404);
+        return Respuesta.success(res, 'Movimiento anulado', anulado);
     } catch (err) {
-        return fallo(res, err, 'eliminarMovimiento', 'Error al eliminar el movimiento.');
+        return fallo(res, err, 'eliminarMovimiento', 'Error al anular el movimiento.');
     }
 }
 

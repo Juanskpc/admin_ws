@@ -59,6 +59,13 @@ module.exports = (sequelize, DataTypes) => {
          * de modo que el resto del sistema lee siempre de un único sitio.
          */
         colores: DataTypes.JSONB,
+        /**
+         * Identidad del negocio en su propia URL: `<slug>.escalapp.cloud`. Único (sin distinguir
+         * mayúsculas, ver el índice de `migrate_negocio_slug.js`), generado solo al crear el
+         * negocio o desde `PUT /reserva/marca/slug` — nunca se regenera solo porque `nombre`
+         * cambió, para no romper un enlace que el negocio ya compartió.
+         */
+        slug: DataTypes.STRING(63),
         estado: { type: DataTypes.CHAR(1), defaultValue: 'A' },
         fecha_registro: { type: DataTypes.DATE, defaultValue: DataTypes.NOW }
     }, {

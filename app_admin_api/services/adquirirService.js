@@ -45,6 +45,7 @@ const MailService = require('./mailService');
 const Audit = require('../../app_core/helpers/auditHelper');
 const { setAuditNegocio } = require('../../app_core/middleware/auditContext');
 const { resolverRubroElegido } = require('./registroTrialService');
+const { generarSlugUnico } = require('../../app_core/helpers/slug');
 
 const sequelize = Models.sequelize;
 
@@ -444,13 +445,24 @@ async function crearCuenta(datos) {
         );
         idUsuario = usuario.id_usuario;
 
+        // Aquí sí llega el nombre real del negocio (no el genérico del trial), así que el slug
+        // de salida ya es utilizable de verdad — ver el comentario en registroTrialService.js.
+        const nombreNegocioLimpio = String(nombre_negocio).trim();
+        const slug = await generarSlugUnico(nombreNegocioLimpio, async (candidato) => {
+            const existente = await Models.GenerNegocio.findOne({
+                where: sequelize.where(sequelize.fn('lower', sequelize.col('slug')), candidato),
+                transaction, attributes: ['id_negocio'],
+            });
+            return !!existente;
+        });
         const negocio = await Models.GenerNegocio.create(
             {
-                nombre: String(nombre_negocio).trim(),
+                nombre: nombreNegocioLimpio,
                 id_tipo_negocio: idTipoNegocio,
                 id_rubro: rubroElegido.id_tipo_negocio ?? null,
                 email_contacto: correo,
                 telefono: telefono ? String(telefono).trim() : null,
+                slug,
                 estado: 'A',
             },
             { transaction }

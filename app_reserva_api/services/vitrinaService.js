@@ -1,7 +1,7 @@
 'use strict';
 const Models = require('../../app_core/models/conection');
 const ConfigService = require('./configService');
-const { monedaDePais } = require('../../app_core/helpers/paises');
+const { monedaDePais, codigoPais } = require('../../app_core/helpers/paises');
 const { urlWhatsapp } = require('../../app_core/helpers/telefono');
 const Perfiles = require('../perfiles');
 const { politicaDePago } = require('./abono');
@@ -118,7 +118,7 @@ async function getVitrina(idNegocio) {
         attributes: [
             'id_negocio', 'nombre', 'email_contacto', 'telefono', 'direccion',
             'url_whatsapp', 'url_facebook', 'url_instagram', 'url_tiktok',
-            'logo_url', 'banner_url', 'colores', 'id_paleta', 'pais',
+            'logo_url', 'banner_url', 'colores', 'id_paleta', 'pais', 'slug',
         ],
         include: [
             INCLUDE_TIPO_RESERVA,
@@ -140,7 +140,8 @@ async function getVitrina(idNegocio) {
         Models.ReservaServicio.findAll({
             where: { id_negocio: idNegocio, estado: 'A' },
             attributes: ['id_servicio', 'nombre', 'descripcion', 'duracion_min', 'precio',
-                         'color_hex', 'imagen_url', 'id_categoria', 'a_cotizar'],
+                         'color_hex', 'imagen_url', 'id_categoria', 'a_cotizar',
+                         'precio_min', 'precio_max'],
             include: fx.has('variantes')
                 ? [{ model: Models.ReservaServicioVariante, as: 'variantes', required: false,
                      where: { estado: 'A' },
@@ -240,6 +241,8 @@ async function getVitrina(idNegocio) {
         id_profesionales: profesionalesPorServicio.get(s.id_servicio) || [],
         // Solo con la función encendida: sin ella el servicio se reserva con su precio de lista.
         a_cotizar: fx.has('a_cotizar') && !!s.a_cotizar,
+        precio_min: fx.has('a_cotizar') && s.precio_min != null ? Number(s.precio_min) : null,
+        precio_max: fx.has('a_cotizar') && s.precio_max != null ? Number(s.precio_max) : null,
         variantes: fx.has('variantes')
             ? (s.variantes || [])
                 .sort((a, b) => a.orden - b.orden || a.duracion_min - b.duracion_min)
@@ -249,6 +252,24 @@ async function getVitrina(idNegocio) {
                 }))
             : [],
     }));
+
+    // Galería de cada servicio: varias fotos aparte de la portada (`imagen_url`), para el
+    // carrusel del detalle. Sin función que la gatee: es una capacidad general del catálogo, no
+    // un perfil de rubro opcional.
+    const galerias = new Map();
+    if (idsServiciosActivos.length) {
+        const imagenes = await Models.ReservaServicioImagen.findAll({
+            where: { id_servicio: idsServiciosActivos, id_negocio: idNegocio },
+            attributes: ['id_servicio', 'url', 'descripcion'],
+            order: [['orden', 'ASC'], ['id_imagen', 'ASC']],
+            raw: true,
+        });
+        for (const i of imagenes) {
+            if (!galerias.has(i.id_servicio)) galerias.set(i.id_servicio, []);
+            galerias.get(i.id_servicio).push({ url: i.url, descripcion: i.descripcion });
+        }
+    }
+    for (const s of serviciosSalida) s.galeria = galerias.get(s.id_servicio) || [];
 
     // Portafolio: hasta doce trabajos por profesional, en su orden.
     const portafolios = new Map();
@@ -311,6 +332,7 @@ async function getVitrina(idNegocio) {
         negocio: {
             id_negocio: negocio.id_negocio,
             nombre: negocio.nombre,
+            slug: negocio.slug ?? null,
             descripcion: limpio(cfg.descripcion_publica),
             logo_url: negocio.logo_url,
             banner_url: negocio.banner_url,
@@ -328,6 +350,9 @@ async function getVitrina(idNegocio) {
             // La portada es pública: no hay sesión de la que sacar la moneda, así que viaja
             // aquí. Sin esto, un negocio chileno publicaría sus precios en pesos colombianos.
             moneda: monedaDePais(negocio.pais),
+            // Y por lo mismo, el país: es el que sugiere el selector de indicativo al cliente
+            // que agenda (ver `TelefonoPaisComponent` / `paisPorMetadatos`).
+            pais: codigoPais(negocio.pais) || 'CO',
         },
         reglas: {
             anticipacion_min_horas: cfg.anticipacion_min_horas,
@@ -376,19 +401,17 @@ const URL_MAX = 300;
  *
  * WhatsApp es aparte: lo que se guarda es un número, y el enlace se arma con `wa.me`.
  */
-function normalizarRed(red, valor) {
+function normalizarRed(red, valor, pais) {
     const v = String(valor ?? '').trim();
     if (!v) return null;
 
     if (red === 'whatsapp') {
-        // Solo dígitos; se asume Colombia (57) si viene un móvil de 10 cifras sin indicativo.
-        const digitos = v.replace(/[^\d]/g, '');
-        if (!digitos) throw error('El WhatsApp debe contener números.', 422);
-        if (digitos.length < 7 || digitos.length > 15) {
-            throw error('El número de WhatsApp no parece válido.', 422);
-        }
-        const conPais = digitos.length === 10 && digitos.startsWith('3') ? `57${digitos}` : digitos;
-        return `https://wa.me/${conPais}`;
+        // Móvil del país del negocio (el mismo que decide el teléfono de contacto): antes se
+        // asumía Colombia siempre, y un WhatsApp chileno o mexicano guardaba un número sin
+        // indicativo que `wa.me` no sabía abrir. Ver `app_core/helpers/telefono.js`.
+        const enlace = urlWhatsapp(v, pais);
+        if (!enlace) throw error('El número de WhatsApp no parece un móvil válido para tu país.', 422);
+        return enlace;
     }
 
     if (/^https?:\/\//i.test(v)) {
@@ -412,7 +435,7 @@ function normalizarRed(red, valor) {
 /** Contenido editable de la página pública: contacto, redes, presentación e interruptor. */
 async function getVitrinaEdicion(idNegocio) {
     const negocio = await Models.GenerNegocio.findByPk(idNegocio, {
-        attributes: ['id_negocio', 'nombre', 'email_contacto', 'telefono', 'direccion',
+        attributes: ['id_negocio', 'nombre', 'email_contacto', 'telefono', 'direccion', 'pais',
                      'url_whatsapp', 'url_facebook', 'url_instagram', 'url_tiktok'],
     });
     if (!negocio) throw error('Negocio no encontrado.');
@@ -422,6 +445,7 @@ async function getVitrinaEdicion(idNegocio) {
         id_negocio: negocio.id_negocio,
         nombre: negocio.nombre,
         email_contacto: negocio.email_contacto,
+        pais: codigoPais(negocio.pais) || 'CO',
         telefono: negocio.telefono,
         direccion: negocio.direccion,
         url_whatsapp: negocio.url_whatsapp,
@@ -459,15 +483,28 @@ async function guardarVitrina(idNegocio, datos) {
         cambiosNegocio.telefono = telefono || null;
     }
 
+    // El país viaja con el mismo formulario (el selector del teléfono de contacto) pero es
+    // columna de `gener_negocio`, la misma que edita Cobros: un negocio tiene un solo país,
+    // lo cambie desde la pestaña que lo cambie. Ver configService.js.
+    if (datos.pais !== undefined && datos.pais !== null && String(datos.pais).trim() !== '') {
+        const codigo = codigoPais(datos.pais);
+        if (!codigo) throw error('País no soportado.', 422);
+        cambiosNegocio.pais = codigo;
+    }
+
     if (datos.direccion !== undefined) {
         const direccion = String(datos.direccion ?? '').trim();
         if (direccion.length > 255) throw error('La dirección es demasiado larga.', 422);
         cambiosNegocio.direccion = direccion || null;
     }
 
+    // El país para normalizar el WhatsApp: el que llega en esta misma petición si lo cambian
+    // aquí, si no el que ya tenía el negocio.
+    const paisEfectivo = cambiosNegocio.pais || negocio.pais;
+
     for (const [campo, red] of [['url_whatsapp', 'whatsapp'], ['url_facebook', 'facebook'],
                                 ['url_instagram', 'instagram'], ['url_tiktok', 'tiktok']]) {
-        if (datos[campo] !== undefined) cambiosNegocio[campo] = normalizarRed(red, datos[campo]);
+        if (datos[campo] !== undefined) cambiosNegocio[campo] = normalizarRed(red, datos[campo], paisEfectivo);
     }
 
     if (Object.keys(cambiosNegocio).length) await Models.sequelize.transaction((t) => negocio.update(cambiosNegocio, { transaction: t }));
@@ -488,4 +525,64 @@ async function guardarVitrina(idNegocio, datos) {
     return getVitrinaEdicion(idNegocio);
 }
 
-module.exports = { getVitrina, getVitrinaEdicion, guardarVitrina, normalizarRed, horarioEfectivo };
+/**
+ * `id_negocio` a partir de su `slug`, con las mismas reglas de visibilidad que `getVitrina`
+ * (inactivo o sin publicar = como si no existiera). La usan dos cosas distintas:
+ *
+ *   - el front, para traducir `dalex-barberia.escalapp.cloud` a `/p/:id_negocio` sin que el
+ *     dueño tenga que compartir nunca ese número;
+ *   - Caddy, como `ask` del TLS on-demand del bloque `*.escalapp.cloud`: sin esto, cualquiera
+ *     podría hacer que el servidor pidiera un certificado para un subdominio inventado.
+ */
+async function resolverSlug(slug) {
+    const limpio = String(slug || '').trim().toLowerCase();
+    if (!limpio) return null;
+
+    const negocio = await Models.GenerNegocio.findOne({
+        where: Models.sequelize.where(
+            Models.sequelize.fn('lower', Models.sequelize.col('slug')), limpio,
+        ),
+        attributes: ['id_negocio', 'estado'],
+        include: [INCLUDE_TIPO_RESERVA],
+    });
+    if (!negocio || negocio.estado !== 'A' || !esModuloReserva(negocio.tipoNegocio)) return null;
+
+    const cfg = await ConfigService.get(negocio.id_negocio);
+    if (cfg.publico_activo === false) return null;
+
+    return { id_negocio: negocio.id_negocio };
+}
+
+/**
+ * Datos para el manifest del portal público (`Add to Home Screen`): que el acceso directo lleve
+ * el logo del negocio, no el pulpo de EscalApp. Mismas reglas de visibilidad que `getVitrina` —
+ * un negocio que escondió su página tampoco publica un icono.
+ */
+async function getManifestData(idNegocio) {
+    const negocio = await Models.GenerNegocio.findOne({
+        where: { id_negocio: idNegocio, estado: 'A' },
+        attributes: ['id_negocio', 'nombre', 'logo_url', 'colores', 'slug'],
+        include: [
+            INCLUDE_TIPO_RESERVA,
+            { model: Models.GenerPaletaColor, as: 'paletaColor', attributes: ['colores'], required: false },
+        ],
+    });
+    if (!negocio || !esModuloReserva(negocio.tipoNegocio)) throw error('Página no disponible.');
+
+    const cfg = await ConfigService.get(idNegocio);
+    if (cfg.publico_activo === false) throw error('Página no disponible.');
+
+    const colores = negocio.colores || negocio.paletaColor?.colores || null;
+    return {
+        id_negocio: negocio.id_negocio,
+        nombre: negocio.nombre,
+        logo_url: negocio.logo_url,
+        slug: negocio.slug ?? null,
+        color_primario: colores?.primario ?? colores?.primary ?? null,
+    };
+}
+
+module.exports = {
+    getVitrina, getVitrinaEdicion, guardarVitrina, normalizarRed, horarioEfectivo,
+    resolverSlug, getManifestData,
+};

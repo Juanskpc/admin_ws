@@ -30,7 +30,7 @@ async function getInfoNegocio(req, res) {
         const idNegocio = Number(req.params.id_negocio);
         const negocio = await Models.GenerNegocio.findOne({
             where: { id_negocio: idNegocio, estado: 'A' },
-            attributes: ['id_negocio', 'nombre', 'email_contacto', 'id_paleta', 'logo_url', 'colores'],
+            attributes: ['id_negocio', 'nombre', 'email_contacto', 'id_paleta', 'logo_url', 'colores', 'slug'],
             include: [
                 // El módulo, no el nombre: un negocio anterior a los rubros guarda aquí su
                 // oficio (BARBERIA) y con el filtro por nombre su página salía «no disponible».
@@ -51,6 +51,7 @@ async function getInfoNegocio(req, res) {
         return Respuesta.success(res, 'Info del negocio', {
             id_negocio: negocio.id_negocio,
             nombre: negocio.nombre,
+            slug: negocio.slug,
             email_contacto: negocio.email_contacto,
             logo_url: negocio.logo_url,
             // `colores` manda sobre la paleta; ambos viajan para que el cliente no tenga que
@@ -247,6 +248,7 @@ async function crearCitaPublica(req, res) {
             fechaHoraInicioISO: String(req.body.fecha_hora_inicio),
             clienteNombre:      String(req.body.cliente_nombre),
             clienteTelefono:    req.body.cliente_telefono ? String(req.body.cliente_telefono) : null,
+            clientePais:        req.body.cliente_pais ? String(req.body.cliente_pais).toUpperCase() : null,
             clienteEmail:       req.body.cliente_email ? String(req.body.cliente_email) : null,
             notas:              req.body.notas ? String(req.body.notas) : null,
             comprobantePath,
@@ -350,8 +352,115 @@ async function getVitrina(req, res) {
         return Respuesta.error(res, 'Error al cargar la página del negocio.');
     }
 }
+
+/**
+ * GET /reserva/publico/dominio/:slug
+ *
+ * Traduce la URL propia del negocio a su `id_negocio`, para que el front pueda pintar la misma
+ * vitrina de `/p/:id_negocio` sin que ese número aparezca nunca en `dalex-barberia.escalapp.cloud`.
+ * Ver `subdominio.guard.ts` en `reserva_app`.
+ */
+async function getPorDominio(req, res) {
+    if (!check(req, res)) return;
+    try {
+        const data = await VitrinaService.resolverSlug(req.params.slug);
+        if (!data) return Respuesta.error(res, 'Página no disponible', 404);
+        return Respuesta.success(res, 'Negocio', data);
+    } catch (err) {
+        console.error('[Reserva/Publico] porDominio:', err.message);
+        return Respuesta.error(res, 'Error al resolver el dominio.');
+    }
+}
+
+/**
+ * GET /reserva/publico/verificar-dominio?domain=dalex-barberia.escalapp.cloud
+ *
+ * El `ask` del TLS on-demand de Caddy para el bloque `*.escalapp.cloud`: sin más cuerpo que el
+ * código de estado, 200 si el subdominio corresponde a un negocio publicado, 404 si no — así
+ * Caddy solo pide un certificado real a Let's Encrypt para subdominios que existen, y no para
+ * cualquier cosa que alguien apunte a la IP del servidor.
+ */
+async function verificarDominio(req, res) {
+    try {
+        const dominio = String(req.query.domain || '').trim().toLowerCase();
+        // El sufijo lo decide el propio dominio de EscalApp, no una lista aparte que se
+        // desincronice si algún día cambia.
+        const sufijo = '.escalapp.cloud';
+        if (!dominio.endsWith(sufijo)) return res.sendStatus(404);
+
+        const slug = dominio.slice(0, -sufijo.length);
+        const data = await VitrinaService.resolverSlug(slug);
+        return res.sendStatus(data ? 200 : 404);
+    } catch (err) {
+        console.error('[Reserva/Publico] verificarDominio:', err.message);
+        return res.sendStatus(404);
+    }
+}
+
+/**
+ * GET /reserva/publico/:id_negocio/manifest.webmanifest
+ *
+ * El manifest del portal público con la identidad del negocio: su nombre, su logo como icono, su
+ * color como `theme_color`. Se genera al vuelo (no hay un archivo por negocio) porque es la
+ * misma información que ya sirve `/vitrina`, solo que en el formato que el navegador espera
+ * cuando el cliente hace «Añadir a la pantalla de inicio».
+ *
+ * El logo ya sale cuadrado y en 512×512 desde el recorte del navegador (`image-cropper`), así que
+ * no hay que redimensionar nada en el servidor — ver la nota de `imagenService.js` sobre por qué
+ * este proyecto no tiene `sharp`.
+ */
+async function getManifest(req, res) {
+    try {
+        const idNegocio = Number(req.params.id_negocio);
+        if (!Number.isInteger(idNegocio) || idNegocio < 1) return res.sendStatus(404);
+
+        const data = await VitrinaService.getManifestData(idNegocio);
+
+        // Absoluta con el origen real de ESTA petición (detrás de Caddy, `trust proxy` ya hace
+        // que `req.protocol` sea el de fuera): así el manifest sirve igual en local, en un
+        // túnel de pruebas o en producción, sin una variable de entorno más que mantener.
+        const origen = `${req.protocol}://${req.get('host')}`;
+        const logoAbsoluto = data.logo_url
+            ? (/^https?:\/\//i.test(data.logo_url) ? data.logo_url : `${origen}${data.logo_url}`)
+            : null;
+
+        // Si ya tiene subdominio propio, el icono vuelve a él al reabrirse; si no, a la ruta de
+        // siempre. Cualquiera de los dos existe siempre — no hay un tercer sitio al que caer.
+        const inicio = data.slug
+            ? `https://${data.slug}.escalapp.cloud/`
+            : `/reserva/p/${data.id_negocio}`;
+
+        const manifest = {
+            name: data.nombre,
+            short_name: data.nombre.length > 20 ? `${data.nombre.slice(0, 19)}…` : data.nombre,
+            description: `Reserva tu cita en ${data.nombre}, con EscalApp.`,
+            start_url: inicio,
+            scope: inicio,
+            id: inicio,
+            display: 'standalone',
+            background_color: '#FFFFFF',
+            theme_color: data.color_primario || '#4338CA',
+            // Sin `purpose: "maskable"`: el logo es un recorte cuadrado plano, sin el margen de
+            // seguridad que ese modo exige, y forzarlo haría que algunos lanzadores le cortaran
+            // las esquinas al aplicar su propia máscara circular.
+            icons: logoAbsoluto
+                ? [{ src: logoAbsoluto, sizes: '512x512', type: 'image/webp' }]
+                : [],
+        };
+
+        res.type('application/manifest+json');
+        res.set('Cache-Control', 'public, max-age=300');
+        return res.json(manifest);
+    } catch (err) {
+        if (err.statusCode === 404) return res.sendStatus(404);
+        console.error('[Reserva/Publico] manifest:', err.message);
+        return res.sendStatus(500);
+    }
+}
+
 module.exports = {
     getVitrina, getInfoNegocio, listarServicios, listarProfesionales,
     getDisponibilidad, getDiasDisponibles, getDiasDeServicio, getSlotsDeServicio,
     crearCitaPublica, consultarCita, cancelarCitaPublica,
+    getPorDominio, verificarDominio, getManifest,
 };

@@ -8,6 +8,10 @@ module.exports = (sequelize, DataTypes) => {
     estado:                        { type: DataTypes.STRING(20), defaultValue: 'pendiente' },
     cliente_nombre:                { type: DataTypes.STRING(150), allowNull: false },
     cliente_telefono:              DataTypes.STRING(30),
+    // ISO 3166-1 alfa-2 del teléfono del cliente, si el portal público lo capturó (ver
+    // app_core/dao/personaNegocioDao.js). NULL en citas creadas antes de esto o desde el panel:
+    // ahí se sigue asumiendo el país del negocio.
+    cliente_pais:                  DataTypes.STRING(2),
     cliente_email:                 DataTypes.STRING(120),
     notas:                         DataTypes.TEXT,
     // FK a platform.persona_negocio — el cliente del negocio, resuelto por teléfono.

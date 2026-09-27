@@ -131,9 +131,9 @@ async function cerrarCaja({ idCaja, idNegocio, montoReportado, observaciones }) 
 
 async function getTotales(idCaja, { transaction } = {}) {
     const [row] = await Models.sequelize.query(`
-        SELECT COALESCE(SUM(monto) FILTER (WHERE tipo = 'INGRESO'), 0) AS ingresos,
-               COALESCE(SUM(monto) FILTER (WHERE tipo = 'EGRESO'), 0)  AS egresos,
-               COUNT(*)                                                AS movimientos
+        SELECT COALESCE(SUM(monto) FILTER (WHERE tipo = 'INGRESO' AND NOT anulado), 0) AS ingresos,
+               COALESCE(SUM(monto) FILTER (WHERE tipo = 'EGRESO' AND NOT anulado), 0)  AS egresos,
+               COUNT(*) FILTER (WHERE NOT anulado)                                     AS movimientos
         FROM reserva.reserva_movimiento_caja
         WHERE id_caja = :idCaja
     `, { replacements: { idCaja }, type: Models.sequelize.QueryTypes.SELECT, transaction });
@@ -145,16 +145,24 @@ async function getTotales(idCaja, { transaction } = {}) {
     };
 }
 
-/** Ingresos del turno agrupados por forma de pago. Los manuales caen en «Sin forma de pago». */
+/**
+ * Desglose del turno por forma de pago: lo que se cuenta al cuadrar el cajón contra el datáfono.
+ *
+ * Ingresos y egresos **netean** en la misma fila de su forma de pago — un egreso pagado en
+ * efectivo resta del efectivo, no queda fuera del desglose. Antes solo se sumaban los ingresos,
+ * así que el total por forma de pago nunca reflejaba los gastos del turno y no cuadraba con
+ * «Debería haber en caja» (que sí los resta). Los movimientos anulados no entran: quedan en la
+ * tabla para trazabilidad, pero no en el cuadre.
+ */
 async function getDesglosePorMetodo(idCaja) {
     const filas = await Models.sequelize.query(`
         SELECT m.id_metodo_pago,
                COALESCE(mp.nombre, 'Sin forma de pago') AS nombre,
-               SUM(m.monto)                             AS total,
+               SUM(CASE WHEN m.tipo = 'INGRESO' THEN m.monto ELSE -m.monto END) AS total,
                COUNT(*)                                 AS movimientos
         FROM reserva.reserva_movimiento_caja m
         LEFT JOIN reserva.reserva_metodo_pago mp ON mp.id_metodo_pago = m.id_metodo_pago
-        WHERE m.id_caja = :idCaja AND m.tipo = 'INGRESO'
+        WHERE m.id_caja = :idCaja AND NOT m.anulado
         GROUP BY m.id_metodo_pago, mp.nombre
         ORDER BY total DESC
     `, { replacements: { idCaja }, type: Models.sequelize.QueryTypes.SELECT });
@@ -191,6 +199,7 @@ async function getResumenPorProfesional(idCaja) {
         WHERE m.id_caja = :idCaja
           AND m.tipo = 'INGRESO'
           AND m.id_profesional IS NOT NULL
+          AND NOT m.anulado
         GROUP BY p.id_profesional, p.nombre, p.color_hex, p.especialidad
         ORDER BY total DESC, p.nombre ASC
     `, { replacements: { idCaja }, type: Models.sequelize.QueryTypes.SELECT });
@@ -207,7 +216,12 @@ async function getResumenPorProfesional(idCaja) {
     }));
 }
 
-/** Movimientos del turno, del más reciente al más antiguo. */
+/**
+ * Movimientos del turno, del más reciente al más antiguo.
+ *
+ * Incluye los anulados a propósito: la lista es el rastro del turno, no el cuadre. `getTotales` y
+ * los dos desgloses son los que dejan fuera lo anulado.
+ */
 async function getMovimientos(idCaja) {
     return Models.ReservaMovimientoCaja.findAll({
         where: { id_caja: idCaja },
@@ -215,7 +229,16 @@ async function getMovimientos(idCaja) {
             { model: Models.ReservaProfesional, as: 'profesional', attributes: ['id_profesional', 'nombre', 'color_hex'] },
             { model: Models.ReservaMetodoPago,  as: 'metodoPago',  attributes: ['id_metodo_pago', 'nombre'] },
             { model: Models.GenerUsuario,       as: 'usuario',     attributes: ['id_usuario', 'primer_nombre', 'primer_apellido'] },
-            { model: Models.ReservaCita,        as: 'cita',        attributes: ['id_cita', 'cliente_nombre'] },
+            { model: Models.GenerUsuario,       as: 'usuarioAnulo', attributes: ['id_usuario', 'primer_nombre', 'primer_apellido'] },
+            // El detalle que despliega la fila al abrirla en la tabla del turno: a quién se
+            // atendió, con qué servicio y a qué hora — no solo el nombre del cliente.
+            { model: Models.ReservaCita,        as: 'cita',
+              attributes: ['id_cita', 'cliente_nombre', 'cliente_telefono', 'fecha_hora_inicio'],
+              include: [{
+                  model: Models.ReservaCitaServicio, as: 'servicios',
+                  attributes: ['precio_snapshot', 'duracion_snapshot_min'],
+                  include: [{ model: Models.ReservaServicio, as: 'servicio', attributes: ['nombre'] }],
+              }] },
         ],
         order: [['fecha', 'DESC'], ['id_movimiento', 'DESC']],
     });
@@ -358,22 +381,33 @@ async function registrarMovimiento({
     }, { transaction });
 }
 
-/** Movimiento manual pedido desde la vista de caja: exige que el turno esté abierto. */
+/**
+ * Movimiento manual pedido desde la vista de caja: exige que el turno esté abierto y una forma
+ * de pago válida, tanto para el ingreso como para el egreso.
+ *
+ * Sin esto un movimiento caía en «Sin forma de pago» y no se podía restar del efectivo ni de
+ * ningún otro método al cuadrar el cajón — el desglose por forma de pago quedaba sin dueño para
+ * ese dinero.
+ */
 async function registrarMovimientoManual({ idNegocio, tipo, monto, concepto, idUsuario, idMetodoPago }) {
     return Models.sequelize.transaction(async (t) => {
         const caja = await requireCajaAbierta(idNegocio, { transaction: t });
-        if (idMetodoPago) {
-            const metodo = await Models.ReservaMetodoPago.findOne({
-                where: { id_metodo_pago: idMetodoPago, id_negocio: idNegocio, estado: 'A' },
-                transaction: t,
-            });
-            if (!metodo) {
-                const e = new Error('Forma de pago no válida.'); e.statusCode = 400; throw e;
-            }
+
+        if (!idMetodoPago) {
+            const e = new Error('Selecciona con qué forma de pago entra o sale el dinero.');
+            e.statusCode = 422; e.code = 'METODO_PAGO_REQUERIDO'; throw e;
         }
+        const metodo = await Models.ReservaMetodoPago.findOne({
+            where: { id_metodo_pago: idMetodoPago, id_negocio: idNegocio, estado: 'A' },
+            transaction: t,
+        });
+        if (!metodo) {
+            const e = new Error('Forma de pago no válida.'); e.statusCode = 400; throw e;
+        }
+
         return registrarMovimiento({
             idCaja: caja.id_caja, tipo, monto, concepto, idUsuario,
-            idMetodoPago: idMetodoPago ?? null, transaction: t,
+            idMetodoPago, transaction: t,
         });
     });
 }
@@ -404,28 +438,36 @@ async function registrarCobroCita({ idNegocio, cita, pagos, idUsuario, transacti
 }
 
 /**
- * Borra un movimiento del turno **abierto**.
+ * Anula un movimiento del turno **abierto**.
  *
  * Es la salida para el error de dedo: el egreso tecleado dos veces, el ingreso con un cero de
  * más. Cuelga de su propio permiso (`caja_eliminar`) porque cambia el cuadre del turno, y por
  * defecto solo lo tiene el administrador.
  *
+ * ## Anular, no borrar
+ *
+ * Un `DELETE` de verdad quitaba el movimiento de `reserva_movimiento_caja` y con él la
+ * trazabilidad: en «Movimientos del turno» dejaba de verse que ese ingreso o egreso había
+ * existido, y solo quedaba el evento de auditoría, que nadie mira desde ahí. Marcarlo `anulado`
+ * lo deja en la tabla —se sigue viendo, tachado— pero lo saca de `getTotales`, del desglose por
+ * forma de pago y del de profesional, que es lo único que de verdad tiene que dejar de contar.
+ *
  * ## Solo mientras el turno está abierto
  *
  * Un turno cerrado ya tiene `monto_cierre` y `diferencia` calculados y firmados por quien lo
- * contó. Quitarle un movimiento después dejaría un cierre que no cuadra con sus propios
+ * contó. Anular un movimiento después dejaría un cierre que no cuadra con sus propios
  * movimientos y que nadie podría explicar. Si el error se descubre tarde, se corrige con un
  * movimiento contrario en el turno actual, que es como se corrige una caja.
  *
- * El snapshot de la fila lo guarda `trg_audit`; aquí se añade el evento de aplicación con el
- * actor y el importe, que es lo que se busca cuando un turno no cuadra.
+ * El snapshot del cambio lo guarda `trg_audit` (es un `UPDATE`); aquí se añade el evento de
+ * aplicación con el actor y el importe, que es lo que se busca cuando un turno no cuadra.
  */
 async function eliminarMovimiento({ idMovimiento, idNegocio, idUsuario = null }) {
     return Models.sequelize.transaction(async (t) => {
         const caja = await requireCajaAbierta(idNegocio, { transaction: t });
 
         const mov = await Models.ReservaMovimientoCaja.findOne({
-            where: { id_movimiento: idMovimiento, id_caja: caja.id_caja },
+            where: { id_movimiento: idMovimiento, id_caja: caja.id_caja, anulado: false },
             transaction: t,
             lock: t.LOCK.UPDATE,
         });
@@ -443,11 +485,15 @@ async function eliminarMovimiento({ idMovimiento, idNegocio, idUsuario = null })
             fecha: mov.fecha,
         };
 
-        await mov.destroy({ transaction: t });
+        await mov.update({
+            anulado: true,
+            fecha_anulado: new Date(),
+            id_usuario_anulo: idUsuario,
+        }, { transaction: t });
 
         await Audit.registrarEvento({
             modulo: 'reserva',
-            accion: 'caja_movimiento_eliminado',
+            accion: 'caja_movimiento_anulado',
             idUsuario,
             idNegocio,
             detalle: huella,

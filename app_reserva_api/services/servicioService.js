@@ -3,7 +3,10 @@ const Models = require('../../app_core/models/conection');
 const ImagenService = require('./imagenService');
 
 /** Campos propios de los perfiles de rubro. Sin tocarlos, el servicio es el de siempre. */
-const CAMPOS_PERFIL = ['proceso_desde_min', 'proceso_min', 'a_cotizar', 'requiere_consentimiento', 'id_tipo_recurso'];
+const CAMPOS_PERFIL = [
+    'proceso_desde_min', 'proceso_min', 'a_cotizar', 'requiere_consentimiento', 'id_tipo_recurso',
+    'precio_min', 'precio_max',
+];
 
 function error(mensaje, statusCode = 400, code = null) {
     const e = new Error(mensaje);
@@ -93,9 +96,31 @@ function normalizarCamposPerfil(data) {
         if (data[c] === undefined) continue;
         if (c === 'id_tipo_recurso') salida[c] = data[c] === '' || data[c] === null ? null : Number(data[c]);
         else if (c === 'a_cotizar' || c === 'requiere_consentimiento') salida[c] = data[c] === true || data[c] === 'true';
-        else salida[c] = Number(data[c]) || 0;
+        // Sin rango es "no lo digas", no cero: un 0 se pintaría como "$0 - $50.000" en el portal.
+        else if (c === 'precio_min' || c === 'precio_max') {
+            salida[c] = data[c] === '' || data[c] === null ? null : Number(data[c]);
+        } else salida[c] = Number(data[c]) || 0;
     }
     return salida;
+}
+
+/**
+ * El rango que se enseña en el portal cuando el precio se decide al atender («Tatuaje pequeño,
+ * $80.000 - $150.000»). Ninguno de los dos extremos es obligatorio —un servicio a cotizar puede
+ * no dar ninguna pista de precio, como hasta ahora—, pero si se da uno el rango tiene que tener
+ * sentido: al revés no orienta a nadie y solo confunde en el portal.
+ */
+function validarRangoPrecio({ precio_min, precio_max }) {
+    if (precio_min == null && precio_max == null) return;
+    if (precio_min != null && (!Number.isFinite(precio_min) || precio_min < 0)) {
+        throw error('El precio "desde" no es válido.', 422, 'RANGO_PRECIO_NO_VALIDO');
+    }
+    if (precio_max != null && (!Number.isFinite(precio_max) || precio_max < 0)) {
+        throw error('El precio "hasta" no es válido.', 422, 'RANGO_PRECIO_NO_VALIDO');
+    }
+    if (precio_min != null && precio_max != null && precio_min > precio_max) {
+        throw error('El precio "desde" no puede ser mayor que "hasta".', 422, 'RANGO_PRECIO_NO_VALIDO');
+    }
 }
 
 /**
@@ -152,6 +177,7 @@ async function crear(data) {
     const { variantes, ...resto } = data;
     const perfil = normalizarCamposPerfil(resto);
     validarProceso({ duracion_min: resto.duracion_min, ...perfil });
+    validarRangoPrecio(perfil);
     if (resto.id_categoria === '') resto.id_categoria = null;
 
     return Models.sequelize.transaction(async (t) => {
@@ -175,6 +201,10 @@ async function actualizar(idServicio, idNegocio, data) {
         duracion_min: resto.duracion_min ?? s.duracion_min,
         proceso_desde_min: perfil.proceso_desde_min ?? s.proceso_desde_min,
         proceso_min: perfil.proceso_min ?? s.proceso_min,
+    });
+    validarRangoPrecio({
+        precio_min: 'precio_min' in perfil ? perfil.precio_min : (s.precio_min == null ? null : Number(s.precio_min)),
+        precio_max: 'precio_max' in perfil ? perfil.precio_max : (s.precio_max == null ? null : Number(s.precio_max)),
     });
     resto.fecha_actualizacion = new Date();
 

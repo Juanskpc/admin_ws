@@ -125,6 +125,26 @@ async function completarYCobrar({ idCita, idNegocio, idUsuario, idMetodoPago, pa
         const funciones = new Set((await Perfiles.perfilDeNegocio(idNegocio, { transaction: t })).funciones);
         if (funciones.has('consentimiento')) await exigirConsentimiento(cita, t);
 
+        // Un servicio «a cotizar» (tatuajes, estética a medida) nace sin precio de lista — el
+        // catálogo da como mucho un rango de referencia — y si nadie escribió el precio acordado
+        // al agendar o editar la cita, la línea se quedó con `precio_snapshot = 0`. Completar así
+        // factura la cita por nada, y no se nota hasta que se cuadra la caja. La barbería no
+        // tiene esta función y estas líneas no existen para ella.
+        if (funciones.has('a_cotizar')) {
+            const lineas = await Models.ReservaCitaServicio.findAll({
+                where: { id_cita: cita.id_cita },
+                include: [{ model: Models.ReservaServicio, as: 'servicio', attributes: ['a_cotizar'] }],
+                transaction: t,
+            });
+            const sinPrecio = lineas.some(l => l.servicio?.a_cotizar && Number(l.precio_snapshot) <= 0);
+            if (sinPrecio) {
+                throw errorValidacion(
+                    'Escribe el precio acordado del servicio a cotizar antes de completar la cita.',
+                    'PRECIO_A_COTIZAR_REQUERIDO',
+                );
+            }
+        }
+
         // Con abono aprobado se cobra el SALDO: el abono ya se pagó. Sin abono (`monto_abono`
         // nulo, el caso de siempre) el saldo es el total y todo lo de abajo es lo de antes.
         const total = Number(cita.monto_total ?? 0);
