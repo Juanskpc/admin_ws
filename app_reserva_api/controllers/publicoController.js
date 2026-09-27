@@ -414,7 +414,11 @@ async function getManifest(req, res) {
         const idNegocio = Number(req.params.id_negocio);
         if (!Number.isInteger(idNegocio) || idNegocio < 1) return res.sendStatus(404);
 
-        const data = await VitrinaService.getManifestData(idNegocio);
+        // Dos accesos directos distintos con la misma marca: el de la VITRINA, que abre el
+        // portal del cliente, y el de la CONSOLA, que abre el panel donde el negocio trabaja.
+        // Comparten logo y color; cambian a dónde llevan y cómo se llaman.
+        const paraConsola = String(req.query.destino || '') === 'consola';
+        const data = await VitrinaService.getManifestData(idNegocio, { exigirPublico: !paraConsola });
 
         // Absoluta con el origen real de ESTA petición (detrás de Caddy, `trust proxy` ya hace
         // que `req.protocol` sea el de fuera): así el manifest sirve igual en local, en un
@@ -426,16 +430,22 @@ async function getManifest(req, res) {
 
         // Si ya tiene subdominio propio, el icono vuelve a él al reabrirse; si no, a la ruta de
         // siempre. Cualquiera de los dos existe siempre — no hay un tercer sitio al que caer.
-        const inicio = data.slug
-            ? `https://${data.slug}.escalapp.cloud/`
-            : `/reserva/p/${data.id_negocio}`;
+        const consola = String(process.env.RESERVA_PORTAL_URL || '/reserva').replace(/\/+$/, '');
+        const inicio = paraConsola
+            ? `${consola}/dashboard`
+            : (data.slug ? `https://${data.slug}.escalapp.cloud/` : `/reserva/p/${data.id_negocio}`);
+        const alcance = paraConsola ? `${consola}/` : inicio;
 
         const manifest = {
-            name: data.nombre,
+            // El nombre largo distingue los dos accesos en el diálogo de instalación; el corto
+            // —el que queda bajo el icono— se deja limpio, que es el del negocio y ya.
+            name: paraConsola ? `${data.nombre} · Gestión` : data.nombre,
             short_name: data.nombre.length > 20 ? `${data.nombre.slice(0, 19)}…` : data.nombre,
-            description: `Reserva tu cita en ${data.nombre}, con EscalApp.`,
+            description: paraConsola
+                ? `Agenda, citas y caja de ${data.nombre}, con EscalApp.`
+                : `Reserva tu cita en ${data.nombre}, con EscalApp.`,
             start_url: inicio,
-            scope: inicio,
+            scope: alcance,
             id: inicio,
             display: 'standalone',
             background_color: '#FFFFFF',

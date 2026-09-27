@@ -558,7 +558,7 @@ async function resolverSlug(slug) {
  * el logo del negocio, no el pulpo de EscalApp. Mismas reglas de visibilidad que `getVitrina` —
  * un negocio que escondió su página tampoco publica un icono.
  */
-async function getManifestData(idNegocio) {
+async function getManifestData(idNegocio, { exigirPublico = true } = {}) {
     const negocio = await Models.GenerNegocio.findOne({
         where: { id_negocio: idNegocio, estado: 'A' },
         attributes: ['id_negocio', 'nombre', 'logo_url', 'colores', 'slug'],
@@ -569,8 +569,13 @@ async function getManifestData(idNegocio) {
     });
     if (!negocio || !esModuloReserva(negocio.tipoNegocio)) throw error('Página no disponible.');
 
-    const cfg = await ConfigService.get(idNegocio);
-    if (cfg.publico_activo === false) throw error('Página no disponible.');
+    // El icono de la CONSOLA no depende de que la vitrina esté publicada: un negocio puede tener
+    // su página escondida y aun así querer su marca en el acceso directo con el que su gente
+    // entra a trabajar todos los días.
+    if (exigirPublico) {
+        const cfg = await ConfigService.get(idNegocio);
+        if (cfg.publico_activo === false) throw error('Página no disponible.');
+    }
 
     const colores = negocio.colores || negocio.paletaColor?.colores || null;
     return {
