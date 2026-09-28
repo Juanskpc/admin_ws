@@ -552,6 +552,7 @@ async function avisarPedidoListo(req, res) {
         const resultado = await avisoPedido.avisarListo({
             idNegocio: Number(req.body.id_negocio),
             idOrden: Number(req.params.id),
+            idUsuario: req.usuario.id_usuario,
         });
         return Respuesta.success(res, 'Le avisamos al cliente que su pedido está listo', resultado);
     } catch (err) {

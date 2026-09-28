@@ -1665,3 +1665,47 @@ backend, luego el build de `restaurante_app`.
 
 - **Movimientos (Caja)** ya no pide fechas ni tiene botón de buscar: muestra los pedidos de la caja EN CURSO y busca solo al escribir (espera de 300 ms; una búsqueda nueva cancela la anterior). `GET /caja/seguimiento?id_caja=N` manda sobre `desde`/`hasta` (que se conservan para quien no pase caja). Los pedidos de un turno son dos grupos: los COBRADOS en él (`pedid_orden.id_caja`, nulo hasta cobrar) y los TOMADOS durante él en su mismo rubro (`id_punto_caja` entre apertura y cierre) — con solo el primero desaparecería lo abierto y lo cancelado sin cobrar. Sin caja abierta el modal lo dice. Tests: `__tests__/restaurante/seguimiento_por_caja.test.js`.
 - **Carta virtual, «En el local»:** el texto es «Un mesero tomará tu pedido»; en ese modo NO hay botones de agregar ni «pedir por WhatsApp» (solo domicilio y recoger arman pedido) y ya no se pregunta la mesa. El QR con `?mesa=` sigue reconociéndose pero deja la carta en solo mirar. El bot conserva su parseo de `~m=L~t=` por compatibilidad con enlaces viejos.
+
+### Pestañas de Caja arriba, auditoría de confirmar/avisar, y el teléfono ya resuelto (2026-09-29)
+
+Tres pedidos sobre lo de ayer; el tercero (no pedir el teléfono en la carta) **ya estaba hecho**
+desde el 2026-09-27 — se verificó que no hay ningún campo de teléfono en el formulario y que
+`contactoTelefono` siempre sale de `telefono_verificado` del canal, nunca de lo que escribe el
+cliente. No hacía falta tocar nada.
+
+- **Pestañas de Caja al principio de la página.** Antes que el encabezado, así que lo primero
+  que se decide es «Turno actual» o «Historial», y de ahí cuelgan los botones: la lista del
+  historial no ofrece ninguno (ni Domiciliarios, ni Movimientos, ni Movimiento, ni Cerrar/Abrir
+  caja); solo al entrar al **detalle** de un turno pasado aparecen Domiciliarios y Movimientos —
+  Movimiento (registrar uno manual) y Cerrar/Abrir caja siguen sin ofrecerse ahí, porque no tiene
+  sentido moverle dinero a un turno que ya cerró.
+- **«Movimientos» en el detalle del historial mira LA CAJA de ese detalle**, no la que esté
+  abierta ahora: `cajaParaSeguimiento` (computed) decide cuál pasarle al modal según la pestaña.
+  `SeguimientoPedidosComponent.caja` ahora acepta `Pick<Caja,'id_caja'|'fecha_apertura'>`, porque
+  eso es lo único que usa — un `CajaHistorial` cabe sin convertirlo al tipo completo.
+- **La tabla de turnos cerrados ya no tiene botón «Ver detalle»**: toda la fila abre el detalle
+  (mismo patrón que la tabla de movimientos), con un chevron decorativo como única pista visual.
+- **El modal de Domiciliarios ya no exige `caja()`** (antes `@if (modal()==='domiciliarios' &&
+  caja())`): el resumen es del negocio, no del turno, y ahora también se abre sin turno en curso.
+
+- **Auditoría: quién confirmó y quién avisó.** Hasta ahora `pedid_orden.confirmado_en` y
+  `aviso_listo_en` decían EL QUÉ pero no EL QUIÉN —ninguna de las dos rutas fijaba el actor de
+  auditoría—, así que `auditoria.audit_dato` quedaba con `id_usuario = NULL` en esas filas.
+  `pedidoService.confirmarPedidoAsistente` ya lo hacía (de la sesión anterior); ahora
+  `avisoPedido.avisarListo` también: `idUsuario` (opcional, por compatibilidad) + `fijarActor(t,
+  …)` antes del UPDATE. `seguimientoPedidoService.listar` lee las dos de `audit_dato`, mismo
+  mecanismo que ya usaba para «canceló sin cobrar» — sin tabla nueva. Dos eventos más en la línea
+  de tiempo de Movimientos: `confirmado` (una vez, idempotente) y `avisado` (uno por intento: un
+  aviso que murió y se reintenta dejó DOS eventos, cada uno con su actor — es a propósito, para
+  poder ver que alguien insistió y con qué cuenta lo hizo).
+- **Frontend**: `TipoEventoSeguimiento` suma `'confirmado' | 'avisado'`; iconos `check-circle` /
+  `send`, ya registrados globalmente.
+
+Tests: `__tests__/restaurante/auditoria_whatsapp.test.js` (backend, con DOS administradores
+distintos para probar que confirmar y avisar quedan a nombre de personas distintas); frontend
+`caja-resumen.spec.ts` (`cajaParaSeguimiento`).
+
+**⚠️ Pendiente de comprobar, no nuevo de hoy:** `Restaurante Demo` en la base compartida sigue sin
+carta (`scripts/fixtures/dev_carta_restaurante.sql` sin aplicar), lo que tumba
+`seguimiento_pedidos.test.js`, `despacho_cancelados.test.js`, `auditoria_actor_restaurante.test.js`
+y varias más por «Falta la carta» — no es una regresión de este cambio, ya fallaban así antes.

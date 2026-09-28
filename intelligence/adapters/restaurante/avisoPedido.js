@@ -43,6 +43,7 @@ const plantillas = require('../../core/plantillas');
 const contextoNegocio = require('../../core/contextoNegocio');
 const features = require('../../core/features');
 const { normalizarE164Colombia } = require('../../../app_core/helpers/telefono');
+const { fijarActor } = require('../../../app_core/helpers/auditActor');
 
 const PLANTILLA = 'pedido_listo';
 const PLANTILLA_DOMICILIO = 'pedido_en_camino';
@@ -129,8 +130,13 @@ function rechazar(mensaje, code, statusCode = 409) {
  * Devuelve `{ id_mensaje, avisado_en }`. Todo lo que impide el envío se lanza como error tipado
  * y con un texto que se le pueda enseñar a quien apretó el botón: quien está al otro lado es
  * alguien con la cocina llena, no un programador leyendo un log.
+ *
+ * `idUsuario` es opcional (compatibilidad con quien llame sin request detrás) pero el despacho
+ * SIEMPRE lo manda: es lo que deja «quién avisó» en `auditoria.audit_dato` —igual que
+ * `pedidoService.confirmarPedidoAsistente` deja «quién confirmó»— y es lo que lee
+ * `seguimientoPedidoService` para la línea de tiempo de Caja → Movimientos.
  */
-async function avisarListo({ idNegocio, idOrden }, { transaction = null } = {}) {
+async function avisarListo({ idNegocio, idOrden, idUsuario = null }, { transaction = null } = {}) {
     // ── 0. ¿Este negocio tiene derecho al asistente? ──────────────────────────────────────
     //
     // Antes que nada, y **fuera de la transacción**: es una pregunta comercial, no de dominio, y
@@ -155,6 +161,11 @@ async function avisarListo({ idNegocio, idOrden }, { transaction = null } = {}) 
     const t = transaction || (await Models.sequelize.transaction());
 
     try {
+        // El actor de auditoría, antes de tocar nada: `fn_audit()` lee la GUC en el momento del
+        // UPDATE de más abajo, así que basta con fijarla en algún punto de esta transacción —
+        // aquí, al principio, para no tener que acordarse más adelante.
+        await fijarActor(t, { idUsuario, idNegocio });
+
         // ── 1. La orden, bloqueada ────────────────────────────────────────────────────────
         //
         // `FOR UPDATE` desde la primera lectura, no después de decidir: entre un SELECT normal y

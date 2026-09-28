@@ -26,12 +26,26 @@ const { usuarioTieneSubnivel } = require('../../app_core/helpers/permisoSubnivel
  * 3. **Quién lo canceló sin cobrar** — `cancelarOrden` deja `pedid_orden.estado =
  *    'CANCELADA'` pero NO guarda ahí quién lo hizo (`id_usuario` sigue siendo el
  *    mesero que la creó). Ese dato solo queda en `auditoria.audit_dato`, en la
- *    fila que el trigger `trg_audit` escribe para ese UPDATE — es la única pieza
- *    de este seguimiento que no sale de una tabla de negocio directamente.
+ *    fila que el trigger `trg_audit` escribe para ese UPDATE.
+ * 4. **Quién confirmó un pedido del asistente** (2026-09-29) — mismo mecanismo que
+ *    lo cancelado: `pedid_orden.confirmado_en` se llena, pero no dice QUIÉN. El
+ *    actor lo fija `pedidoService.confirmarPedidoAsistente` con `fijarActor` antes
+ *    del UPDATE, y de ahí sale, otra vez de `auditoria.audit_dato`.
+ * 5. **Quién avisó «tu pedido ya está listo»** (2026-09-29) — mismo mecanismo:
+ *    `avisoPedido.avisarListo` fija el actor antes de tocar `aviso_listo_en`. A
+ *    diferencia de lo demás, este SÍ puede repetirse (un aviso que murió se
+ *    reintenta), así que aquí no se colapsa a un solo evento: cada intento queda.
+ *
+ * Estas tres últimas son la única pieza de este seguimiento que no sale de una
+ * tabla de negocio directamente: viven en `auditoria.audit_dato` porque la
+ * columna de negocio solo dice EL QUÉ (cancelado / confirmado / avisado_en), no
+ * el QUIÉN — y separar el qué del quién es justo lo que permite reutilizar la
+ * misma columna sin abrir una de auditoría por cada acción nueva.
  *
  * Con eso alcanza para las cuatro salidas de un pedido: `CERRADA` (cobrado),
  * `CANCELADA` (nunca se cobró), `ANULADA` (se cobró y se revirtió) y `ABIERTA`
- * (todavía en curso, nadie en caja lo ha tocado).
+ * (todavía en curso, nadie en caja lo ha tocado) — y, dentro de cualquiera de
+ * ellas, si lo tomó el asistente, cuándo se confirmó y cuándo se avisó.
  *
  * ## Por qué es de solo lectura y con su propio permiso
  *
@@ -374,6 +388,49 @@ async function cargarEventos(idsOrden) {
     for (const r of cancelaciones.rows) {
         push(Number(r.id_orden), {
             tipo: 'cancelado', fecha: r.fecha,
+            id_usuario: r.id_usuario, actor: r.nombre?.trim() || null,
+        });
+    }
+
+    // Confirmado por una persona del negocio: solo aplica a los pedidos que tomó el asistente
+    // (`confirmado_en` nace NULL y solo se llena una vez — `confirmarPedidoAsistente` es
+    // idempotente), así que un pedido normal del POS nunca tiene esta fila. DISTINCT ON por si
+    // acaso, aunque en la práctica solo existe UN cambio de NULL a un instante.
+    const confirmaciones = await Models.pool.query(`
+        SELECT DISTINCT ON (a.pk_registro)
+            (a.pk_registro)::int AS id_orden, a.fecha, a.id_usuario,
+            TRIM(CONCAT(u.primer_nombre, ' ', u.primer_apellido)) AS nombre
+        FROM auditoria.audit_dato a
+        LEFT JOIN general.gener_usuario u ON u.id_usuario = a.id_usuario
+        WHERE a.esquema = 'restaurante' AND a.tabla = 'pedid_orden' AND a.operacion = 'U'
+          AND a.pk_registro = ANY($1::text[])
+          AND a.datos_despues ->> 'confirmado_en' IS NOT NULL
+        ORDER BY a.pk_registro, a.fecha DESC
+    `, [idsCandidatos.map(String)]);
+    for (const r of confirmaciones.rows) {
+        push(Number(r.id_orden), {
+            tipo: 'confirmado', fecha: r.fecha,
+            id_usuario: r.id_usuario, actor: r.nombre?.trim() || null,
+        });
+    }
+
+    // Avisado «tu pedido ya está listo»: a diferencia de lo anterior, SÍ puede repetirse (un
+    // aviso que murió en dead letter se reintenta — ver `avisoPedido.avisoSigueEnPie`), así que
+    // aquí no se colapsa a uno por orden: cada intento que tocó `aviso_listo_en` queda en la
+    // línea de tiempo, con quién lo mandó cada vez.
+    const avisos = await Models.pool.query(`
+        SELECT (a.pk_registro)::int AS id_orden, a.fecha, a.id_usuario,
+               TRIM(CONCAT(u.primer_nombre, ' ', u.primer_apellido)) AS nombre
+        FROM auditoria.audit_dato a
+        LEFT JOIN general.gener_usuario u ON u.id_usuario = a.id_usuario
+        WHERE a.esquema = 'restaurante' AND a.tabla = 'pedid_orden' AND a.operacion = 'U'
+          AND a.pk_registro = ANY($1::text[])
+          AND a.datos_despues ->> 'aviso_listo_en' IS NOT NULL
+        ORDER BY a.fecha ASC
+    `, [idsCandidatos.map(String)]);
+    for (const r of avisos.rows) {
+        push(Number(r.id_orden), {
+            tipo: 'avisado', fecha: r.fecha,
             id_usuario: r.id_usuario, actor: r.nombre?.trim() || null,
         });
     }
