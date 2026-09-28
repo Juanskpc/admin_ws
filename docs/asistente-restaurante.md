@@ -593,12 +593,19 @@ datos viajan en un bloque de etiquetas FIJAS, antes de la línea `#P…`:
 
 ```
 Nombre: Ana Pérez
-Teléfono: 3001234567
 Dirección: Cra 3 #21-10, apto 201
 Nota: sin cebolla en todo
 
 #P12-4x1~m=D~z=7
 ```
+
+> **Actualizado 2026-09-27:** el formulario ya NO pide teléfono en ninguna modalidad (el cliente
+> llega por su WhatsApp y el canal prueba el número; uno escrito a mano solo podía contradecirlo), y
+> el **nombre del formulario manda sobre el que el bot recordaba** de otras conversaciones. Antes
+> `sembrarDatosCliente` solo aceptaba el nombre si `datos.nombre` estaba vacío, y como el flujo lo
+> precargaba desde la memoria, un pedido hecho «a nombre de Ana» salía a nombre del recordado.
+> Un «Teléfono:» que aún mande una carta vieja se ignora (ya no es una etiqueta del parser).
+> Las filas de más abajo que hablen de teléfono describen el diseño del 2026-09-25.
 
 | Lado | Archivo |
 |---|---|

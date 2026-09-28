@@ -86,6 +86,10 @@ const ACCIONES = [
     ['/estancias', '/estancias/cancelar', 'Cancelar estancias', ['ADMINISTRADOR']],
     ['/estancias', '/estancias/validar-pago', 'Validar anticipos', ['ADMINISTRADOR']],
     ['/unidades', '/unidades/tarifas', 'Cambiar tarifas y temporadas', ['ADMINISTRADOR']],
+
+    // ── Venta de productos (requiere migrate:reserva-productos) ──
+    ['/productos', '/productos/editar', 'Crear y editar el catálogo de productos', ['ADMINISTRADOR']],
+    ['/productos', '/productos/vender', 'Vender productos y cobrar pedidos del portal', ['ADMINISTRADOR', 'RECEPCIONISTA']],
 ];
 
 async function migrar() {

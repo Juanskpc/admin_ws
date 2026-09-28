@@ -3,7 +3,8 @@
 **Estado:** **implementado (fases 0–5) en local y en `escalapp_dev`, sin desplegar** — ver §11 ·
 **Fecha:** 2026-09-17 ·
 **Parte de:** [`rubros-de-reserva.md`](rubros-de-reserva.md) (el diagnóstico; esto es el plan) ·
-**Relacionado:** [ADR-003](adr/ADR-003-madurez-esquemas.md) · [ADR-005](adr/ADR-005-independencia-verticales.md)
+**Relacionado:** [ADR-003](adr/ADR-003-madurez-esquemas.md) · [ADR-005](adr/ADR-005-independencia-verticales.md) ·
+[Venta de productos](productos-en-reserva.md) (la función `productos`, 2026-09-28)
 
 > **Lo pedido:** que `reserva_app` se adapte al tipo de negocio elegido al crearlo —salón de belleza,
 > mascotas, alojamientos, spa, tatuadores, centros de estética— y que **la barbería siga funcionando

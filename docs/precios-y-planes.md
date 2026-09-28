@@ -1,7 +1,7 @@
 # Precios y planes: qué cobrar por el sistema, por WhatsApp y por la facturación
 
 **Estado:** propuesta de trabajo, **no hay precios nuevos publicados todavía** · **Fecha:** 2026-09-02
-· **Última revisión:** 2026-09-12 (§2 y §3 rehechas con los costos reales de Factus y el volumen medido)
+· **Última revisión:** 2026-09-26 (la bolsa de Factus tiene lista propia y más cara: §2 y §3 marcadas y recalculadas sobre el paquete individual; ningún precio publicado cambia) · antes, 2026-09-12 (§2 y §3 rehechas con los costos reales de Factus y el volumen medido)
 · **Relacionado:** [`facturacion-electronica.md`](facturacion-electronica.md) §8 ·
 [`canal-whatsapp.md`](canal-whatsapp.md) · [`obligaciones-escalapp.md`](obligaciones-escalapp.md)
 
@@ -60,6 +60,22 @@ Las cifras de facturación salen de la decisión de
 entre varios NIT, comprada por nosotros**, con el certificado digital aparte a $130.000/año por
 cliente.
 
+> ❌ **Desactualizada el 2026-09-26.** La tabla de arriba cobra los documentos de la bolsa a $18, y
+> la bolsa tiene su propia lista: **$63 por documento en la mínima (10.000) y nunca menos de $21**
+> ([`facturacion-electronica.md`](facturacion-electronica.md) §8.2-septies). Con la lista real, la
+> bolsa no le gana al paquete individual en un cliente grande hasta ~21 clientes de ese tamaño, así
+> que la base segura es el **paquete individual** (certificado incluido):
+>
+> | Concepto | **Restaurante grande** (21.000 doc/año) | **Negocio pequeño** (~180 doc/año) |
+> |---|---|---|
+> | Infraestructura | ~$1.000 | ~$1.000 |
+> | WhatsApp — desde oct-2026 *(estimado)* | ~$8.000 | ~$3.000 |
+> | Facturación — paquete individual, certificado incluido | **$59.167** (20.000 + 1.600 = $710.000/año) | **$15.833** (400 = $190.000/año) |
+> | **Total por inquilino** | **~$68.200** (antes ~$51.300) | **~$19.800** (antes ~$15.100) |
+>
+> Si ese mismo restaurante fuera en bolsa, la facturación sola costaría $156.667/mes con un cliente,
+> $104.583 con dos y $74.833 con cinco del mismo tamaño.
+
 **Tres cosas que esta tabla enseña y la anterior escondía:**
 
 1. **El suelo del costo es el certificado, no los documentos.** Un negocio pequeño cuesta $10.833 al
@@ -70,6 +86,8 @@ cliente.
 3. **$18 por documento es el tramo alto de la bolsa**, y solo se alcanza agregando el volumen de
    varios clientes. Con uno o dos, el costo real por documento está entre $22 y $31, y el margen de
    los tramos de §3 se estrecha en consecuencia.
+   ❌ *2026-09-26: $18 no existe en la bolsa.* Es el precio por documento del **paquete individual**
+   de 120.000; la bolsa va de $63 (10.000) a $21 (1.000.000).
 
 ⚠️ **Lo único de esta tabla que sigue sin medir son las dos cifras de WhatsApp.** §6 dice cómo.
 
@@ -99,6 +117,31 @@ siempre en cuál está.
 *(Costo = $10.833 de certificado + documentos × $18. Por encima de 2.500 al mes se cotiza: es un
 cliente que factura más de $80 millones y merece una conversación, no una tabla.)*
 
+> ❌ **La columna «Costo nuestro» está desactualizada desde el 2026-09-26**: supone $18 por
+> documento en bolsa, y la bolsa real cuesta entre $63 y $21 ([`facturacion-electronica.md`](facturacion-electronica.md)
+> §8.2-septies). Los **precios** de la tabla no se tocan (están publicados en la landing y en
+> `gener_plan` desde el 2026-09-24). Lo que cambia es el costo, y depende de la modalidad:
+>
+> **En paquete individual (la base segura), ningún tramo pierde** — ver «Los tramos aguantan…» más
+> abajo: margen mínimo S $20.667 · M $26.500 · L $42.333 · XL $30.667.
+>
+> **En bolsa, sí.** Costo del tramo lleno = $10.833 + documentos/mes × precio por documento de la
+> bolsa (aprovechada entera):
+>
+> | Tramo (precio) | Bolsa 10.000 ($63) | 20.000 ($56) | 50.000 ($45) | 80.000 ($40) | 120.000 ($32) |
+> |---|---|---|---|---|---|
+> | S ($39.000) | $17.133 | $16.433 | $15.333 | $14.833 | $14.033 |
+> | M ($59.000) | $42.333 | $38.833 | $33.333 | $30.833 | $26.833 |
+> | L ($79.000) | **$86.433 — pierde** | $78.033 — empata | $64.833 | $58.833 | $49.233 |
+> | XL ($99.000) | **$168.333 — pierde** | **$150.833 — pierde** | **$123.333 — pierde** | **$110.833 — pierde** | $90.833 |
+>
+> Dónde entra en pérdida cada tramo en bolsa: **XL** pierde siempre que el documento cueste más de
+> **$35** (o sea, con cualquier bolsa menor de 120.000); con la de 10.000 pierde desde **1.399
+> documentos/mes**, con la de 50.000 desde 1.959 y con la de 80.000 desde 2.204. **L** pierde por
+> encima de **$57** por documento: solo con la bolsa de 10.000, desde 1.082 documentos/mes. S y M no
+> pierden con ninguna bolsa. Y ojo: en la práctica el precio por documento es peor que el de la
+> tabla, porque la bolsa rara vez se gasta entera.
+
 > ⚠️ **El tramo se mide por documentos EMITIDOS, no por tiquetes vendidos**, y no son el mismo
 > número: en la práctica muchos negocios solo emiten cuando el cliente lo pide
 > ([`facturacion-electronica.md`](facturacion-electronica.md) §8.1). Por eso **un cliente nuevo
@@ -108,6 +151,9 @@ cliente que factura más de $80 millones y merece una conversación, no una tabl
 
 **Si Zona Burger emitiera todo lo que vende**, cae en XL: paga $99.000, cuesta $42.333, deja
 **$56.667** de margen. Es el peor caso para nosotros y el que hay que poder aguantar.
+❌ *2026-09-26:* en paquete individual (20.000 + 1.600) cuesta **$59.167** y deja **$39.833**; en
+bolsa con 5 clientes de su tamaño cuesta $74.833 y deja $24.167; en bolsa él solo, **pierde $57.667
+al mes**.
 
 ### Los paquetes
 
@@ -118,6 +164,12 @@ cliente que factura más de $80 millones y merece una conversación, no una tabl
 | **Avanzado** | Sistema completo: inventario, reportes, sucursales, asistente | $59.999 | $9.000 | **$50.999** |
 | **Avanzado + Facturación S** | + factura electrónica, negocio pequeño | $98.999 | $21.700 | **$77.299** |
 | **Avanzado + Facturación XL** | + factura electrónica, restaurante grande | $158.999 | $51.300 | **$107.699** |
+
+> ⚠️ **2026-09-26:** los costos de las dos últimas filas usaban la bolsa a $18. En paquete
+> individual, peor caso del tramo: **S** $9.000 + $18.333 = **$27.333** (margen $71.666); **XL**
+> $9.000 + $68.333 = **$77.333** (margen $81.666). Con el volumen de Zona Burger en XL, $68.167
+> (margen $90.832). *(En la landing estas dos filas se venden hoy como «Plan Empresarial S» y
+> «Plan Empresarial XL», a los mismos $98.999 y $158.999.)*
 
 ### Por qué esos números
 
@@ -153,6 +205,8 @@ concreta —en la modalidad de bolsa repartida el certificado lo compramos nosot
 cobrárselo aparte al cliente sería facturarle un costo que él no contrata. Lo que sí se le cobra
 aparte, si algún día se elige la opción A, es el **paquete individual completo**, donde el
 certificado va incluido de fábrica y la línea es suya de verdad.
+*(2026-09-26: la conclusión —absorberlo— no cambia; si el paquete individual pasa a ser la modalidad
+por defecto, el certificado ya viene dentro de su precio y no hay que sumarlo aparte.)*
 
 ### Los tramos aguantan aunque nunca lleguemos a la bolsa (2026-09-14)
 
@@ -175,6 +229,15 @@ más barato que lo cubre (lista pública de Factus, certificado incluido).
 así que **los precios se pueden publicar sin esperar a tener varios clientes**. La bolsa, cuando
 llegue, solo mejora el margen.
 
+> ✅ **Esta tabla sigue siendo correcta el 2026-09-26** —usa la lista de paquetes individuales, que
+> no cambió— y **pasa a ser la base de los tramos**. Recalculada por programa sobre toda la lista,
+> revisando cada volumen dentro del tramo y no solo el máximo: los márgenes mínimos son exactamente
+> estos. ❌ **Lo que es falso es la última frase**: la bolsa **no** «solo mejora el margen». Tiene
+> lista propia y más cara, y con clientes L o XL la **empeora** — ver la tabla de pérdidas en bolsa
+> junto a los tramos, arriba. Propuesta sin decidir: paquete individual por defecto y bolsa solo
+> para agrupar clientes S y M ([`facturacion-electronica.md`](facturacion-electronica.md)
+> §8.2-septies, apartado 5).
+
 ### ⚠️ Quién pone la plata del año — decidir ANTES de anunciar
 
 Factus se paga **por adelantado, por un año**, sin devolución pasados 5 días hábiles, y los
@@ -187,6 +250,14 @@ mes, ya pagamos $820.000 y cobramos $198.000. Tres salidas, sin decidir todavía
    nosotros cobremos solo la integración, más barata. El riesgo pasa a ser suyo.
 
 Lo que no hay que hacer es anunciar «facturación desde $39.000 al mes» sin haber elegido una.
+
+> ⚠️ **2026-09-26: el riesgo de caja es mayor con bolsa de lo que se creía.** La bolsa mínima son
+> **$630.000 + $130.000 por cliente**, por adelantado; la de 50.000, $2.250.000. En paquete
+> individual el adelanto va cliente por cliente: $220.000 por un S, $390.000 por un M, $440.000 por
+> un L, $820.000 por un XL (o $710.000 si es del tamaño de Zona Burger). Otra razón para que el
+> paquete individual sea la modalidad por defecto. *(Nota: desde el 2026-09-24 los planes con
+> facturación ya están a la venta en línea con precio mensual — §8 — así que esta decisión ya no
+> es hipotética.)*
 
 ⚠️ **Cerrado el 2026-09-15: no existe paquete mensual de Factus.** Se esperaba que lo hubiera —sus
 Términos y Condiciones §f.2 mencionan «de manera mensual o anual»— porque habría resuelto buena
@@ -273,7 +344,7 @@ corre.
 | 3 | ✅ **Precio de Factus** | Lista completa recibida el 2026-09-11 y las 11 preguntas contestadas el 2026-09-12. **No es plano: bolsa anual por documentos** | — |
 | 4 | ✅ **Certificado digital** | **$130.000/año por NIT** en bolsa repartida; incluido en el paquete individual | — |
 | 5 | ⬜ **Cotización de Alegra** como contraste | Un correo | Nada: es comparación, ya no decisión |
-| 6 | ✅ **Precio de aliado de Factus** — **no existe**: aplica la lista pública (reunión del 2026-09-14) | — | Los tramos de §3 ya están calculados con esa lista, así que su margen es el real |
+| 6 | ⚠️ **Precio de aliado de Factus** — **no existe**: aplica la lista pública (reunión del 2026-09-14). **Corregido el 2026-09-26: la bolsa multifacturador tiene lista propia y más cara**; sin fecha impresa y sin confirmar que sea la vigente | Preguntas en [`facturacion-electronica.md`](facturacion-electronica.md) §8.2-septies, apartado 6 | Con paquete individual, nada: los tramos aguantan. Con bolsa, los márgenes de L y XL |
 
 **La número 2 es ahora la única que de verdad bloquea**, y es la que más urge: el cobro de Meta
 empieza el 1 de octubre y no depende de nadie de fuera medirlo.

@@ -265,6 +265,16 @@ Comparado con lo que ya está decidido (puerta 3, aliado de Factus):
 | Zona Burger (1.750 doc/mes) | $42.333/mes | **~$10.833/mes** |
 | Negocio pequeño (15 doc/mes) | $11.100/mes | ~$10.833/mes |
 
+> ⚠️ **2026-09-26: la columna «Puerta 3» usaba la bolsa de Factus a $18 por documento, y la bolsa
+> tiene lista propia y más cara** ([`facturacion-electronica.md`](facturacion-electronica.md)
+> §8.2-septies). Con la base segura, el **paquete individual**, Zona Burger cuesta **$59.167/mes**
+> en la puerta 3 (no $42.333) y un negocio pequeño **$14.083–$15.833/mes** (tramos de 150 o 400).
+> El ahorro de la puerta 2 con un cliente grande sube a **~$48.300/mes**, o sea **~$27,6 por
+> documento** (($710.000 − $130.000 de certificado) ÷ 21.000). **Esto acerca la puerta 2, no la
+> aleja**: en «La cuenta que decide» el divisor pasa de $18 a ~$28, y con 500 horas a $30.000 la
+> inversión se recupera con **~543.000 documentos (~26 Zona Burger-año)** en vez de 833.000 (~40).
+> Las cifras originales se dejan abajo tal como estaban.
+
 **El ahorro es de ~$31.500 al mes con un cliente grande y de ~$270 con uno pequeño.** Ese contraste
 es la clave de toda la decisión: **la puerta 2 solo se paga con volumen de DOCUMENTOS**, no con
 número de clientes. Cien barberías no la pagan; diez restaurantes grandes sí.

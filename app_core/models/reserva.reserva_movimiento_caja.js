@@ -8,6 +8,8 @@ module.exports = (sequelize, DataTypes) => {
     id_cita:        DataTypes.INTEGER,
     /** Anticipo, saldo o cargo de una estancia (alojamiento, hotel de mascotas). */
     id_estancia:    DataTypes.INTEGER,
+    /** Venta de producto (mostrador o recogida de un pedido del portal). */
+    id_venta_producto: DataTypes.INTEGER,
     // Quién PRESTÓ el servicio, no quién cobró. Es lo que permite liquidar al final del día
     // sin reconstruirlo desde la cita, que puede haber cambiado de profesional.
     id_profesional: DataTypes.INTEGER,
@@ -27,6 +29,7 @@ module.exports = (sequelize, DataTypes) => {
     ReservaMovimientoCaja.belongsTo(models.ReservaCaja,        { foreignKey: 'id_caja',        as: 'caja' });
     ReservaMovimientoCaja.belongsTo(models.ReservaCita,        { foreignKey: 'id_cita',        as: 'cita' });
     ReservaMovimientoCaja.belongsTo(models.ReservaEstancia,    { foreignKey: 'id_estancia',    as: 'estancia' });
+    ReservaMovimientoCaja.belongsTo(models.ReservaVentaProducto, { foreignKey: 'id_venta_producto', as: 'ventaProducto' });
     ReservaMovimientoCaja.belongsTo(models.ReservaProfesional, { foreignKey: 'id_profesional', as: 'profesional' });
     ReservaMovimientoCaja.belongsTo(models.ReservaMetodoPago,  { foreignKey: 'id_metodo_pago', as: 'metodoPago' });
     ReservaMovimientoCaja.belongsTo(models.GenerUsuario,       { foreignKey: 'id_usuario',     as: 'usuario' });

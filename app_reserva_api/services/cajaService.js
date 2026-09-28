@@ -360,7 +360,7 @@ async function getDetalleCaja({ idCaja, idNegocio }) {
 /** Movimiento suelto (ingreso extra o gasto del día). Valida y escribe. */
 async function registrarMovimiento({
     idCaja, tipo, monto, concepto, idUsuario,
-    idCita = null, idProfesional = null, idMetodoPago = null, transaction,
+    idCita = null, idProfesional = null, idMetodoPago = null, idVentaProducto = null, transaction,
 }) {
     if (!['INGRESO', 'EGRESO'].includes(tipo)) {
         const e = new Error('El tipo debe ser INGRESO o EGRESO.'); e.statusCode = 422; throw e;
@@ -377,6 +377,7 @@ async function registrarMovimiento({
         id_cita: idCita,
         id_profesional: idProfesional,
         id_metodo_pago: idMetodoPago,
+        id_venta_producto: idVentaProducto,
         id_usuario: idUsuario,
     }, { transaction });
 }

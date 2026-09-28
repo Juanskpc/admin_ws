@@ -45,6 +45,7 @@ const TIPOS = {
     // Galería de un servicio: varias fotos aparte de la portada (`servicio`). Carpeta propia
     // porque comparten prefijo de id con `servicio` y se pisarían si fueran la misma carpeta.
     servicio_galeria: { carpeta: 'servicios_galeria', prefijo: 'foto' },
+    producto:    { carpeta: 'productos',     prefijo: 'producto' },
 };
 
 const EXTENSIONES = { 'image/webp': 'webp', 'image/jpeg': 'jpg', 'image/png': 'png' };

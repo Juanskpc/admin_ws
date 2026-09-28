@@ -4,6 +4,7 @@ const Models = require('../../app_core/models/conection');
 const DisponibilidadService = require('../services/disponibilidadService');
 const CitaService = require('../services/citaService');
 const VitrinaService = require('../services/vitrinaService');
+const VentaProductoService = require('../services/ventaProductoService');
 const AgendaServicio = require('../services/agendaServicioService');
 const Respuesta = require('../../app_core/helpers/respuesta');
 const Perfiles = require('../perfiles');
@@ -270,6 +271,40 @@ async function crearCitaPublica(req, res) {
     }
 }
 
+/**
+ * POST /reserva/publico/:id_negocio/venta-producto
+ *
+ * Comprar productos del portal sin necesidad de una cita: el cliente arma su carrito, elige
+ * recoger en el local (única entrega hoy — domicilio queda para más adelante) y dice quién
+ * recoge y a qué contacto avisarle. Queda PENDIENTE hasta que el negocio la cobra al entregarla,
+ * igual que un pedido de la carta digital en restaurante.
+ */
+async function crearVentaProductoPublica(req, res) {
+    if (!check(req, res)) return;
+    try {
+        const venta = await VentaProductoService.crear({
+            idNegocio: Number(req.params.id_negocio),
+            items: req.body.items,
+            canal: 'PORTAL',
+            entrega: 'RECOGER',
+            clienteNombre: String(req.body.cliente_nombre),
+            clienteTelefono: req.body.cliente_telefono ? String(req.body.cliente_telefono) : null,
+            notas: req.body.notas ? String(req.body.notas) : null,
+        });
+        return Respuesta.success(res, 'Pedido registrado. Te esperamos para entregarlo.', {
+            id_venta: venta.id_venta,
+            total: Number(venta.total),
+            estado: venta.estado,
+        }, 201);
+    } catch (err) {
+        if (err.statusCode) {
+            return Respuesta.error(res, err.message, err.statusCode, err.code ? [{ code: err.code }] : null);
+        }
+        console.error('[Reserva/Publico] crearVentaProducto:', err.message);
+        return Respuesta.error(res, 'Error al registrar el pedido.');
+    }
+}
+
 /** GET /reserva/publico/cita/:codigo_publico */
 async function consultarCita(req, res) {
     try {
@@ -471,6 +506,6 @@ async function getManifest(req, res) {
 module.exports = {
     getVitrina, getInfoNegocio, listarServicios, listarProfesionales,
     getDisponibilidad, getDiasDisponibles, getDiasDeServicio, getSlotsDeServicio,
-    crearCitaPublica, consultarCita, cancelarCitaPublica,
+    crearCitaPublica, consultarCita, cancelarCitaPublica, crearVentaProductoPublica,
     getPorDominio, verificarDominio, getManifest,
 };

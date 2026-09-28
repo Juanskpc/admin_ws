@@ -540,6 +540,19 @@ router.get('/caja/historial', [
 	query('offset').optional().isInt({ min: 0 }),
 ], CajaController.getHistorial);
 
+// Sección «Movimientos»: seguimiento del flujo mesero → caja. Va antes de
+// '/caja/:id/...' por la misma razón que 'historial'.
+router.get('/caja/seguimiento', [
+	query('id_negocio').isInt({ min: 1 }),
+	query('id_punto_caja').optional({ nullable: true, checkFalsy: true }).isInt({ min: 1 }),
+	query('desde').optional({ nullable: true, checkFalsy: true }).isISO8601(),
+	query('hasta').optional({ nullable: true, checkFalsy: true }).isISO8601(),
+	query('estado').optional({ nullable: true, checkFalsy: true }).isIn(['ABIERTA', 'CERRADA', 'CANCELADA', 'ANULADA']),
+	query('q').optional({ nullable: true, checkFalsy: true }).isString().isLength({ max: 60 }),
+	query('limite').optional().isInt({ min: 1, max: 100 }),
+	query('offset').optional().isInt({ min: 0 }),
+], CajaController.getSeguimiento);
+
 router.get('/caja/:id/detalle', [
 	param('id').isInt({ min: 1 }),
 	query('id_negocio').isInt({ min: 1 }),

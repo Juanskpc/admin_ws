@@ -291,6 +291,50 @@ async function getVitrina(idNegocio) {
     }
     for (const p of profesionalesSalida) p.portafolio = portafolios.get(p.id_profesional) || [];
 
+    // Venta de productos: catálogo agrupado por categoría, igual que las secciones de servicios.
+    // Solo con la función encendida y solo lo marcado visible en el portal (`publico_activo`):
+    // un negocio puede vender de mostrador un producto que no quiere ofrecer en línea.
+    let productos = [];
+    let productoSecciones = [];
+    if (fx.has('productos')) {
+        const [filas, categoriasProducto] = await Promise.all([
+            Models.ReservaProducto.findAll({
+                where: { id_negocio: idNegocio, estado: 'A', publico_activo: true },
+                attributes: ['id_producto', 'nombre', 'descripcion', 'precio', 'imagen_url', 'id_categoria'],
+                order: [['nombre', 'ASC']],
+                raw: true,
+            }),
+            Models.ReservaProductoCategoria.findAll({
+                where: { id_negocio: idNegocio, estado: 'A' },
+                attributes: ['id_categoria', 'nombre', 'orden'],
+                order: [['orden', 'ASC'], ['nombre', 'ASC']],
+                raw: true,
+            }),
+        ]);
+        productos = filas.map((p) => ({
+            id_producto: p.id_producto,
+            nombre: p.nombre,
+            descripcion: limpio(p.descripcion),
+            precio: Number(p.precio),
+            imagen_url: p.imagen_url,
+            id_categoria: p.id_categoria ?? null,
+        }));
+        productoSecciones = categoriasProducto
+            .map((c) => ({
+                id_categoria: c.id_categoria, nombre: c.nombre,
+                productos: productos.filter((p) => p.id_categoria === c.id_categoria),
+            }))
+            .filter((sec) => sec.productos.length > 0);
+        const sinCategoria = productos.filter((p) => p.id_categoria == null);
+        if (sinCategoria.length) {
+            productoSecciones.push({
+                id_categoria: null,
+                nombre: productoSecciones.length ? 'Otros productos' : 'Productos',
+                productos: sinCategoria,
+            });
+        }
+    }
+
     // Alojamiento y hotel de mascotas: los tipos de unidad que se reservan por noches.
     const unidadesTipo = perfil.modos.includes('ESTANCIA')
         ? (await Models.ReservaUnidadTipo.findAll({
@@ -380,6 +424,8 @@ async function getVitrina(idNegocio) {
             portal: perfil.portal,
         },
         unidades_tipo: unidadesTipo,
+        productos,
+        producto_secciones: productoSecciones,
         horario_negocio: horarioEfectivo([], horariosGenerales),
         // `servicios` va plano **además** de `secciones`: el buscador y la página de un servicio
         // suelto lo necesitan sin tener que recorrer las secciones. Las secciones son la misma

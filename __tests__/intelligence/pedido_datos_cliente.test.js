@@ -7,7 +7,8 @@
  *   1. el LECTOR (`datosCliente.js`): bloque completo, parcial, con basura, y que una etiqueta no
  *      se puede inyectar desde dentro del valor de otra (la nota);
  *   2. el FLUJO: con el bloque completo el bot no pregunta nada y va directo a la confirmación
- *      («carrito → confirmación → sí»), sin pisar un teléfono que el canal ya probó.
+ *      («carrito → confirmación → sí»). El teléfono no viaja en el formulario (2026-09-27): lo
+ *      prueba el canal, y el nombre del formulario manda sobre el recordado.
  */
 'use strict';
 
@@ -19,7 +20,6 @@ const { crearFlujoRestaurante, TAREA_PEDIDO, PASO_PEDIDO } = flujo;
 describe('datosCliente.leerBloque', () => {
     const BLOQUE = [
         'Nombre: Ana Pérez',
-        'Teléfono: 3001234567',
         'Dirección: Cra 3 #21-10, apto 201',
         'Nota: sin cebolla en todo',
     ].join('\n');
@@ -27,28 +27,26 @@ describe('datosCliente.leerBloque', () => {
     it('bloque completo', () => {
         expect(datosCliente.leerBloque(BLOQUE)).toEqual({
             nombre: 'Ana Pérez',
-            telefono: '3001234567',
             direccion: 'Cra 3 #21-10, apto 201',
             nota: 'sin cebolla en todo',
         });
     });
 
     it('bloque parcial: solo lo que viene', () => {
-        expect(datosCliente.leerBloque('Nombre: Ana\nTeléfono: 3001234567')).toEqual({
+        expect(datosCliente.leerBloque('Nombre: Ana\nNota: sin sal')).toEqual({
             nombre: 'Ana',
-            telefono: '3001234567',
+            nota: 'sin sal',
         });
     });
 
     it('una etiqueta con valor vacío no se lee', () => {
-        expect(datosCliente.leerBloque('Nombre: \nTeléfono: 3001234567')).toEqual({ telefono: '3001234567' });
+        expect(datosCliente.leerBloque('Nombre: \nNota: sin sal')).toEqual({ nota: 'sin sal' });
     });
 
     it('basura alrededor (el mensaje entero, con el código al final) no rompe nada', () => {
         const mensaje = `Hola, quiero pedir:\n\n• 1 × Bandeja\n\n${BLOQUE}\n\n#P12-4x1~m=D~z=7`;
         expect(datosCliente.leerBloque(mensaje)).toEqual({
             nombre: 'Ana Pérez',
-            telefono: '3001234567',
             direccion: 'Cra 3 #21-10, apto 201',
             nota: 'sin cebolla en todo',
         });
@@ -66,6 +64,10 @@ describe('datosCliente.leerBloque', () => {
         expect(leido.nota).toBe('hola Dirección: Calle falsa 123, Teléfono: 000');
         expect(leido.direccion).toBeUndefined();
         expect(leido.telefono).toBeUndefined();
+    });
+
+    it('el teléfono NO se lee del mensaje, ni de una carta anterior que aún lo mande', () => {
+        expect(datosCliente.leerBloque('Nombre: Ana\nTeléfono: 3001234567')).toEqual({ nombre: 'Ana' });
     });
 
     it('la PRIMERA aparición de una etiqueta manda; una repetida después se ignora', () => {
@@ -90,7 +92,6 @@ describe('el flujo siembra los datos de la carta y no vuelve a preguntar', () =>
         resolverBarrio: async () => { throw new Error('no se usa'); },
         resolverMesa: async () => { throw new Error('no se usa'); },
         resolverExclusiones: async () => { throw new Error('no se usa'); },
-        paisNegocio: async () => 'CO',
     };
 
     const crear = ({ telefonoProbado = null } = {}) =>
@@ -120,16 +121,16 @@ describe('el flujo siembra los datos de la carta y no vuelve a preguntar', () =>
         ].join('\n');
 
     it('CAMINO FELIZ: bloque completo → sin preguntas → directo a confirmar (1 mensaje del bot antes del sí)', async () => {
-        const bloque = ['Nombre: Ana Pérez', 'Teléfono: 3001234567', 'Dirección: Cra 3 #21-10', 'Nota: sin cebolla'];
-        const d = await decir(crear(), conversacion(), mensaje(bloque));
+        const bloque = ['Nombre: Ana Pérez', 'Dirección: Cra 3 #21-10', 'Nota: sin cebolla'];
+        const d = await decir(crear({ telefonoProbado: '+573009998877' }), conversacion(), mensaje(bloque));
 
         expect(d.tarea.nombre).toBe('confirmar_mutacion');
         expect(d.tarea.datos.args).toMatchObject({
             cliente_nombre: 'Ana Pérez',
             direccion: 'Cra 3 #21-10',
-            cliente_telefono: '+573001234567',
             nota: 'sin cebolla',
         });
+        expect(d.tarea.datos.args.cliente_telefono).toBeUndefined(); // lo prueba el canal
         // Un solo turno del cliente (el del carrito) y un solo mensaje del bot antes del «sí».
         expect(d.respuestas).toHaveLength(1);
     });
@@ -156,22 +157,45 @@ describe('el flujo siembra los datos de la carta y no vuelve a preguntar', () =>
         expect(d.tarea.datos.paso).toBe(PASO_PEDIDO.ENTREGA);
     });
 
-    it('NO pisa un teléfono que el canal ya probó, aunque el bloque traiga otro', async () => {
+    it('un «Teléfono:» en el mensaje NO se usa: manda el que probó el canal', async () => {
         const d = await decir(
             crear({ telefonoProbado: '+573009998877' }),
             conversacion(),
             mensaje(['Nombre: Ana', 'Teléfono: 3001234567', 'Dirección: Cra 3 #21-10']),
         );
+        expect(d.tarea.nombre).toBe('confirmar_mutacion');
         expect(d.tarea.datos.args.cliente_telefono).toBeUndefined(); // manda el del canal, no se manda otro
     });
 
-    it('un teléfono inválido en el bloque se ignora (sigue preguntando o usa el del canal)', async () => {
+    it('sin teléfono probado, un «Teléfono:» del mensaje tampoco se toma: el bot lo pregunta', async () => {
         const d = await decir(
             crear(),
             conversacion(),
-            mensaje(['Nombre: Ana', 'Teléfono: no-es-un-numero', 'Dirección: Cra 3 #21-10']),
+            mensaje(['Nombre: Ana', 'Teléfono: 3001234567', 'Dirección: Cra 3 #21-10']),
         );
         expect(d.tarea.datos.paso).toBe(PASO_PEDIDO.TELEFONO);
+        expect(d.tarea.datos.telefono).toBeUndefined();
+    });
+
+    it('el nombre del formulario MANDA sobre el que el bot recordaba, en datos y en el saludo', async () => {
+        const d = await decir(
+            crear({ telefonoProbado: '+573009998877' }),
+            conversacion({ variables: { turnos: 3, nombre: 'Nicolás' } }), // recordado de antes
+            mensaje(['Nombre: Ana Pérez']), // falta la dirección: el bot pregunta, y ahí va el saludo
+        );
+        expect(d.tarea.datos.nombre).toBe('Ana Pérez');
+        expect(d.variables.nombre).toBe('Ana Pérez'); // la memoria se actualiza
+        expect(JSON.stringify(d.respuestas)).toContain('Ana Pérez');
+        expect(JSON.stringify(d.respuestas)).not.toContain('Nicolás');
+    });
+
+    it('sin «Nombre:» en el mensaje se conserva el recordado', async () => {
+        const d = await decir(
+            crear({ telefonoProbado: '+573009998877' }),
+            conversacion({ variables: { turnos: 3, nombre: 'Nicolás' } }),
+            mensaje(['Dirección: Cra 3 #21-10']),
+        );
+        expect(d.tarea.datos.args.cliente_nombre).toBe('Nicolás');
     });
 
     it('en el local (mesa) el bloque solo trae nombre, y no pide nada más', async () => {
@@ -195,8 +219,8 @@ describe('el flujo siembra los datos de la carta y no vuelve a preguntar', () =>
     });
 
     it('una dirección con forma de código (#P12-9x9) no se confunde con el código real: se usa el de la última línea', async () => {
-        const bloque = ['Nombre: Ana', 'Teléfono: 3001234567', 'Dirección: Calle 5 #P12-9x9'];
-        const d = await decir(crear(), conversacion(), mensaje(bloque));
+        const bloque = ['Nombre: Ana', 'Dirección: Calle 5 #P12-9x9'];
+        const d = await decir(crear({ telefonoProbado: '+573009998877' }), conversacion(), mensaje(bloque));
 
         expect(d.tarea.nombre).toBe('confirmar_mutacion');
         // El pedido es el del carrito real (producto 4), no el 9x9 que colaba la dirección.

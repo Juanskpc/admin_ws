@@ -34,6 +34,8 @@ const { exigirFuncion } = require('../middleware/exigirFuncion');
 const Perfil       = require('../controllers/perfilController');
 const Estancias    = require('../controllers/estanciaController');
 const ServicioGaleria = require('../controllers/servicioImagenController');
+const Productos      = require('../controllers/productoController');
+const VentaProductos = require('../controllers/ventaProductoController');
 
 // ───────── Multer: comprobantes de pago ─────────
 const COMPROBANTES_BASE = path.resolve(path.join(__dirname, '..', '..', 'uploads', 'reserva', 'comprobantes'));
@@ -236,6 +238,17 @@ router.post('/publico/:id_negocio/estancia',
     ],
     Estancias.publicoCrear,
 );
+// Comprar productos sin cita, para recoger en el local (ver `docs/productos-en-reserva.md`).
+router.post('/publico/:id_negocio/venta-producto', [
+    param('id_negocio').isInt({ min: 1 }),
+    body('items').isArray({ min: 1 }),
+    body('items.*.id_producto').isInt({ min: 1 }),
+    body('items.*.cantidad').optional().isFloat({ gt: 0 }),
+    body('cliente_nombre').trim().notEmpty().isLength({ max: 150 }),
+    body('cliente_telefono').optional({ nullable: true, checkFalsy: true }).isString().isLength({ max: 30 }),
+    body('notas').optional({ nullable: true }).isString(),
+], exigirFuncion('productos'), Publico.crearVentaProductoPublica);
+
 // Calendario exportado de una unidad, para pegar en Airbnb/Booking. El token es el secreto.
 router.get('/publico/ical/:token', Estancias.icalExportar);
 
@@ -833,6 +846,66 @@ router.post('/profesionales/:id/portafolio', uploadImagen.single('imagen'), [
 ], exigirVista('/profesionales'), exigirFuncion('portafolio'), Perfil.portafolioAgregar);
 router.delete('/portafolio/:id', [param('id').isInt({ min: 1 }), idNeg()],
     exigirVista('/profesionales'), exigirFuncion('portafolio'), Perfil.portafolioEliminar);
+
+// Venta de productos, disponible en los siete perfiles y apagada de fábrica
+// (`docs/productos-en-reserva.md`). Todo cuelga de `exigirFuncion('productos')`.
+const FX_PRODUCTOS = exigirFuncion('productos');
+const VISTA_PRODUCTOS = exigirVista('/productos');
+
+router.get('/productos/categorias', [idNeg()], VISTA_PRODUCTOS, FX_PRODUCTOS, Productos.listarCategorias);
+router.post('/productos/categorias', [
+    idNeg('body'), body('nombre').trim().notEmpty().isLength({ max: 120 }),
+], VISTA_PRODUCTOS, exigirAccion('productos_editar'), FX_PRODUCTOS, Productos.crearCategoria);
+router.put('/productos/categorias/:id', [param('id').isInt({ min: 1 }), idNeg('body')],
+    VISTA_PRODUCTOS, exigirAccion('productos_editar'), FX_PRODUCTOS, Productos.actualizarCategoria);
+router.patch('/productos/categorias/:id/inactivar', [param('id').isInt({ min: 1 }), idNeg()],
+    VISTA_PRODUCTOS, exigirAccion('productos_editar'), FX_PRODUCTOS, Productos.inactivarCategoria);
+
+router.get('/productos', [idNeg()], VISTA_PRODUCTOS, FX_PRODUCTOS, Productos.listar);
+router.post('/productos', [
+    idNeg('body'),
+    body('nombre').trim().notEmpty().isLength({ max: 150 }),
+    body('precio').isFloat({ min: 0 }),
+    body('id_categoria').optional({ nullable: true, checkFalsy: true }).isInt({ min: 1 }),
+    body('controla_stock').optional().isBoolean(),
+    body('stock_actual').optional().isFloat({ min: 0 }),
+    body('publico_activo').optional().isBoolean(),
+], VISTA_PRODUCTOS, exigirAccion('productos_editar'), FX_PRODUCTOS, Productos.crear);
+router.put('/productos/:id', [param('id').isInt({ min: 1 }), idNeg('body'), body('precio').optional().isFloat({ min: 0 })],
+    VISTA_PRODUCTOS, exigirAccion('productos_editar'), FX_PRODUCTOS, Productos.actualizar);
+router.patch('/productos/:id/inactivar', [param('id').isInt({ min: 1 }), idNeg()],
+    VISTA_PRODUCTOS, exigirAccion('productos_editar'), FX_PRODUCTOS, Productos.inactivar);
+router.post('/productos/:id/imagen', uploadImagen.single('imagen'), [param('id').isInt({ min: 1 }), idNeg('body')],
+    VISTA_PRODUCTOS, exigirAccion('productos_editar'), FX_PRODUCTOS, Productos.subirImagen);
+router.delete('/productos/:id/imagen', [param('id').isInt({ min: 1 }), idNeg()],
+    VISTA_PRODUCTOS, exigirAccion('productos_editar'), FX_PRODUCTOS, Productos.eliminarImagen);
+
+// Ventas de productos: mostrador (con o sin cita) y pedidos que llegaron del portal.
+const productoItems = [
+    body('items').isArray({ min: 1 }),
+    body('items.*.id_producto').isInt({ min: 1 }),
+    body('items.*.cantidad').optional().isFloat({ gt: 0 }),
+];
+const pagosVentaProducto = [
+    body('id_metodo_pago').optional({ nullable: true, checkFalsy: true }).isInt({ min: 1 }),
+    body('pagos').optional().isArray({ min: 1 }),
+    body('pagos.*.id_metodo_pago').optional().isInt({ min: 1 }),
+    body('pagos.*.valor').optional().isFloat({ gt: 0 }),
+];
+router.get('/ventas-productos', [
+    idNeg(), query('estado').optional().isIn(['PENDIENTE', 'COMPLETADA', 'CANCELADA']),
+    query('canal').optional().isIn(['MOSTRADOR', 'PORTAL']),
+], VISTA_PRODUCTOS, FX_PRODUCTOS, VentaProductos.listar);
+router.get('/ventas-productos/:id', [param('id').isInt({ min: 1 }), idNeg()],
+    VISTA_PRODUCTOS, FX_PRODUCTOS, VentaProductos.getById);
+router.post('/ventas-productos', [idNeg('body'), ...productoItems],
+    VISTA_PRODUCTOS, exigirAccion('productos_vender'), FX_PRODUCTOS, VentaProductos.crear);
+router.post('/ventas-productos/vender', [idNeg('body'), ...productoItems, ...pagosVentaProducto],
+    VISTA_PRODUCTOS, exigirAccion('productos_vender'), FX_PRODUCTOS, VentaProductos.vender);
+router.post('/ventas-productos/:id/cobrar', [param('id').isInt({ min: 1 }), idNeg('body'), ...pagosVentaProducto],
+    VISTA_PRODUCTOS, exigirAccion('productos_vender'), FX_PRODUCTOS, VentaProductos.cobrar);
+router.post('/ventas-productos/:id/cancelar', [param('id').isInt({ min: 1 }), idNeg('body')],
+    VISTA_PRODUCTOS, exigirAccion('productos_vender'), FX_PRODUCTOS, VentaProductos.cancelar);
 
 // ═════════ Estancias por noches (alojamiento, hotel de mascotas) ═════════
 //

@@ -49,8 +49,6 @@ const barrioService = require('../../../app_restaurante_api/services/barrioServi
 const exclusiones = require('./exclusiones');
 const mesaPublicaService = require('../../../app_restaurante_api/services/mesaPublicaService');
 const datosCliente = require('./datosCliente');
-const { normalizarE164 } = require('../../../app_core/helpers/telefono');
-const Models = require('../../../app_core/models/conection');
 
 const VERTICAL = 'restaurante';
 
@@ -667,41 +665,23 @@ function seguirOConfirmar(ctx, datos, pasos, { apertura = '', solicitarConfirmac
  * las que no. Si no se puede leer (el catálogo falla), las líneas se quedan como llegaron: no se
  * guarda nada sin pasar por `tomar_pedido.ejecutar`, que las vuelve a comprobar.
  */
-/** El país del negocio (`gener_negocio.pais`), para normalizar el teléfono que deja en la carta. */
-async function paisDelNegocio(idNegocio) {
-    const negocio = await Models.GenerNegocio.findByPk(idNegocio, { attributes: ['pais'] });
-    return negocio?.pais || 'CO';
-}
-
 /**
- * Lo que el cliente escribió en el bloque de la carta (nombre, teléfono, dirección, nota), ANTES
- * de la línea `#P…`. Es una SUGERENCIA: se relee en la confirmación, igual que el barrio o la
- * mesa (ADR-010 no se salta por venir de un formulario en vez de una pregunta).
+ * Lo que el cliente escribió en el bloque de la carta (nombre, dirección, nota), ANTES de la línea
+ * `#P…`. Es una SUGERENCIA: se relee en la confirmación, igual que el barrio o la mesa (ADR-010 no
+ * se salta por venir de un formulario en vez de una pregunta).
  *
- *  - El nombre y la nota se aceptan tal cual (ya saneados por el lector).
- *  - La dirección igual: quien la escribe es quien la va a recibir.
- *  - El teléfono se normaliza con el país del negocio; si no da un móvil válido, se ignora — el
- *    del canal (`telefonoProbado`) sigue mandando cuando existe, y si no, se pregunta como
- *    siempre. Nunca se escribe encima de un teléfono que el canal ya probó: ese es el que
- *    autoriza, y decir uno distinto no lo cambia.
+ *  - El nombre del formulario MANDA sobre el que el bot recordaba de otras conversaciones: es lo que
+ *    el cliente acaba de escribir para ESTE pedido (puede pedir a nombre de otra persona). Antes
+ *    ganaba el recordado y el pedido salía a nombre equivocado.
+ *  - La nota y la dirección, igual: son de este pedido.
+ *  - El teléfono no viaja en el formulario: lo prueba el canal (`telefonoProbado`) o, si no hay,
+ *    se pregunta como siempre.
  */
-async function sembrarDatosCliente(ctx, datos) {
+function sembrarDatosCliente(ctx, datos) {
     const bloque = datosCliente.leerBloque(ctx.texto);
-    if (Object.keys(bloque).length === 0) return;
-
-    if (bloque.nombre && !datos.nombre) datos.nombre = bloque.nombre;
-    if (bloque.direccion && !datos.direccion) datos.direccion = bloque.direccion;
-    if (bloque.nota && !datos.nota) datos.nota = bloque.nota;
-
-    if (bloque.telefono && !datos.telefono && !ctx.telefonoProbado) {
-        try {
-            const pais = await (ctx.catalogo?.paisNegocio?.(ctx.idNegocio) ?? paisDelNegocio(ctx.idNegocio));
-            const normalizado = normalizarE164(bloque.telefono, pais);
-            if (normalizado) datos.telefono = normalizado;
-        } catch (error) {
-            console.warn(`[restaurante] no se pudo normalizar el teléfono de la carta: ${error.message}`);
-        }
-    }
+    if (bloque.nombre) datos.nombre = bloque.nombre;
+    if (bloque.direccion) datos.direccion = bloque.direccion;
+    if (bloque.nota) datos.nota = bloque.nota;
 }
 
 async function sembrarExclusiones(ctx, datos) {
@@ -840,7 +820,7 @@ async function recibirPedidoDelMenu(ctx, pedido, { solicitarConfirmacion }) {
     // Lo que escribió en el paso «tus datos» de la carta: nombre, teléfono, dirección, nota.
     // Va ANTES que las exclusiones y la elección: si ya trae el nombre, esas dos secciones no
     // tienen que repetir la pregunta por él.
-    await sembrarDatosCliente(ctx, datos);
+    sembrarDatosCliente(ctx, datos);
 
     // Los ingredientes que quitó en la carta se RELEEN: se queda solo lo que de verdad se puede
     // quitar de ese plato, y lo descartado se guarda para decírselo en la confirmación.
@@ -861,7 +841,7 @@ async function recibirPedidoDelMenu(ctx, pedido, { solicitarConfirmacion }) {
         {
             apertura:
                 `¡Listo, ya tengo tu pedido! ${cuantos === 1 ? 'Es 1 producto' : `Son ${cuantos} productos`}` +
-                `${previas.nombre ? `, a nombre de ${previas.nombre}` : ''}. ${avisoEleccion}`,
+                `${datos.nombre ? `, a nombre de ${datos.nombre}` : ''}. ${avisoEleccion}`,
             solicitarConfirmacion,
         }
     );
@@ -1419,7 +1399,6 @@ function crearFlujoRestaurante({
         resolverBarrio: (args) => barrioService.resolverBarrio(args),
         resolverMesa: (args) => mesaPublicaService.resolverMesa(args),
         resolverExclusiones: (args) => exclusiones.resolver(args),
-        paisNegocio: (idNegocio) => paisDelNegocio(idNegocio),
     },
 } = {}) {
     /** Barrios y mesas en el contexto, para las preguntas y para leer el código de la carta. */

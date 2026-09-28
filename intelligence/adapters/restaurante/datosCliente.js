@@ -3,7 +3,6 @@
  * El bloque de datos del cliente que trae el mensaje del menú digital, ANTES de la línea `#P…`:
  *
  *     Nombre: Ana Pérez
- *     Teléfono: 3001234567
  *     Dirección: Cra 3 #21-10, apto 201
  *     Nota: sin cebolla en todo
  *
@@ -28,9 +27,15 @@
  */
 
 /** Las etiquetas, en el orden en que se escriben. Igual que `ETIQUETAS` en el otro repo. */
-const ETIQUETAS = { nombre: 'Nombre', telefono: 'Teléfono', direccion: 'Dirección', nota: 'Nota' };
+const ETIQUETAS = { nombre: 'Nombre', direccion: 'Dirección', nota: 'Nota' };
 
-const MAXIMOS = { nombre: 100, telefono: 20, direccion: 300, nota: 300 };
+const MAXIMOS = { nombre: 100, direccion: 300, nota: 300 };
+
+/**
+ * El teléfono NO se lee del mensaje (desde 2026-09-27). El cliente llega por su WhatsApp y el canal
+ * prueba su número; uno escrito a mano solo podía contradecirlo. Un mensaje viejo (de una carta
+ * anterior) que aún traiga «Teléfono: …» simplemente se ignora: no está entre las etiquetas.
+ */
 
 /**
  * `Etiqueta: valor` **al principio de una línea**, con el valor hasta el fin de esa línea. Una

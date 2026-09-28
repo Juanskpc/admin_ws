@@ -245,4 +245,4 @@ async function exigirConsentimiento(cita, transaction) {
     throw e;
 }
 
-module.exports = { completarYCobrar, normalizarPagos };
+module.exports = { completarYCobrar, normalizarPagos, centavos };

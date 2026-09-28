@@ -136,6 +136,34 @@ describe('lo que el dueño puede tocar', () => {
     });
 });
 
+describe('venta de productos: disponible en los siete perfiles, apagada de fábrica', () => {
+    test('ningún perfil la trae activa de fábrica', () => {
+        for (const clave of Object.keys(Def.PERFILES)) {
+            const p = Def.describirPerfil(Def.perfilPorClave(clave), {});
+            expect(p.funciones).not.toContain('productos');
+        }
+    });
+
+    test('el dueño la enciende como cualquier otra función disponible', () => {
+        const salon = Def.perfilPorClave('SALON');
+        expect(Def.funcionesActivas(salon, { productos: true })).toContain('productos');
+    });
+
+    test('encendida, la vista /productos aparece; apagada, no', () => {
+        const base = Def.perfilPorClave('BASE');
+        const encendida = Def.describirPerfil(base, { productos: true });
+        const apagada = Def.describirPerfil(base, {});
+        expect(encendida.vistas).toContain('/productos');
+        expect(apagada.vistas).not.toContain('/productos');
+    });
+
+    test('la barbería (perfil BASE) sigue sin ninguna función activa: /productos no cambia eso', () => {
+        const descrito = Def.describirPerfil(Def.perfilPorClave(null, 'BARBERIA'), {});
+        expect(descrito.funciones).toEqual([]);
+        expect(descrito.vistas).toEqual(VISTAS_DE_SIEMPRE);
+    });
+});
+
 describe('coherencia de los datos', () => {
     test('todo rubro del catálogo apunta a un perfil que existe', () => {
         for (const r of RUBROS.filter((x) => x.perfil)) {

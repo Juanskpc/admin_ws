@@ -2,6 +2,7 @@
 const { validationResult } = require('express-validator');
 const CajaService = require('../services/cajaService');
 const CajaExportService = require('../services/cajaExportService');
+const SeguimientoPedidoService = require('../services/seguimientoPedidoService');
 const Respuesta = require('../../app_core/helpers/respuesta');
 const Audit = require('../../app_core/helpers/auditHelper');
 const { setAuditNegocio } = require('../../app_core/middleware/auditContext');
@@ -416,6 +417,37 @@ async function transferirDomiciliario(req, res) {
 }
 
 /**
+ * GET /restaurante/caja/seguimiento
+ *
+ * Sección «Movimientos»: el flujo completo de cada pedido —quién lo tomó, quién
+ * lo cobró o lo canceló, y con qué— para un rango de días. Permiso propio
+ * (`caja_ver_movimientos`), apagado por defecto y revalidado en el servicio.
+ */
+async function getSeguimiento(req, res) {
+    if (!handleValidation(req, res)) return;
+    try {
+        const resultado = await SeguimientoPedidoService.listar({
+            idUsuario: req.usuario?.id_usuario,
+            idNegocio: Number(req.query.id_negocio),
+            desde: req.query.desde || null,
+            hasta: req.query.hasta || null,
+            estado: req.query.estado || null,
+            idPuntoCaja: req.query.id_punto_caja ? Number(req.query.id_punto_caja) : null,
+            q: req.query.q || null,
+            limite: req.query.limite,
+            offset: req.query.offset,
+        });
+        return Respuesta.success(res, 'Seguimiento de pedidos obtenido', resultado);
+    } catch (err) {
+        if (err.statusCode) {
+            return Respuesta.error(res, err.message, err.statusCode, err.code ? { code: err.code } : undefined);
+        }
+        console.error('[Caja] Error getSeguimiento:', err.message);
+        return Respuesta.error(res, 'Error al obtener el seguimiento de pedidos.');
+    }
+}
+
+/**
  * POST /restaurante/caja/ordenes/:id/anular
  * Elimina de la caja un pedido ya cobrado, sin borrar su historial.
  * El permiso `caja_eliminar_pedido` se vuelve a verificar en el servicio.
@@ -552,6 +584,7 @@ module.exports = {
     getMovimientos,
     getItemsOrden,
     getResumenDomiciliarios,
+    getSeguimiento,
     registrarMovimiento,
     transferirDomiciliario,
     anularPedido,

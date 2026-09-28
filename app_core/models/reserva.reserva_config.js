@@ -31,6 +31,12 @@ module.exports = (sequelize, DataTypes) => {
     /** Estancias: hora de entrada y salida del negocio (las noches no llevan hora). */
     hora_checkin:              { type: DataTypes.TIME, allowNull: false, defaultValue: '15:00' },
     hora_checkout:             { type: DataTypes.TIME, allowNull: false, defaultValue: '12:00' },
+    /**
+     * % de comisión sobre lo vendido en productos, si el negocio decide pagarla. 0 = sin
+     * comisión (el valor por defecto): no todo negocio quiere que el profesional gane por
+     * vender, y encenderlo es una decisión suya, no de fábrica.
+     */
+    comision_productos_pct:    { type: DataTypes.SMALLINT, allowNull: false, defaultValue: 0 },
     fecha_creacion:            { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
     fecha_actualizacion:       { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
   }, {

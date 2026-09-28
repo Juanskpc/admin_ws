@@ -1,6 +1,6 @@
 # Facturación electrónica: qué es, qué exige la DIAN y cómo la va a hacer EscalApp
 
-**Estado:** documentación previa a la implementación · **Decisión que la gobierna:** [ADR-026](adr/ADR-026-facturacion-electronica.md) · **Fecha:** 2026-09-01 · **Última revisión:** 2026-09-15 (§8.2-sexies: llegan el Contrato de Alianza y el Acuerdo de Confidencialidad; no existe paquete mensual) · **Backlog:** ESC-067 a ESC-071
+**Estado:** documentación previa a la implementación · **Decisión que la gobierna:** [ADR-026](adr/ADR-026-facturacion-electronica.md) · **Fecha:** 2026-09-01 · **Última revisión:** 2026-09-26 (§8.2-septies: la bolsa multifacturador tiene lista propia y más cara; la decisión B de §8.7 queda reabierta) · antes, 2026-09-15 (§8.2-sexies: llegan el Contrato de Alianza y el Acuerdo de Confidencialidad; no existe paquete mensual) · **Backlog:** ESC-067 a ESC-071
 
 > Este documento cierra ESC-067 («investigar y documentar requisitos DIAN»). Está escrito para
 > leerse de arriba abajo la primera vez y consultarse por secciones después. La §1 no tiene
@@ -855,10 +855,30 @@ Incluye notas crédito y débito, documento soporte y nota de ajuste.
 > ilimitado son los rangos de numeración de las sucursales, no la bolsa. La tabla de arriba es la
 > que manda.
 
-Hay dos listas más, ambas fuera de nuestro alcance hoy (§11): **RADIAN** (recepción de documentos,
-desde $60.000/año por 24 hasta $900.000 por 5.000) y **nómina electrónica por interfaz de aliados
-API** (desde $60.000/año por 24 hasta $480.000 por 1.200). Se anotan porque la de nómina confirma
-que **existe un programa de aliados**, que es la pregunta que puede cambiarlo todo (§8.6).
+> ⚠️ **2026-09-26: esta es la lista de PAQUETES INDIVIDUALES (un NIT, certificado incluido), y
+> sigue valiendo para eso.** La **bolsa multifacturador** repartida entre varios NIT tiene **su propia
+> lista, más cara y sin certificado** — está en §8.2-septies. Hasta esa fecha este documento usó esta
+> tabla también para la bolsa, y fue un error.
+
+Hay dos listas más, ambas fuera de nuestro alcance hoy (§11): **RADIAN** (recepción de documentos)
+y **nómina electrónica por interfaz de aliados API**. Se anotan porque la de nómina confirma que
+**existe un programa de aliados**, que es la pregunta que puede cambiarlo todo (§8.6). *(Tablas
+completas añadidas el 2026-09-26, de dos imágenes de la misma lista; sus extremos coinciden con lo
+que ya estaba anotado. Las dos son conexión API y paquete anual.)*
+
+| RADIAN — documentos/año | Precio anual | | Nómina — documentos/año | Precio anual |
+|---|---|---|---|---|
+| 24 | $60.000 | | 24 | $60.000 |
+| 60 | $75.000 | | 60 | $75.000 |
+| 120 | $90.000 | | 120 | $90.000 |
+| 300 | $150.000 | | 300 | $180.000 |
+| 500 | $195.000 | | 480 | $250.000 |
+| 800 | $240.000 | | 780 | $350.000 |
+| 1.600 | $320.000 | | 1.200 | $480.000 |
+| 2.500 | $475.000 | | | |
+| 5.000 | $900.000 | | | |
+
+La **bolsa multifacturador incluye nómina** en el mismo cupo; RADIAN no aparece en ella (§8.2-septies).
 
 #### Qué cuesta ZONA BURGER con estos precios
 
@@ -870,6 +890,10 @@ el año:
 | 20.000 | $490.000 | $40.833 | No — ya va en 20.760/año |
 | 35.000 | $820.000 | $68.333 | Sí, con margen para el crecimiento |
 | **20.000 + 5.000 al agotarse** | **$780.000** | **$65.000** | **Sí, y es lo más barato** |
+| **20.000 + 1.600 al agotarse** *(2026-09-26)* | **$710.000** | **$59.167** | **Sí (hasta 21.600), y esta es la más barata** |
+
+> ⚠️ **2026-09-26:** la fila de 20.000 + 5.000 no era la compra más barata: para 21.000 basta
+> añadir el de 1.600. Se calculó por programa sobre toda la lista (§8.2-septies, apartado 1).
 
 > ✅ **La tercera fila se añadió el 2026-09-12**, cuando Factus confirmó que **las bolsas se pueden
 > sumar** y que **lo que sobra caduca al año** (§8.2-quater). Eso invierte la recomendación que
@@ -995,6 +1019,12 @@ llevaba dos semanas abierta en una cuenta de restar.
 
 #### 2. La bolsa compartida NO conviene con un solo cliente, y sí con dos
 
+> ❌ **Desactualizado el 2026-09-26.** Esta tabla cobra la bolsa a la lista de paquetes
+> individuales, y la bolsa tiene su propia lista, más cara (§8.2-septies). Rehecha: B con un cliente
+> cuesta **$156.667/mes**, no $75.833; con dos, **$104.583**, no $56.667; y con clientes de este
+> tamaño **no gana antes de ~21–23 clientes**. A, además, baja a **$59.167** (20.000 + 1.600). Ver
+> §8.2-septies, apartado 2.
+
 La comparación, con el volumen real de ZONA BURGER (21.000 documentos/año, §8.1) y aprovechando que
 la respuesta 3 confirma que **las bolsas se pueden sumar**:
 
@@ -1015,6 +1045,12 @@ $68.333/mes (la bolsa de 35.000), son **$65.000** comprando la de 20.000 y ampli
 5.000 al agotarse. Es poco, pero es la diferencia entre comprar bien y comprar «con margen».
 
 #### 3. Donde la bolsa compartida de verdad gana no es con el cliente grande, es con los pequeños
+
+> ⚠️ **Corregido el 2026-09-26.** La dirección era correcta —la bolsa solo tiene sentido con
+> clientes pequeños— pero las cifras no: el documento en bolsa no cuesta $18 sino **$63 en la bolsa
+> mínima** (10.000), y hacen falta **~8 a 11 clientes pequeños** para que la bolsa empate con el
+> paquete individual, ahorrando apenas 1 a 5 %. El «número que hay que llevarse» del final
+> ($42.333/mes para Zona Burger, margen de $56.667) **es falso**. Ver §8.2-septies, apartado 3.
 
 Eso es lo contrario de lo que parecía. Una barbería o un parqueadero que emite **150 documentos al
 año**:
@@ -1082,6 +1118,8 @@ Se asume la primera. Pero confirmarlo es **una línea de correo**, y va en el si
 1. **¿La bolsa repartida se cobra con la misma lista de precios pública, o hay lista de aliados?**
    Todas las cuentas de arriba usan la lista pública, que es el supuesto conservador. Si hay
    descuento de aliado, B gana antes de llegar al segundo cliente.
+   ❌ *2026-09-26: la lista pública NO era el supuesto conservador.* La bolsa tiene lista propia y
+   es **más cara** (§8.2-septies).
 2. **¿Una sola credencial para varios NIT, o una cuenta por NIT con la bolsa en común?** Es una
    pregunta técnica, no comercial, y **decide cómo se diseña el adaptador de FE-2**: si es una
    credencial, `fe_configuracion` guarda un identificador de empresa; si son cuentas separadas,
@@ -1109,7 +1147,7 @@ correo (al final de esta sección).
 | — | ¿Paquete individual o bolsa? | Los dos, como ya se sabía, **y se pueden mezclar** («pueden ser híbridas») | ✅ nuevo |
 | P4 | ¿Sandbox con varias empresas? | Sí, **se puede hacer todo el flujo**, pero los documentos **salen con los datos de Factus** | ✅ a medias: una empresa de prueba, la suya |
 | P5 | ¿Sin tiquete POS, factura de venta para todo? | Confirmado: no emiten POS; la DIAN permite cumplir solo con factura electrónica, que tiene más ventajas y admite consumidor final | ✅ |
-| P6 | ¿Precio de aliado? | **No hay precios de aliado**: aplica la misma lista pública (la de §8.2) | ✅ las cuentas de `precios-y-planes.md` ya la usan |
+| P6 | ¿Precio de aliado? | **No hay precios de aliado**: aplica la misma lista pública (la de §8.2) | ⚠️ **2026-09-26: no vale para la bolsa**, que tiene lista propia y más cara (§8.2-septies). Para el paquete individual, sin confirmar por escrito |
 | P7 | ¿Consultar saldo y consumo por cliente? | **Paquete individual: sí** se consulta lo gastado. **Bolsa: los documentos se asignan a cada cliente**, y consultar el consumo **llegará «en los próximos meses»** | ⚠️ en bolsa, todavía no |
 | P8 | ¿Qué pasa al agotarse? | **Avisan antes** de que se acabe, y la **activación de una bolsa nueva es inmediata** | ✅ |
 | P9 | ¿Intermitencias y soporte? | Ante intermitencias **se espera y se vuelve a intentar**. El horario llegó por escrito en el Acuerdo de Nivel de Servicio | ✅ ver apartado 6: después de las 8 p. m. no hay respuesta hasta el día siguiente |
@@ -1305,6 +1343,8 @@ ensayar el alta real o empezar a facturar las mensualidades.
 **Si se compra: paquete individual, no bolsa.** Con un solo NIT la bolsa trae los mismos documentos
 y cobra el certificado aparte (150 documentos: $169.000 en paquete contra $299.000 en bolsa). La
 bolsa solo sirve con varios NIT que la repartan, y no hay precio de aliado que lo cambie (P6).
+*(2026-09-26: la conclusión se refuerza. La bolsa más pequeña es de 10.000, así que con un NIT son
+$630.000 + $130.000 = **$760.000**, no $299.000 — §8.2-septies.)*
 
 **Recomendado: el de 400 documentos/año por $190.000.**
 
@@ -1496,13 +1536,228 @@ asesor podría referirse a que la relación comercial es directa, no a un descue
 asumir ninguna de las dos. **Pendiente: preguntarlo por escrito y, si existe, pedir la lista** —
 cambiaría los márgenes por tramos de `precios-y-planes.md` §3.
 
+> ⚠️ **2026-09-26: apareció una lista, pero va en contra.** La bolsa multifacturador tiene su
+> propia lista «para empresas de software», y es **más cara** que la pública, no más barata. Ver
+> §8.2-septies. Sigue sin saberse si esa es la de los «valores especiales» de este mensaje.
+
+### 8.2-septies La lista de la bolsa multifacturador (2026-09-26): la bolsa cuesta mucho más de lo que se suponía
+
+> **Corrige §8.2-quater (apartados 2 y 3), §8.7, §8.8 y `precios-y-planes.md` §2 y §3.** Todas esas
+> cuentas daban por hecho que **la bolsa repartida se cobra a la lista pública** de §8.2, más
+> $130.000 por NIT. Se apoyaban en la respuesta P6 de la reunión (§8.2-quinquies: *«no hay precios
+> de aliado, aplica la misma lista pública»*). **La lista de la bolsa es otra, y es más cara.** Lo
+> escrito antes se deja como estaba y se marca con un aviso que apunta aquí.
+
+El 2026-09-26 llegó una imagen de Factus titulada **«Bolsa anual multifacturador, para empresas de
+software (SaaS, Multitenant)»**, conexión API. **No trae fecha.** La transcripción y el análisis para
+JD&D están también en el repo de JD&D (`jdd_consultores_app/docs/factus-precios-paquetes.md` §4).
+
+| Documentos/año | Valor de la bolsa anual | Por documento | Lo que se suponía (lista pública) |
+|---|---|---|---|
+| 10.000 | $630.000 | $63 | $390.000 (+62 %) |
+| 20.000 | $1.120.000 | $56 | $490.000 (+129 %) |
+| 50.000 | $2.250.000 | $45 | $1.100.000 (+105 %) |
+| 80.000 | $3.200.000 | $40 | $1.700.000 (+88 %) |
+| 120.000 | $3.840.000 | $32 | $2.160.000 (+78 %) |
+| 200.000 | $5.600.000 | $28 | — |
+| 500.000 | $12.000.000 | $24 | — |
+| 750.000 | $16.500.000 | $22 | — |
+| 1.000.000 | $21.000.000 | $21 | — |
+
+Condiciones que trae la imagen:
+
+- Incluye factura electrónica, notas crédito y débito, documento soporte, nota de ajuste **y
+  nómina** (el paquete individual vende la nómina aparte). **No menciona RADIAN.**
+- **No incluye el certificado digital**: cada NIT necesita el suyo, **$130.000 por un año**.
+- Cada bolsa dura **1 año desde la compra**. *«El aliado recibe su bolsa y puede dividirla en los
+  paquetes (NIT) que desee.»*
+- **La bolsa más pequeña es de 10.000.** Para más de 1.000.000, «escríbenos».
+
+**Lo que NO cambia:** la lista de **paquetes individuales** de §8.2 (150 → $169.000 … 120.000 →
+$2.160.000, **con certificado incluido**). Es la que usa la sección «Los tramos aguantan aunque nunca
+lleguemos a la bolsa» de `precios-y-planes.md` §3, y por eso esa sección sigue en pie.
+
+#### Tres cosas que la tabla dice sin decirlas
+
+1. **A igual cantidad, la bolsa es siempre más cara que el paquete individual**, y además sin
+   certificado: 120.000 documentos cuestan $3.840.000 en bolsa y $2.160.000 en paquete individual con
+   certificado. **Lo único que compra la bolsa es poder repartir**, no un mejor precio por documento.
+2. **Los tramos de 150, 400, 1.600, 2.500, 5.000, 15.000 y 35.000 no existen en bolsa.** Las cuentas
+   que usaban «50.000 + 15.000» o «20.000 + 5.000» dentro de la bolsa usaban piezas que no se venden.
+3. **Los «$18 por documento» no se alcanzan nunca.** El tramo más barato de la bolsa es $21, con un
+   millón de documentos al año. Con 120.000 son $32.
+
+#### Supuestos de las cuentas de abajo (explícitos, porque ninguno está confirmado para la bolsa)
+
+| # | Supuesto | Qué se sabe |
+|---|---|---|
+| S1 | **Las bolsas se pueden sumar** (p. ej. 20.000 + 10.000) | Confirmado para «cada paquete o bolsa» el 2026-09-12 (§8.2-quater, respuesta 3) y en el contrato (cláusula PRIMERA: *«si un paquete se termina antes de cumplir el periodo de 1 año, el ALIADO puede adquirir un nuevo paquete»*). **Para la lista nueva no está confirmado** → pregunta 3 abajo |
+| S2 | **Lo que sobra de la bolsa se pierde** | Se paga la bolsa entera aunque no se use toda. Es el supuesto conservador y el real: caducan al año y *«no son acumulables de un periodo a otro»* (contrato, cláusula PRIMERA) |
+| S3 | **Cada NIT en bolsa suma $130.000** de certificado | Dicho en la imagen y por escrito el 2026-09-14 |
+| S4 | **Se compra la combinación más barata que cubre el volumen** | Calculado por programa sobre las dos listas, no a mano |
+| S5 | **Paquete individual también se puede sumar** (al agotarse se compra otro) | Confirmado el 2026-09-12 y en el contrato |
+| S6 | Zona Burger = **21.000 documentos/año**, el techo (todo lo que vende) | §8.1. Lo emitido real se sabrá con FE-2 |
+
+#### 1. Zona Burger solo (opción A) cuesta menos de lo que decía este documento
+
+Con S5, lo más barato que cubre 21.000 documentos **no es 20.000 + 5.000** ($780.000, que es lo que
+se venía usando), sino **20.000 + 1.600 = $710.000/año = $59.167/mes**. Los $65.000 de §8.2,
+§8.2-quater, §8.3 y §8.7 eran una compra peor que la mejor posible. Si pasara de 21.600, la siguiente
+pieza es 20.000 + 2.500 = $750.000 ($62.500/mes).
+
+#### 2. A contra B, rehecho (recalcula §8.2-quater, apartado 2)
+
+Clientes del tamaño de Zona Burger (21.000 documentos/año cada uno):
+
+| Clientes | Qué se compra en bolsa | Bolsa + certificados/año | **B: por cliente/mes** | Antes se decía | **A: paquete individual, por cliente/mes** |
+|---|---|---|---|---|---|
+| 1 | 20.000 + 10.000 | $1.750.000 + $130.000 | **$156.667** | $75.833 | **$59.167** |
+| 2 | 50.000 | $2.250.000 + $260.000 | **$104.583** | $56.667 | $59.167 |
+| 3 | 80.000 | $3.200.000 + $390.000 | **$99.722** | $53.611 | $59.167 |
+| 5 | 120.000 | $3.840.000 + $650.000 | **$74.833** | $46.833 | $59.167 |
+| 9 | 200.000 | $5.600.000 + $1.170.000 | **$62.685** | — | $59.167 |
+| 20 | 500.000 | $12.000.000 + $2.600.000 | **$60.833** | — | $59.167 |
+| 23 | 500.000 | $12.000.000 + $2.990.000 | **$54.312** | — | $59.167 |
+
+**Con clientes grandes, la bolsa no gana antes de ~21–23 clientes** (la de 500.000, a $24 el
+documento), y no de forma estable: con 24 hay que añadir otra de 10.000 y vuelve a ponerse justa.
+Antes se decía que ganaba **desde el segundo**. Aunque se tomara el costo viejo de A ($65.000), la
+bolsa no ganaría antes de 9 clientes.
+
+Sin S1 (si las bolsas no se pudieran sumar), un solo cliente en bolsa necesitaría la de 50.000:
+**$198.333/mes**.
+
+#### 3. Dónde sí puede ganar la bolsa: agrupando clientes PEQUEÑOS (recalcula §8.2-quater, apartado 3)
+
+El certificado ($130.000) se paga igual en los dos casos —incluido en uno, aparte en el otro—, así
+que la bolsa solo gana cuando **reparte los $630.000 de la bolsa mínima entre suficientes clientes
+que, en paquete individual, pagarían un tramo caro**:
+
+| Tipo de cliente | Documentos/año | Paquete individual | Bolsa: gana a partir de | Con ese número, por cliente/año |
+|---|---|---|---|---|
+| Barbería (~15/mes) | 180 | 400 → $190.000 | **11 clientes** (bolsa de 10.000) | $187.273 (−1 %) |
+| JD&D (~50/mes) | 600 | 1.600 → $220.000 | **8 clientes** (10.000) | $208.750 (−5 %) |
+| Tramo S lleno (100/mes) | 1.200 | 1.600 → $220.000 | **8 clientes** (10.000 justa) | $208.750 (−5 %) |
+| Tramo M lleno (500/mes) | 6.000 | 10.000 → $390.000 | **13 clientes** (80.000) | $376.154 (−4 %) |
+| Tramo L lleno (1.200/mes) | 14.400 | 15.000 → $440.000 | ~68 clientes (1.000.000) | prácticamente nunca |
+| Tramo XL lleno (2.500/mes) | 30.000 | 35.000 → $820.000 | ~24–25 clientes (750.000) | $790.000 (−4 %) |
+
+Dos matices que la tabla esconde:
+
+- **El ahorro al empatar es pequeño** (1 a 5 %), y a cambio la bolsa trae riesgos que el paquete
+  individual no: se paga todo de golpe, **el consumo por cliente todavía no se puede consultar**
+  (P7 de §8.2-quinquies) y **reasignar documentos entre clientes es a solicitud** (§8.2-sexies). El
+  ahorro crece despacio: con 50 barberías, $142.600 cada una (−25 %).
+- **No es monótono.** 8 clientes de tramo S llenan justa la bolsa de 10.000; con 10 u 11 hay que
+  pasar a la de 20.000 y la bolsa vuelve a perder hasta ~13. La decisión se hace **con la cuenta del
+  grupo concreto**, no con una regla de «a partir de N».
+
+La afirmación de §8.2-quater, apartado 3 (*«una barbería paga $1.127 por documento en su paquete y
+$18 dentro de la bolsa»*), queda así: en paquete individual la barbería de 180 documentos paga el
+tramo de 400 ($190.000, no el de 150), y dentro de una bolsa de 10.000 compartida con otras diez
+paga ~$187.000 — **casi lo mismo, y todo es certificado**.
+
+#### 4. La bolsa tiene otra ventaja, y otro costo
+
+- **Incluye nómina electrónica.** Un cliente en paquete individual que quiera nómina paga además la
+  lista de nómina (desde $60.000/año por 24, tabla en §8.2). Si algún día vendemos nómina a varios
+  clientes pequeños, eso inclina la balanza hacia la bolsa antes de lo que dicen las tablas de
+  arriba. Hoy nómina está fuera del alcance (§11).
+- **Riesgo de caja mayor.** La bolsa mínima son **$630.000 más los certificados**, por adelantado;
+  la de 50.000, $2.250.000. Caduca al año, no existe paquete mensual (§8.2-sexies) y el consumo no se
+  puede consultar todavía. En paquete individual el adelanto es por cliente y crece con cada cliente,
+  no de golpe.
+
+#### 5. La regla que se propone (propuesta, **no decidida**)
+
+> **El paquete individual es la modalidad por defecto.** La bolsa se compra solo para **agrupar
+> clientes pequeños y medianos** (tramos S y M), y solo cuando la cuenta del grupo concreto dé
+> menos que la suma de sus paquetes individuales: **bolsa + $130.000 × NIT < Σ paquetes
+> individuales**. Con las listas de hoy eso pide **~8 clientes de tramo S** o **~13 de tramo M**. Los
+> clientes de tramo **L y XL van siempre en paquete individual.**
+
+Las dos modalidades se pueden mezclar (§8.2-quinquies), así que la regla no obliga a nada al
+código: cada cliente se decide al comprar su cupo. Y conviene revisarla cuando Factus conteste las
+preguntas de abajo, porque la primera puede cambiarla entera.
+
+#### 6. Preguntas para Factus (sin enviar)
+
+1. **¿Desde qué fecha rige la lista de la bolsa multifacturador, y es la vigente para aliados?** ¿Es
+   la de los *«valores especiales para ti como ALIADO»* del WhatsApp del 2026-09-15 (§8.2-sexies,
+   apartado 6)? ¿Y la respuesta del 2026-09-14 (*«no hay precios de aliado, aplica la misma lista
+   pública»*) sigue valiendo para los **paquetes individuales**?
+2. **Con paquetes individuales comprados por nosotros a nombre de un cliente** (cláusula PRIMERA del
+   contrato), **¿el precio es el de la lista individual?** El contrato no lo fija: la cláusula
+   TERCERA dice *«la suma que sea convenida entre las partes»* y remite a la factura de cada
+   activación.
+3. **¿Existen bolsas de menos de 10.000?** ¿Cómo se cubre un volumen intermedio? **¿Se pueden sumar
+   bolsas de esta lista** (por ejemplo 20.000 + 10.000 para 30.000)?
+4. **¿RADIAN se vende en bolsa multifacturador o solo como paquete individual?** ¿Un cliente que va
+   en bolsa puede tener además un paquete de RADIAN propio?
+5. **La nómina dentro de la bolsa, ¿descuenta del mismo cupo que las facturas**, documento por
+   documento?
+6. **¿Un mismo NIT puede empezar en paquete individual y pasar a la bolsa** (o al revés) al renovar,
+   sin volver a tramitar el certificado ni la activación?
+7. ¿El certificado de $130.000 por NIT tiene el mismo precio si el cliente ya tuvo un paquete
+   individual (que lo incluía) y pasa a la bolsa?
+
+#### 7. Lo que sigue sin saberse
+
+- Si esta lista es la vigente y desde cuándo (pregunta 1). **Todo lo de esta sección depende de eso.**
+- Si las bolsas de esta lista se suman (S1). Sin eso, un cliente grande en bolsa sale a $198.333/mes.
+- Si el precio de los paquetes individuales comprados por nosotros es el de la lista (pregunta 2).
+  Todas las cifras de la opción A lo suponen.
+- Cuánto emite de verdad un cliente (S6): hasta FE-2, todas las cuentas usan el techo.
+
+#### 8. Propuesta analizada (2026-09-27): comprar una bolsa de 10.000 para arrancar con JD&D — **sin decidir**
+
+**La propuesta:** que JD&D Consultores (primer cliente de facturación electrónica, línea de
+servicio a terceros) arranque dentro de una **bolsa de 10.000**, para tener margen para otros
+clientes e ir aprendiendo a operar la bolsa.
+
+**Las cuentas** (volumen de JD&D: ~600 documentos/año y nómina de 1 empleado; fuente:
+`jdd_consultores_app/docs/factus-precios-paquetes.md`):
+
+| | Paquete individual | Bolsa de 10.000 |
+|---|---|---|
+| Facturación | 1.600 → $220.000 (certificado incluido) | $630.000 |
+| Certificado | incluido | $130.000 |
+| Nómina (24/año) | $60.000 | incluida |
+| **Total del año** | **$280.000** | **$760.000** |
+| RADIAN (aparte en los dos casos; la bolsa no lo incluye) | $75.000–$320.000 | $75.000–$320.000 |
+| Queda de la anualidad de $1.000.000 de JD&D | **$400.000–$630.000** | **$0–$165.000** |
+
+- JD&D usaría **~6 %** de la bolsa; el resto **caduca al año de la compra**.
+- La bolsa empata con paquetes individuales en **~5 clientes del tamaño de JD&D si todos llevan
+  nómina, ~7–8 si no**. Hoy JD&D es el único cliente que ha pedido facturación.
+- El «margen para otros clientes» solo sirve a **clientes pequeños**: un restaurante del tamaño de
+  Zona Burger (~21.000/año) no cabe en una bolsa de 10.000 y, por el apartado 5, va en paquete
+  individual de todos modos.
+- **Lo que se aprende es casi lo mismo en las dos modalidades**: cada cliente tiene cuenta y
+  credencial propias también en bolsa (§8.2-quinquies), así que alta, certificado, rango de
+  numeración, emisión, copia del XML/PDF y vigilancia del saldo se aprenden igual con el paquete
+  individual. Lo único propio de la bolsa es **asignar documentos por cliente**, y eso hoy es
+  **a solicitud** a Factus (§8.2-sexies) y **sin consulta de consumo por cliente** (P7).
+- Las modalidades **se pueden mezclar**, así que empezar en paquete individual no cierra la puerta
+  a la bolsa.
+
+**Recomendación (no decidida por el usuario):** JD&D en **paquete individual** (facturación 1.600
++ nómina 24 + RADIAN según su volumen); **comprar la bolsa cuando haya ~5 clientes pequeños
+confirmados**, y antes confirmar con Factus que esta lista está vigente (pregunta 1). Compre lo que
+compre, hacerlo **cuando JD&D esté listo para arrancar**: el año corre desde la compra y hay 8 días
+para los papeles del certificado (§8.2-bis, punto 3).
+
+**Cuándo sí tendría sentido la bolsa ya:** si hay **4 o más clientes pequeños a punto de firmar en
+los próximos meses**. En ese caso hay que hacer la cuenta con ese grupo concreto (tamaño y si llevan
+nómina) antes de comprar.
+
 ---
 
 ### 8.3 Los candidatos, con precios reales
 
 | Proveedor | Forma del costo | ¿Tiquete POS? | ¿Varios NIT? | Precio |
 |---|---|---|---|---|
-| **Factus** | **Bolsa anual por documentos** (no plano — corregido 2026-09-11) | ❌ No | ✅ **Sí, con el programa de aliados** (bolsa repartida, +$130.000/año por NIT — corregido 2026-09-12, §8.2-quater) | $169.000/año (150 doc) → $2.160.000/año (120.000 doc, **$18/doc**). Tabla completa en §8.2 |
+| **Factus** | **Bolsa anual por documentos** (no plano — corregido 2026-09-11) | ❌ No | ✅ **Sí, con el programa de aliados** (bolsa repartida, +$130.000/año por NIT — corregido 2026-09-12, §8.2-quater; **la bolsa tiene lista propia, desde $630.000 por 10.000 — 2026-09-26, §8.2-septies**) | Paquete individual: $169.000/año (150 doc) → $2.160.000/año (120.000 doc, $18/doc), tabla en §8.2. **Bolsa: $63/doc (10.000) → $21/doc (1.000.000)** |
 | **MATIAS API** (Lopezsoft) | Por documento, anual prepago | ✅ Sí | ✅ Programa «casas de software», clientes ilimitados | $220.000/año (5.000 doc, $44/doc) → $6.000.000/año (500.000 doc, **$12/doc**) |
 | **Facturalatam** (Digital Búho) | Mensual por cupo de empresas + tope de documentos | ✅ Sí | ✅ Marca blanca | $99.900/mes (10 emp · 5.000 doc) · $349.900 (50 · 30.000) · $999.900 (200 · 150.000) |
 | **Plemsi** | Por documento | ✅ Sí | Bolsa multiempresa, precio no público | $19.000/mes (100 doc) · $1.242.000/año (24.000) · **$16,83/doc** en volumen |
@@ -1515,7 +1770,7 @@ tabla que importa, porque es lo que costaría *hoy* el cliente que ya tenemos:
 
 | Proveedor | Qué habría que comprar | Costo mensual de ESE cliente | ¿Se puede agrupar con otros clientes? |
 |---|---|---|---|
-| **Factus** | Bolsa de 20.000 + una de 5.000 al agotarse | **$65.000** | ✅ **Sí** (bolsa repartida entre NIT, §8.2-quater) |
+| **Factus** | Paquete de 20.000 + uno de 1.600 al agotarse *(antes decía 20.000 + 5.000, $65.000; corregido 2026-09-26)* | **$59.167** | ✅ Sí, pero **la bolsa cuesta más que el paquete** y con clientes de este tamaño no gana antes de ~21 (§8.2-septies) |
 | **MATIAS** (tramo alto, $12/doc) | Parte de una bolsa compartida | ~$21.000 | ✅ Sí, y es su modelo |
 | **Facturalatam** ($349.900/mes, 50 emp · 30.000 doc) | ~70% del cupo de documentos del plan | ~$20.580 si se llena de clientes así | ⚠️ Sí en empresas, pero el techo real son los documentos: caben 17, no 50 |
 | **Plemsi** ($51,75/doc a 24.000/año) | Bolsa propia | ~$89.500 | Bolsa multiempresa, precio no público |
@@ -1533,6 +1788,12 @@ tabla que importa, porque es lo que costaría *hoy* el cliente que ya tenemos:
 > ⚠️ **Aún así, el descuento por agrupar solo llega con volumen.** MATIAS a $12/doc son 500.000
 > documentos al año ≈ 24 clientes del tamaño de Zona Burger. Con Factus el punto de equilibrio es
 > mucho más temprano —**dos clientes**— porque lo único que hay que amortizar es el certificado.
+>
+> ❌ **Falso desde el 2026-09-26.** Con la lista real de la bolsa, el equilibrio de Factus para
+> clientes de ese tamaño está en **~21–23 clientes**, casi lo mismo que MATIAS, y a ese volumen la
+> bolsa de Factus cuesta el doble por documento ($24 contra $12). Agrupar con Factus sirve para
+> clientes pequeños, no para grandes (§8.2-septies). **Esto le devuelve peso a MATIAS como
+> contraste** si algún día hay muchos clientes grandes.
 
 **Trayectoria de los dos que más encajan:** MATIAS declara 800+ empresas activas, 130+ casas de
 software y 8,75M documentos en 2025, con aceptación DIAN en ~1,8 s; hay un testimonio de un
@@ -1622,6 +1883,7 @@ Participantes vigente**: <https://micrositios.dian.gov.co/sistema-de-facturacion
     adquiere el certificado por cada uno por aparte». Es justo el caso que §8.3 daba por imposible
     con Factus, y por eso §8.7 pasa de condicional a decidida. Falta el precio de aliado: todas
     las cuentas de §8.2-quater usan la lista pública, que es el supuesto conservador.*
+    · *2026-09-26: **no era conservador.** La bolsa tiene lista propia, más cara (§8.2-septies).*
 
 ### 8.6 Lo que falta por confirmar antes de decidir
 
@@ -1659,7 +1921,7 @@ adaptador, porque cambian qué guarda la base y qué pantalla hay que construir.
 | Quién paga a Factus | El cliente, con su NIT | Nosotros | Nosotros |
 | Qué cobramos | Solo la integración | Módulo por tramos de volumen | Módulo plano |
 | Certificado digital | **Incluido** en el paquete | **$130.000/año por NIT**, aparte | Igual que B |
-| Costo con Zona Burger | $65.000/mes, lo paga el cliente | $75.833/mes con 1 cliente · **$56.667 con 2** | Igual que B, y lo pagamos nosotros |
+| Costo con Zona Burger | $65.000/mes, lo paga el cliente *(2026-09-26: **$59.167**)* | $75.833/mes con 1 cliente · **$56.667 con 2** *(2026-09-26: **$156.667 con 1 · $104.583 con 2**, §8.2-septies)* | Igual que B, y lo pagamos nosotros |
 | Margen con Zona Burger | Intacto | Positivo si los tramos están bien | **−$20.000/mes** |
 | Si el cliente crece | Nos da igual, es su bolsa | Sube su tramo, avisado | Duele más cada mes |
 | Quién queda en el medio | Comercialmente, nosotros igual | Nosotros | Nosotros |
@@ -1677,6 +1939,14 @@ bolsa entre varios NIT, cobrando el certificado digital aparte, $130.000/año po
 esto deja de ser una bifurcación y pasa a ser una decisión.
 
 #### Decisión: **B, y desde el primer cliente**
+
+> ❌ **Ya no se sostiene (2026-09-26).** La razón 2 de abajo (*«con el segundo cliente que facture,
+> B ya gana»*) salía de cobrar la bolsa a la lista de paquetes individuales. Con la lista real de la
+> bolsa, B con clientes del tamaño de Zona Burger **no gana antes de ~21–23 clientes**, y la razón 3
+> (el cliente pequeño) solo vale a partir de **~8 clientes pequeños**, ahorrando 1 a 5 %. **Propuesta,
+> sin decidir: paquete individual por defecto; bolsa solo para agrupar clientes S y M cuando la
+> cuenta del grupo lo justifique** (§8.2-septies, apartado 5). El razonamiento original se deja abajo
+> tal como estaba.
 
 > ⚠️ **Matizada el 2026-09-14 (§8.2-quinquies, punto 3).** En la reunión Factus confirmó que cada
 > cliente tiene **su propia credencial también en la bolsa** y que **paquetes y bolsa se pueden
@@ -1729,6 +1999,10 @@ contrato** que las obligaciones fiscales son del cliente y nosotros somos el med
 > tienen suelo: el certificado ($10.833/mes) más los documentos. Un cliente de 150 documentos al año
 > cuesta ~$11.100/mes y uno como Zona Burger ~$42.333/mes. Ver
 > [`precios-y-planes.md`](precios-y-planes.md), que hay que rehacer con esto.
+>
+> ❌ *2026-09-26: esas dos cifras suponían $18 por documento en bolsa.* En paquete individual el
+> cliente de 150 documentos cuesta $169.000/año = **$14.083/mes** y Zona Burger **$59.167/mes**
+> (§8.2-septies).
 
 ---
 
@@ -1787,8 +2061,15 @@ cambia el problema de §8.1: el módulo de facturación nunca tuvo que valer $45
 | Bolsa de 35.000 (lo que se creía el 2026-09-11) | $68.333/mes | $30.667 |
 | Bolsa de 20.000 + 5.000, comprada por el cliente (A) | $65.000/mes | no aplica, la paga él |
 | **Dentro de la bolsa repartida, 5 clientes (B)** | **$42.333/mes** | **$56.667** |
+| *(2026-09-26)* Paquete individual 20.000 + 1.600, comprado por nosotros (A) | **$59.167/mes** | **$39.833** |
+| *(2026-09-26)* Bolsa repartida con la lista real, 5 clientes de ese tamaño (B) | **$74.833/mes** | **$24.167** |
 
 La tercera fila es la decisión de §8.7, y es la que hay que usar para fijar precio.
+
+> ❌ **2026-09-26: la tercera fila es falsa**: usaba $18 por documento en bolsa, y con la lista real
+> de la bolsa 5 clientes grandes cuestan $74.833 cada uno (§8.2-septies). La fila que hay que usar
+> para fijar precio es la del **paquete individual: $59.167, margen de $39.833** contra el módulo de
+> $99.000.
 
 > **La conclusión que hay que llevarse:** el problema nunca fue que la facturación electrónica sea
 > cara. **Es cara para todos.** El problema era nuestro precio, que se fijó sin mirar lo que cobra
@@ -1902,6 +2183,7 @@ Gracias,
 **Que la respuesta sea mala no nos deja sin camino**, y conviene tenerlo claro antes de preguntar: la
 opción A sigue existiendo, cuesta $65.000/mes para Zona Burger en vez de $75.833, y lo único que se
 pierde es el margen del cliente pequeño y la comodidad de no gestionar credenciales ajenas.
+*(2026-09-26: con las listas reales, A cuesta $59.167 y B con un cliente $156.667; §8.2-septies.)*
 
 ---
 
@@ -1914,7 +2196,7 @@ pierde es el margen del cliente pequeño y la comodidad de no gestionar credenci
 
 | Fase | Qué | Bloqueada por |
 |---|---|---|
-| **FE-0** | **No es código. EN CURSO.** ✅ Volumen real medido (§8.1), ✅ Factus cotizado con lista de precios y T&C (§8.2), ✅ las 11 preguntas contestadas incluido el programa de aliados (§8.2-quater) y ✅ **decidido quién compra la bolsa: opción B, bolsa repartida** (§8.7). ⬜ Falta: las 4 preguntas de seguimiento (§8.9) —de las cuales **la de una credencial o varias bloquea FE-2**—, cotizar Alegra como contraste, confirmar con un contador el régimen y los impuestos del primer cliente, y que el cliente saque su **resolución de numeración** (la habilitación la hace Factus) | Trámite externo, plazos ajenos |
+| **FE-0** | **No es código. EN CURSO.** ✅ Volumen real medido (§8.1), ✅ Factus cotizado con lista de precios y T&C (§8.2), ✅ las 11 preguntas contestadas incluido el programa de aliados (§8.2-quater) y ~~✅ **decidido quién compra la bolsa: opción B, bolsa repartida** (§8.7)~~ ⚠️ **reabierto el 2026-09-26**: la bolsa tiene lista propia y más cara; propuesta sin decidir, paquete individual por defecto (§8.2-septies). ⬜ Falta: las 4 preguntas de seguimiento (§8.9) —de las cuales **la de una credencial o varias bloquea FE-2**—, cotizar Alegra como contraste, confirmar con un contador el régimen y los impuestos del primer cliente, y que el cliente saque su **resolución de numeración** (la habilitación la hace Factus) | Trámite externo, plazos ajenos |
 | **FE-1** | ✅ **HECHA el 2026-09-01, en local.** `general.gener_negocio_fiscal` + `general.gener_departamento` (33, completo) + `facturacion.fe_impuesto`, helper del NIT con DV, `puedeEmitir()`, y las 4 columnas fiscales en las 6 tablas de producto de las 5 verticales. `npm run migrate:facturacion`. **22 pruebas en verde.** Sin desplegar y sin aplicar en la base compartida | — |
 | **FE-2** | Puerto + primer adaptador contra **sandbox**. Emitir factura de venta desde restaurante de punta a punta | FE-0 (credenciales), FE-1 |
 | **FE-3** | Tiquete POS electrónico, notas crédito, worker de reintentos, entrega por correo y **por WhatsApp** | FE-2 |

@@ -66,6 +66,11 @@ const FUNCIONES = {
         descripcion: 'Reservas de una o varias noches sobre habitaciones, cabañas o cupos '
             + '(hotel o guardería).',
     },
+    productos: {
+        etiqueta: 'Venta de productos',
+        descripcion: 'Además de agendar, vende productos físicos (shampoo, cera, alimento, '
+            + 'accesorios…) desde el mostrador y en el portal, con o sin cita.',
+    },
 };
 
 const TERMINOS_BASE = {
@@ -90,7 +95,7 @@ const PERFILES = {
         terminos: {},
         icono_servicios: 'scissors',
         fijas: [],
-        disponibles: ['variantes', 'deposito', 'a_cotizar', 'portafolio'],
+        disponibles: ['variantes', 'deposito', 'a_cotizar', 'portafolio', 'productos'],
         activas: [],
         config_inicial: {},
         portal: {
@@ -105,7 +110,7 @@ const PERFILES = {
         terminos: { profesional: 'Estilista', profesionales: 'Estilistas' },
         icono_servicios: 'sparkles',
         fijas: [],
-        disponibles: ['tiempo_proceso', 'variantes', 'deposito', 'consentimiento', 'portafolio'],
+        disponibles: ['tiempo_proceso', 'variantes', 'deposito', 'consentimiento', 'portafolio', 'productos'],
         activas: ['tiempo_proceso', 'variantes'],
         config_inicial: {
             anticipacion_min_horas: 2,
@@ -128,7 +133,7 @@ const PERFILES = {
         },
         icono_servicios: 'flower-2',
         fijas: [],
-        disponibles: ['recursos', 'deposito', 'variantes', 'consentimiento', 'tiempo_proceso'],
+        disponibles: ['recursos', 'deposito', 'variantes', 'consentimiento', 'tiempo_proceso', 'productos'],
         activas: ['recursos', 'deposito'],
         config_inicial: {
             anticipacion_min_horas: 4,
@@ -152,7 +157,7 @@ const PERFILES = {
         },
         icono_servicios: 'sparkles',
         fijas: [],
-        disponibles: ['consentimiento', 'recursos', 'deposito', 'variantes'],
+        disponibles: ['consentimiento', 'recursos', 'deposito', 'variantes', 'productos'],
         activas: ['consentimiento', 'recursos', 'deposito'],
         config_inicial: {
             anticipacion_min_horas: 12,
@@ -176,7 +181,7 @@ const PERFILES = {
         },
         icono_servicios: 'pen-tool',
         fijas: [],
-        disponibles: ['a_cotizar', 'deposito', 'consentimiento', 'portafolio', 'variantes'],
+        disponibles: ['a_cotizar', 'deposito', 'consentimiento', 'portafolio', 'variantes', 'productos'],
         activas: ['a_cotizar', 'deposito', 'consentimiento', 'portafolio'],
         config_inicial: {
             anticipacion_min_horas: 24,
@@ -200,7 +205,7 @@ const PERFILES = {
         fijas: ['mascotas'],
         // Sin estancias: el cuidado de mascotas se agenda por citas. Una guardería que cobre por
         // noches es un hospedaje, y ese es su propio oficio.
-        disponibles: ['variantes', 'deposito', 'tiempo_proceso'],
+        disponibles: ['variantes', 'deposito', 'tiempo_proceso', 'productos'],
         activas: ['variantes'],
         config_inicial: {
             anticipacion_min_horas: 2,
@@ -223,7 +228,7 @@ const PERFILES = {
         },
         icono_servicios: 'bed-double',
         fijas: ['estancias'],
-        disponibles: ['deposito'],
+        disponibles: ['deposito', 'productos'],
         activas: ['deposito'],
         config_inicial: {
             anticipacion_min_horas: 0,
@@ -256,6 +261,7 @@ const VISTAS_POR_FUNCION = {
     recursos: ['/recursos'],
     mascotas: ['/mascotas'],
     estancias: ['/ocupacion', '/estancias', '/unidades'],
+    productos: ['/productos'],
 };
 const TODAS_LAS_VISTAS = new Set([
     ...VISTAS_COMUNES, ...VISTAS_CITA, ...Object.values(VISTAS_POR_FUNCION).flat(),

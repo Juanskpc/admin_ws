@@ -8,7 +8,7 @@
 > paso a paso, comprobaciones y cómo revertir en
 > [`despliegue-pendiente-2026-09-24.md`](despliegue-pendiente-2026-09-24.md).
 
-**Última actualización:** 2026-09-19/20 (**F8-D — Embedded Signup, Opción B, IMPLEMENTADO Y PROBADO
+**Última actualización:** 2026-09-26 (**la bolsa multifacturador de Factus tiene lista propia y más cara**: la decisión B de facturación queda reabierta; resumen en §4-0.14, sin código). Antes, 2026-09-19/20 (**F8-D — Embedded Signup, Opción B, IMPLEMENTADO Y PROBADO
 EN PRODUCCIÓN.** Backend + panel construidos y desplegados, primera conexión real de punta a punta
 contra la cuenta de Meta (no un doble), botón de autoservicio para desconectar, y la pregunta de
 "¿quién paga?" contestada con evidencia real — el cliente, en una cuenta separada de la de
@@ -746,6 +746,9 @@ en verde.** El roadmap original está agotado: todo lo que se hace ahora sale de
 >
 > #### 2. La decisión: **B, y desde el primer cliente**
 >
+> ❌ **Reabierta el 2026-09-26** (§14 de esta lista): la bolsa tiene lista propia y más cara, así que
+> «con el segundo ya gana» es falso. Lo de abajo se conserva tal como se escribió.
+>
 > Con **un** cliente, B cuesta exactamente $130.000/año más que A —el certificado, porque la bolsa
 > es la misma—. **Con el segundo ya gana**: $56.667/mes por cliente contra $65.000. Se elige B ya,
 > por tres razones:
@@ -776,6 +779,9 @@ en verde.** El roadmap original está agotado: todo lo que se hace ahora sale de
 >   todo**, válida en punto de venta y con adquiriente «consumidor final».
 >
 > #### 4. Precios rehechos: el módulo va por TRAMOS
+>
+> ❌ *2026-09-26: la columna «Costo» usa $18/doc en bolsa, que no existe (§14). Los precios
+> aguantan en paquete individual; en bolsa, L y XL pueden perder.*
 >
 > Costo = **$10.833/mes de certificado + $18 por documento**. De ahí salen los tramos:
 >
@@ -1030,6 +1036,47 @@ en verde.** El roadmap original está agotado: todo lo que se hace ahora sale de
 > `precios-y-planes`, `tiqueteras-y-fiado`, `proveedor-tecnologico-dian` nuevo).
 > `restaurante_app`: `core/services/{clientes,caja}.service.ts`, `features/caja/caja.ts`,
 > `features/clientes/clientes.{ts,html,scss}`.
+>
+> ### 14. CIERRE DEL 2026-09-26 — la bolsa de Factus tiene lista propia, y la decisión B se reabre
+>
+> Sesión de documentación, **sin código y sin tocar ningún precio publicado**. Llegó una imagen de
+> Factus, **«Bolsa anual multifacturador, para empresas de software»**, sin fecha: 10.000 documentos
+> → $630.000 ($63/doc) … 120.000 → $3.840.000 ($32) … 1.000.000 → $21.000.000 ($21), sin
+> certificado ($130.000 por NIT), con nómina incluida, sin RADIAN, y **nada por debajo de 10.000**.
+> Todas las cuentas de §8.2-quater, §8.7, §8.8 y `precios-y-planes.md` §2–§3 cobraban la bolsa a la
+> lista de **paquetes individuales**, que es mucho más barata. Todo el detalle, con los supuestos
+> explícitos y recalculado por programa, en [`facturacion-electronica.md`](facturacion-electronica.md)
+> **§8.2-septies**; lo viejo quedó marcado con avisos fechados, no borrado.
+>
+> Lo que hay que saber:
+>
+> - **A igual cantidad, la bolsa es más cara que el paquete individual.** Lo único que compra es
+>   poder repartir.
+> - **Zona Burger en paquete individual cuesta $59.167/mes** (20.000 + 1.600), no $65.000. En bolsa él
+>   solo, $156.667; con 2 clientes de su tamaño, $104.583; con 5, $74.833. **La bolsa no gana con
+>   clientes grandes antes de ~21–23.**
+> - **Con clientes pequeños sí puede ganar**, pero desde ~8 (tramo S, o del tamaño de JD&D) u ~11
+>   barberías, y ahorrando solo 1–5 %.
+> - **Los tramos S/M/L/XL publicados aguantan en paquete individual** (margen mínimo $20.667 /
+>   $26.500 / $42.333 / $30.667). **En bolsa, XL pierde** con cualquier bolsa por debajo de 120.000
+>   (desde 1.399 doc/mes con la de 10.000) y **L** con la de 10.000 desde 1.082 doc/mes.
+> - **Propuesta, sin decidir:** paquete individual por defecto; bolsa solo para agrupar clientes S y
+>   M cuando la cuenta del grupo concreto dé menos que la suma de sus paquetes; L y XL siempre en
+>   paquete individual.
+> - El contrato de alianza **no fija precios** (cláusula TERCERA: «la suma que sea convenida»).
+>
+> **Por dónde seguir:** mandar a Factus las 7 preguntas de §8.2-septies, apartado 6 (la primera
+> —desde cuándo rige esta lista y si es la de aliados— puede cambiarlo todo), y decidir la regla de
+> modalidad. JD&D no se ve afectado: ya iba en paquete individual.
+>
+> **Añadido el 2026-09-27 — propuesta abierta: comprar una bolsa de 10.000 para arrancar con JD&D**
+> y tener margen para otros clientes. Analizada en §8.2-septies, apartado 8: la bolsa cuesta
+> **$760.000** el primer año contra **$280.000** en paquete individual (facturación + nómina; RADIAN
+> aparte en los dos), JD&D usaría ~6 % y el resto caduca; empata desde ~5 clientes pequeños con
+> nómina. Lo que se aprende de la integración es el mismo en las dos modalidades. **Recomendación:
+> paquete individual para JD&D y bolsa cuando haya ~5 clientes pequeños confirmados. El usuario
+> NO ha decidido todavía** — es lo primero que hay que cerrar al retomar facturación, junto con
+> enviar las preguntas a Factus.
 
 ### Qué hay vivo, y dónde apunta
 
