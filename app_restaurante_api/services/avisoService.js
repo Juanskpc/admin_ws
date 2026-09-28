@@ -15,6 +15,8 @@ const realtime = require('../../app_core/realtime');
  *   cocina   → el tablero del KDS.
  *   caja     → el turno abierto y sus movimientos.
  *   clientes → las cuentas de cliente: tiqueteras, fiado y sus saldos.
+ *   whatsapp → llegó un pedido tomado por el asistente. A diferencia de los demás NO pide recargar
+ *              una lista —eso ya lo hace `pedidos`—: es el «suena» para que alguien lo mire.
  *
  * ## La regla que no se puede saltar: avisar DESPUÉS del commit
  *
@@ -37,6 +39,7 @@ const TEMAS = Object.freeze({
     COCINA: 'cocina',
     CAJA: 'caja',
     CLIENTES: 'clientes',
+    WHATSAPP: 'whatsapp',
 });
 
 /** Avisa ya. Para operaciones que no abren transacción explícita. */

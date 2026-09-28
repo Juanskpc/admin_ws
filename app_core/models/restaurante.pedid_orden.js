@@ -55,6 +55,10 @@ module.exports = (sequelize, DataTypes) => {
         // distinguir «se intentó» de «llegó» — que no es lo mismo, y verlo costó un aviso
         // marcado cuyo mensaje murió en dead letter.
         aviso_listo_mensaje: { type: DataTypes.UUID, allowNull: true },
+        // Cuándo una persona del negocio dio por vista la orden. Solo significa algo en las que
+        // tomó el asistente de WhatsApp (ahí NULL = «pendiente de confirmar»); en las demás se
+        // queda nulo y no se lee. Ver `migrate_restaurante_confirmacion_asistente.js`.
+        confirmado_en:       { type: DataTypes.DATE, allowNull: true },
     }, {
         tableName: 'pedid_orden',
         schema: 'restaurante',

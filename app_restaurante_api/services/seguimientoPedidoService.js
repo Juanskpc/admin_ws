@@ -77,13 +77,19 @@ function buildPagination(limite, offset) {
 const ESTADOS_VALIDOS = ['ABIERTA', 'CERRADA', 'CANCELADA', 'ANULADA'];
 
 /**
- * Lista los pedidos del rango con su línea de tiempo (tomado / cobrado / cancelado /
- * anulado), más un resumen del período. `desde`/`hasta` filtran por `fecha_creacion`
- * — «el día laboral en que se tomó», no en que se cerró — porque un pedido tomado
- * a las 11 p. m. y cerrado pasada la medianoche sigue siendo del turno de esa noche.
+ * Lista los pedidos con su línea de tiempo (tomado / cobrado / cancelado / anulado), más un
+ * resumen. Hay dos maneras de acotarlos:
+ *
+ * - **Por caja (`idCaja`)** — la que usa la pantalla desde 2026-09-29: los pedidos de UN turno, sin
+ *   fechas. Ver `condicionDeCaja`.
+ * - **Por rango de días** (`desde`/`hasta`, hoy por defecto) — filtra por `fecha_creacion`, «el día
+ *   laboral en que se tomó», no en que se cerró: un pedido tomado a las 11 p. m. y cerrado pasada la
+ *   medianoche sigue siendo del turno de esa noche. Se conserva para quien no pase caja.
+ *
+ * Si llega `idCaja`, manda sobre las fechas.
  */
 async function listar({
-    idUsuario, idNegocio, desde, hasta, estado, idPuntoCaja, q, limite, offset,
+    idUsuario, idNegocio, desde, hasta, estado, idPuntoCaja, idCaja, q, limite, offset,
 }) {
     const permitido = await usuarioTieneSubnivel({
         idUsuario, idNegocio, codigo: SUBNIVEL_VER_MOVIMIENTOS,
@@ -99,20 +105,36 @@ async function listar({
         throw error('Estado inválido.', 422, 'ESTADO_INVALIDO');
     }
 
-    const hoy = hoyBogota();
-    const fechaDesde = parseFecha(desde) || hoy;
-    const fechaHasta = parseFecha(hasta) || hoy;
-    if (fechaDesde > fechaHasta) {
-        throw error('El rango de fechas es inválido.', 422, 'RANGO_FECHAS_INVALIDO');
-    }
     const { limite: safeLimite, offset: safeOffset } = buildPagination(limite, offset);
 
-    const condiciones = [
-        'o.id_negocio = $1',
-        'o.fecha_creacion >= $2::date::timestamp',
-        'o.fecha_creacion < ($3::date + 1)::timestamp',
-    ];
-    const params = [idNegocio, fechaDesde, fechaHasta];
+    const condiciones = ['o.id_negocio = $1'];
+    const params = [idNegocio];
+    let rango = null;
+
+    if (idCaja) {
+        // Se comprueba aparte para poder decir «esa caja no existe» en vez de devolver una lista
+        // vacía que parece «esa caja no tuvo pedidos». Y de este negocio: el id viene del cliente.
+        const existe = await Models.pool.query(
+            'SELECT 1 FROM restaurante.rest_caja WHERE id_caja = $1 AND id_negocio = $2',
+            [idCaja, idNegocio],
+        );
+        if (existe.rowCount === 0) throw error('No encuentro esa caja.', 404, 'CAJA_NO_ENCONTRADA');
+        params.push(idCaja);
+        condiciones.push(condicionDeCaja(params.length));
+    } else {
+        const hoy = hoyBogota();
+        const fechaDesde = parseFecha(desde) || hoy;
+        const fechaHasta = parseFecha(hasta) || hoy;
+        if (fechaDesde > fechaHasta) {
+            throw error('El rango de fechas es inválido.', 422, 'RANGO_FECHAS_INVALIDO');
+        }
+        params.push(fechaDesde, fechaHasta);
+        condiciones.push(
+            `o.fecha_creacion >= $${params.length - 1}::date::timestamp`,
+            `o.fecha_creacion < ($${params.length}::date + 1)::timestamp`,
+        );
+        rango = { desde: fechaDesde, hasta: fechaHasta };
+    }
 
     if (idPuntoCaja) {
         params.push(idPuntoCaja);
@@ -203,8 +225,38 @@ async function listar({
         limite: safeLimite,
         offset: safeOffset,
         resumen: resumenRes.rows[0] || {},
-        rango: { desde: fechaDesde, hasta: fechaHasta },
+        rango,
+        id_caja: idCaja || null,
     };
+}
+
+/**
+ * Los pedidos «de una caja» (un turno). Son dos grupos, y hacen falta los dos:
+ *
+ * 1. **Los que se cobraron en ese turno** (`o.id_caja`). Esa columna dice en qué turno se COBRÓ y
+ *    llega nula hasta que se cobra, así que sola dejaría fuera todo lo que sigue abierto o se
+ *    canceló sin cobrar — justo lo que esta pantalla existe para vigilar.
+ * 2. **Los que se tomaron durante el turno, en su mismo rubro** (`id_punto_caja`, entre la apertura y
+ *    el cierre; sin cierre = turno en curso). Cubre los abiertos, los cancelados y los anulados.
+ *
+ * Va como `EXISTS` sobre `rest_caja` para servir igual a las tres consultas (lista, conteo y
+ * resumen) sin pasar fechas: comparar dentro de Postgres evita reinterpretar un `timestamp` sin
+ * huso en Node.
+ */
+function condicionDeCaja(posicionParametro) {
+    return `EXISTS (
+        SELECT 1 FROM restaurante.rest_caja c
+        WHERE c.id_caja = $${posicionParametro}
+          AND c.id_negocio = o.id_negocio
+          AND (
+                o.id_caja = c.id_caja
+                OR (
+                    o.id_punto_caja = c.id_punto_caja
+                    AND o.fecha_creacion >= c.fecha_apertura
+                    AND (c.fecha_cierre IS NULL OR o.fecha_creacion <= c.fecha_cierre)
+                )
+          )
+    )`;
 }
 
 /**

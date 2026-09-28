@@ -117,6 +117,44 @@ async function estadoDeAtencion({ idNegocio, ahora = new Date() } = {}) {
 }
 
 /**
+ * Cuándo abre el negocio la próxima vez, según su horario semanal.
+ *
+ * Existe para poder decirle al cliente de la carta «puedes pedir a partir de las 5:00 PM» en vez
+ * de solo «estamos cerrados». Mira primero lo que le queda al día de hoy —una franja que todavía
+ * no ha empezado— y si no hay, el próximo día con horario, hasta una semana adelante (el mismo
+ * día de la semana que viene cuenta: un negocio que solo abre los martes y ya cerró hoy martes).
+ *
+ * Con varias franjas en un mismo día (almuerzo y cena) devuelve la que sigue, no la primera del
+ * día: a las 3 de la tarde la próxima apertura es la de las 6, no la de las 12 que ya pasó.
+ *
+ * `null` cuando el negocio no cargó horario (no hay «próxima apertura» que decir) o cuando no tiene
+ * ninguna franja en toda la semana.
+ *
+ * @returns {Promise<{dias_adelante: number, dia_semana: number, hora: string}|null>}
+ *   `dias_adelante` 0 = hoy, 1 = mañana…; `dia_semana` 0=Dom…6=Sáb; `hora` = «HH:MM» de Bogotá.
+ */
+async function proximaApertura({ idNegocio, ahora = new Date() } = {}) {
+    const bloques = await Models.RestHorario.findAll({
+        where: { id_negocio: idNegocio, id_usuario: null },
+        attributes: ['dia_semana', 'hora_inicio'],
+    });
+    if (bloques.length === 0) return null;
+
+    const { dia, hora } = diaYHora(ahora);
+    for (let adelante = 0; adelante <= 7; adelante += 1) {
+        const diaBuscado = (dia + adelante) % 7;
+        const inicios = bloques
+            .filter((b) => Number(b.dia_semana) === diaBuscado && (adelante > 0 || b.hora_inicio > hora))
+            .map((b) => b.hora_inicio)
+            .sort();
+        if (inicios.length > 0) {
+            return { dias_adelante: adelante, dia_semana: diaBuscado, hora: String(inicios[0]).slice(0, 5) };
+        }
+    }
+    return null;
+}
+
+/**
  * Los usuarios (domiciliarios) cuyo horario cubre este instante.
  *
  * Devuelve `id_usuario`, no objetos completos: quien llama (`elegirDomiciliarioAlAzar`) ya sabe
@@ -138,4 +176,4 @@ async function usuariosEnTurnoAhora({ idNegocio, ahora = new Date(), transaction
     return [...idsEnTurno];
 }
 
-module.exports = { listar, reemplazar, estaAbierto, usuariosEnTurnoAhora, estadoDeAtencion };
+module.exports = { listar, reemplazar, estaAbierto, usuariosEnTurnoAhora, estadoDeAtencion, proximaApertura };

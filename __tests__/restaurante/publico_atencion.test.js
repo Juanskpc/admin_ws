@@ -116,3 +116,71 @@ describe('el negocio público lleva el estado de atención', () => {
         expect(data.atencion.estado).toBe('abierto');
     });
 });
+
+describe('proximaApertura — a qué hora abre', () => {
+    // Miércoles 30-sep-2026. Bogotá = UTC-5: las 15:00 allá son las 20:00Z.
+    const aBogota = (hhmm) => new Date(Date.UTC(2026, 8, 30, Number(hhmm.slice(0, 2)) + 5, Number(hhmm.slice(3))));
+    const MIERCOLES = 3;
+    const JUEVES = 4;
+
+    async function cargar(bloques) {
+        await horarioService.reemplazar({ idNegocio, idUsuario: null, bloques });
+    }
+
+    it('sin horario cargado no hay próxima apertura que decir', async () => {
+        expect(await horarioService.proximaApertura({ idNegocio, ahora: aBogota('15:00') })).toBeNull();
+    });
+
+    it('si hoy abre más tarde, dice la hora de hoy', async () => {
+        await cargar([{ dia_semana: MIERCOLES, hora_inicio: '17:00', hora_fin: '22:00' }]);
+        expect(await horarioService.proximaApertura({ idNegocio, ahora: aBogota('15:00') })).toEqual({
+            dias_adelante: 0, dia_semana: MIERCOLES, hora: '17:00',
+        });
+    });
+
+    it('con varias franjas en el día, la que sigue y no la que ya pasó', async () => {
+        await cargar([
+            { dia_semana: MIERCOLES, hora_inicio: '12:00', hora_fin: '14:00' },
+            { dia_semana: MIERCOLES, hora_inicio: '18:00', hora_fin: '22:00' },
+        ]);
+        expect((await horarioService.proximaApertura({ idNegocio, ahora: aBogota('15:00') })).hora).toBe('18:00');
+    });
+
+    it('si hoy ya cerró, dice el próximo día con horario', async () => {
+        await cargar([
+            { dia_semana: MIERCOLES, hora_inicio: '17:00', hora_fin: '22:00' },
+            { dia_semana: JUEVES, hora_inicio: '11:30', hora_fin: '22:00' },
+        ]);
+        expect(await horarioService.proximaApertura({ idNegocio, ahora: aBogota('23:00') })).toEqual({
+            dias_adelante: 1, dia_semana: JUEVES, hora: '11:30',
+        });
+    });
+
+    it('si solo abre este día de la semana y ya cerró, es el de la semana que viene', async () => {
+        await cargar([{ dia_semana: MIERCOLES, hora_inicio: '17:00', hora_fin: '22:00' }]);
+        expect(await horarioService.proximaApertura({ idNegocio, ahora: aBogota('23:00') })).toEqual({
+            dias_adelante: 7, dia_semana: MIERCOLES, hora: '17:00',
+        });
+    });
+});
+
+describe('el negocio público dice cuándo abre', () => {
+    it('fuera de horario, "atencion.abre" trae la próxima apertura', async () => {
+        const diaLejano = (new Date(Date.now() - 5 * 3600 * 1000).getUTCDay() + 3) % 7;
+        await horarioService.reemplazar({
+            idNegocio, idUsuario: null,
+            bloques: [{ dia_semana: diaLejano, hora_inicio: '17:00', hora_fin: '22:00' }],
+        });
+        await abrirCaja();
+
+        const { atencion } = (await pedirNegocioPublico()).data;
+        expect(atencion.estado).toBe('fuera_de_horario');
+        expect(atencion.abre).toMatchObject({ dia_semana: diaLejano, hora: '17:00' });
+        expect(atencion.abre.dias_adelante).toBeGreaterThan(0);
+    });
+
+    it('abierto no lleva "abre"', async () => {
+        await abrirCaja();
+        expect((await pedirNegocioPublico()).data.atencion.abre).toBeUndefined();
+    });
+});

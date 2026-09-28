@@ -1,9 +1,13 @@
 # Sesión 2026-09-28 — Venta de productos en `reserva`
 
-> **Estado: TODO EN LOCAL. Nada está commiteado, nada está en la base compartida, nada
-> desplegado.** Las migraciones nuevas solo se corrieron contra la base **local** de este PC
-> (`DB_PORT=5432`). La base compartida del VPS de desarrollo (`5433`) y producción no tienen
-> ninguna de las tablas ni columnas de este documento. Ver §5 para el orden exacto de retomar.
+> **Estado: DESPLEGADO EN PRODUCCIÓN el 2026-09-28** (`admin_ws` `001bb54`, `restaurante_app`
+> `74fab1d`, `reserva_app` `f67ac1d`; migraciones corridas también en la base compartida de
+> desarrollo). El registro del despliegue está en §8; lo de §0–§7 es el historial de la sesión
+> tal como se escribió antes de desplegar (donde dice «todo en local», ya no aplica).
+>
+> Esta misma sesión trajo dos cambios más, desplegados en el mismo lote: la sección
+> **«Movimientos» en Caja de restaurante** (permiso `caja_ver_movimientos`, ver §8.3) y la
+> **corrección del nombre y el teléfono** de la carta digital (§8.4).
 
 **De dónde viene:** idea del usuario — vender productos físicos junto a los servicios en
 `reserva`, con carrito en el portal, para los siete oficios (no solo salones). Documento de
@@ -216,3 +220,80 @@ alcance): lo que necesiten `negocios/rubros.test.js`, `negocios/cupo_usuarios.te
 correcciones en `admin_ws/intelligence/adapters/restaurante/` y `restaurante_app` sobre el
 nombre y teléfono del formulario de la carta digital. Ver el resumen de esa tarea si hace falta
 retomarla; no la repite este documento.)
+
+---
+
+## 8. Despliegue a producción (2026-09-28, ~10:33–10:50 hora Bogotá)
+
+Un solo commit por repo, subido por el dueño: `admin_ws` `001bb54`, `restaurante_app` `74fab1d`,
+`reserva_app` `cf03743` (mergeado en `f67ac1d`, que además trae un cambio ajeno de la otra
+persona: «escribir al cliente por WhatsApp desde el detalle de la cita», solo frontend).
+
+### 8.1 Orden seguido (el de siempre: respaldo → backend → migración → frontends)
+
+1. **Respaldo fresco** con `/home/escalapp/backup.sh` (`db_2026-09-28_1033.dump`). Sigue
+   siendo solo local: no existe el remoto rclone.
+2. **Backend**: `git pull` (verificado con `git log -1` → `001bb54`; era un pull real, no el
+   «Already up to date» de la trampa documentada), `npm install --omit=dev` (nada nuevo).
+3. **Migraciones en producción**, en este orden, con `npm run` desde `/var/www/admin_ws`:
+   `migrate:reserva-productos` → `migrate:reserva-subniveles` (+2 acciones,
+   `/productos/editar` y `/productos/vender`) → `migrate:restaurante-caja-movimientos`.
+   Solo estas tres: las demás de reserva (perfiles, estancias…) ya estaban en producción — el
+   «drift» de §6 era de la base **local**, no de producción.
+4. `sudo systemctl restart escalapp-api`.
+5. **Frontends** compilados en local y subidos: `restaurante` (con `cp index.csr.html
+   index.html`, no prerenderiza) y `reserva` (**dos builds**, ver §8.2). Cada destino con su
+   respaldo previo en `/home/escalapp/backups/front_*_pre-deploy_*.tar.gz`.
+
+### 8.2 ⚠️ `reserva_app` se despliega DOS veces
+
+El Caddyfile sirve dos builds del mismo código, y olvidar uno rompe cosas sin avisar:
+
+| Destino en el VPS | Se sirve en | Cómo se compila |
+|---|---|---|
+| `/var/www/html/reserva` | `escalapp.cloud/reserva/*` (consola + portal) | `npm run build` (baseHref `/reserva/`) |
+| `/var/www/html/reserva-portal` | `*.escalapp.cloud` (subdominio de cada negocio, p. ej. `d-alex-barberia.escalapp.cloud`) | `ng build --base-href=/ --output-path=dist/reserva_portal` |
+
+- **En Git Bash de Windows, `--base-href=/` se convierte en `C:/Program Files/Git/`** y el build
+  sale con un `<base href>` roto sin ningún error. Usar `MSYS_NO_PATHCONV=1 npx ng build
+  --base-href=/ ...` (o PowerShell) y **comprobar** con `grep -o '<base href="[^"]*"'
+  dist/reserva_portal/browser/index.csr.html` → debe decir `"/"`.
+- No renombrar `index.csr.html` en ninguno de los dos (los dos prerenderizan).
+- El subdominio de D'ALEX es **`d-alex-barberia`** (el slug real), no `dalex-barberia`: este
+  último solo aparece como ejemplo en los comentarios del Caddyfile y da error de TLS porque el
+  endpoint `ask` responde 404 y Caddy no emite certificado (comportamiento correcto).
+
+### 8.3 Movimientos en Caja (restaurante)
+
+Permiso `caja_ver_movimientos` sembrado en FALSE para todos los roles y negocios de
+restaurante (25 filas de negocio en producción). **Nadie lo tiene todavía**: el administrador
+debe activarlo en Usuarios → Roles y Permisos → Caja → «CAJA - VER MOVIMIENTOS» → Guardar, y
+volver a iniciar sesión (los permisos se cargan al entrar). Ruta:
+`GET /restaurante/caja/seguimiento`. Diseño y razones: `seguimientoPedidoService.js` (el rastro
+sale de `pedid_orden`, `rest_movimiento_caja` y `auditoria.audit_dato`; no hay tablas nuevas).
+
+### 8.4 Carta digital (restaurante) — nombre y teléfono
+
+El nombre del formulario manda sobre el que el bot recordaba, y el formulario ya no pide
+teléfono (lo prueba el canal). Sin migración. **Cartas ya abiertas en el navegador de algún
+cliente** siguen mandando el bloque viejo con `Teléfono:`: el bot lo ignora, así que no rompe
+nada.
+
+### 8.5 Verificación posterior
+
+- 60/60 chunks JS de cada build de reserva y 38/38 de restaurante coinciden con el build local
+  (son hashes de contenido).
+- `200` en `/admin/`, `/restaurante/`, `/reserva/`, `/reserva/dashboard` y en el subdominio
+  `d-alex-barberia.escalapp.cloud`; las dos rutas nuevas del API responden `401` sin token
+  (registradas, no 404/500); `GET /reserva/publico/16/vitrina` → 200 con `"productos":[]`
+  (función apagada de fábrica, como debe ser).
+- Backend `active` sirviendo tráfico real de D'ALEX durante todo el despliegue, sin errores.
+
+### 8.6 Pendiente tras el despliegue
+
+1. Que el dueño active `caja_ver_movimientos` para quien corresponda (§8.3).
+2. Para probar productos en producción: Configuración → Funciones → «Venta de productos»
+   (apagada de fábrica en los siete perfiles) y luego la vista Productos por rol.
+3. Sigue pendiente lo de §4 (informe de comisión, domicilio, seguimiento público del pedido…).
+4. Nada de esto se ha visto con ojos del dueño en pantalla real todavía.
+5. Commit de esta documentación (los `.md` quedaron modificados en `admin_ws`).

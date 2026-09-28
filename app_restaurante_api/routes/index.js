@@ -411,6 +411,10 @@ router.post('/despacho/:id/avisar-listo', [
 	param('id').isInt({ min: 1 }),
 	...PedidoController.avisarPedidoListoValidators,
 ], PedidoController.avisarPedidoListo);
+router.post('/despacho/:id/confirmar', [
+	param('id').isInt({ min: 1 }),
+	...PedidoController.confirmarPedidoAsistenteValidators,
+], PedidoController.confirmarPedidoAsistente);
 router.get('/domiciliarios', [
 	query('id_negocio').isInt({ min: 1 }),
 ], PedidoController.getDomiciliarios);
@@ -545,6 +549,8 @@ router.get('/caja/historial', [
 router.get('/caja/seguimiento', [
 	query('id_negocio').isInt({ min: 1 }),
 	query('id_punto_caja').optional({ nullable: true, checkFalsy: true }).isInt({ min: 1 }),
+	// Los pedidos de UN turno; manda sobre `desde`/`hasta`.
+	query('id_caja').optional({ nullable: true, checkFalsy: true }).isInt({ min: 1 }),
 	query('desde').optional({ nullable: true, checkFalsy: true }).isISO8601(),
 	query('hasta').optional({ nullable: true, checkFalsy: true }).isISO8601(),
 	query('estado').optional({ nullable: true, checkFalsy: true }).isIn(['ABIERTA', 'CERRADA', 'CANCELADA', 'ANULADA']),

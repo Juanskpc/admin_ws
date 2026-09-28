@@ -488,6 +488,10 @@ async function crearOrden({
     tipoPedido = 'MESA', contactoNombre = null, contactoTelefono = null,
     direccionDomicilio = null, notaDomicilio = null, idDomiciliario = null,
     valorDomicilio = 0, descuento = 0,
+    // La orden la toma el asistente de WhatsApp. Lo dice quien llama —el adaptador— y no se
+    // deduce aquí del autor para no pagar una consulta más en cada pedido del POS. Solo sirve
+    // para avisar a las pantallas de que llegó uno que ninguna persona del negocio tomó.
+    deAsistente = false,
 }, { transaction = null } = {}) {
     // Si el llamante trae su propia transacción, esta función NO la confirma ni la deshace:
     // solo trabaja dentro. Quien la abre, la cierra.
@@ -630,6 +634,9 @@ async function crearOrden({
             idNegocio,
             TEMAS.PEDIDOS,
             ...(idMesa ? [TEMAS.MESAS] : []),
+            // El tema va en el MISMO aviso que `pedidos`: así llega junto a la señal de recargar
+            // y solo si la transacción confirma —el dry-run del Gate no hace sonar nada.
+            ...(deAsistente ? [TEMAS.WHATSAPP] : []),
         );
 
         if (transaccionPropia) await t.commit();
@@ -1113,6 +1120,10 @@ async function getOrdenesDespacho({ idNegocio, idUsuario }) {
         const plano = typeof o.toJSON === 'function' ? o.toJSON() : { ...o };
         plano.de_whatsapp =
             asistenteHabilitado && idAsistente != null && plano.id_usuario === idAsistente;
+        // Sin confirmar = lo tomó el bot y nadie del negocio lo ha dado por visto. Se deduce y no
+        // se guarda (ver `migrate_restaurante_confirmacion_asistente.js`); en una orden que tomó
+        // una persona no significa nada, por eso depende de `de_whatsapp`.
+        plano.pendiente_confirmar = plano.de_whatsapp && !plano.confirmado_en;
         return plano;
     });
 
@@ -2162,8 +2173,59 @@ async function cerrarOrden(idOrden, { idUsuario, idMetodoPago, pagos, idCuenta =
     }
 }
 
+/**
+ * Una persona del negocio confirma un pedido que tomó el asistente de WhatsApp.
+ *
+ * «Confirmar» aquí es **dar por visto**: el pedido ya existe, ya está en la caja y ya lo ve
+ * Despacho; lo que faltaba era que alguien del negocio supiera que llegó, porque nadie del equipo
+ * lo tomó. No manda nada a cocina ni cambia el estado de pago — eso sigue siendo lo de siempre,
+ * lo decide la persona. Lo único que guarda es el instante y quién.
+ *
+ * Idempotente a propósito: dos tablets confirmando el mismo pedido a la vez (es lo normal, con la
+ * pantalla en vivo) no pueden hacer que la segunda reciba un error por haber sido la segunda. Se
+ * conserva el instante de la PRIMERA confirmación y se devuelve `ya_confirmado: true`.
+ *
+ * @returns {Promise<{id_orden: number, confirmado_en: Date, ya_confirmado: boolean}>}
+ */
+async function confirmarPedidoAsistente({ idNegocio, idOrden, idUsuario }) {
+    return Models.sequelize.transaction(async (t) => {
+        const orden = await Models.PedidOrden.findOne({
+            where: { id_orden: idOrden, id_negocio: idNegocio },
+            transaction: t,
+            lock: t.LOCK.UPDATE,
+        });
+        if (!orden) {
+            const e = new Error('No encuentro ese pedido.');
+            e.code = 'PEDIDO_NO_ENCONTRADO'; e.statusCode = 404;
+            throw e;
+        }
+
+        const idAsistente = await usuarioAsistenteDao.buscar(idNegocio, { transaction: t });
+        if (idAsistente == null || orden.id_usuario !== idAsistente) {
+            const e = new Error('Este pedido lo tomó una persona del negocio, no hay nada que confirmar.');
+            e.code = 'PEDIDO_NO_ES_DE_WHATSAPP'; e.statusCode = 409;
+            throw e;
+        }
+        if (orden.estado !== 'ABIERTA') {
+            const e = new Error('Este pedido ya no está abierto.');
+            e.code = 'ORDEN_NO_ABIERTA'; e.statusCode = 409;
+            throw e;
+        }
+        if (orden.confirmado_en) {
+            return { id_orden: orden.id_orden, confirmado_en: orden.confirmado_en, ya_confirmado: true };
+        }
+
+        await fijarActor(t, { idUsuario, idNegocio });
+        const confirmadoEn = new Date();
+        await orden.update({ confirmado_en: confirmadoEn }, { transaction: t });
+        avisarTrasCommit(t, idNegocio, TEMAS.PEDIDOS);
+        return { id_orden: orden.id_orden, confirmado_en: confirmadoEn, ya_confirmado: false };
+    });
+}
+
 module.exports = {
     crearOrden,
+    confirmarPedidoAsistente,
     agregarItemsOrden,
     agregarItemsPorCliente,
     quitarItemsOrden,

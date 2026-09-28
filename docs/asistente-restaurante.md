@@ -1599,3 +1599,69 @@ hashes de los chunks comparados byte a byte entre el build local y `/var/www/htm
 **Para retomar:** este archivo tiene la historia completa en orden; la sección "Lo que queda
 pendiente" (arriba) es la lista viva de deuda técnica conocida y no específica de una sola
 sesión — conviene revisarla antes de tocar el bot de restaurante otra vez.
+
+## Confirmar los pedidos del asistente, alerta sonora y «a qué hora abre» (2026-09-28)
+
+Cuatro correcciones pedidas sobre `restaurante_app`; tres tocan al asistente y se documentan aquí.
+
+### El pedido del bot nace «pendiente de confirmar»
+
+- **Qué significa «confirmar»: dar por visto, nada más.** El pedido ya existe, ya está en la caja y ya
+  lo ve Despacho; lo que faltaba es que alguien del negocio *sepa* que llegó, porque ninguna persona
+  lo tomó. Confirmar NO manda a cocina, NO toca el pago y NO avisa al cliente. (El bot nunca envió
+  a cocina —`enviarACocina` no se llama desde el adaptador—, así que no hay flujo de cocina que
+  bloquear.) Si algún día se quiere que cocina no vea nada hasta confirmar, ese es el gancho: la
+  bandera ya existe.
+- **Una columna, no dos:** `pedid_orden.confirmado_en` (`npm run migrate:restaurante-confirmacion-asistente`).
+  «Pendiente» se **deduce**: `de_whatsapp AND confirmado_en IS NULL` → `pendiente_confirmar` en
+  `getOrdenesDespacho`. Misma razón que `de_whatsapp`: que lo tomó el bot lo dice su autor; una
+  columna «origen» sería una segunda verdad. La migración marca las órdenes ya existentes como
+  confirmadas (solo la vez que crea la columna, para que repetirla no confirme nada por su cuenta).
+- **Endpoint:** `POST /restaurante/despacho/:id/confirmar` `{ id_negocio }`. Idempotente: dos tablets
+  a la vez no producen un error para la segunda y se conserva el instante de la primera. Errores
+  tipados: `PEDIDO_NO_ENCONTRADO` 404, `PEDIDO_NO_ES_DE_WHATSAPP` 409, `ORDEN_NO_ABIERTA` 409.
+- **Frontend (Despacho):** la tarjeta pendiente lleva borde ámbar que late, etiqueta «Pendiente» y,
+  como acción principal, «Confirmar» (móvil) / «Confirmar pedido» (PC) — antes que avisar o cobrar.
+  Al confirmar se pregunta «¿imprimir la comanda?» (Imprimir / Omitir); las dos dejan el pedido
+  confirmado y el botón de la impresora sigue activo. Se confirma en el servidor **primero** y se
+  pregunta **después**, para que el estado no dependa de cómo se cierre la pregunta.
+- **La «comanda» es hoy el mismo tiquete** que imprime el botón de la impresora (`imprimirTicket`),
+  con precios. Si el negocio quiere una comanda de cocina sin precios es un formato aparte.
+- **Ojo, alcance:** solo los pedidos LLEVAR y DOMICILIO (los que lista Despacho). Un pedido «en el
+  local» (mesa) por el bot suma a la cuenta de la mesa y no pasa por este flujo.
+
+### La alerta sonora
+
+- Tema nuevo del canal en vivo: `whatsapp` (`avisoService.TEMAS.WHATSAPP`). `crearOrden` lo suma al
+  aviso de `pedidos` cuando el adaptador pasa `deAsistente: true`, y con `avisarTrasCommit`: el
+  dry-run del Policy Gate **no** hace sonar nada. Sigue siendo una señal, no datos.
+- `RealtimeService.alAvisar(tema, fn)` reacciona **al instante**, sin la agrupación ni la espera de
+  pestaña visible de `alCambiar` (que es para recargar listas): hay que sonar una vez por pedido y
+  sobre todo con la pestaña de fondo.
+- Suena en **cualquier pantalla** (el `LayoutComponent` se suscribe), solo a quien puede ver todo
+  Despacho (`despacho_ver_todos`); fuera de Despacho además sale un aviso.
+- El tono se sintetiza con Web Audio (`SonidoAlertaService`), sin archivo. **Limitación del
+  navegador, sin arreglo posible:** el audio se desbloquea con el primer clic/tecla. Si se recarga la
+  pestaña y nadie toca nada antes de que llegue el pedido, ese primer aviso no suena.
+
+### La carta virtual dice a qué hora abre
+
+- Los botones de pedir ya no van `disabled` (un `disabled` no recibe el toque y en móvil no hay
+  `title`): se ven apagados, pero al tocarlos sale un aviso.
+- `GET /public/negocios/:id` devuelve, solo si el estado es `fuera_de_horario`,
+  `atencion.abre = { dias_adelante, dia_semana, hora }` (`horarioService.proximaApertura`): hoy si
+  queda una franja por empezar, si no el próximo día con horario (hasta 7 días). La frase la arma el
+  frontend (`mensajeFueraDeHorario`): «…Puedes realizar tu pedido a partir de las 5:00 PM.» /
+  «…mañana a partir de…» / «…el lunes a partir de…». `aun_no_abre` y `cerrado_sin_horario` dicen
+  otra cosa porque no hay hora que prometer.
+
+Tests: `__tests__/restaurante/confirmacion_asistente.test.js`, `publico_atencion.test.js` (bloque
+`proximaApertura`); frontend `caja-orden.spec.ts`, `despacho-confirmar.spec.ts`,
+`menu-publico-cerrado.spec.ts`, `realtime.service.spec.ts` (`alAvisar`).
+**Despliegue:** primero la migración (o `getOrdenesDespacho` pide una columna que no existe), luego
+backend, luego el build de `restaurante_app`.
+
+### «Movimientos» por caja y «En el local» sin pedido desde la carta (2026-09-29)
+
+- **Movimientos (Caja)** ya no pide fechas ni tiene botón de buscar: muestra los pedidos de la caja EN CURSO y busca solo al escribir (espera de 300 ms; una búsqueda nueva cancela la anterior). `GET /caja/seguimiento?id_caja=N` manda sobre `desde`/`hasta` (que se conservan para quien no pase caja). Los pedidos de un turno son dos grupos: los COBRADOS en él (`pedid_orden.id_caja`, nulo hasta cobrar) y los TOMADOS durante él en su mismo rubro (`id_punto_caja` entre apertura y cierre) — con solo el primero desaparecería lo abierto y lo cancelado sin cobrar. Sin caja abierta el modal lo dice. Tests: `__tests__/restaurante/seguimiento_por_caja.test.js`.
+- **Carta virtual, «En el local»:** el texto es «Un mesero tomará tu pedido»; en ese modo NO hay botones de agregar ni «pedir por WhatsApp» (solo domicilio y recoger arman pedido) y ya no se pregunta la mesa. El QR con `?mesa=` sigue reconociéndose pero deja la carta en solo mirar. El bot conserva su parseo de `~m=L~t=` por compatibilidad con enlaces viejos.

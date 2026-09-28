@@ -105,6 +105,10 @@ const avisarPedidoListoValidators = [
     body('id_negocio').isInt({ min: 1 }).withMessage('id_negocio inválido'),
 ];
 
+const confirmarPedidoAsistenteValidators = [
+    body('id_negocio').isInt({ min: 1 }).withMessage('id_negocio inválido'),
+];
+
 const cerrarOrdenValidators = [
     body('id_metodo_pago').optional({ nullable: true }).isInt({ min: 1 }).withMessage('id_metodo_pago inválido'),
     body('pagos').optional({ nullable: true }).isArray({ min: 2 }).withMessage('pagos debe tener al menos 2 formas de pago'),
@@ -561,6 +565,34 @@ async function avisarPedidoListo(req, res) {
     }
 }
 
+/**
+ * POST /restaurante/despacho/:id/confirmar
+ *
+ * El negocio da por visto un pedido que tomó el asistente de WhatsApp. Ver
+ * `pedidoService.confirmarPedidoAsistente`.
+ */
+async function confirmarPedidoAsistente(req, res) {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+        return Respuesta.error(res, 'Datos inválidos', 422, errors.array());
+    }
+
+    try {
+        const resultado = await PedidoService.confirmarPedidoAsistente({
+            idNegocio: Number(req.body.id_negocio),
+            idOrden: Number(req.params.id),
+            idUsuario: req.usuario.id_usuario,
+        });
+        return Respuesta.success(res, 'Pedido confirmado', resultado);
+    } catch (err) {
+        if (err.code && err.statusCode) {
+            return Respuesta.error(res, err.message, err.statusCode, { code: err.code });
+        }
+        console.error('[Despacho] Error confirmarPedidoAsistente:', err.message);
+        return Respuesta.error(res, 'No se pudo confirmar el pedido.');
+    }
+}
+
 /** GET /restaurante/domiciliarios?id_negocio=N */
 async function getDomiciliarios(req, res) {
     try {
@@ -586,6 +618,7 @@ module.exports = {
     getOrdenesDespacho,
     getOrdenesCanceladasRecientes,
     avisarPedidoListo, avisarPedidoListoValidators,
+    confirmarPedidoAsistente, confirmarPedidoAsistenteValidators,
     getDomiciliarios,
     enviarACocina,
     cambiarEstadoCocina,

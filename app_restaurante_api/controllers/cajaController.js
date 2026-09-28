@@ -433,6 +433,7 @@ async function getSeguimiento(req, res) {
             hasta: req.query.hasta || null,
             estado: req.query.estado || null,
             idPuntoCaja: req.query.id_punto_caja ? Number(req.query.id_punto_caja) : null,
+            idCaja: req.query.id_caja ? Number(req.query.id_caja) : null,
             q: req.query.q || null,
             limite: req.query.limite,
             offset: req.query.offset,

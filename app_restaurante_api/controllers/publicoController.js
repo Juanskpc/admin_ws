@@ -56,6 +56,19 @@ async function getNegocio(req, res) {
             atencion = { estado: 'abierto' };
         }
 
+        // Solo cuando el cierre es por HORARIO: es el único caso en que «a las 5:00 PM» es una
+        // respuesta. Con la caja sin abrir dentro de horario, o sin horario cargado, no hay una
+        // hora que prometer y la carta dice otra cosa. Si esto falla se sigue sin la hora: la
+        // carta cae al mensaje genérico, que es peor pero no rompe nada.
+        if (atencion.estado === 'fuera_de_horario') {
+            try {
+                const abre = await horarioService.proximaApertura({ idNegocio });
+                if (abre) atencion = { ...atencion, abre };
+            } catch (err) {
+                console.error('[Publico] Error próxima apertura:', err.message);
+            }
+        }
+
         return Respuesta.success(res, 'Negocio obtenido', {
             ...datos,
             plan_activo: planActivo,

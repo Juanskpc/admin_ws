@@ -949,6 +949,8 @@ function registrarCapacidades() {
                 {
                     idNegocio,
                     idUsuario,
+                    // Hace sonar la alerta del negocio: es un pedido que ninguna persona tomó.
+                    deAsistente: true,
                     idMesa: mesa ? mesa.id_mesa : null,
                     tipoPedido: args.tipo_entrega,
                     valorDomicilio,
