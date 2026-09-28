@@ -37,8 +37,13 @@
 require('dotenv').config();
 const { sequelize } = require('../app_core/models/conection');
 
-/** Las vistas que introdujo el despliegue 2026-09-27 (perfiles y estancias). */
-const VISTAS_NUEVAS = ['/recursos', '/mascotas', '/ocupacion', '/estancias', '/unidades'];
+/**
+ * Las vistas que introdujeron los despliegues recientes (perfiles, estancias y productos).
+ * `/productos` (migrate_reserva_productos) sufrió el mismo sembrado a medias: en D'ALEX
+ * BARBERIA (#16) dejó a ADMINISTRADOR y RECEPCIONISTA con `/productos` como único ajuste, y
+ * como el perfil BASE no usa esa vista, el resultado era una sesión sin ninguna vista.
+ */
+const VISTAS_NUEVAS = ['/recursos', '/mascotas', '/ocupacion', '/estancias', '/unidades', '/productos'];
 
 async function migrar() {
     const t = await sequelize.transaction();
