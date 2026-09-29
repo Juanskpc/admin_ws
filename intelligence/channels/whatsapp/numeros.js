@@ -44,7 +44,11 @@ const CANAL = 'whatsapp';
 const TTL_MS = 60_000;
 
 let porNumero = new Map(); // phone_number_id → id_negocio
-let porNegocio = new Map(); // id_negocio → { idExterno, numeroE164 }
+let porNegocio = new Map(); // id_negocio → { idExterno, numeroE164, origen, token, coexistencia }
+// waba_id → id_negocio, solo para WABAs de UN solo negocio (Embedded Signup: cada cliente trae la
+// suya). `account_update` no trae phone_number_id, solo la WABA en `entry.id`: sin esto, un
+// PARTNER_REMOVED de un cliente de Embedded Signup se descartaría como «ajeno».
+let porWaba = new Map();
 let cargadoEn = 0;
 let deLaTabla = false;
 
@@ -64,7 +68,14 @@ function desdeEntorno() {
 function reconstruir(filas) {
     porNumero = new Map();
     porNegocio = new Map();
+    porWaba = new Map();
+    const negociosPorWaba = new Map();
     for (const f of filas) {
+        if (f.waba_id) {
+            const clave = String(f.waba_id);
+            if (!negociosPorWaba.has(clave)) negociosPorWaba.set(clave, new Set());
+            negociosPorWaba.get(clave).add(Number(f.id_negocio));
+        }
         porNumero.set(String(f.id_externo), Number(f.id_negocio));
         // El primero gana. El único parcial de la tabla ya impide que haya dos activos por
         // negocio, así que esto solo importa con el respaldo del entorno.
@@ -89,8 +100,14 @@ function reconstruir(filas) {
                 numeroE164: f.numero_e164 || null,
                 origen: f.origen || 'manual',
                 token,
+                coexistencia: f.coexistencia === true,
             });
         }
+    }
+    // Una WABA compartida por varios negocios (la nuestra, alta manual) no se puede atribuir a
+    // uno solo: se queda fuera del mapa y su `account_update` sigue como hasta hoy.
+    for (const [waba, negocios] of negociosPorWaba) {
+        if (negocios.size === 1) porWaba.set(waba, [...negocios][0]);
     }
 }
 
@@ -99,6 +116,20 @@ async function hayTabla() {
     const filas = await Models.sequelize.query(
         `SELECT 1 FROM information_schema.tables
           WHERE table_schema = 'platform' AND table_name = 'numero_canal' LIMIT 1;`,
+        { type: Models.sequelize.QueryTypes.SELECT }
+    );
+    return filas.length > 0;
+}
+
+/**
+ * ¿Ya corrió `migrate:embedded-signup-coexistencia`? Un backend desplegado antes que la migración
+ * no puede dejar de atender a todos los negocios por una columna que falta.
+ */
+async function hayColumnaCoexistencia() {
+    const filas = await Models.sequelize.query(
+        `SELECT 1 FROM information_schema.columns
+          WHERE table_schema = 'platform' AND table_name = 'numero_canal'
+            AND column_name = 'coexistencia' LIMIT 1;`,
         { type: Models.sequelize.QueryTypes.SELECT }
     );
     return filas.length > 0;
@@ -119,8 +150,12 @@ async function asegurarCargado({ forzar = false } = {}) {
 
     try {
         if (await hayTabla()) {
+            const columnaCoexistencia = (await hayColumnaCoexistencia())
+                ? 'coexistencia'
+                : 'false AS coexistencia';
             const filas = await Models.sequelize.query(
-                `SELECT id_externo, id_negocio, numero_e164, origen, token_cifrado
+                `SELECT id_externo, id_negocio, numero_e164, origen, token_cifrado, waba_id,
+                        ${columnaCoexistencia}
                    FROM platform.numero_canal
                   WHERE canal = :canal AND estado = 'A'
                   ORDER BY id_negocio;`,
@@ -183,6 +218,21 @@ function origenDeNegocio(idNegocio) {
     return porNegocio.get(Number(idNegocio))?.origen ?? null;
 }
 
+/**
+ * El negocio dueño de una WABA, si es de un solo negocio (Embedded Signup). `null` para la WABA
+ * compartida de EscalApp o una desconocida. Síncrona, como `negocioDe`.
+ */
+function negocioDeWaba(wabaId) {
+    if (!wabaId) return null;
+    return porWaba.get(String(wabaId)) ?? null;
+}
+
+/** ¿El número del negocio vive también en la app WhatsApp Business (coexistencia)? */
+function coexistenciaDeNegocio(idNegocio) {
+    if (!idNegocio) return false;
+    return porNegocio.get(Number(idNegocio))?.coexistencia === true;
+}
+
 /** Lo que hay cargado, para el log de arranque y el diagnóstico. */
 function listar() {
     return {
@@ -192,6 +242,7 @@ function listar() {
             id_externo: n.idExterno,
             numero_e164: n.numeroE164,
             conexion: n.origen,
+            coexistencia: n.coexistencia === true,
         })),
     };
 }
@@ -200,6 +251,7 @@ function listar() {
 function _reiniciar() {
     porNumero = new Map();
     porNegocio = new Map();
+    porWaba = new Map();
     cargadoEn = 0;
     deLaTabla = false;
 }
@@ -210,6 +262,8 @@ module.exports = {
     numeroDe,
     tokenDeNegocio,
     origenDeNegocio,
+    negocioDeWaba,
+    coexistenciaDeNegocio,
     listar,
     CANAL,
     TTL_MS,

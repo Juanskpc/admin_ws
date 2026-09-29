@@ -51,9 +51,12 @@ function crearRutas({ config = configReal, adaptador = adaptadorReal } = {}) {
      * día manda otro y el parser lo ignora, el cuerpo llegaría vacío y la firma fallaría con un
      * motivo que no tiene nada que ver con la firma. Fallar por lo que es, no por lo que parece.
      */
+    // 10 MB y no 1: con la coexistencia llegan los lotes del historial de chats de la app Business
+    // (`history`), mucho más grandes que un mensaje. Un lote por encima del límite sería un 413,
+    // Meta lo reintentaría hasta rendirse, y ese trozo del historial no llegaría nunca.
     router.use(
         express.json({
-            limit: '1mb',
+            limit: '10mb',
             type: () => true,
             verify: (req, _res, buf) => {
                 req.cuerpoCrudo = buf;

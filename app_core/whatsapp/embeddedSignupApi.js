@@ -24,7 +24,12 @@
 'use strict';
 
 const TIMEOUT_MS = Number(process.env.WHATSAPP_TIMEOUT_MS) || 8000;
-const VERSION_API = process.env.WHATSAPP_API_VERSION || 'v21.0';
+/**
+ * Versión propia, separada de `WHATSAPP_API_VERSION` (la de mensajería), a propósito: la
+ * coexistencia (`smb_app_data`, `is_on_biz_app`) salió en 2025 y los ejemplos de Meta la usan
+ * desde v23.0. Subir aquí no toca cómo se envían los mensajes; subir la de mensajería sí.
+ */
+const VERSION_API = process.env.META_EMBEDDED_SIGNUP_API_VERSION || 'v23.0';
 const BASE_URL = process.env.WHATSAPP_API_URL || 'https://graph.facebook.com';
 
 function fallo(mensaje, { code, statusCode, reintentable, detalle }) {
@@ -36,12 +41,17 @@ function fallo(mensaje, { code, statusCode, reintentable, detalle }) {
     return e;
 }
 
-async function llamar(url, { fetchImpl = globalThis.fetch, metodo = 'GET' } = {}) {
+async function llamar(url, { fetchImpl = globalThis.fetch, metodo = 'GET', cuerpo = null } = {}) {
     const control = new AbortController();
     const reloj = setTimeout(() => control.abort(), TIMEOUT_MS);
     let respuesta;
     try {
-        respuesta = await fetchImpl(url, { method: metodo, signal: control.signal });
+        const opciones = { method: metodo, signal: control.signal };
+        if (cuerpo) {
+            opciones.headers = { 'Content-Type': 'application/json' };
+            opciones.body = JSON.stringify(cuerpo);
+        }
+        respuesta = await fetchImpl(url, opciones);
     } catch (error) {
         throw fallo(`No se pudo llamar a la Graph API: ${error.message}`, {
             code: 'META_RED',
@@ -267,4 +277,225 @@ async function suscribirApp({
     return { suscrito: Boolean(datos?.success) };
 }
 
-module.exports = { canjearCodigo, resolverWaba, resolverNumero, suscribirApp };
+/**
+ * Lo contrario de `suscribirApp()`: deja de recibir los webhooks de la WABA del cliente. Se usa
+ * cuando el propio negocio se desconecta desde el panel — sin esto, Meta seguiría mandándonos sus
+ * mensajes (que el webhook descartaría como ajenos, pero seguirían saliendo de su cuenta).
+ *
+ * @returns {Promise<{desuscrito: boolean}>}
+ */
+async function desuscribirApp({
+    wabaId,
+    accessToken,
+    fetchImpl = globalThis.fetch,
+    baseUrl = BASE_URL,
+    versionApi = VERSION_API,
+}) {
+    if (!wabaId || !accessToken) {
+        throw fallo('Faltan datos para desuscribir la app (wabaId o accessToken).', {
+            code: 'META_SUSCRIPCION_DATOS_INCOMPLETOS',
+            statusCode: 400,
+            reintentable: false,
+        });
+    }
+
+    const { ok, status, datos } = await llamar(
+        `${baseUrl}/${versionApi}/${wabaId}/subscribed_apps` +
+            `?access_token=${encodeURIComponent(accessToken)}`,
+        { fetchImpl, metodo: 'DELETE' }
+    );
+
+    if (!ok) {
+        throw fallo(`Meta rechazó quitar la suscripción a la WABA (${status}).`, {
+            code: 'META_DESUSCRIPCION_FALLIDA',
+            statusCode: 502,
+            reintentable: status === 429 || status >= 500,
+            detalle: datos?.error,
+        });
+    }
+
+    return { desuscrito: Boolean(datos?.success) };
+}
+
+/** Campos del número que interesan. `is_on_biz_app` es el que delata la coexistencia. */
+const CAMPOS_NUMERO = 'id,display_phone_number,verified_name,platform_type,is_on_biz_app';
+/** Respaldo si Meta no reconoce algún campo en esta versión (error #100): lo mínimo que usamos. */
+const CAMPOS_NUMERO_MINIMOS = 'id,display_phone_number,verified_name,platform_type';
+
+/**
+ * Los números que hay en la WABA del cliente, leídos **con su propio token**.
+ *
+ * ## Para qué sirve, además de mostrar el número
+ *
+ *   1. **Verificar el `phone_number_id` que manda el navegador.** El evento del SDK lo trae, pero
+ *      el navegador es del cliente: aquí se comprueba contra Meta que ese número está de verdad en
+ *      la WABA que concedió el token. Un id ajeno no pasa.
+ *   2. **Descubrirlo cuando el navegador no lo manda.** En coexistencia el evento
+ *      `FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING` puede llegar solo con `waba_id` y `business_id`,
+ *      y a veces el evento no llega antes de que caduque el `code`. Con la WABA ya probada por
+ *      `resolverWaba()`, la lista de números es la fuente fiable.
+ *   3. **Saber si es coexistencia** (`is_on_biz_app`) y si ya está registrado en la Cloud API
+ *      (`platform_type === 'CLOUD_API'`), que decide si hay que llamar a `/register`.
+ *
+ * @returns {Promise<Array<{id: string, numeroE164: string|null, nombreVerificado: string|null,
+ *           platformType: string|null, enAppBusiness: boolean|null}>>}
+ */
+async function listarNumeros({
+    wabaId,
+    accessToken,
+    fetchImpl = globalThis.fetch,
+    baseUrl = BASE_URL,
+    versionApi = VERSION_API,
+}) {
+    if (!wabaId || !accessToken) {
+        throw fallo('Faltan datos para listar los números (wabaId o accessToken).', {
+            code: 'META_NUMEROS_DATOS_INCOMPLETOS',
+            statusCode: 400,
+            reintentable: false,
+        });
+    }
+
+    const pedir = (campos) =>
+        llamar(
+            `${baseUrl}/${versionApi}/${wabaId}/phone_numbers` +
+                `?fields=${campos}&access_token=${encodeURIComponent(accessToken)}`,
+            { fetchImpl }
+        );
+
+    let { ok, status, datos } = await pedir(CAMPOS_NUMERO);
+    if (!ok && datos?.error?.code === 100) {
+        ({ ok, status, datos } = await pedir(CAMPOS_NUMERO_MINIMOS));
+    }
+
+    if (!ok) {
+        throw fallo(`Meta rechazó la consulta de los números de la WABA (${status}).`, {
+            code: 'META_NUMEROS_FALLIDO',
+            statusCode: 502,
+            reintentable: status === 429 || status >= 500,
+            detalle: datos?.error,
+        });
+    }
+
+    return (datos?.data || []).map((n) => ({
+        id: String(n.id),
+        numeroE164: n.display_phone_number ?? null,
+        nombreVerificado: n.verified_name ?? null,
+        platformType: n.platform_type ?? null,
+        enAppBusiness: typeof n.is_on_biz_app === 'boolean' ? n.is_on_biz_app : null,
+    }));
+}
+
+/**
+ * Registra un número **dedicado** en la Cloud API — sin esto, un número recién creado por
+ * Embedded Signup recibe webhooks pero no puede enviar un solo mensaje.
+ *
+ * ⚠️ **Nunca para coexistencia.** Un número que vive en la app WhatsApp Business ya está
+ * registrado por la propia app; llamar a `/register` sobre él lo sacaría de la app del dueño.
+ *
+ * El `pin` es la verificación en dos pasos del número: lo fija esta llamada, así que quien llama
+ * debe guardarlo (cifrado) para poder volver a registrar el número en el futuro.
+ *
+ * @returns {Promise<{registrado: boolean}>}
+ */
+async function registrarNumero({
+    phoneNumberId,
+    accessToken,
+    pin,
+    fetchImpl = globalThis.fetch,
+    baseUrl = BASE_URL,
+    versionApi = VERSION_API,
+}) {
+    if (!phoneNumberId || !accessToken || !/^\d{6}$/.test(String(pin || ''))) {
+        throw fallo('Faltan datos para registrar el número (phoneNumberId, accessToken o PIN de 6 dígitos).', {
+            code: 'META_REGISTRO_DATOS_INCOMPLETOS',
+            statusCode: 400,
+            reintentable: false,
+        });
+    }
+
+    const { ok, status, datos } = await llamar(
+        `${baseUrl}/${versionApi}/${phoneNumberId}/register` +
+            `?access_token=${encodeURIComponent(accessToken)}`,
+        { fetchImpl, metodo: 'POST', cuerpo: { messaging_product: 'whatsapp', pin: String(pin) } }
+    );
+
+    if (!ok) {
+        throw fallo(
+            `Meta rechazó el registro del número (${status}): ${datos?.error?.message || 'sin detalle'}`,
+            {
+                code: 'META_REGISTRO_FALLIDO',
+                statusCode: 502,
+                reintentable: status === 429 || status >= 500,
+                detalle: datos?.error,
+            }
+        );
+    }
+
+    return { registrado: Boolean(datos?.success) };
+}
+
+/** Los dos tipos de sincronización que ofrece la coexistencia, en el orden en que se piden. */
+const SINCRONIZACIONES = Object.freeze(['smb_app_state_sync', 'history']);
+
+/**
+ * Pide a Meta que empiece a mandar por webhook los contactos (`smb_app_state_sync`) o el
+ * historial de chats (`history`) de la app WhatsApp Business del cliente.
+ *
+ * ## Por qué se llama justo al conectar
+ *
+ * Meta solo acepta esta petición en las **24 horas** siguientes a la conexión: después ya no hay
+ * forma de pedirla sin volver a conectar el número. Y solo se puede pedir **una vez** por tipo.
+ * El historial solo llega si el dueño aceptó compartirlo en su celular durante el escaneo del QR;
+ * si no, Meta manda un webhook `history` con un error y no pasa nada más.
+ *
+ * Los chats NO dependen de esto: siguen en el celular del dueño pase lo que pase. Esto es lo que
+ * nos llega a nosotros, no lo que el dueño conserva.
+ *
+ * @returns {Promise<{solicitado: boolean, idSolicitud: string|null}>}
+ */
+async function solicitarSincronizacion({
+    phoneNumberId,
+    accessToken,
+    tipo,
+    fetchImpl = globalThis.fetch,
+    baseUrl = BASE_URL,
+    versionApi = VERSION_API,
+}) {
+    if (!phoneNumberId || !accessToken || !SINCRONIZACIONES.includes(tipo)) {
+        throw fallo('Faltan datos para pedir la sincronización (phoneNumberId, accessToken o tipo).', {
+            code: 'META_SINCRONIZACION_DATOS_INCOMPLETOS',
+            statusCode: 400,
+            reintentable: false,
+        });
+    }
+
+    const { ok, status, datos } = await llamar(
+        `${baseUrl}/${versionApi}/${phoneNumberId}/smb_app_data` +
+            `?access_token=${encodeURIComponent(accessToken)}`,
+        { fetchImpl, metodo: 'POST', cuerpo: { messaging_product: 'whatsapp', sync_type: tipo } }
+    );
+
+    if (!ok) {
+        throw fallo(`Meta rechazó la sincronización "${tipo}" (${status}).`, {
+            code: 'META_SINCRONIZACION_FALLIDA',
+            statusCode: 502,
+            reintentable: false,
+            detalle: datos?.error,
+        });
+    }
+
+    return { solicitado: true, idSolicitud: datos?.request_id ?? null };
+}
+
+module.exports = {
+    canjearCodigo,
+    resolverWaba,
+    resolverNumero,
+    suscribirApp,
+    desuscribirApp,
+    listarNumeros,
+    registrarNumero,
+    solicitarSincronizacion,
+    SINCRONIZACIONES,
+    VERSION_API,
+};

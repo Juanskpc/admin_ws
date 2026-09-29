@@ -457,9 +457,15 @@ router.post(
     [
         ...idNegocioValidator,
         body('code').trim().notEmpty().withMessage('Falta el code de Embedded Signup'),
-        body('phoneNumberId').trim().notEmpty().withMessage('Falta el phoneNumberId'),
+        // Opcional desde la coexistencia: el evento del SDK puede no traerlo, y entonces el
+        // backend lo descubre en la WABA que concedió el token (canalEmbeddedSignup#elegirNumero).
+        body('phoneNumberId').optional({ nullable: true }).trim().isLength({ max: 64 }),
         body('numeroE164').optional({ nullable: true }).trim().isLength({ max: 20 }),
         body('businessId').optional({ nullable: true }).trim().isLength({ max: 100 }),
+        body('modo')
+            .optional({ nullable: true })
+            .isIn(['coexistencia', 'nuevo'])
+            .withMessage('Modo de conexión inválido'),
     ],
     CanalWhatsappController.postCanjear
 );

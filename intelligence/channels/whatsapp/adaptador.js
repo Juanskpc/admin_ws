@@ -43,6 +43,7 @@ const repositorio = require('../../engine/repositorio');
 const plantillas = require('../../core/plantillas');
 const Audit = require('../../../app_core/helpers/auditHelper');
 const canalEmbeddedSignup = require('../../../app_core/whatsapp/canalEmbeddedSignup');
+const notificacionDao = require('../../../app_core/dao/notificacionDao');
 
 const NOMBRE = 'whatsapp';
 const MODULO_AUDITORIA = 'canal_whatsapp';
@@ -108,13 +109,28 @@ function textoDeMensaje(mensaje) {
  * @returns {{mensajes: Array, estados: Array, ecos: Array, avisos: Array, ajenos: number}}
  */
 function interpretarWebhook(cuerpo, { config = configReal } = {}) {
-    const salida = { mensajes: [], estados: [], ecos: [], avisos: [], ajenos: 0, sinRemitente: [] };
+    const salida = {
+        mensajes: [],
+        estados: [],
+        ecos: [],
+        avisos: [],
+        sincronizaciones: [],
+        ajenos: 0,
+        sinRemitente: [],
+    };
 
     for (const entrada of cuerpo?.entry || []) {
         for (const cambio of entrada.changes || []) {
             const valor = cambio.value || {};
             const phoneNumberId = valor.metadata?.phone_number_id;
-            const idNegocio = config.resolverNegocio(phoneNumberId);
+            let idNegocio = config.resolverNegocio(phoneNumberId);
+
+            // `account_update` no trae `metadata.phone_number_id`: lo único que dice de quién es
+            // es la WABA, en `entry.id`. Solo se resuelve si esa WABA es de un único negocio
+            // (Embedded Signup); la WABA compartida sigue sin atribuirse a nadie.
+            if (!idNegocio && !phoneNumberId && typeof config.resolverNegocioPorWaba === 'function') {
+                idNegocio = config.resolverNegocioPorWaba(entrada.id);
+            }
 
             // Un webhook de un número que no es nuestro no se procesa ni se adivina a quién es.
             // Atribuirlo «al negocio por defecto» sería escribir en la conversación de otro
@@ -202,6 +218,37 @@ function interpretarWebhook(cuerpo, { config = configReal } = {}) {
                 });
             }
 
+            // ── Coexistencia: historial y contactos de la app WhatsApp Business ─────────
+            // Llegan porque `canalEmbeddedSignup.conectar()` los pidió al conectar. **No** son
+            // mensajes nuevos: son chats pasados del dueño, y van en `history[].threads`, nunca en
+            // `messages` — por eso no pueden despertar al motor. Aquí solo se cuenta qué llegó
+            // (y si el dueño se negó a compartir el historial): los chats siguen en su celular.
+            for (const lote of valor.history || []) {
+                const hilos = lote.threads || [];
+                const error = (lote.errors || valor.errors || [])[0] || null;
+                salida.sincronizaciones.push({
+                    idNegocio,
+                    tipo: 'historial',
+                    fase: lote.metadata?.phase ?? null,
+                    progreso: lote.metadata?.progress ?? null,
+                    hilos: hilos.length,
+                    mensajes: hilos.reduce((n, h) => n + (h.messages?.length || 0), 0),
+                    error: error
+                        ? { codigo: error.code ?? null, titulo: error.title ?? error.message ?? null }
+                        : null,
+                });
+            }
+            if (Array.isArray(valor.state_sync) && valor.state_sync.length > 0) {
+                salida.sincronizaciones.push({
+                    idNegocio,
+                    tipo: 'contactos',
+                    contactos: valor.state_sync.length,
+                    altas: valor.state_sync.filter((c) => c.action === 'add').length,
+                    bajas: valor.state_sync.filter((c) => c.action === 'remove').length,
+                    error: null,
+                });
+            }
+
             // ── Avisos de la cuenta ─────────────────────────────────────────────────────
             // Aquí llega el corte de los ~14 días sin abrir la app (`PRIMARY_INACTIVITY`),
             // confirmado en la documentación de Meta. Es la diferencia entre enterarse por el
@@ -284,6 +331,12 @@ async function recibirWebhook(cuerpo, { config = configReal } = {}) {
         );
     }
 
+    for (const sincronizacion of leido.sincronizaciones) {
+        await aparte('una sincronización de la app Business', sincronizacion.tipo, () =>
+            registrarSincronizacion(sincronizacion)
+        );
+    }
+
     for (const estado of leido.estados) {
         // Solo interesa `failed`, y desde F8-B se puede **atar a la fila**: el `wamid` se guarda
         // al entregar. `sent`, `delivered` y `read` no se guardan a propósito — son tres
@@ -320,6 +373,7 @@ async function recibirWebhook(cuerpo, { config = configReal } = {}) {
         recibidos: leido.mensajes.length,
         ecos: leido.ecos.length,
         avisos: leido.avisos.length,
+        sincronizaciones: leido.sincronizaciones.length,
         estados: leido.estados.length,
         ajenos: leido.ajenos,
         sinRemitente: leido.sinRemitente.length,
@@ -378,7 +432,7 @@ async function silenciarPorHumano({ idNegocio, idExterno, wamid }) {
  * cruzar hacia `app_core`) para no seguir intentando enviar con un token ya revocado.
  */
 async function registrarAviso({ idNegocio, evento, motivo, iniciadoPor, numero }) {
-    const critico = evento === 'PARTNER_REMOVED';
+    const critico = EVENTOS_DESCONEXION.has(evento);
     if (critico) {
         console.error(
             `[whatsapp] ⚠️  El número ${numero || '(sin número)'} del negocio ${idNegocio} se ` +
@@ -391,8 +445,9 @@ async function registrarAviso({ idNegocio, evento, motivo, iniciadoPor, numero }
 
     let accion = critico ? 'cuenta_desconectada' : 'aviso_de_cuenta';
     if (critico && numeros.origenDeNegocio(idNegocio) === 'embedded_signup') {
+        const coexistencia = numeros.coexistenciaDeNegocio(idNegocio);
         try {
-            await canalEmbeddedSignup.desconectar({ idNegocio, motivo });
+            await canalEmbeddedSignup.desconectar({ idNegocio, motivo: motivo || evento });
             numeros._reiniciar();
             accion = 'canal_revocado';
         } catch (error) {
@@ -403,9 +458,81 @@ async function registrarAviso({ idNegocio, evento, motivo, iniciadoPor, numero }
                 error.message
             );
         }
+        // El número es del cliente y solo él puede reconectarlo: se le avisa en la campana. Un
+        // negocio de alta manual no recibe esto — ese número lo gestionamos nosotros.
+        if (accion === 'canal_revocado') {
+            await avisarDesconexion({ idNegocio, motivo, coexistencia });
+        }
     }
 
     await auditar(accion, idNegocio, { evento, motivo, iniciado_por: iniciadoPor, numero });
+}
+
+/**
+ * Eventos de `account_update` que significan «este número dejó de estar conectado a nosotros».
+ * `PARTNER_REMOVED` es el documentado y el que ya vimos (incluye el corte de coexistencia por
+ * ~14 días sin abrir la app, `PRIMARY_INACTIVITY`). Los otros dos son los que Meta documenta para
+ * cuando el cliente quita la app o da de baja la cuenta; tratarlos igual es lo seguro: un evento
+ * de desconexión que no se trata deja un token muerto y un asistente mudo sin que nadie lo sepa.
+ */
+const EVENTOS_DESCONEXION = new Set(['PARTNER_REMOVED', 'PARTNER_APP_UNINSTALLED', 'ACCOUNT_OFFBOARDED']);
+
+const TIPO_NOTIFICACION_DESCONEXION = 'WHATSAPP_DESCONECTADO';
+
+/** La campana del negocio: qué pasó y qué tiene que hacer, sin jerga de Meta. */
+async function avisarDesconexion({ idNegocio, motivo, coexistencia }) {
+    const porInactividad = motivo === 'PRIMARY_INACTIVITY';
+    const mensaje = porInactividad
+        ? 'Meta desconectó tu número porque la app WhatsApp Business de tu celular lleva unos 14 días ' +
+          'sin abrirse. Ábrela en tu celular y vuelve a conectar el número desde WhatsApp en EscalApp.'
+        : coexistencia
+          ? 'Tu número se desconectó del asistente desde la app WhatsApp Business o desde Meta. Tus ' +
+            'chats siguen en tu celular. Para que el asistente vuelva a responder, conecta de nuevo ' +
+            'el número desde WhatsApp en EscalApp.'
+          : 'Tu número se desconectó del asistente desde Meta. Para que vuelva a responder, conecta ' +
+            'de nuevo el número desde WhatsApp en EscalApp.';
+    try {
+        await notificacionDao.crearNotificacion({
+            id_negocio: idNegocio,
+            tipo: TIPO_NOTIFICACION_DESCONEXION,
+            titulo: 'Tu WhatsApp se desconectó del asistente',
+            mensaje,
+        });
+    } catch (error) {
+        console.error(`[whatsapp] no se pudo avisar la desconexión al negocio ${idNegocio}:`, error.message);
+    }
+}
+
+/**
+ * Deja constancia de lo que llegó de la app WhatsApp Business al conectar en coexistencia.
+ *
+ * Se audita solo lo que alguien querría ver después — el historial terminado (progreso 100), un
+ * rechazo, y cada lote de contactos — no cada trozo del historial, que puede llegar en decenas.
+ * El error `2593109` es el normal cuando el dueño decide no compartir su historial en el celular:
+ * no es una avería y no rompe nada.
+ */
+async function registrarSincronizacion(s) {
+    const resumen =
+        s.tipo === 'historial'
+            ? `fase ${s.fase ?? '?'}, ${s.progreso ?? '?'}%, ${s.hilos} chat(s), ${s.mensajes} mensaje(s)`
+            : `${s.contactos} contacto(s) (+${s.altas} / -${s.bajas})`;
+    console.log(
+        `[whatsapp] sincronización de ${s.tipo} del negocio ${s.idNegocio}: ${resumen}` +
+            (s.error ? ` — error ${s.error.codigo}: ${s.error.titulo}` : '')
+    );
+
+    const merece = s.error || s.tipo === 'contactos' || s.progreso === 100;
+    if (!merece) return;
+
+    await auditar(s.error ? 'sincronizacion_rechazada' : `sincronizacion_${s.tipo}`, s.idNegocio, {
+        tipo: s.tipo,
+        fase: s.fase ?? null,
+        progreso: s.progreso ?? null,
+        hilos: s.hilos ?? null,
+        mensajes: s.mensajes ?? null,
+        contactos: s.contactos ?? null,
+        error: s.error,
+    });
 }
 
 // ── Salida: Mensaje Canónico → WhatsApp ─────────────────────────────────────────────────
@@ -651,5 +778,6 @@ module.exports = {
     renderizarPlantilla,
     textoDeMensaje,
     silenciarPorHumano,
+    EVENTOS_DESCONEXION,
     LIMITES,
 };
