@@ -60,7 +60,8 @@ const Models = require('../../../app_core/models/conection');
 const registry = require('../../core/registry');
 const { FEATURE } = require('../../core/features');
 const { TIPO } = require('../../../app_core/authz/principal');
-const { normalizarE164Colombia } = require('../../../app_core/helpers/telefono');
+const { normalizarE164 } = require('../../../app_core/helpers/telefono');
+const { paisDeNegocio } = require('../../../app_core/helpers/paisNegocio');
 
 /** Solo a un cliente final se le comprueba de quién es la cita; el negocio opera sobre todas. */
 const TIPO_CONTACTO = TIPO.CONTACTO;
@@ -70,6 +71,8 @@ const profesionalService = require('../../../app_reserva_api/services/profesiona
 const disponibilidadService = require('../../../app_reserva_api/services/disponibilidadService');
 const citaService = require('../../../app_reserva_api/services/citaService');
 const holdService = require('../../../app_reserva_api/services/holdService');
+const mascotaService = require('../../../app_reserva_api/services/mascotaService');
+const perfiles = require('../../../app_reserva_api/perfiles');
 
 const VERTICAL = 'reserva';
 
@@ -84,6 +87,176 @@ const VERTICAL = 'reserva';
  * exactamente el trabajo de una capa anticorrupción: absorber aquí la imperfección del
  * modelo de al lado.
  */
+/**
+ * Quién es quien escribe, dentro de este negocio — **sin crearlo si no existe**.
+ *
+ * `personaNegocioDao.resolverOCrear` es el camino normal al crear una cita, pero aquí sería
+ * exactamente el error que `exigirConfiguracion` documenta abajo: convertir una consulta en una
+ * escritura. Preguntar «¿tengo mascotas registradas?» no puede dar de alta a un cliente, y menos
+ * dentro de un `dry-run` que después no lo desharía.
+ *
+ * Devuelve `null` cuando no hay teléfono probado (WebChat, que no autentica a nadie) o cuando el
+ * número no sirve para el país del negocio. Quien llama lo trata como «no te conozco todavía»,
+ * que es la verdad y es inofensivo.
+ */
+async function personaDelCanal(idNegocio, principal, transaction = null) {
+    const telefono = principal?.telefono_verificado;
+    if (!telefono) return null;
+
+    const pais = await paisDeNegocio(idNegocio, { transaction });
+    const e164 = normalizarE164(telefono, pais);
+    if (!e164) return null;
+
+    const [fila] = await Models.sequelize.query(
+        `SELECT id_persona_negocio
+           FROM platform.persona_negocio
+          WHERE id_negocio = :idNegocio AND telefono_e164 = :telefono
+          LIMIT 1`,
+        {
+            replacements: { idNegocio, telefono: e164 },
+            type: Models.sequelize.QueryTypes.SELECT,
+            transaction,
+        },
+    );
+    return fila?.id_persona_negocio || null;
+}
+
+/**
+ * Las horas libres de UN día, fundiendo las agendas de quienes prestan el servicio.
+ *
+ * Anticorrupción: `calcularSlots` exige un profesional concreto, porque nació para un formulario
+ * donde el usuario ya lo había elegido. La pregunta de negocio («¿hay hueco el martes?») no lo
+ * tiene, así que se recorren los profesionales que prestan el servicio y se funden sus horas.
+ *
+ * Vive fuera de la capacidad porque la usan dos: `consultar_disponibilidad` (un día) y
+ * `consultar_dias_con_horas` (varios). Si cada una calculara a su manera, un día podría
+ * aparecer «con horas» en la segunda y vacío en la primera — que es exactamente el tipo de
+ * contradicción que el cliente ve y no perdona.
+ */
+async function horasDelDia(idNegocio, args, profesionalesPrecargados = null) {
+    const profesionales = profesionalesPrecargados
+        || (args.id_profesional
+            ? [{ id_profesional: args.id_profesional }]
+            : await profesionalService.listar({
+                  idNegocio,
+                  idServicio: args.id_servicio,
+                  soloActivos: true,
+              }));
+
+    if (profesionales.length === 0) {
+        return { fecha: args.fecha, horas: [], motivo: 'no hay profesionales que presten ese servicio' };
+    }
+
+    const porHora = new Map();
+    let duracionMin = null;
+
+    for (const p of profesionales) {
+        const resultado = await disponibilidadService.calcularSlots({
+            idNegocio,
+            idServicio: args.id_servicio,
+            idProfesional: p.id_profesional,
+            fechaISO: args.fecha,
+            // El mismo formato que acepta `composicionCita.normalizarVariantes` y que guarda el
+            // hold: así las tres medidas —ofrecer, apartar y crear— salen de la misma cuenta.
+            ...(args.id_variante ? { variantes: { [args.id_servicio]: args.id_variante } } : {}),
+        });
+        duracionMin = duracionMin ?? resultado.duracion_servicio_min;
+
+        for (const slot of resultado.slots) {
+            if (!slot.disponible) continue;
+            // Una hora la ofrece quien la tenga libre; se guarda el primero para que la
+            // capacidad de reserva no tenga que volver a calcularlo.
+            if (!porHora.has(slot.hora)) porHora.set(slot.hora, p.id_profesional);
+        }
+    }
+
+    const horas = [...porHora.entries()]
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([hora, idProfesional]) => ({ hora, id_profesional: idProfesional }));
+
+    return { fecha: args.fecha, duracion_min: duracionMin, horas };
+}
+
+/** Cuántos días hacia delante se busca como máximo. Tres semanas cubren cualquier agenda viva. */
+const DIAS_A_BUSCAR = 21;
+
+/** `YYYY-MM-DD` de hoy en Bogotá, sin pasar por UTC (la trampa que el repo ya pagó dos veces). */
+function hoyISO(ahora = new Date()) {
+    return new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'America/Bogota', year: 'numeric', month: '2-digit', day: '2-digit',
+    }).format(ahora);
+}
+
+function sumarDias(fechaISO, n) {
+    const [a, m, d] = fechaISO.split('-').map(Number);
+    return new Date(Date.UTC(a, m - 1, d + n)).toISOString().slice(0, 10);
+}
+
+/**
+ * Los próximos días que **de verdad tienen horas libres**, desde `desde`.
+ *
+ * ## El fallo que obliga a que esto exista (producción, D'ALEX, 2026-09-28)
+ *
+ * El flujo consultaba un día, y si estaba vacío proponía el siguiente **sin mirarlo**:
+ *
+ *   «No hay horas libres el 2026-09-29. ¿Probamos el 2026-09-30?» → vacío
+ *   «No hay horas libres el 2026-09-30. ¿Probamos el 2026-10-01?» → vacío …
+ *
+ * Un cliente real hizo cuatro turnos para descubrir que no había agenda, y ninguno le sirvió.
+ * El bot proponía días que no había comprobado. La regla nueva es simple: **nunca se ofrece un
+ * día sin haber visto que tiene hueco**.
+ *
+ * ## Por qué es barato aunque mire tres semanas
+ *
+ * Primero se descartan los días cerrados con `diasDisponibles`, que solo lee horarios (una
+ * consulta por día, sin citas ni holds). El cálculo caro de huecos —`calcularSlots`, por
+ * profesional— solo se hace en los días que abren, y se para en cuanto hay `cuantos`. En una
+ * agenda normal eso son tres o cuatro días calculados, no veintiuno.
+ */
+async function diasConHoras(idNegocio, args, ahora = new Date()) {
+    const cuantos = Math.min(Math.max(Number(args.cuantos) || 3, 1), 5);
+    const hoy = hoyISO(ahora);
+    const desde = args.desde && args.desde > hoy ? args.desde : hoy;
+    const hasta = sumarDias(desde, DIAS_A_BUSCAR - 1);
+
+    const profesionales = args.id_profesional
+        ? [{ id_profesional: args.id_profesional }]
+        : await profesionalService.listar({ idNegocio, idServicio: args.id_servicio, soloActivos: true });
+
+    if (profesionales.length === 0) {
+        return { dias: [], desde, hasta, motivo: 'no hay profesionales que presten ese servicio' };
+    }
+
+    // Días en que ALGUIEN trabaja. Se consulta por profesional (su horario propio manda sobre
+    // el del negocio) y se unen.
+    const abiertos = new Set();
+    for (const p of profesionales) {
+        const calendario = await disponibilidadService.diasDisponibles({
+            idNegocio, idProfesional: p.id_profesional, desde, hasta,
+        });
+        for (const d of calendario) if (d.abierto) abiertos.add(d.fecha);
+    }
+
+    const dias = [];
+    for (const fecha of [...abiertos].sort()) {
+        const { horas } = await horasDelDia(idNegocio, { ...args, fecha }, profesionales);
+        if (horas.length === 0) continue;
+        dias.push({ fecha, primera_hora: horas[0].hora, cuantas: horas.length });
+        if (dias.length >= cuantos) break;
+    }
+
+    return {
+        dias,
+        desde,
+        hasta,
+        // Para que quien lea un vacío sepa por qué: no es lo mismo «nadie trabaja» que «está
+        // todo lleno», y el negocio tiene que arreglar cosas distintas en cada caso.
+        ...(dias.length === 0
+            ? { motivo: abiertos.size === 0 ? 'nadie tiene horario en esas fechas' : 'la agenda está llena' }
+            : {}),
+    };
+}
+
 async function exigirConfiguracion(idNegocio) {
     const cfg = await Models.ReservaConfig.findByPk(idNegocio);
     if (!cfg) {
@@ -101,20 +274,54 @@ function registrarCapacidades() {
         descripcion:
             'Lista los servicios que el negocio ofrece, con su duración y su precio. Úsala ' +
             'cuando el cliente pregunte qué se hace en el negocio, cuánto cuesta algo o ' +
-            'cuánto dura, y antes de consultar disponibilidad para saber qué servicio pide.',
+            'cuánto dura, y antes de consultar disponibilidad para saber qué servicio pide. ' +
+            'Un servicio con `a_cotizar` NO tiene precio cerrado: su precio se acuerda antes de ' +
+            'agendar, así que no prometas el que veas. Un servicio con `variantes` cuesta y dura ' +
+            'distinto según cuál se elija (largo del cabello, tamaño de la mascota, zona).',
         vertical: VERTICAL,
         tipo: registry.TIPO.CONSULTA,
         feature: FEATURE.ASISTENTE_IA,
         parametros: {},
 
         async ejecutar({ idNegocio }) {
-            const servicios = await servicioService.listar({ idNegocio, soloActivos: true });
+            const [servicios, perfil] = await Promise.all([
+                servicioService.listar({ idNegocio, soloActivos: true }),
+                perfiles.perfilDeNegocio(idNegocio),
+            ]);
+            const activas = new Set(perfil.funciones);
+
             return {
+                // Cómo llama este oficio a las cosas («terapeuta», «sesión», «groomer») y qué
+                // tiene encendido. Viaja con los servicios y no en una capacidad aparte porque
+                // quien pregunta por los servicios lo necesita en el mismo turno: es el primer
+                // mensaje de la conversación y no merece dos viajes al Gate.
+                negocio: {
+                    terminos: perfil.terminos,
+                    funciones: perfil.funciones,
+                },
                 servicios: servicios.map((s) => ({
                     id_servicio: s.id_servicio,
                     nombre: s.nombre,
                     duracion_min: s.duracion_min,
                     precio: s.precio != null ? Number(s.precio) : null,
+                    // Los tres campos que deciden si este servicio se puede agendar por chat y
+                    // qué hay que preguntar antes. Solo se exponen si el negocio tiene la
+                    // función encendida: un dato que el oficio no usa es ruido para el modelo.
+                    a_cotizar: activas.has('a_cotizar') ? Boolean(s.a_cotizar) : false,
+                    requiere_consentimiento: activas.has('consentimiento')
+                        ? Boolean(s.requiere_consentimiento)
+                        : false,
+                    variantes: activas.has('variantes')
+                        ? (s.variantes || []).map((v) => ({
+                              id_variante: v.id_variante,
+                              nombre: v.nombre,
+                              // La clave empareja la variante con un atributo conocido —el
+                              // tamaño de la mascota—, y es lo que permite elegirla sola.
+                              clave: v.clave || null,
+                              duracion_min: v.duracion_min,
+                              precio: v.precio != null ? Number(v.precio) : null,
+                          }))
+                        : [],
                 })),
             };
         },
@@ -170,55 +377,93 @@ function registrarCapacidades() {
             // a elegir profesional para poder preguntar "¿tienen hueco el martes?" es
             // convertir una pregunta de negocio en un formulario.
             id_profesional: { tipo: 'entero', requerido: false, min: 1 },
+            /**
+             * La variante, cuando ya se sabe cuál.
+             *
+             * ⚠️ **Sin esto las horas se miden con la duración equivocada.** Una coloración de
+             * pelo largo dura 120 minutos y la de lista 60: preguntando sin variante, el bot
+             * ofrece las 11:00 de un negocio que cierra a las 12:00, y al apartar la hora la
+             * vertical la rechaza con «ese horario está fuera del horario de atención» — sobre
+             * una hora que el propio bot acababa de ofrecer.
+             *
+             * Lo destapó la prueba de oficios; es el mismo desajuste que el del hold, un piso
+             * más arriba, y por eso se arregla con la misma regla: **todo lo que mide tiempo
+             * tiene que medirlo igual**.
+             */
+            id_variante: { tipo: 'entero', requerido: false, min: 1 },
         },
 
         async ejecutar({ idNegocio, args }) {
             await exigirConfiguracion(idNegocio);
 
-            // Anticorrupción: `calcularSlots` exige un profesional concreto, porque nació
-            // para un formulario donde el usuario ya lo había elegido. La pregunta de
-            // negocio ("¿hay hueco el martes?") no lo tiene, así que el adaptador recorre
-            // los profesionales que prestan el servicio y funde sus horas.
-            const profesionales = args.id_profesional
-                ? [{ id_profesional: args.id_profesional }]
-                : await profesionalService.listar({
-                      idNegocio,
-                      idServicio: args.id_servicio,
-                      soloActivos: true,
-                  });
+            return horasDelDia(idNegocio, args);
+        },
+    });
 
-            if (profesionales.length === 0) {
-                return { fecha: args.fecha, horas: [], motivo: 'no hay profesionales que presten ese servicio' };
+    registry.registrar({
+        nombre: 'consultar_dias_con_horas',
+        descripcion:
+            'Busca los próximos días que TIENEN horas libres para un servicio, desde una fecha. ' +
+            'Úsala antes de preguntarle al cliente qué día quiere, y siempre que un día no tenga ' +
+            'horas: nunca le propongas un día sin haber comprobado que tiene hueco. Si devuelve ' +
+            'la lista vacía, no hay agenda en las próximas semanas y hay que decírselo.',
+        vertical: VERTICAL,
+        tipo: registry.TIPO.CONSULTA,
+        feature: FEATURE.ASISTENTE_IA,
+        parametros: {
+            id_servicio: { tipo: 'entero', requerido: true, min: 1 },
+            // Desde qué día buscar, incluido. Sin él, desde hoy.
+            desde: { tipo: 'fecha', requerido: false },
+            id_profesional: { tipo: 'entero', requerido: false, min: 1 },
+            id_variante: { tipo: 'entero', requerido: false, min: 1 },
+            // Cuántos días con horas devolver. Tres caben como botones y dejan elegir.
+            cuantos: { tipo: 'entero', requerido: false, min: 1, max: 5 },
+        },
+
+        async ejecutar({ idNegocio, args }) {
+            await exigirConfiguracion(idNegocio);
+            return diasConHoras(idNegocio, args);
+        },
+    });
+
+    registry.registrar({
+        nombre: 'consultar_mis_mascotas',
+        descripcion:
+            'Lista las mascotas que este cliente ya tiene registradas en el negocio. Úsala en ' +
+            'negocios de cuidado de mascotas antes de agendar, para no pedirle otra vez los ' +
+            'datos de un peludo que ya conoces. Si devuelve la lista vacía, pregúntale el ' +
+            'nombre y el tamaño de su mascota.',
+        vertical: VERTICAL,
+        tipo: registry.TIPO.CONSULTA,
+        feature: FEATURE.ASISTENTE_IA,
+        parametros: {},
+
+        async ejecutar({ idNegocio, contexto }) {
+            // Sin función de mascotas no hay nada que listar, y decirlo así evita que el modelo
+            // se invente una pregunta sobre perros en una barbería.
+            if (!(await perfiles.tieneFuncion(idNegocio, 'mascotas'))) {
+                return { mascotas: [], motivo: 'este negocio no atiende mascotas' };
             }
 
-            const porHora = new Map();
-            let duracionMin = null;
+            // El teléfono que **probó el canal**, nunca uno dictado: esto devuelve datos de un
+            // cliente concreto, así que identificarlo por lo que alguien diga sería dejar que
+            // cualquiera pidiera la lista de mascotas de otro.
+            const idPersona = await personaDelCanal(idNegocio, contexto?.principal, contexto?.transaction);
+            if (!idPersona) return { mascotas: [], motivo: 'no te tenemos registrado todavía' };
 
-            for (const p of profesionales) {
-                const resultado = await disponibilidadService.calcularSlots({
-                    idNegocio,
-                    idServicio: args.id_servicio,
-                    idProfesional: p.id_profesional,
-                    fechaISO: args.fecha,
-                });
-                duracionMin = duracionMin ?? resultado.duracion_servicio_min;
-
-                for (const slot of resultado.slots) {
-                    if (!slot.disponible) continue;
-                    // Una hora la ofrece quien la tenga libre; se guarda el primero para que
-                    // la capacidad de reserva de F4-B no tenga que volver a calcularlo.
-                    if (!porHora.has(slot.hora)) porHora.set(slot.hora, p.id_profesional);
-                }
-            }
-
-            const horas = [...porHora.entries()]
-                .sort(([a], [b]) => a.localeCompare(b))
-                .map(([hora, idProfesional]) => ({ hora, id_profesional: idProfesional }));
-
+            const mascotas = await mascotaService.listarDeCliente(idNegocio, idPersona, {
+                transaction: contexto?.transaction,
+            });
             return {
-                fecha: args.fecha,
-                duracion_min: duracionMin,
-                horas,
+                mascotas: mascotas.map((m) => ({
+                    id_mascota: m.id_mascota,
+                    nombre: m.nombre,
+                    especie: m.especie || null,
+                    raza: m.raza || null,
+                    // El tamaño es a la vez dato de la mascota y variante del servicio: elegir
+                    // la mascota elige el precio, sin preguntarlo aparte.
+                    tamano: m.tamano || null,
+                })),
             };
         },
     });
@@ -247,12 +492,40 @@ function registrarCapacidades() {
             id_servicio: { tipo: 'entero', requerido: true, min: 1 },
             inicio: { tipo: 'string', requerido: true, max_longitud: 25 },
             id_profesional: { tipo: 'entero', requerido: false, min: 1 },
+            // La variante decide cuánto dura y cuánto cuesta, así que entra ya en el hold: sin
+            // ella se apartaban 40 minutos para una cita de 90 y el choque salía después, en la
+            // agenda del profesional. Ver `migrate_reserva_hold_variantes.js`.
+            id_variante: { tipo: 'entero', requerido: false, min: 1 },
         },
 
         async ejecutar({ idNegocio, args, contexto }) {
             await exigirConfiguracion(idNegocio);
 
+            // Un servicio «a cotizar» no se aparta: su precio y su duración no existen todavía,
+            // así que apartar un hueco sería inventarse cuánto va a durar. Se corta aquí —en la
+            // puerta de la mutación— y no solo en el flujo, porque el modelo también puede
+            // pedirla y la regla tiene que valer para los dos.
+            const servicio = await servicioService.getById(args.id_servicio, idNegocio);
+            if (!servicio) {
+                const e = new Error('Ese servicio no existe en este negocio.');
+                e.code = 'SERVICIO_NO_VALIDO';
+                e.statusCode = 404;
+                throw e;
+            }
+            if (servicio.a_cotizar && (await perfiles.tieneFuncion(idNegocio, 'a_cotizar'))) {
+                const e = new Error(
+                    `«${servicio.nombre}» se cotiza antes de agendarlo: el precio y la duración ` +
+                        'los acuerda el negocio contigo. No lo apartes.'
+                );
+                e.code = 'SERVICIO_A_COTIZAR';
+                e.statusCode = 409;
+                throw e;
+            }
+
             const idProfesional = args.id_profesional || (await elegirProfesional(idNegocio, args));
+            const variantes = args.id_variante
+                ? { [args.id_servicio]: args.id_variante }
+                : null;
 
             // La transacción del Gate se pasa hacia abajo: sin ella el servicio confirmaría
             // por su cuenta y un dry-run dejaría el hold puesto de verdad.
@@ -262,21 +535,32 @@ function registrarCapacidades() {
                     idProfesional,
                     idServicios: [args.id_servicio],
                     fechaHoraInicioISO: args.inicio,
+                    variantes,
                 },
                 { transaction: contexto.transaction }
             );
 
-            const servicio = await servicioService.getById(args.id_servicio, idNegocio);
             const profesional = await profesionalService.getById(idProfesional, idNegocio);
+            // Lo que se le dice al cliente sale de la variante apartada, no del precio de lista:
+            // prometer el de lista y cobrar el de la variante es la queja en la puerta.
+            const elegida = args.id_variante
+                ? (servicio.variantes || []).find((v) => v.id_variante === args.id_variante)
+                : null;
 
             return {
                 codigo_hold: hold.codigo,
                 expira_en: hold.expira_en,
                 inicio: args.inicio,
-                duracion_min: servicio.duracion_min,
-                precio: servicio.precio != null ? Number(servicio.precio) : null,
+                duracion_min: elegida ? elegida.duracion_min : servicio.duracion_min,
+                precio: elegida
+                    ? (elegida.precio != null ? Number(elegida.precio) : null)
+                    : (servicio.precio != null ? Number(servicio.precio) : null),
                 servicio: servicio.nombre,
+                variante: elegida ? elegida.nombre : null,
                 profesional: profesional?.nombre ?? null,
+                // Para que el flujo pueda avisar «trae tu documento» al confirmar.
+                requiere_consentimiento: Boolean(servicio.requiere_consentimiento)
+                    && (await perfiles.tieneFuncion(idNegocio, 'consentimiento')),
             };
         },
     });
@@ -309,6 +593,18 @@ function registrarCapacidades() {
             cliente_nombre: { tipo: 'string', requerido: true, min_longitud: 2, max_longitud: 150 },
             cliente_telefono: { tipo: 'string', requerido: false, max_longitud: 30 },
             notas: { tipo: 'string', requerido: false, max_longitud: 500 },
+            // ── Mascota (negocios de cuidado de mascotas) ──────────────────────────────────
+            //
+            // Dos formas, y las dos hacen falta: `id_mascota` para quien vuelve con un peludo ya
+            // registrado, y el nombre suelto para quien llega por primera vez. Sin esto, en una
+            // peluquería canina la cita se rechazaba con `MASCOTA_REQUERIDA` **después** de que
+            // el cliente ya había dicho que sí.
+            //
+            // No viajan en el hold porque no cambian cuánto dura el hueco: son datos de la cita,
+            // igual que el nombre del cliente.
+            id_mascota: { tipo: 'entero', requerido: false, min: 1 },
+            mascota_nombre: { tipo: 'string', requerido: false, max_longitud: 60 },
+            mascota_tamano: { tipo: 'string', requerido: false, max_longitud: 10 },
         },
 
         async ejecutar({ idNegocio, args, contexto }) {
@@ -349,6 +645,17 @@ function registrarCapacidades() {
                     clienteTelefono: telefonoDelCanal || args.cliente_telefono || null,
                     notas: args.notas || null,
                     consumirHoldId: hold.id_hold,
+                    // La variante sale **del hold**, no de los argumentos: es lo que se apartó, y
+                    // el hueco se midió con ella. Si viniera de la conversación, una cita podría
+                    // durar más que el hueco que la estaba protegiendo (ADR-010: el contexto es
+                    // una pista, el hold es el hecho).
+                    variantes: hold.variantes || null,
+                    // La mascota sí viene de la conversación, porque no afecta al hueco. La
+                    // vertical valida que sea de este cliente (`MASCOTA_DE_OTRO_CLIENTE`).
+                    idMascota: args.id_mascota || null,
+                    mascota: args.mascota_nombre
+                        ? { nombre: args.mascota_nombre, tamano: args.mascota_tamano || null }
+                        : null,
                 },
                 { transaction: contexto.transaction }
             );
@@ -544,8 +851,16 @@ async function buscarCitaPorCodigo(codigo, idNegocio, transaction = null, princi
     // `principal` llega en null desde la CLI de capacidades y los arneses, que operan como el
     // negocio y no como un cliente. Ahí no hay dueño que comprobar.
     if (principal && principal.tipo === TIPO_CONTACTO) {
-        const deQuienPide = normalizarE164Colombia(principal.telefono_verificado);
-        const deLaCita = normalizarE164Colombia(cita.cliente_telefono);
+        // ⚠️ Con el país del NEGOCIO, no con Colombia fija (2026-09-29).
+        //
+        // Hasta hoy esto usaba `normalizarE164Colombia`, así que en un negocio chileno los dos
+        // teléfonos salían `null` y la comparación fallaba siempre. El efecto no era un error
+        // visible: era que **ningún cliente de D'ALEX podía cancelar por WhatsApp**, porque esta
+        // función falla cerrada a propósito. Un fallo de seguridad correcto convertido en una
+        // puerta tapiada para un cliente entero.
+        const pais = await paisDeNegocio(idNegocio, { transaction });
+        const deQuienPide = normalizarE164(principal.telefono_verificado, pais);
+        const deLaCita = normalizarE164(cita.cliente_telefono, pais);
 
         if (!deQuienPide || !deLaCita || deQuienPide !== deLaCita) {
             const e = new Error(
@@ -583,9 +898,11 @@ function formatearWallTime(fecha) {
 /**
  * Los tipos de negocio que atiende el flujo de citas.
  *
- * El manejador sigue viviendo en `engine/manejadorDeterminista.js` por historia —era el único
- * que había— y no se mueve hoy para no tocar un flujo que funciona. Lo que sí se declara aquí
- * es a QUIÉN atiende, que es lo que el motor necesita preguntar.
+ * El flujo de citas vive en `./flujoCita.js` desde el 2026-09-29. Vivía en `engine/` «por
+ * historia —era el único que había—», lo que dejaba al núcleo sabiendo qué es un servicio y qué
+ * es un profesional, justo lo que ADR-009 manda que viva aquí. Se movió antes de enseñarle los
+ * oficios (variantes, mascotas, cotizaciones): meter eso en `engine/` habría hecho que el núcleo
+ * supiera de peluquerías caninas. Lo que sí se declara aquí es a QUIÉN atiende.
  *
  * Basta con `RESERVA`: `contextoNegocio` ya traduce el tipo guardado en el negocio a su módulo,
  * así que un rubro nuevo (spa, tatuajes, peluquería canina…) llega aquí como `RESERVA` sin que
@@ -598,7 +915,7 @@ function formatearWallTime(fecha) {
 const TIPOS_NEGOCIO = ['RESERVA', 'BARBERIA', 'SALON DE BELLEZA'];
 
 function registrarFlujo({ flujos }) {
-    const { manejarDeterminista } = require('../../engine/manejadorDeterminista');
+    const { manejarDeterminista } = require('./flujoCita');
     flujos.registrar({ vertical: VERTICAL, tipos: TIPOS_NEGOCIO, manejar: manejarDeterminista });
     // Alojamientos: mismo módulo, otro flujo (reservan noches, no citas).
     require('./flujoEstancia').registrarFlujo({ flujos });

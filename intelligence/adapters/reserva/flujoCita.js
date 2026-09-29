@@ -55,19 +55,37 @@
  */
 'use strict';
 
-const policyGateReal = require('../core/policyGate');
-const registry = require('../core/registry');
-const identidadReal = require('./identidad');
-const contextoNegocioReal = require('../core/contextoNegocio');
+const policyGateReal = require('../../core/policyGate');
+const registry = require('../../core/registry');
+const identidadReal = require('../../engine/identidad');
+const contextoNegocioReal = require('../../core/contextoNegocio');
 // Leer «sí», «cancelar» y la última línea de una ráfaga vive en `texto.js` desde F7: la
 // confirmación de una mutación necesita exactamente la misma lectura, y dos lecturas distintas
 // de «sí» sería un bot que confirma en un sitio y repregunta en el otro.
-const { COMANDO, normalizar, ultimaLinea, esComando, saludoPorLaHora } = require('./texto');
-const confirmacion = require('./confirmacion');
+const { COMANDO, normalizar, ultimaLinea, esComando, saludoPorLaHora } = require('../../engine/texto');
+const confirmacion = require('../../engine/confirmacion');
+// El estado que apaga el bot, pone la conversación en la bandeja y avisa al negocio (campanita y
+// correo, `avisos/escalado.js`). `resultado: 'handoff'` a secas solo cuenta en el Ledger: un
+// mensaje que dice «le aviso al negocio» sin este estado es una promesa que nadie cumple.
+const { ESTADO_HANDOFF } = require('../../engine/handoff');
 
 /** Pasos de la tarea de agendar. Enum-like: se registran en el Ledger y se miden. */
 const PASO = {
     SERVICIO: 'servicio',
+    /**
+     * El largo del cabello, el tamaño de la mascota, la zona del cuerpo. Va **entre el servicio
+     * y las horas** y no más tarde: la variante cambia la duración, y la duración decide qué
+     * horas caben. Preguntarla después de elegir hora obligaría a retirar una hora ya ofrecida.
+     */
+    VARIANTE: 'variante',
+    /**
+     * Para cuál de sus mascotas. Solo en negocios que las atienden, donde además es obligatoria:
+     * sin ella la vertical rechaza la cita (`MASCOTA_REQUERIDA`).
+     *
+     * Va **antes** que la variante porque el tamaño de la mascota ES la variante: elegir a
+     * Firulais (grande) fija el precio del baño de perro grande sin preguntarlo aparte.
+     */
+    MASCOTA: 'mascota',
     PROFESIONAL: 'profesional',
     FECHA: 'fecha',
     HORA: 'hora',
@@ -101,6 +119,30 @@ const VOLVER = {
 };
 
 /**
+ * Los tamaños de mascota, con el texto que ve el cliente.
+ *
+ * ⚠️ Las claves son las de `reserva_mascota.tamano` **y** las de `reserva_servicio_variante.clave`
+ * (ver el comentario de ese modelo). Que sean las mismas no es casualidad: es lo que permite que
+ * elegir la mascota elija también la variante de precio, sin preguntar dos veces. Si alguien
+ * cambia una de las dos listas sin la otra, el emparejamiento deja de funcionar **en silencio**:
+ * el bot seguirá agendando, pero con el precio del tamaño equivocado.
+ */
+const TAMANOS_MASCOTA = {
+    PEQUENO: 'Pequeño',
+    MEDIANO: 'Mediano',
+    GRANDE: 'Grande',
+    GIGANTE: 'Gigante',
+};
+
+/** `GRANDE` → `Grande`, para el detalle del botón. Un tamaño desconocido no se pinta. */
+function etiquetaTamano(clave) {
+    return TAMANOS_MASCOTA[String(clave || '').toUpperCase()] || null;
+}
+
+/** La mascota nueva, cuando el cliente no quiere ninguna de las que ya tiene registradas. */
+const OTRA_MASCOTA = 'otra_mascota';
+
+/**
  * Qué sobrevive al volver a cada paso. **Es una lista blanca a propósito.**
  *
  * Con una lista negra —«borra la hora»— cada campo nuevo que alguien añada al flujo se
@@ -124,9 +166,14 @@ const VOLVER = {
  */
 const SOBREVIVE_AL_VOLVER = {
     servicio: [],
-    profesional: ['id_servicio'],
-    fecha: ['id_servicio', 'id_profesional_preferido', 'profesionales_ofrecidos'],
-    hora: ['id_servicio', 'id_profesional_preferido', 'profesionales_ofrecidos', 'fecha'],
+    // La mascota y la variante sobreviven a partir de aquí: son del pedido, no del calendario.
+    // `perfil` sobrevive a todo — es cómo habla este oficio, no una elección del cliente.
+    profesional: ['id_servicio', 'id_mascota', 'mascota_nombre', 'mascota_tamano', 'id_variante',
+                  'variante_nombre', 'perfil'],
+    fecha: ['id_servicio', 'id_profesional_preferido', 'profesionales_ofrecidos',
+            'id_mascota', 'mascota_nombre', 'mascota_tamano', 'id_variante', 'variante_nombre', 'perfil'],
+    hora: ['id_servicio', 'id_profesional_preferido', 'profesionales_ofrecidos', 'fecha',
+           'id_mascota', 'mascota_nombre', 'mascota_tamano', 'id_variante', 'variante_nombre', 'perfil'],
 };
 
 /**
@@ -152,8 +199,12 @@ function podarAlVolver(destino, datos) {
 const PISTA_DE_CAMBIO = /\b(otro|otra|otros|otras|cambiar|cambia|cambio|volver|atras|regresar|distinto|distinta|diferente)\b/;
 
 const DESTINOS_DE_RETROCESO = [
-    [PASO.SERVICIO, VOLVER.SERVICIO, /\bservicios?\b/],
-    [PASO.PROFESIONAL, VOLVER.PROFESIONAL, /\b(profesional|persona|estilista|barbero|peluquer\w*|manicurista)\b/],
+    // Los términos de cada oficio entran aquí: en un spa el cliente escribe «otro tratamiento»
+    // y en un tatuador «otra sesión». Sin ellos, «cambiar de tratamiento» no se reconocía como
+    // un retroceso y se leía como una respuesta al paso en curso.
+    [PASO.SERVICIO, VOLVER.SERVICIO, /\b(servicios?|tratamientos?)\b/],
+    [PASO.PROFESIONAL, VOLVER.PROFESIONAL,
+     /\b(profesional|persona|estilista|barbero|peluquer\w*|manicurista|terapeuta|especialista|artista|groomer|tatuador\w*)\b/],
     [PASO.FECHA, VOLVER.FECHA, /\b(dia|dias|fecha|fechas)\b/],
     [PASO.HORA, VOLVER.HORA, /\b(hora|horas|horario)\b/],
 ];
@@ -179,6 +230,53 @@ function destinoDeRetroceso(texto) {
         if (patron.test(t)) return destino;
     }
     return null;
+}
+
+/**
+ * ── El idioma del oficio ────────────────────────────────────────────────────────────────────
+ *
+ * Un spa no tiene «servicios» sino tratamientos, ni «profesionales» sino terapeutas; un tatuador
+ * agenda «sesiones» con «artistas»; una peluquería canina trabaja con «groomers». El diccionario
+ * vive en `app_reserva_api/perfiles/definiciones.js` y llega al flujo dentro de
+ * `consultar_servicios`, junto con las funciones que el negocio tiene encendidas.
+ *
+ * ⚠️ **Nunca se pregunta por el nombre del perfil.** El flujo pregunta qué funciones hay activas
+ * y cómo se llaman las cosas; si en este archivo apareciera un `if (perfil === 'SALON')`, la
+ * regla que protege a la barbería ya estaría rota (`docs/asistente-reserva.md` §1).
+ *
+ * Los valores por defecto son los de la barbería, que es lo que se usaba antes de que esto
+ * existiera: un negocio cuyo perfil no se pudo leer sigue hablando como siempre.
+ */
+const TERMINOS_POR_DEFECTO = {
+    profesional: 'Profesional',
+    profesionales: 'Profesionales',
+    servicio: 'Servicio',
+    servicios: 'Servicios',
+    cita: 'Cita',
+    citas: 'Citas',
+    cliente: 'Cliente',
+    clientes: 'Clientes',
+};
+
+/** Los términos de la barbería ya en minúscula, para las funciones fuera del closure. */
+const TERMINOS_POR_DEFECTO_MINUSCULA = Object.fromEntries(
+    Object.entries(TERMINOS_POR_DEFECTO).map(([k, v]) => [k, v.toLocaleLowerCase('es')]),
+);
+
+/** El diccionario del negocio, en minúscula, listo para meter en una frase. */
+function terminos(datos) {
+    const propios = datos?.perfil?.terminos || {};
+    const mezcla = { ...TERMINOS_POR_DEFECTO, ...propios };
+    const salida = {};
+    for (const [clave, valor] of Object.entries(mezcla)) {
+        salida[clave] = String(valor || '').toLocaleLowerCase('es');
+    }
+    return salida;
+}
+
+/** ¿Tiene el negocio esta función encendida? Sin perfil leído, no. */
+function tiene(datos, funcion) {
+    return Array.isArray(datos?.perfil?.funciones) && datos.perfil.funciones.includes(funcion);
 }
 
 /**
@@ -210,6 +308,7 @@ function paso(decision, motivo = {}) {
  */
 function interpretarFecha(texto, ahora = new Date()) {
     const t = normalizar(texto);
+    if (!t) return null;
 
     const iso = t.match(/(\d{4})-(\d{2})-(\d{2})/);
     if (iso) return iso[0];
@@ -225,13 +324,83 @@ function interpretarFecha(texto, ahora = new Date()) {
         month: '2-digit',
         day: '2-digit',
     }).format(ahora);
+    const [anioHoy, mesHoy, diaHoy] = hoyISO.split('-').map(Number);
+    // Aritmética de calendario en UTC sobre fechas sin hora: `Date.UTC` normaliza el desborde
+    // de mes y año, y como se construye y se lee en UTC no hay sesgo de zona.
+    const masDias = (n) => new Date(Date.UTC(anioHoy, mesHoy - 1, diaHoy + n)).toISOString().slice(0, 10);
 
-    if (t === 'hoy') return hoyISO;
-    if (t === 'manana' || t === 'mañana') {
-        // Aritmética de calendario en UTC sobre una fecha sin hora: `Date.UTC` normaliza el
-        // desbordamiento de mes y año, y como se construye y se lee en UTC no hay sesgo de zona.
-        const [anio, mes, dia] = hoyISO.split('-').map(Number);
-        return new Date(Date.UTC(anio, mes - 1, dia + 1)).toISOString().slice(0, 10);
+    // ── Lo que escribe una persona (2026-09-29) ─────────────────────────────────────────
+    //
+    // Hasta hoy solo se entendía «hoy», «mañana» y `2026-10-02`, que nadie escribe. Un cliente
+    // pone «el viernes», «el 15», «2 de octubre» o «pasado mañana», y todo eso caía al modelo
+    // —que cuesta— o en un «no entendí la fecha». Se cubren las formas comunes y nada más: lo
+    // raro («el jueves de la otra semana») sigue siendo trabajo del modelo, y fingirlo aquí con
+    // expresiones regulares es el peor de los mundos — acertar lo justo para que nadie note
+    // cuándo falla.
+    //
+    // Una hora (`10:00`) no es una fecha: si el texto trae dos puntos, no se busca un día en él.
+    const sinHoras = t.replace(/\d{1,2}:\d{2}/g, ' ');
+
+    // «2 de octubre», «octubre 2»
+    for (let i = 0; i < MESES.length; i++) {
+        const mesNombre = MESES[i];
+        const m = sinHoras.match(new RegExp(`\\b(\\d{1,2})\\s*(?:de\\s+)?${mesNombre}\\b`))
+            || sinHoras.match(new RegExp(`\\b${mesNombre}\\s+(\\d{1,2})\\b`));
+        if (m) return proximaFechaCon(Number(m[1]), i + 1, hoyISO);
+    }
+
+    // «2/10», «02-10» (día/mes)
+    const dm = sinHoras.match(/\b(\d{1,2})[/-](\d{1,2})\b/);
+    if (dm) return proximaFechaCon(Number(dm[1]), Number(dm[2]), hoyISO);
+
+    if (/\bpasado\s+manana\b/.test(sinHoras)) return masDias(2);
+
+    // «el 15», «viernes 2» (el número manda sobre el nombre del día: es más preciso)
+    const numero = sinHoras.match(/\b(\d{1,2})\b/);
+    if (numero) {
+        const dia = Number(numero[1]);
+        if (dia >= 1 && dia <= 31) return proximaFechaCon(dia, null, hoyISO);
+    }
+
+    if (/\bhoy\b/.test(sinHoras)) return hoyISO;
+    if (/\bmanana\b/.test(sinHoras)) return masDias(1);
+
+    // «el viernes», «para el sábado»
+    const nombresDia = ['domingo', 'lunes', 'martes', 'miercoles', 'jueves', 'viernes', 'sabado'];
+    const hoyDow = new Date(Date.UTC(anioHoy, mesHoy - 1, diaHoy)).getUTCDay();
+    for (let dow = 0; dow < 7; dow++) {
+        if (new RegExp(`\\b${nombresDia[dow]}\\b`).test(sinHoras)) {
+            // El mismo día de la semana que hoy es la semana que viene: quien dice «el lunes»
+            // un lunes casi nunca quiere decir hoy (para eso dice «hoy»).
+            const faltan = (dow - hoyDow + 7) % 7 || 7;
+            return masDias(faltan);
+        }
+    }
+
+    return null;
+}
+
+/**
+ * La próxima fecha —hoy incluido— con ese día del mes (y ese mes, si se dijo).
+ *
+ * «El 15» dicho el 20 es el 15 del mes que viene, no uno que ya pasó. Un día que no existe en un
+ * mes («el 31» en septiembre) salta al siguiente mes que lo tenga, en vez de desbordarse al 1 de
+ * octubre sin avisar. Devuelve `null` si en un año no aparece (un 31 de febrero).
+ */
+function proximaFechaCon(dia, mes, hoyISO) {
+    if (!Number.isInteger(dia) || dia < 1 || dia > 31) return null;
+    if (mes != null && (!Number.isInteger(mes) || mes < 1 || mes > 12)) return null;
+    const [anio, mesHoy] = hoyISO.split('-').map(Number);
+
+    for (let k = 0; k < 13; k++) {
+        const base = new Date(Date.UTC(anio, mesHoy - 1 + k, 1));
+        const a = base.getUTCFullYear();
+        const m = base.getUTCMonth() + 1;
+        if (mes != null && m !== mes) continue;
+        const candidato = new Date(Date.UTC(a, m - 1, dia));
+        if (candidato.getUTCMonth() + 1 !== m) continue; // ese mes no tiene ese día
+        const iso = candidato.toISOString().slice(0, 10);
+        if (iso >= hoyISO) return iso;
     }
     return null;
 }
@@ -251,9 +420,31 @@ function etiquetaDia(fechaISO) {
     return `${DIAS[d.getUTCDay()]} ${dia}`;
 }
 
-function formatearPrecio(valor) {
+const MESES = [
+    'enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio',
+    'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre',
+];
+
+/**
+ * «viernes 2 de octubre». Es como se dice una fecha en una conversación.
+ *
+ * El bot escribía `2026-10-02` en cada mensaje —«No hay horas libres el 2026-09-29»—, que es
+ * como la guarda la base, no como la lee nadie. Aritmética en UTC sobre una fecha sin hora: no
+ * hay zona que la corra de día.
+ */
+function fechaLegible(fechaISO) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(fechaISO || ''))) return String(fechaISO || '');
+    const [anio, mes, dia] = fechaISO.split('-').map(Number);
+    const d = new Date(Date.UTC(anio, mes - 1, dia));
+    return `${DIAS[d.getUTCDay()]} ${dia} de ${MESES[mes - 1]}`;
+}
+
+function formatearPrecio(valor, desde = false) {
     if (valor == null) return '';
-    return ` — $${Number(valor).toLocaleString('es-CO')}`;
+    // «desde $35.000» cuando el servicio tiene variantes: el precio de lista es el del caso más
+    // barato, y enseñarlo a secas haría que la clienta de pelo largo se sintiera engañada al
+    // llegar. Una palabra evita esa conversación en el mostrador.
+    return ` — ${desde ? 'desde ' : ''}$${Number(valor).toLocaleString('es-CO')}`;
 }
 
 /**
@@ -357,13 +548,17 @@ function crearManejadorDeterminista({
         const { resultado } = await invocar({ ...ctx, capacidad: 'consultar_servicios', args: {} });
         const servicios = (resultado?.servicios || []).slice(0, MAX_OPCIONES);
         const apertura = saludar ? `${saludo(ctx)} ` : '';
+        // Cómo habla este oficio y qué tiene encendido. Viene con los servicios —una sola
+        // llamada— y se guarda en la tarea para que los pasos siguientes no vuelvan a pedirlo.
+        const perfil = resultado?.negocio || null;
+        const t = terminos({ perfil });
 
         if (servicios.length === 0) {
             return {
                 pasos: [...pasosPrevios, paso('sin_servicios')],
                 // También se saluda aquí: que no haya agenda no es motivo para que el cliente
                 // no sepa a dónde escribió.
-                respuestas: [`${apertura}Ahora mismo no tenemos servicios disponibles para agendar.`],
+                respuestas: [`${apertura}Ahora mismo no tenemos ${t.servicios} disponibles para agendar.`],
                 variables: conMemoria(ctx.conversacion),
                 tarea: null,
                 resultado: 'sin_respuesta',
@@ -375,7 +570,7 @@ function crearManejadorDeterminista({
             pasos: [...pasosPrevios, paso('menu_servicios', { cuantos: servicios.length })],
             respuestas: [
                 {
-                    texto: `${apertura}¿Qué servicio te gustaría agendar?`,
+                    texto: `${apertura}¿Qué ${t.servicio} te gustaría agendar?`,
                     // Nunca numerado dentro del texto: va en `opciones` y cada canal lo pinta
                     // como sabe (ADR-017). El WebChat los hace chips; WhatsApp, botones.
                     // El nombre va en `etiqueta` y lo demás en `detalle` (F8-A): en el WebChat
@@ -385,7 +580,12 @@ function crearManejadorDeterminista({
                     opciones: servicios.map((s) => ({
                         id: String(s.id_servicio),
                         etiqueta: s.nombre,
-                        detalle: `${s.duracion_min} min${formatearPrecio(s.precio)}`,
+                        // Un servicio a cotizar NO lleva precio en el detalle: enseñar el de
+                        // lista es prometer algo que el negocio va a desmentir. Y uno con
+                        // variantes lleva «desde», porque el precio depende de cuál se elija.
+                        detalle: s.a_cotizar
+                            ? 'Precio a convenir'
+                            : `${s.duracion_min} min${formatearPrecio(s.precio, s.variantes?.length > 0)}`,
                     })),
                 },
             ],
@@ -394,10 +594,21 @@ function crearManejadorDeterminista({
                 nombre: TAREA_AGENDAR,
                 datos: {
                     paso: PASO.SERVICIO,
+                    perfil,
                     // Se recuerda QUÉ se ofreció para poder resolver la respuesta contra la
                     // lista real en vez de adivinar. Sin esto había que sacar un número del
                     // texto libre, y «Corte de cabello (30 min) — $35.000» daba el servicio 30.
-                    ofrecidos: servicios.map((s) => ({ id: s.id_servicio, nombre: s.nombre })),
+                    //
+                    // Desde 2026-09-29 se guarda también lo que decide los pasos siguientes:
+                    // si hay que cotizarlo, qué variantes tiene y si pide consentimiento. Así
+                    // el paso siguiente no necesita volver a consultar el catálogo.
+                    ofrecidos: servicios.map((s) => ({
+                        id: s.id_servicio,
+                        nombre: s.nombre,
+                        a_cotizar: Boolean(s.a_cotizar),
+                        requiere_consentimiento: Boolean(s.requiere_consentimiento),
+                        variantes: s.variantes || [],
+                    })),
                 },
             },
             resultado: 'resuelto',
@@ -442,6 +653,36 @@ function crearManejadorDeterminista({
         return null;
     }
 
+    /**
+     * Resuelve la respuesta contra una lista de opciones `{ id, nombre }`.
+     *
+     * Es `resolverServicio` generalizado, y existe por la misma razón que aquél: el WebChat
+     * manda la **etiqueta** del chip al pulsarlo y WhatsApp manda el **id**, así que hay que
+     * aceptar las dos formas y validar siempre contra la lista real.
+     *
+     * Lo que NO hace es aceptar un número suelto por el hecho de serlo: si el texto trae un 30
+     * porque el nombre decía «30 min», ese 30 tiene que estar entre los ids ofrecidos para
+     * contar. Ésa es la parte que evitó repetir el bug de «Corte de cabello (30 min)» leído como
+     * el servicio 30.
+     */
+    function resolverOpcion(texto, ofrecidas) {
+        if (!ofrecidas || ofrecidas.length === 0) return null;
+        const t = normalizar(texto);
+        if (!t) return null;
+
+        const porId = ofrecidas.find((o) => t === String(o.id));
+        if (porId) return porId;
+
+        const porNombre = ofrecidas.find((o) => o.nombre && t.includes(normalizar(o.nombre)));
+        if (porNombre) return porNombre;
+
+        for (const n of t.match(/\d+/g) || []) {
+            const o = ofrecidas.find((x) => String(x.id) === n);
+            if (o) return o;
+        }
+        return null;
+    }
+
     async function elegirServicio(ctx, datos) {
         // Una conversación abierta ANTES de que se guardara `ofrecidos` no lo tiene: su
         // `tarea_datos` está persistido en la base y no se migra solo. Sin lista contra la que
@@ -451,31 +692,413 @@ function crearManejadorDeterminista({
             return ofrecerServicios(ctx, [paso('menu_repetido', { motivo: 'sin_ofrecidos' })]);
         }
 
+        const t = terminos(datos);
         const servicio = resolverServicio(ultimaLinea(ctx.texto), datos.ofrecidos);
         if (!servicio) {
-            return reintentar(ctx, datos, 'Elige uno de los servicios de la lista, por favor.');
+            return reintentar(ctx, datos, `Elige uno de los ${t.servicios} de la lista, por favor.`);
         }
         const idServicio = Number(servicio.id);
-        return ofrecerProfesionales(
-            ctx,
-            { ...datos, id_servicio: idServicio },
-            [paso('servicio_elegido', { id_servicio: idServicio })]
-        );
+        const elegido = { ...datos, id_servicio: idServicio, servicio_nombre: servicio.nombre };
+
+        // ── Lo que se cotiza no se agenda por chat ────────────────────────────────────────
+        //
+        // En un tatuador la mayoría de trabajos no tienen precio hasta que el artista ve qué
+        // quiere el cliente. Apartar una hora exigiría saber cuánto va a durar, y no se sabe.
+        //
+        // Antes el flujo lo ofrecía con su precio de lista y la vertical lo rechazaba al
+        // confirmar (`SERVICIO_A_COTIZAR`): el cliente elegía día y hora, daba su nombre, decía
+        // que sí, y ahí se caía. Ahora se corta en el primer paso y se dice por qué.
+        if (servicio.a_cotizar) {
+            return cederAlNegocio(ctx, elegido, servicio);
+        }
+
+        return despuesDelServicio(ctx, elegido, [paso('servicio_elegido', { id_servicio: idServicio })]);
     }
 
-    /** El paso de fecha, que es a donde se llega con o sin elegir profesional. */
-    function pedirFecha(ctx, datos, pasosPrevios) {
+    /**
+     * Qué toca después de elegir servicio, según el oficio.
+     *
+     * Es el único sitio donde se decide el orden, y por eso se lee de un vistazo: mascota →
+     * variante → profesional. Cada paso se salta solo si el negocio no tiene esa función o si
+     * el dato ya está resuelto, así que en una barbería —todo apagado— se cae directo a
+     * profesional, que es exactamente el flujo de siempre.
+     */
+    async function despuesDelServicio(ctx, datos, pasosPrevios) {
+        const servicio = (datos.ofrecidos || []).find((x) => Number(x.id) === Number(datos.id_servicio));
+
+        // 1. La mascota, si el negocio las atiende y aún no se sabe cuál.
+        if (tiene(datos, 'mascotas') && !datos.id_mascota && !datos.mascota_nombre) {
+            return preguntarMascota(ctx, datos, pasosPrevios);
+        }
+
+        // 2. La variante. El tamaño de la mascota ya la resuelve, así que este paso solo
+        //    aparece cuando no hay mascota que la decida.
+        const variantes = servicio?.variantes || [];
+        if (tiene(datos, 'variantes') && variantes.length > 0 && !datos.id_variante) {
+            const porTamano = datos.mascota_tamano
+                ? variantes.find((v) => v.clave && v.clave === datos.mascota_tamano)
+                : null;
+            if (porTamano) {
+                return despuesDelServicio(
+                    ctx,
+                    { ...datos, id_variante: porTamano.id_variante, variante_nombre: porTamano.nombre },
+                    [...pasosPrevios, paso('variante_por_tamano', {
+                        id_variante: porTamano.id_variante, tamano: datos.mascota_tamano,
+                    })],
+                );
+            }
+            return ofrecerVariantes(ctx, datos, variantes, pasosPrevios);
+        }
+
+        return ofrecerProfesionales(ctx, datos, pasosPrevios);
+    }
+
+    /**
+     * Un servicio «a cotizar»: se le pasa la conversación al negocio.
+     *
+     * No es una limitación que haya que disimular, es cómo trabaja el oficio: el artista mira el
+     * diseño, dice cuánto cuesta y cuánto dura, y entonces se agenda. Lo honesto es decirlo y
+     * avisar a una persona, no simular una agenda que después se desmiente.
+     *
+     * La tarea se cierra (`tarea: null`): dejarla abierta haría que el cliente siguiera dentro
+     * de un formulario que ya no lleva a ninguna parte.
+     */
+    function cederAlNegocio(ctx, datos, servicio) {
+        const t = terminos(datos);
+        const quien = ctx.negocio?.tratamiento || 'el negocio';
         return {
-            pasos: pasosPrevios,
+            pasos: [paso('servicio_a_cotizar', { id_servicio: datos.id_servicio })],
+            respuestas: [
+                `«${servicio.nombre}» se cotiza antes de agendar: el precio y el tiempo dependen ` +
+                    'de lo que quieras hacerte, así que lo vemos contigo.',
+                `Cuéntame aquí mismo qué tienes en mente y alguien de *${quien}* te responde con ` +
+                    `precio y fecha para tu ${t.cita}.`,
+            ],
+            variables: conMemoria(ctx.conversacion),
+            tarea: null,
+            // El negocio lo ve en la bandeja y contesta a mano: es el mismo camino que cualquier
+            // otra cosa que el asistente no sabe hacer (ADR-023). Lo que el cliente escriba
+            // ahora —«quiero un dragón en el brazo»— le llega a una persona, no al bot.
+            estado: ESTADO_HANDOFF,
+            resultado: 'handoff',
+            nivel: 'determinista',
+        };
+    }
+
+    // ── Variante: el largo, el tamaño, la zona ──────────────────────────────────────────
+
+    /**
+     * Pregunta cuál de las variantes del servicio quiere.
+     *
+     * Aquí no hay opción de «me da igual», y es deliberado: a diferencia del profesional, esto
+     * no es una preferencia sino un hecho sobre el cliente —su pelo mide lo que mide—. Una
+     * opción de azar elegiría por él un precio y una duración equivocados.
+     */
+    function ofrecerVariantes(ctx, datos, variantes, pasosPrevios) {
+        const t = terminos(datos);
+        return {
+            pasos: [...pasosPrevios, paso('menu_variantes', { cuantas: variantes.length })],
             respuestas: [
                 {
-                    texto: '¿Para qué día? Puedes decirme "hoy", "mañana" o una fecha (2026-08-20).',
+                    texto: `Para ese ${t.servicio}, ¿cuál es tu caso?`,
                     opciones: [
-                        { id: 'hoy', etiqueta: 'Hoy' },
-                        { id: 'mañana', etiqueta: 'Mañana' },
+                        ...variantes.slice(0, MAX_OPCIONES).map((v) => ({
+                            id: String(v.id_variante),
+                            etiqueta: v.nombre,
+                            detalle: `${v.duracion_min} min${formatearPrecio(v.precio)}`,
+                        })),
+                        { id: VOLVER.SERVICIO, etiqueta: `← Otro ${t.servicio}` },
                     ],
                 },
             ],
+            variables: conMemoria(ctx.conversacion),
+            tarea: {
+                nombre: TAREA_AGENDAR,
+                datos: {
+                    ...datos,
+                    paso: PASO.VARIANTE,
+                    variantes_ofrecidas: variantes.map((v) => ({ id: v.id_variante, nombre: v.nombre })),
+                },
+            },
+            resultado: 'resuelto',
+            nivel: 'determinista',
+        };
+    }
+
+    async function elegirVariante(ctx, datos) {
+        const ofrecidas = datos.variantes_ofrecidas || [];
+        if (ofrecidas.length === 0) {
+            // Sin lista contra la que validar no se resuelve sin adivinar: se rehace el menú.
+            return despuesDelServicio(ctx, datos, [paso('menu_repetido', { motivo: 'sin_variantes_ofrecidas' })]);
+        }
+
+        const elegida = resolverOpcion(ultimaLinea(ctx.texto), ofrecidas);
+        if (!elegida) {
+            return reintentar(ctx, datos, 'Elige una de las opciones de la lista, por favor.');
+        }
+        return despuesDelServicio(
+            ctx,
+            { ...datos, id_variante: Number(elegida.id), variante_nombre: elegida.nombre },
+            [paso('variante_elegida', { id_variante: Number(elegida.id) })],
+        );
+    }
+
+    // ── Mascota ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * ¿Para cuál de sus mascotas?
+     *
+     * Quien ya vino las ve como botones: el teléfono del canal identifica al cliente y sus
+     * mascotas están registradas. Preguntarle otra vez cómo se llama su perro sería tratarle
+     * como a un desconocido teniendo su ficha delante.
+     *
+     * Quien llega por primera vez escribe el nombre. El tamaño se pregunta **solo si hace
+     * falta** —cuando el servicio tiene variantes por tamaño— y no siempre: en un negocio sin
+     * variantes, el tamaño no cambia nada y preguntarlo es un paso regalado.
+     */
+    async function preguntarMascota(ctx, datos, pasosPrevios) {
+        const { resultado } = await invocar({ ...ctx, capacidad: 'consultar_mis_mascotas', args: {} });
+        const mias = (resultado?.mascotas || []).slice(0, MAX_OPCIONES);
+
+        if (mias.length === 0) {
+            return {
+                pasos: [...pasosPrevios, paso('mascota_sin_registro')],
+                respuestas: ['¿Cómo se llama tu mascota? 🐾'],
+                variables: conMemoria(ctx.conversacion),
+                tarea: { nombre: TAREA_AGENDAR, datos: { ...datos, paso: PASO.MASCOTA, mascotas_ofrecidas: [] } },
+                resultado: 'resuelto',
+                nivel: 'determinista',
+            };
+        }
+
+        return {
+            pasos: [...pasosPrevios, paso('menu_mascotas', { cuantas: mias.length })],
+            respuestas: [
+                {
+                    texto: '¿Para cuál de tus mascotas?',
+                    opciones: [
+                        ...mias.map((m) => ({
+                            id: String(m.id_mascota),
+                            etiqueta: m.nombre,
+                            detalle: [m.raza, etiquetaTamano(m.tamano)].filter(Boolean).join(' · ') || undefined,
+                        })),
+                        { id: OTRA_MASCOTA, etiqueta: '+ Otra mascota' },
+                    ],
+                },
+            ],
+            variables: conMemoria(ctx.conversacion),
+            tarea: {
+                nombre: TAREA_AGENDAR,
+                datos: {
+                    ...datos,
+                    paso: PASO.MASCOTA,
+                    mascotas_ofrecidas: mias.map((m) => ({
+                        id: m.id_mascota, nombre: m.nombre, tamano: m.tamano || null,
+                    })),
+                },
+            },
+            resultado: 'resuelto',
+            nivel: 'determinista',
+        };
+    }
+
+    async function elegirMascota(ctx, datos) {
+        const texto = ultimaLinea(ctx.texto);
+        const ofrecidas = datos.mascotas_ofrecidas || [];
+        const t = normalizar(texto);
+
+        // «Otra mascota»: se pregunta el nombre, vaciando la lista para que la próxima vuelta
+        // caiga en la rama de texto libre en vez de volver a ofrecer los botones.
+        if (t === OTRA_MASCOTA || /\b(otra|otro|nueva|nuevo)\b/.test(t)) {
+            return {
+                pasos: [paso('mascota_nueva')],
+                respuestas: ['¿Cómo se llama? 🐾'],
+                variables: conMemoria(ctx.conversacion),
+                tarea: { nombre: TAREA_AGENDAR, datos: { ...datos, paso: PASO.MASCOTA, mascotas_ofrecidas: [] } },
+                resultado: 'resuelto',
+                nivel: 'determinista',
+            };
+        }
+
+        const suya = ofrecidas.length ? resolverOpcion(texto, ofrecidas) : null;
+        if (suya) {
+            return despuesDelServicio(
+                ctx,
+                {
+                    ...datos,
+                    id_mascota: Number(suya.id),
+                    mascota_nombre: suya.nombre,
+                    // El tamaño viene de su ficha, y es lo que después elige la variante sola.
+                    mascota_tamano: suya.tamano || null,
+                },
+                [paso('mascota_elegida', { id_mascota: Number(suya.id) })],
+            );
+        }
+
+        // Texto libre: es el nombre de una mascota nueva.
+        const nombre = String(texto || '').trim();
+        if (nombre.length < 2) {
+            return reintentar(ctx, datos, '¿Cómo se llama tu mascota?');
+        }
+        const conMascota = { ...datos, mascota_nombre: nombre.slice(0, 60), id_mascota: null };
+
+        // El tamaño solo se pregunta si de verdad cambia el precio o la duración.
+        const servicio = (datos.ofrecidos || []).find((x) => Number(x.id) === Number(datos.id_servicio));
+        const porTamano = tiene(datos, 'variantes')
+            && (servicio?.variantes || []).some((v) => v.clave && TAMANOS_MASCOTA[v.clave]);
+        if (porTamano && !conMascota.mascota_tamano) {
+            return {
+                pasos: [paso('mascota_pide_tamano', { nombre: conMascota.mascota_nombre })],
+                respuestas: [
+                    {
+                        texto: `¿De qué tamaño es ${conMascota.mascota_nombre}?`,
+                        opciones: Object.entries(TAMANOS_MASCOTA).map(([clave, etiqueta]) => ({
+                            id: clave, etiqueta,
+                        })),
+                    },
+                ],
+                variables: conMemoria(ctx.conversacion),
+                tarea: { nombre: TAREA_AGENDAR, datos: { ...conMascota, paso: PASO.MASCOTA, espera_tamano: true } },
+                resultado: 'resuelto',
+                nivel: 'determinista',
+            };
+        }
+
+        return despuesDelServicio(ctx, conMascota, [paso('mascota_nombre_recibido')]);
+    }
+
+    /** La respuesta al tamaño, que llega en el mismo paso pero con `espera_tamano` puesto. */
+    async function recibirTamanoMascota(ctx, datos) {
+        const t = normalizar(ultimaLinea(ctx.texto));
+        const clave = Object.keys(TAMANOS_MASCOTA).find(
+            (k) => t === normalizar(k) || t.includes(normalizar(TAMANOS_MASCOTA[k])),
+        );
+        if (!clave) {
+            return reintentar(ctx, datos, 'Dime si es pequeño, mediano, grande o gigante.');
+        }
+        const { espera_tamano: _espera, ...limpio } = datos;
+        return despuesDelServicio(
+            ctx,
+            { ...limpio, mascota_tamano: clave },
+            [paso('mascota_tamano_recibido', { tamano: clave })],
+        );
+    }
+
+    /**
+     * Busca los próximos días que tienen horas libres para lo que se está agendando.
+     *
+     * Devuelve `null` —y no una lista vacía— cuando **no se pudo saber**: la capacidad falló o
+     * no está (un negocio sin habilitar, un doble de pruebas). Son dos cosas muy distintas:
+     * con `[]` se sabe que no hay agenda y se le dice al cliente; con `null` no se sabe nada y
+     * se vuelve al comportamiento de antes, que es preguntar el día sin prometer que tenga hueco.
+     * Confundirlas le diría «no tenemos agenda» a un negocio que la tiene llena de huecos.
+     */
+    async function buscarDias(ctx, datos, desde) {
+        try {
+            const { resultado } = await invocar({
+                ...ctx,
+                capacidad: 'consultar_dias_con_horas',
+                args: {
+                    id_servicio: datos.id_servicio,
+                    ...(desde ? { desde } : {}),
+                    ...(datos.id_profesional_preferido ? { id_profesional: datos.id_profesional_preferido } : {}),
+                    ...(datos.id_variante ? { id_variante: datos.id_variante } : {}),
+                    cuantos: 3,
+                },
+            });
+            return Array.isArray(resultado?.dias) ? resultado : null;
+        } catch {
+            // Ya quedó en el Ledger (lo hace `invocar`). Aquí solo se degrada.
+            return null;
+        }
+    }
+
+    /** Un día con horas, como botón: «viernes 2» y debajo «desde las 09:00». */
+    function chipDeDia(d) {
+        return {
+            id: d.fecha,
+            etiqueta: etiquetaDia(d.fecha),
+            detalle: d.primera_hora ? `Desde las ${d.primera_hora}` : undefined,
+        };
+    }
+
+    /**
+     * No hay agenda en las próximas semanas.
+     *
+     * Lo que NO se hace es lo que se hacía: proponer el día siguiente a ciegas, una y otra vez.
+     * Si eligió a alguien concreto, se le ofrece cambiar de persona —puede que otra sí tenga
+     * hueco—. Si no, se le dice la verdad y se avisa al negocio: que no haya agenda en tres
+     * semanas casi siempre es un horario sin configurar, y eso lo tiene que ver una persona.
+     */
+    function sinAgenda(ctx, datos, pasosPrevios) {
+        const t = terminos(datos);
+        const quien = ctx.negocio?.tratamiento || 'el negocio';
+
+        if (datos.id_profesional_preferido) {
+            return {
+                pasos: [...pasosPrevios, paso('sin_agenda', { con_profesional: true })],
+                respuestas: [
+                    {
+                        texto: 'Con quien elegiste no hay horas libres en las próximas tres semanas. ' +
+                            '¿Probamos con otra persona?',
+                        opciones: [
+                            { id: VOLVER.PROFESIONAL, etiqueta: '← Con otra persona' },
+                            { id: VOLVER.SERVICIO, etiqueta: `← Otro ${t.servicio}` },
+                        ],
+                    },
+                ],
+                variables: conMemoria(ctx.conversacion),
+                tarea: { nombre: TAREA_AGENDAR, datos: { ...datos, paso: PASO.FECHA } },
+                resultado: 'resuelto',
+                nivel: 'determinista',
+            };
+        }
+
+        return {
+            pasos: [...pasosPrevios, paso('sin_agenda', { con_profesional: false })],
+            respuestas: [
+                `Por ahora no veo horas libres para ese ${t.servicio} en las próximas tres semanas. 😕`,
+                `Ya le aviso a *${quien}* para que te escriba y te busque un espacio.`,
+            ],
+            variables: conMemoria(ctx.conversacion),
+            tarea: null,
+            // A la bandeja: el negocio tiene que enterarse, porque esto casi nunca es una agenda
+            // llena de verdad sino un horario que nadie configuró.
+            estado: ESTADO_HANDOFF,
+            resultado: 'handoff',
+            nivel: 'determinista',
+        };
+    }
+
+    /**
+     * El paso de fecha, que es a donde se llega con o sin elegir profesional.
+     *
+     * Desde el 2026-09-29 **no se ofrece ningún día sin haber comprobado que tiene horas**. Antes
+     * los botones eran «Hoy» y «Mañana» a ciegas, y un cliente de D'ALEX pulsó «Mañana», oyó
+     * «no hay horas», y el bot le fue proponiendo el día siguiente cuatro veces seguidas sin
+     * encontrar nada. Ahora los botones SON los próximos días con hueco, con su primera hora.
+     */
+    async function pedirFecha(ctx, datos, pasosPrevios) {
+        const busqueda = await buscarDias(ctx, datos, null);
+        if (busqueda && busqueda.dias.length === 0) return sinAgenda(ctx, datos, pasosPrevios);
+
+        const respuesta = busqueda
+            ? {
+                  texto: '¿Qué día te queda bien? Estos son los próximos con horas libres ' +
+                      '(también puedes escribirme otra fecha):',
+                  opciones: busqueda.dias.map(chipDeDia),
+              }
+            : {
+                  texto: '¿Para qué día? Puedes decirme "hoy", "mañana" o una fecha (2026-08-20).',
+                  opciones: [
+                      { id: 'hoy', etiqueta: 'Hoy' },
+                      { id: 'mañana', etiqueta: 'Mañana' },
+                  ],
+              };
+
+        return {
+            pasos: [...pasosPrevios, ...(busqueda ? [paso('dias_con_horas', { cuantos: busqueda.dias.length })] : [])],
+            respuestas: [respuesta],
             variables: conMemoria(ctx.conversacion),
             tarea: { nombre: TAREA_AGENDAR, datos: { ...datos, paso: PASO.FECHA } },
             resultado: 'resuelto',
@@ -521,7 +1144,7 @@ function crearManejadorDeterminista({
             pasos: [...pasosPrevios, paso('menu_profesionales', { cuantos: profesionales.length })],
             respuestas: [
                 {
-                    texto: '¿Con quién prefieres?',
+                    texto: `¿Con quién prefieres?`,
                     opciones: [
                         { id: CUALQUIER_PROFESIONAL, etiqueta: 'Me da igual', detalle: 'El primero que tenga hueco' },
                         ...profesionales.map((pr) => ({
@@ -605,7 +1228,10 @@ function crearManejadorDeterminista({
             case PASO.SERVICIO:
                 return ofrecerServicios(ctx, rastro);
             case PASO.PROFESIONAL:
-                return ofrecerProfesionales(ctx, podados, rastro);
+                // Por `despuesDelServicio` y no directo al menú de profesionales: si el negocio
+                // pregunta mascota o variante, volver «atrás» tiene que pasar por donde
+                // corresponda en ESTE oficio, no saltárselo.
+                return despuesDelServicio(ctx, podados, rastro);
             case PASO.HORA:
                 // Volver a las horas de ESE día. Si no hay día guardado —porque se venía de
                 // más atrás— no hay nada a lo que volver, y se pide la fecha.
@@ -641,7 +1267,7 @@ function crearManejadorDeterminista({
     async function elegirFecha(ctx, datos) {
         const fecha = interpretarFecha(ultimaLinea(ctx.texto), ahora());
         if (!fecha) {
-            return reintentar(ctx, datos, 'No entendí la fecha. Dime "hoy", "mañana" o algo como 2026-08-20.');
+            return reintentar(ctx, datos, 'No entendí el día. Puedes decirme "mañana", "el viernes" o "el 15".');
         }
         return mostrarHoras(ctx, datos, fecha, []);
     }
@@ -666,27 +1292,40 @@ function crearManejadorDeterminista({
                 ...(datos.id_profesional_preferido
                     ? { id_profesional: datos.id_profesional_preferido }
                     : {}),
+                // La variante ya elegida: las horas tienen que medirse con la duración REAL,
+                // no con la de lista, o se ofrecen huecos donde la cita no cabe.
+                ...(datos.id_variante ? { id_variante: datos.id_variante } : {}),
             },
         });
         const horas = (resultado?.horas || []).slice(0, MAX_OPCIONES);
 
         if (horas.length === 0) {
-            // El chip lleva el día siguiente **al consultado**, no «mañana». Ofrecer «Mañana»
-            // aquí era un callejón sin salida: se resuelve contra HOY, así que quien acababa de
-            // oír «no hay horas el 14» pulsaba «Mañana» y volvía a preguntar por el 14, en
-            // bucle. Se avanza de día en día porque `consultar_disponibilidad` mira una sola
-            // fecha y la FSM invoca una capacidad por turno (clave de idempotencia = id del
-            // turno): sondear varios días de golpe exige otra capacidad, no otro parche aquí.
+            // ⚠️ Se buscan los próximos días CON horas, no el siguiente a ciegas (2026-09-29).
+            //
+            // Antes esto ofrecía el día siguiente al consultado sin mirarlo. En producción, en
+            // D'ALEX, un cliente encadenó «no hay horas el 29 → ¿el 30? → no hay → ¿el 1?…»
+            // cuatro veces y se fue sin cita. La nota que había aquí ya lo decía: sondear varios
+            // días exigía otra capacidad, no otro parche. Ésa es `consultar_dias_con_horas`.
+            const busqueda = await buscarDias(ctx, datos, diaSiguiente(fecha));
+            if (busqueda && busqueda.dias.length === 0) {
+                return sinAgenda(ctx, datos, [...pasosPrevios, paso('sin_disponibilidad', { fecha })]);
+            }
+
             const siguiente = diaSiguiente(fecha);
+            const conQuien = datos.id_profesional_preferido ? ' con quien elegiste' : '';
             return {
                 pasos: [...pasosPrevios, paso('sin_disponibilidad', { fecha })],
                 respuestas: [
                     {
-                        texto: datos.id_profesional_preferido
-                            ? `No hay horas libres el ${fecha} con quien elegiste. ¿Probamos el ${siguiente}?`
-                            : `No hay horas libres el ${fecha}. ¿Probamos el ${siguiente}?`,
+                        texto: busqueda
+                            ? `El ${fechaLegible(fecha)} no hay horas libres${conQuien}. ` +
+                              'Estos son los días más próximos que sí tienen:'
+                            : `No hay horas libres el ${fechaLegible(fecha)}${conQuien}. ` +
+                              `¿Probamos el ${fechaLegible(siguiente)}?`,
                         opciones: [
-                            { id: siguiente, etiqueta: etiquetaDia(siguiente) },
+                            ...(busqueda
+                                ? busqueda.dias.map(chipDeDia)
+                                : [{ id: siguiente, etiqueta: etiquetaDia(siguiente) }]),
                             // Solo si había preferencia: sin ella, «otra persona» no significa
                             // nada y sería una opción que no lleva a ninguna parte.
                             ...(datos.id_profesional_preferido
@@ -719,7 +1358,7 @@ function crearManejadorDeterminista({
             pasos: [...pasosPrevios, paso('menu_horas', { fecha, cuantas: horas.length })],
             respuestas: [
                 {
-                    texto: `Estas son las horas libres el ${fecha}:`,
+                    texto: `Estas son las horas libres el ${fechaLegible(fecha)}:`,
                     // Ocho horas + «otro día» = nueve filas, dentro del límite de diez de una
                     // lista de WhatsApp (`channels/whatsapp/adaptador.js`, LIMITES). Añadir
                     // aquí una segunda opción de volver rompería ese margen.
@@ -760,7 +1399,7 @@ function crearManejadorDeterminista({
         if (!ctx.identidad.nombre) {
             return {
                 pasos: [paso('hora_elegida', { hora: hora[0], pide_nombre: true })],
-                respuestas: ['¿A nombre de quién agendo la cita?'],
+                respuestas: [`¿A nombre de quién agendo la ${terminos(datos).cita}?`],
                 variables: conMemoria(ctx.conversacion),
                 tarea: { nombre: TAREA_AGENDAR, datos: { ...conHora, paso: PASO.NOMBRE } },
                 resultado: 'resuelto',
@@ -781,7 +1420,10 @@ function crearManejadorDeterminista({
             .filter(Boolean)
             .join(' ');
         if (nombre.length < 2) {
-            return reintentar(ctx, datos, 'Necesito un nombre para la cita. ¿Cómo te llamas?');
+            return reintentar(
+                ctx, datos,
+                `Necesito un nombre para la ${terminos(datos).cita}. ¿Cómo te llamas?`,
+            );
         }
         return apartarHora(ctx, datos, nombre, [paso('nombre_recibido')]);
     }
@@ -798,24 +1440,39 @@ function crearManejadorDeterminista({
                 // El mismo profesional que tenía libre esa hora cuando se ofreció. Sin esto,
                 // el adaptador vuelve a elegir y puede caer en uno ya ocupado.
                 ...(datos.id_profesional ? { id_profesional: datos.id_profesional } : {}),
+                // La variante va AL APARTAR, no al confirmar: es lo que decide cuánto dura el
+                // hueco. Sin ella se apartaban 40 minutos para una cita de 90.
+                ...(datos.id_variante ? { id_variante: datos.id_variante } : {}),
             },
         });
 
+        const t = terminos(datos);
         const detalle = [
             `${resultado.servicio}`,
+            // La variante en el resumen: «Coloración (pelo largo)». Sin esto el cliente lee el
+            // nombre del servicio a secas y no puede comprobar que se entendió su caso.
+            resultado.variante ? `(${resultado.variante})` : null,
+            datos.mascota_nombre ? `para ${datos.mascota_nombre}` : null,
             resultado.profesional ? `con ${resultado.profesional}` : null,
-            `el ${datos.fecha} a las ${datos.hora}`,
+            `el ${fechaLegible(datos.fecha)} a las ${datos.hora}`,
             resultado.duracion_min ? `(${resultado.duracion_min} min)` : null,
             resultado.precio != null ? formatearPrecio(resultado.precio).replace(' — ', '— ') : null,
         ]
             .filter(Boolean)
             .join(' ');
 
+        // El consentimiento no se firma por chat: se avisa para que venga preparado. Callarlo y
+        // que se entere en el mostrador es lo que convierte una cita en una discusión.
+        const avisos = resultado.requiere_consentimiento
+            ? ['Antes de empezar firmarás un consentimiento, así que trae tu documento.']
+            : [];
+
         return {
             pasos: [...pasosPrevios, paso('hora_apartada', { codigo_hold: resultado.codigo_hold })],
             respuestas: [
+                ...avisos,
                 {
-                    texto: `Te aparté ${detalle}. ¿Confirmo la cita?`,
+                    texto: `Te aparté ${detalle}. ¿Confirmo la ${t.cita}?`,
                     opciones: [
                         { id: 'si', etiqueta: 'Sí, confirmar' },
                         { id: 'no', etiqueta: 'Ver otras horas' },
@@ -844,7 +1501,7 @@ function crearManejadorDeterminista({
         }
 
         if (!esComando(ctx.texto, COMANDO.SI)) {
-            return reintentar(ctx, datos, '¿Confirmo la cita? Respóndeme sí o no.');
+            return reintentar(ctx, datos, `¿Confirmo la ${terminos(datos).cita}? Respóndeme sí o no.`);
         }
 
         try {
@@ -855,6 +1512,16 @@ function crearManejadorDeterminista({
                     codigo_hold: datos.codigo_hold,
                     cliente_nombre: datos.nombre,
                     cliente_telefono: ctx.identidad.telefono || undefined,
+                    // La mascota. Va al confirmar y no al apartar porque no cambia el hueco;
+                    // sin ella la vertical rechaza la cita con `MASCOTA_REQUERIDA` — que es lo
+                    // que hacía que una peluquería canina no pudiera agendar nada por WhatsApp.
+                    ...(datos.id_mascota ? { id_mascota: datos.id_mascota } : {}),
+                    ...(!datos.id_mascota && datos.mascota_nombre
+                        ? {
+                              mascota_nombre: datos.mascota_nombre,
+                              ...(datos.mascota_tamano ? { mascota_tamano: datos.mascota_tamano } : {}),
+                          }
+                        : {}),
                 },
                 // Éste es el sí: el texto que acaba de pasar por `COMANDO.SI` dos líneas arriba.
                 confirmadoPor: { idTurno: ctx.turno?.id_turno, texto: ctx.texto },
@@ -863,7 +1530,7 @@ function crearManejadorDeterminista({
             return {
                 pasos: [paso('cita_creada', { codigo_cita: resultado.codigo_cita })],
                 respuestas: [
-                    `¡Listo! Tu cita quedó agendada para el ${datos.fecha} a las ${datos.hora}. ` +
+                    `¡Listo! Tu ${terminos(datos).cita} quedó agendada para el ${fechaLegible(datos.fecha)} a las ${datos.hora}. ` +
                         `El código es ${resultado.codigo_cita} — guárdalo por si quieres cambiarla o cancelarla.`,
                 ],
                 // El código va a `variables` y no solo al texto: sin `consultar_mis_citas`, es
@@ -884,7 +1551,7 @@ function crearManejadorDeterminista({
                     respuestas: [
                         {
                             texto: 'Se me liberó esa hora mientras esperábamos. ¿Miramos las horas libres otra vez?',
-                            opciones: [{ id: datos.fecha, etiqueta: `Ver el ${datos.fecha}` }],
+                            opciones: [{ id: datos.fecha, etiqueta: `Ver el ${etiquetaDia(datos.fecha)}` }],
                         },
                     ],
                     variables: conMemoria(ctx.conversacion),
@@ -955,7 +1622,10 @@ function crearManejadorDeterminista({
 
         if (hayTarea && esComando(texto, COMANDO.SEGUIMOS)) {
             // Retomar no repite trabajo: se vuelve a preguntar lo del paso donde se quedó.
-            return reintentar(ctx, datos, `Seguimos donde lo dejamos. ${textoDelPaso(datos.paso)}`);
+            return reintentar(
+                ctx, datos,
+                `Seguimos donde lo dejamos. ${textoDelPaso(datos.paso, terminos(datos))}`,
+            );
         }
 
         // Retroceder. Va DESPUÉS de cancelar y de la confirmación pendiente —que mandan
@@ -980,6 +1650,16 @@ function crearManejadorDeterminista({
         switch (datos.paso) {
             case PASO.SERVICIO:
                 return conRastro(await elegirServicio(ctx, datos));
+            case PASO.VARIANTE:
+                return conRastro(await elegirVariante(ctx, datos));
+            case PASO.MASCOTA:
+                // Dos preguntas caen en el mismo paso —el nombre y el tamaño— porque son la
+                // misma decisión partida en dos mensajes. `espera_tamano` dice en cuál va.
+                return conRastro(
+                    datos.espera_tamano
+                        ? await recibirTamanoMascota(ctx, datos)
+                        : await elegirMascota(ctx, datos)
+                );
             case PASO.PROFESIONAL:
                 return conRastro(await elegirProfesional(ctx, datos));
             case PASO.FECHA:
@@ -1010,10 +1690,14 @@ function crearManejadorDeterminista({
     }
 }
 
-function textoDelPaso(pasoActual) {
+function textoDelPaso(pasoActual, t = TERMINOS_POR_DEFECTO_MINUSCULA) {
     switch (pasoActual) {
         case PASO.SERVICIO:
-            return 'Elige el servicio de la lista.';
+            return `Elige el ${t.servicio} de la lista.`;
+        case PASO.VARIANTE:
+            return 'Elige una de las opciones de la lista.';
+        case PASO.MASCOTA:
+            return '¿Para cuál de tus mascotas?';
         case PASO.PROFESIONAL:
             return '¿Con quién prefieres? También puedes decir "me da igual".';
         case PASO.FECHA:
@@ -1021,9 +1705,9 @@ function textoDelPaso(pasoActual) {
         case PASO.HORA:
             return 'Elige una de las horas libres.';
         case PASO.NOMBRE:
-            return '¿A nombre de quién agendo la cita?';
+            return `¿A nombre de quién agendo la ${t.cita}?`;
         case PASO.CONFIRMAR:
-            return '¿Confirmo la cita?';
+            return `¿Confirmo la ${t.cita}?`;
         default:
             return '';
     }

@@ -18,7 +18,7 @@ const {
     crearManejadorDeterminista,
     PASO,
     TAREA_AGENDAR,
-} = require('../../intelligence/engine/manejadorDeterminista');
+} = require('../../intelligence/adapters/reserva/flujoCita');
 
 // ── Dobles ──────────────────────────────────────────────────────────────────────────────
 
@@ -876,7 +876,8 @@ describe('retroceder sin empezar de cero (2026-08-24)', () => {
 
         expect(d.tarea.datos.paso).toBe(PASO.HORA);
         expect(d.tarea.datos.fecha).toBe('2026-08-20');
-        expect(d.respuestas[0].texto).toMatch(/horas libres el 2026-08-20/);
+        // Desde 2026-09-29 la fecha se escribe como la dice una persona, no como la guarda la base.
+        expect(d.respuestas[0].texto).toMatch(/horas libres el jueves 20 de agosto/);
         expect(d.tarea.datos.codigo_hold).toBeUndefined();
     });
 

@@ -325,11 +325,56 @@ async function runVentasPeriodoQuery({ idNegocio, startDate, endDate, page, page
           AND o.fecha_cierre < ($3::date + 1)::timestamp
     `;
 
+    // Gráficas: se calculan sobre TODO el rango (no sobre la página de la tabla).
+    const serieQuery = `
+        SELECT
+            to_char(d.dia, 'YYYY-MM-DD') AS fecha,
+            COALESCE(SUM(o.total), 0)::numeric AS ventas,
+            COUNT(o.id_orden)::int AS ordenes
+        FROM generate_series($2::date::timestamp, $3::date::timestamp, interval '1 day') AS d(dia)
+        LEFT JOIN restaurante.pedid_orden o
+               ON o.id_negocio = $1
+              AND o.estado = 'CERRADA'
+              AND o.fecha_cierre >= d.dia
+              AND o.fecha_cierre < d.dia + interval '1 day'
+        GROUP BY d.dia
+        ORDER BY d.dia
+    `;
+
+    const tipoQuery = `
+        SELECT
+            COALESCE(o.tipo_pedido, 'MESA') AS tipo_pedido,
+            COUNT(*)::int AS ordenes,
+            COALESCE(SUM(o.total), 0)::numeric AS ventas
+        FROM restaurante.pedid_orden o
+        WHERE o.id_negocio = $1
+          AND o.estado = 'CERRADA'
+          AND o.fecha_cierre >= $2::date::timestamp
+          AND o.fecha_cierre < ($3::date + 1)::timestamp
+        GROUP BY 1
+    `;
+
+    // Período anterior de igual duración, para los badges de tendencia.
+    const previoQuery = `
+        SELECT
+            COALESCE(SUM(o.total), 0)::numeric AS ventas_totales,
+            COUNT(*)::int AS ordenes_cobradas,
+            COALESCE(AVG(o.total), 0)::numeric AS ticket_promedio
+        FROM restaurante.pedid_orden o
+        WHERE o.id_negocio = $1
+          AND o.estado = 'CERRADA'
+          AND o.fecha_cierre >= ($2::date - ($3::date - $2::date + 1))::timestamp
+          AND o.fecha_cierre < $2::date::timestamp
+    `;
+
     const params = [idNegocio, startDate, endDate];
-    const [rowsRes, countRes, summaryRes] = await Promise.all([
+    const [rowsRes, countRes, summaryRes, serieRes, tipoRes, previoRes] = await Promise.all([
         Models.pool.query(dataQuery, [...params, limit, exportMode ? 0 : offset]),
         Models.pool.query(countQuery, params),
         Models.pool.query(summaryQuery, params),
+        exportMode ? { rows: [] } : Models.pool.query(serieQuery, params),
+        exportMode ? { rows: [] } : Models.pool.query(tipoQuery, params),
+        exportMode ? { rows: [] } : Models.pool.query(previoQuery, params),
     ]);
 
     const total = Number(countRes.rows[0]?.total || 0);
@@ -339,6 +384,23 @@ async function runVentasPeriodoQuery({ idNegocio, startDate, endDate, page, page
         page,
         pageSize: exportMode ? total || limit : pageSize,
         resumen: summaryRes.rows[0] || {},
+        graficas: exportMode ? null : {
+            serie_diaria: serieRes.rows.map((r) => ({
+                fecha: r.fecha,
+                ventas: toNumber(r.ventas),
+                ordenes: toNumber(r.ordenes),
+            })),
+            por_tipo: tipoRes.rows.map((r) => ({
+                tipo_pedido: r.tipo_pedido,
+                ordenes: toNumber(r.ordenes),
+                ventas: toNumber(r.ventas),
+            })),
+            periodo_anterior: {
+                ventas_totales: toNumber(previoRes.rows[0]?.ventas_totales),
+                ordenes_cobradas: toNumber(previoRes.rows[0]?.ordenes_cobradas),
+                ticket_promedio: toNumber(previoRes.rows[0]?.ticket_promedio),
+            },
+        },
     };
 }
 
@@ -349,6 +411,7 @@ async function runProductosMasVendidosQuery({ idNegocio, startDate, endDate, pag
         FROM restaurante.pedid_detalle d
         INNER JOIN restaurante.pedid_orden o ON o.id_orden = d.id_orden
         INNER JOIN restaurante.carta_producto p ON p.id_producto = d.id_producto
+        LEFT JOIN restaurante.carta_categoria c ON c.id_categoria = p.id_categoria
         WHERE o.id_negocio = $1
           AND o.estado = 'CERRADA'
           AND o.fecha_cierre >= $2::date::timestamp
@@ -385,11 +448,35 @@ async function runProductosMasVendidosQuery({ idNegocio, startDate, endDate, pag
         ${baseFilter}
     `;
 
+    // Gráficas: sobre TODO el rango, no sobre la página de la tabla.
+    const topQuery = `
+        SELECT
+            p.nombre AS producto,
+            SUM(d.cantidad)::int AS unidades,
+            COALESCE(SUM(d.subtotal), 0)::numeric AS ingresos
+        ${baseFilter}
+        GROUP BY p.id_producto, p.nombre
+        ORDER BY unidades DESC, ingresos DESC
+        LIMIT 10
+    `;
+
+    const categoriaQuery = `
+        SELECT
+            COALESCE(c.nombre, 'Sin categoría') AS categoria,
+            SUM(d.cantidad)::int AS unidades,
+            COALESCE(SUM(d.subtotal), 0)::numeric AS ingresos
+        ${baseFilter}
+        GROUP BY c.id_categoria, c.nombre
+        ORDER BY ingresos DESC
+    `;
+
     const params = [idNegocio, startDate, endDate];
-    const [rowsRes, countRes, summaryRes] = await Promise.all([
+    const [rowsRes, countRes, summaryRes, ...extra] = await Promise.all([
         Models.pool.query(dataQuery, [...params, limit, exportMode ? 0 : offset]),
         Models.pool.query(countQuery, params),
         Models.pool.query(summaryQuery, params),
+        exportMode ? { rows: [] } : Models.pool.query(topQuery, params),
+        exportMode ? { rows: [] } : Models.pool.query(categoriaQuery, params),
     ]);
 
     const total = Number(countRes.rows[0]?.total || 0);
@@ -399,6 +486,18 @@ async function runProductosMasVendidosQuery({ idNegocio, startDate, endDate, pag
         page,
         pageSize: exportMode ? total || limit : pageSize,
         resumen: summaryRes.rows[0] || {},
+        graficas: exportMode ? null : {
+            top_productos: extra[0].rows.map((r) => ({
+                producto: r.producto,
+                unidades: toNumber(r.unidades),
+                ingresos: toNumber(r.ingresos),
+            })),
+            por_categoria: extra[1].rows.map((r) => ({
+                categoria: r.categoria,
+                unidades: toNumber(r.unidades),
+                ingresos: toNumber(r.ingresos),
+            })),
+        },
     };
 }
 
@@ -514,11 +613,30 @@ async function runRendimientoUsuariosQuery({ idNegocio, startDate, endDate, page
           AND o.fecha_cierre < ($3::date + 1)::timestamp
     `;
 
+    // Gráficas: sobre TODO el rango, no sobre la página de la tabla.
+    const usuariosGraficaQuery = `
+        SELECT
+            TRIM(CONCAT(u.primer_nombre, ' ', u.primer_apellido)) AS usuario,
+            COUNT(*)::int AS ordenes,
+            COALESCE(SUM(o.total), 0)::numeric AS ventas,
+            COALESCE(AVG(o.total), 0)::numeric AS ticket_promedio
+        FROM restaurante.pedid_orden o
+        INNER JOIN general.gener_usuario u ON u.id_usuario = o.id_usuario
+        WHERE o.id_negocio = $1
+          AND o.estado = 'CERRADA'
+          AND o.fecha_cierre >= $2::date::timestamp
+          AND o.fecha_cierre < ($3::date + 1)::timestamp
+        GROUP BY u.id_usuario, u.primer_nombre, u.primer_apellido
+        ORDER BY ventas DESC
+        LIMIT 12
+    `;
+
     const params = [idNegocio, startDate, endDate];
-    const [rowsRes, countRes, summaryRes] = await Promise.all([
+    const [rowsRes, countRes, summaryRes, ...extra] = await Promise.all([
         Models.pool.query(dataQuery, [...params, limit, exportMode ? 0 : offset]),
         Models.pool.query(countQuery, params),
         Models.pool.query(summaryQuery, params),
+        exportMode ? { rows: [] } : Models.pool.query(usuariosGraficaQuery, params),
     ]);
 
     const total = Number(countRes.rows[0]?.total || 0);
@@ -528,6 +646,14 @@ async function runRendimientoUsuariosQuery({ idNegocio, startDate, endDate, page
         page,
         pageSize: exportMode ? total || limit : pageSize,
         resumen: summaryRes.rows[0] || {},
+        graficas: exportMode ? null : {
+            por_usuario: extra[0].rows.map((r) => ({
+                usuario: r.usuario,
+                ordenes: toNumber(r.ordenes),
+                ventas: toNumber(r.ventas),
+                ticket_promedio: toNumber(r.ticket_promedio),
+            })),
+        },
     };
 }
 
@@ -640,6 +766,7 @@ async function getReporte({ idUsuario, idNegocio, tipo = 'ventas_periodo', fecha
         },
         columns: REPORT_TYPES[tipo].columns,
         resumen: mapResumenItems(tipo, reportResult.resumen || {}, rangoFechas),
+        ...(reportResult.graficas ? { graficas: reportResult.graficas } : {}),
         rows: normalizedRows,
         pagination: {
             page: pagination.page,
@@ -799,6 +926,24 @@ async function getDetalleVentaPeriodo({ idUsuario, idNegocio, idOrden }) {
         }))
         .sort((a, b) => a.id_detalle - b.id_detalle);
 
+    // Forma(s) de pago: el desglose (multipago) si existe; si no, el método único de la orden.
+    const { rows: pagoRows } = await Models.pool.query(
+        `SELECT mp.nombre AS metodo, po.valor
+           FROM restaurante.rest_pago_orden po
+           JOIN restaurante.rest_metodo_pago mp ON mp.id_metodo_pago = po.id_metodo_pago
+          WHERE po.id_orden = $1
+          ORDER BY po.id_pago`,
+        [orden.id_orden],
+    );
+    let pagos = pagoRows.map((r) => ({ metodo: r.metodo, valor: toNumber(r.valor) }));
+    if (pagos.length === 0 && orden.id_metodo_pago) {
+        const { rows: [unico] } = await Models.pool.query(
+            'SELECT nombre FROM restaurante.rest_metodo_pago WHERE id_metodo_pago = $1',
+            [orden.id_metodo_pago],
+        );
+        if (unico) pagos = [{ metodo: unico.nombre, valor: toNumber(orden.total) }];
+    }
+
     return {
         id_orden: Number(orden.id_orden),
         numero_orden: orden.numero_orden || `#${orden.id_orden}`,
@@ -833,6 +978,8 @@ async function getDetalleVentaPeriodo({ idUsuario, idNegocio, idOrden }) {
             impuesto: toNumber(orden.impuesto),
             total: toNumber(orden.total),
         },
+        metodo_pago: pagos.map((x) => x.metodo).join(' + ') || 'Sin registrar',
+        pagos,
         items,
     };
 }

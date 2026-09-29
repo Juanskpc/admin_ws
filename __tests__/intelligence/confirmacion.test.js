@@ -13,7 +13,7 @@
 'use strict';
 
 const confirmacion = require('../../intelligence/engine/confirmacion');
-const { crearManejadorDeterminista, TAREA_AGENDAR } = require('../../intelligence/engine/manejadorDeterminista');
+const { crearManejadorDeterminista, TAREA_AGENDAR } = require('../../intelligence/adapters/reserva/flujoCita');
 const { crearManejadorLlm } = require('../../intelligence/engine/manejadorLlm');
 const { crearManejadorEscalera } = require('../../intelligence/engine/manejadorEscalera');
 const puerto = require('../../intelligence/model/puerto');

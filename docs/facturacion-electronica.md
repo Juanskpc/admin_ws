@@ -2203,6 +2203,10 @@ pierde es el margen del cliente pequeño y la comodidad de no gestionar credenci
 | **FE-4** | ✅ **Endpoints y pantalla hechos (2026-09-01).** 4 endpoints + `/admin/facturacion` en `admin_app-v21`, con los tres caminos de §4.1. Verificado de punta a punta contra el backend real. Lo demás (listado de documentos, alerta de rangos, ESC-071) sigue esperando a FE-3 | El resto, FE-3 |
 | **FE-5** | Resto de verticales: parqueadero, tienda, gym, reserva | FE-3 |
 
+> **2026-09-28: FE-2 y FE-3 del restaurante tienen plan de implementación tarea por tarea** en
+> [`plan-fe-restaurante.md`](plan-fe-restaurante.md) — decisiones cerradas, esquema, adaptador de
+> Factus, gancho en el cobro, pantallas y pruebas. El avance se marca en su §3.
+
 **FE-1 no dependía de nada externo**, y además **sirve aunque el cliente nunca facture**: es lo que
 necesitamos para cobrarle nosotros (§12). Era el trabajo útil mientras el trámite avanza, y ya está.
 

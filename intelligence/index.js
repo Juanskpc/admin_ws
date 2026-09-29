@@ -110,7 +110,7 @@ async function arrancarMotor(manejador, { recuperar = true } = {}) {
  */
 function montarEscalera({ adaptador = null, proveedor = null, modelo = null } = {}) {
     const { crearManejadorEscalera } = require('./engine/manejadorEscalera');
-    const { manejarDeterminista } = require('./engine/manejadorDeterminista');
+    const { manejarDeterminista } = require('./adapters/reserva/flujoCita');
     const fabrica = require('./model/adaptadores');
 
     const soloNivel1 = (motivo) => {
@@ -286,7 +286,7 @@ module.exports = {
     /** El andamio de F5-B. Se queda como manejador de pruebas del motor, no como producto. */
     manejadorEco: require('./engine/manejadorEco'),
     /** El motor determinista de F5-D (ADR-015). Es el manejador de verdad. */
-    manejadorDeterminista: require('./engine/manejadorDeterminista'),
+    manejadorDeterminista: require('./adapters/reserva/flujoCita'),
     identidad: require('./engine/identidad'),
     /** El `ModelPort` y su alrededor (F6). El núcleo nunca importa el SDK de un proveedor. */
     modelPort: require('./model/puerto'),

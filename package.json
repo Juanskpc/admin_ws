@@ -79,6 +79,8 @@
     "migrate:reserva-perfiles": "node migrations/migrate_reserva_perfiles.js",
     "migrate:reserva-estancias": "node migrations/migrate_reserva_estancias.js",
     "migrate:reserva-productos": "node migrations/migrate_reserva_productos.js",
+    "migrate:reserva-hold-variantes": "node migrations/migrate_reserva_hold_variantes.js",
+    "migrate:intelligence-consultas-reserva": "node migrations/migrate_intelligence_consultas_reserva.js",
     "migrate:intelligence-reportes": "node migrations/migrate_intelligence_reportes.js",
     "migrate:restaurante-pago-domicilio": "node migrations/migrate_restaurante_pago_domicilio.js",
     "migrate:restaurante-subniveles-tipo-pedido": "node migrations/migrate_restaurante_subniveles_tipo_pedido.js",

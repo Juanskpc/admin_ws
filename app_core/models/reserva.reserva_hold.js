@@ -14,6 +14,14 @@ module.exports = (sequelize, DataTypes) => {
     id_servicios:      { type: DataTypes.ARRAY(DataTypes.INTEGER), defaultValue: [] },
     /** Cabina apartada junto con el hueco, si los servicios la necesitan. */
     id_recurso:        { type: DataTypes.INTEGER, allowNull: true },
+    /**
+     * Variante elegida por servicio: `{ "<id_servicio>": <id_variante> }`.
+     *
+     * Es lo único del pedido que cambia **cuánto tiempo** hay que apartar (una coloración de
+     * pelo largo dura el doble), así que se guarda aquí y se relee al confirmar. Lo demás —la
+     * mascota, el nombre— son datos de la cita y viajan al confirmarla.
+     */
+    variantes:         { type: DataTypes.JSONB, allowNull: true },
     creado_en:         { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
   }, {
     tableName: 'reserva_hold', schema: 'reserva', timestamps: false,

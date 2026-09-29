@@ -56,7 +56,7 @@ function error(code, mensaje, statusCode = 409) {
  * @returns {Promise<Object>} el hold, con su `codigo` público y `expira_en`.
  */
 async function tomar(
-    { idNegocio, idProfesional, idServicios = [], fechaHoraInicioISO, ttlMinutos },
+    { idNegocio, idProfesional, idServicios = [], fechaHoraInicioISO, ttlMinutos, variantes = null },
     { transaction: transaccionExterna = null } = {}
 ) {
     if (!idNegocio || !idProfesional || !idServicios.length || !fechaHoraInicioISO) {
@@ -85,9 +85,19 @@ async function tomar(
 
     // Misma composición que al crear la cita: si el hold midiera distinto, apartaría un hueco
     // que la confirmación después rechazaría. Sin funciones (la barbería) es la suma de siempre.
+    //
+    // ⚠️ Las variantes entran en la cuenta, y por eso están aquí. Una coloración de pelo largo
+    // dura el doble que la de lista: sin esto el hold apartaba 40 minutos para una cita de 90 y
+    // el choque no aparecía aquí, sino después, en la agenda del profesional.
     const { funciones } = await Perfiles.perfilDeNegocio(idNegocio);
     const ordenados = idServicios.map((id) => servicios.find((s) => s.id_servicio === Number(id)));
-    const comp = Composicion.componer(ordenados, { funciones });
+    const variantesPedidas = Composicion.normalizarVariantes(variantes);
+    const comp = Composicion.componer(ordenados, {
+        funciones,
+        // La misma función que usa `crearCita`, y no una copia: si el hold resolviera las
+        // variantes por su cuenta acabarían divergiendo, que es el fallo que este arreglo cierra.
+        variantes: await Disponibilidad.variantesElegidas(idNegocio, variantesPedidas),
+    });
     const inicio = parsearInicio(fechaHoraInicioISO);
     const duracion = comp.duracion;
     const fin = Reglas.addMinutes(inicio, duracion);
@@ -136,6 +146,10 @@ async function tomar(
                 estado: 'activo',
                 id_servicios: idServicios,
                 id_recurso: idRecurso,
+                // Se guarda lo que se APARTÓ, para que confirmar cree exactamente esa cita y no
+                // otra. Releerlo de aquí es lo que ADR-010 pide: el contexto de la conversación
+                // es una pista, el hold es el hecho.
+                variantes: variantesPedidas.size ? Object.fromEntries(variantesPedidas) : null,
             },
             { transaction: t }
         );

@@ -28,8 +28,6 @@
 const { NIVEL, enrutar } = require('../model/orquestador');
 const flujos = require('./flujos');
 const contextoNegocio = require('../core/contextoNegocio');
-const { manejarDeterminista } = require('./manejadorDeterminista');
-const { TAREA_AGENDAR } = require('./manejadorDeterminista');
 const confirmacion = require('./confirmacion');
 // La baja (STOP/BAJA) va por encima de la tabla de enrutado: no es una decisión de costo, es una
 // obligación legal, y ninguna otra regla puede ganarle. Ver la cabecera de `optout.js`.
@@ -81,12 +79,20 @@ function tareaCaducada(conversacion, ahora = Date.now()) {
 
 /**
  * @param {Object}   deps
- * @param {Function} deps.determinista — el Nivel 1. Siempre presente.
+ * @param {Function} [deps.determinista] — el Nivel 1 de respaldo, para un negocio cuyo tipo
+ *                   **nadie declaró**. Lo inyecta la composición (`intelligence/index.js`), que
+ *                   es quien conoce los adaptadores; este archivo no lo importa a propósito.
+ *
+ *                   Hasta el 2026-09-29 el valor por defecto era el flujo de citas, importado
+ *                   aquí. O sea que el núcleo dependía de una vertical (lo que ADR-009 prohíbe)
+ *                   y, de paso, un gimnasio sin flujo propio recibía el menú de una peluquería
+ *                   — justo lo que `flujos.js` dice que no debe pasar. Sin respaldo inyectado,
+ *                   ahora se cae a `handoff`: «te contesta una persona», que es la verdad.
  * @param {Function} [deps.llm]        — el Nivel 4. Ausente = escalera de un peldaño, que es
  *                                       exactamente el sistema de F5 y sigue siendo válido.
  */
 function crearManejadorEscalera({
-    determinista = manejarDeterminista,
+    determinista = null,
     llm = null,
     // Inyectable por la misma razón que los otros dos: un test del enrutado no debería
     // necesitar una base de datos para comprobar a qué peldaño va un mensaje.
@@ -252,7 +258,7 @@ function crearManejadorEscalera({
             }
         }
 
-        const decision = await (flujo ? flujo.manejar(ctx) : determinista(ctx));
+        const decision = await ejecutarNivel1(ctx, flujo);
 
         // ── La cesión al modelo, por fin recogida ──────────────────────────────────────────
         //
@@ -313,6 +319,21 @@ function crearManejadorEscalera({
     };
 
     /**
+     * El Nivel 1: el flujo que declaró la vertical de ESTE negocio y, si nadie declaró ninguno,
+     * el respaldo que haya inyectado la composición.
+     *
+     * Sin flujo ni respaldo devuelve una decisión **vacía** a propósito, no un error: quien
+     * llama ya sabe tratar el vacío —lo sube al modelo o lo convierte en handoff—, y así un tipo
+     * de negocio sin flujo acaba en «te contesta una persona» en vez de en el menú de otra
+     * vertical o en una excepción.
+     */
+    async function ejecutarNivel1(ctx, flujo) {
+        if (flujo) return flujo.manejar(ctx);
+        if (determinista) return determinista(ctx);
+        return { nivel: NIVEL.DETERMINISTA };
+    }
+
+    /**
      * El peldaño de abajo, con la garantía de que sale una frase.
      *
      * Se usa en los dos caminos por los que el Nivel 4 puede dejar tirado a alguien —revienta, o
@@ -321,7 +342,7 @@ function crearManejadorEscalera({
     async function respaldoQueSiempreHabla(ctx, flujo) {
         let decision;
         try {
-            decision = await (flujo ? flujo.manejar(ctx) : determinista(ctx));
+            decision = await ejecutarNivel1(ctx, flujo);
         } catch (error) {
             // El respaldo del respaldo. Si esto también lanza, ya no queda nadie debajo.
             console.warn(`[intelligence] el respaldo determinista falló: ${error.message}`);

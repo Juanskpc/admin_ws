@@ -21,7 +21,7 @@ const motor = require('../../intelligence/engine/motor');
 const gateway = require('../../intelligence/channels/gateway');
 const adaptador = require('../../intelligence/channels/webchat/adaptador');
 const { CONFIG: COLA_CONFIG } = require('../../intelligence/engine/cola');
-const { manejarDeterminista } = require('../../intelligence/engine/manejadorDeterminista');
+const { manejarDeterminista } = require('../../intelligence/adapters/reserva/flujoCita');
 const intelligence = require('../../intelligence');
 const Consola = require('../../app_admin_api/controllers/intelligenceConsolaController');
 

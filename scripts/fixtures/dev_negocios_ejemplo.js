@@ -93,6 +93,11 @@ const CAPACIDADES = [
     'consultar_servicios',
     'consultar_profesionales',
     'consultar_disponibilidad',
+    // Solo devuelve algo en negocios con mascotas; en los demás contesta «este negocio no
+    // atiende mascotas». Se habilita en todos porque habilitar es decir «puedes preguntar»,
+    // no «hay algo que responder».
+    'consultar_mis_mascotas',
+    'consultar_dias_con_horas',
     'proponer_turno',
     'reservar_turno',
     'reagendar_cita',

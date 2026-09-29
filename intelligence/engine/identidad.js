@@ -129,24 +129,52 @@ function telefonoVerificadoDe(conversacion) {
 }
 
 /**
- * Normaliza un teléfono colombiano a E.164, que es como lo guarda `persona_negocio`.
+ * Normaliza un teléfono a E.164, que es como lo guarda `persona_negocio`.
  *
  * Devuelve `null` en vez de adivinar cuando no cuadra. Es deliberado: una persona creada a
  * partir de un teléfono mal normalizado es peor que no crearla, porque queda como un duplicado
  * silencioso que nadie va a limpiar. El backfill de F0 ya pagó esa lección — los cinco
  * formatos del mismo móvil que colapsan en una sola persona salen justo de aquí.
+ *
+ * ## ⚠️ Era solo colombiano, y eso tapió a un cliente entero (corregido 2026-09-29)
+ *
+ * Las tres reglas de abajo cubren Colombia y **nada más**. El `from` de un webhook de WhatsApp
+ * llega siempre con indicativo de país y sin `+` (`56912345678` para un móvil chileno), así que
+ * para el primer cliente fuera de Colombia —D'ALEX BARBERIA, Chile— esta función devolvía
+ * `null` para todos sus clientes. Y como devuelve el **teléfono verificado**, del que cuelga
+ * toda la identidad, el efecto en cadena era:
+ *
+ *   · el Principal se quedaba sin `telefono_verificado`;
+ *   · no se encontraba su `persona_negocio`, así que el bot no reconocía a quien ya había ido;
+ *   · y `buscarCitaPorCodigo` —que falla cerrada a propósito— **denegaba cancelar o mover
+ *     cualquier cita**, porque no podía comprobar de quién era.
+ *
+ * Nada de eso daba un error: simplemente el bot trataba a todo cliente chileno como a un
+ * desconocido y le decía que llamara al negocio.
+ *
+ * La corrección **no** intenta adivinar el país: acepta tal cual lo que ya viene en formato
+ * internacional, que es lo que manda el canal, y deja las reglas colombianas para los números
+ * sin indicativo (que es de donde vienen, por ejemplo, los que teclea una persona).
  */
 function normalizarTelefono(entrada) {
     if (!entrada) return null;
     const digitos = String(entrada).replace(/\D/g, '');
     if (!digitos) return null;
 
+    // ── Colombia sin indicativo: lo que escribe una persona ──
     // Móvil nacional: 10 dígitos empezando por 3.
     if (digitos.length === 10 && digitos.startsWith('3')) return `+57${digitos}`;
     // Ya viene con indicativo país.
     if (digitos.length === 12 && digitos.startsWith('573')) return `+${digitos}`;
     // Fijo con indicativo de ciudad (Bogotá 601, etc.).
     if (digitos.length === 10 && /^[1-8]/.test(digitos)) return `+57${digitos}`;
+
+    // ── Cualquier país, ya con indicativo ──
+    // Es la forma en que WhatsApp entrega el remitente, y la única que permite atender a un
+    // negocio fuera de Colombia. El rango 11–15 es el de E.164 con indicativo incluido: por
+    // debajo de 11 se solaparía con los casos colombianos de arriba, que son más específicos y
+    // por eso van primero.
+    if (digitos.length >= 11 && digitos.length <= 15) return `+${digitos}`;
 
     return null;
 }
