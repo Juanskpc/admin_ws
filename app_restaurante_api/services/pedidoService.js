@@ -568,9 +568,19 @@ async function crearOrden({
         // ⚠️ **No solo el domicilio.** Hasta el 2026-09-08 esto era `=== 'DOMICILIO'`, de cuando
         // un «para llevar» solo podía ser alguien de pie en el mostrador. Desde que el asistente
         // toma pedidos para recoger, un LLEVAR también tiene una persona detrás con su número.
+        //
+        // La identidad se resuelve con **cualquier** teléfono, también en MESA: un pedido a la mesa
+        // hecho desde la carta virtual llega por el asistente con el número de WhatsApp, y ese
+        // cliente debe quedar registrado en «Clientes» igual que uno de domicilio. El POS no manda
+        // teléfono en una mesa, así que ahí no cambia nada. Lo que sigue siendo solo de despacho
+        // es el `contacto_*` de la orden (abajo): en una mesa no hay a quién avisar.
+        //
+        // Es el registro automático de clientes: ocurre aquí, cuando el pedido ya confirmado entra
+        // al sistema, y no cuando alguien apenas escribe. La llave es (negocio, teléfono E.164):
+        // si ya existe solo se refresca el nombre; si no, se crea.
         const conCliente = tipoPedido === 'DOMICILIO' || tipoPedido === 'LLEVAR';
         const idPersonaNegocio =
-            conCliente && contactoTelefono
+            contactoTelefono
                 ? await personaNegocioDao.resolverOCrearBestEffort(
                       { idNegocio, telefono: contactoTelefono, nombre: contactoNombre },
                       { transaction: t }

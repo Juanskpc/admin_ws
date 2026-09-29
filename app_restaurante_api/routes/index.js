@@ -111,6 +111,14 @@ router.get('/clientes', [
 	query('offset').optional().isInt({ min: 0 }),
 ], CuentaController.listar);
 
+// Directorio: todos los clientes (los que llegan pidiendo por la carta y los de tiquetera).
+// Va ANTES de `/clientes/:id`, o «directorio» se leería como un id.
+router.get('/clientes/directorio', [
+	query('id_negocio').isInt({ min: 1 }),
+	query('limite').optional().isInt({ min: 1, max: 500 }),
+	query('offset').optional().isInt({ min: 0 }),
+], CuentaController.directorio);
+
 router.get('/clientes/:id', [
 	param('id').isInt({ min: 1 }),
 	query('id_negocio').isInt({ min: 1 }),

@@ -93,6 +93,27 @@ async function exigirSubnivel(req, res, codigo) {
     return true;
 }
 
+/**
+ * GET /restaurante/clientes/directorio?id_negocio=N
+ *
+ * El directorio de clientes. **No** pasa por `exigirCuentasHabilitadas`: el registro automático
+ * (clientes que piden por la carta) es de todos los restaurantes; tiqueteras y fiado siguen
+ * siendo opt-in y conservan su candado en las demás rutas.
+ */
+async function directorio(req, res) {
+    if (!handleValidation(req, res)) return;
+    try {
+        const clientes = await CuentaService.listarDirectorio({
+            idNegocio: Number(req.query.id_negocio),
+            limite: req.query.limite,
+            offset: req.query.offset,
+        });
+        return Respuesta.success(res, 'Directorio de clientes', clientes);
+    } catch (err) {
+        return responderError(res, err, 'Error al listar los clientes');
+    }
+}
+
 /** GET /restaurante/clientes?id_negocio=N&busqueda=&filtro=todos|deben|a_favor */
 async function listar(req, res) {
     if (!handleValidation(req, res)) return;
@@ -327,4 +348,4 @@ async function eliminar(req, res) {
     }
 }
 
-module.exports = { listar, detalle, movimientos, crear, actualizar, abonar, ajustar, cobertura, eliminar };
+module.exports = { directorio, listar, detalle, movimientos, crear, actualizar, abonar, ajustar, cobertura, eliminar };

@@ -126,6 +126,72 @@ async function getTiquetes(idCuenta, { transaction } = {}) {
 // ============================================================
 
 /**
+ * El directorio de clientes del negocio: toda `persona_negocio` del restaurante.
+ *
+ * No hay tabla aparte de «clientes»: en un restaurante una persona_negocio solo nace de dos
+ * sitios, y los dos son clientes de verdad —
+ *   · un pedido confirmado que trae teléfono (`pedidoService.crearOrden`): el registro
+ *     automático, con la llave única (negocio, teléfono E.164). Escribir al WhatsApp sin pedir
+ *     NO crea nada.
+ *   · una tiquetera o fiado abierto a mano (`crearCuenta`), con o sin teléfono.
+ *
+ * Por cliente: cuántos pedidos (sin cancelados ni anulados), cuánto ha pagado (los cerrados),
+ * el último pedido y, si la tiene, su cuenta de tiquetera/fiado activa.
+ */
+async function listarDirectorio({ idNegocio, limite = 500, offset = 0 }) {
+    const filas = await sequelize.query(
+        `
+        SELECT pn.id_persona_negocio,
+               pn.nombre_mostrado,
+               pn.telefono_e164,
+               pn.creado_en,
+               COALESCE(o.pedidos, 0)::int          AS pedidos,
+               COALESCE(o.pedidos_todos, 0)::int    AS pedidos_todos,
+               COALESCE(o.total_gastado, 0)::numeric AS total_gastado,
+               o.ultimo_pedido,
+               c.id_cuenta,
+               c.modo AS modo_cuenta
+          FROM platform.persona_negocio pn
+          LEFT JOIN LATERAL (
+              SELECT COUNT(*)                                                         AS pedidos_todos,
+                     COUNT(*) FILTER (WHERE po.estado NOT IN ('CANCELADA', 'ANULADA')) AS pedidos,
+                     SUM(po.total) FILTER (WHERE po.estado = 'CERRADA')             AS total_gastado,
+                     MAX(po.fecha_creacion) FILTER (WHERE po.estado NOT IN ('CANCELADA', 'ANULADA'))
+                                                                                    AS ultimo_pedido
+                FROM restaurante.pedid_orden po
+               WHERE po.id_persona_negocio = pn.id_persona_negocio
+                 AND po.id_negocio = pn.id_negocio
+          ) o ON true
+          LEFT JOIN restaurante.rest_cuenta c
+            ON c.id_persona_negocio = pn.id_persona_negocio
+           AND c.id_negocio = pn.id_negocio
+           AND c.estado <> 'E'
+         WHERE pn.id_negocio = :idNegocio
+         ORDER BY o.ultimo_pedido DESC NULLS LAST, pn.creado_en DESC
+         LIMIT :limite OFFSET :offset
+        `,
+        {
+            replacements: { idNegocio, limite: Number(limite) || 500, offset: Number(offset) || 0 },
+            type: sequelize.QueryTypes.SELECT,
+        },
+    );
+
+    return filas.map((f) => ({
+        id_persona_negocio: f.id_persona_negocio,
+        cliente: f.nombre_mostrado || 'Sin nombre',
+        telefono: f.telefono_e164,
+        registrado_en: f.creado_en,
+        pedidos: Number(f.pedidos) || 0,
+        total_gastado: Number(f.total_gastado) || 0,
+        ultimo_pedido: f.ultimo_pedido,
+        // Nunca pidió = alta manual (tiquetera/fiado); con algún pedido = llegó pidiendo.
+        origen: Number(f.pedidos_todos) > 0 ? 'PEDIDO' : 'MANUAL',
+        id_cuenta: f.id_cuenta ? Number(f.id_cuenta) : null,
+        modo_cuenta: f.modo_cuenta || null,
+    }));
+}
+
+/**
  * La lista de cuentas del negocio con su saldo.
  *
  * El saldo se calcula en la misma consulta —no una por cliente— porque esta pantalla se abre
@@ -942,6 +1008,7 @@ async function getMetodoPagoCuenta(idNegocio, { transaction } = {}) {
 module.exports = {
     MODO,
     TIPO,
+    listarDirectorio,
     listarCuentas,
     getCuenta,
     buscarCuentaPorTelefono,
