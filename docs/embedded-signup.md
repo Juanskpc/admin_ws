@@ -278,3 +278,109 @@ en que se cree haber terminado**: `git log --oneline -1` en el servidor tras cua
 la fecha de `index.html` (o un `grep` del texto nuevo en los `.js` servidos) tras cualquier
 despliegue de frontend. Es la misma disciplina que ya pedía §7 de este documento para el `pull` del
 backend — solo que aquí mordió también del lado del frontend, que no la tenía anotada todavía.
+
+---
+
+## 10. Coexistencia + arreglo del iPhone (2026-09-28)
+
+### 10.1 Qué falló con el primer cliente real
+
+Un cliente quiso conectar su número de **WhatsApp Business** (el de la app del celular, con sus
+chats y contactos) desde «Conectar mi número». Pasaron dos cosas:
+
+1. **En su iPhone no se abrió la ventana de Facebook.** Error nuestro: el clic hacía
+   `await cargarSdk()` y después `FB.login()`. La descarga del SDK rompía el «gesto del usuario» y
+   Safari bloqueaba la ventana emergente sin avisar; el botón se quedaba en «Conectando…». En la
+   tablet (Chrome/Android, más permisivo) sí abrió.
+2. **Meta dijo «Este número de teléfono ya está registrado en una cuenta de WhatsApp»
+   (#2494064).** También nuestro: el botón abría el Embedded Signup **estándar**, que exige un
+   número libre de cualquier app de WhatsApp. El camino que conserva la app —la **coexistencia**—
+   se pide con `extras.featureType = 'whatsapp_business_app_onboarding'` en `FB.login()`, y no lo
+   mandábamos. La tarjeta prometía «conserva tu app de WhatsApp Business» y el código hacía otra
+   cosa. Como Tech Provider sí podemos ofrecer coexistencia.
+
+### 10.2 Qué cambió
+
+**Panel (`admin_app_v21`, `canal-whatsapp`)**
+- El SDK se carga al abrir la pantalla; `FB.login()` sale síncrono del clic. Los botones esperan
+  en «Preparando…», y si el SDK no carga (bloqueador, protección de rastreo) se ofrece «Reintentar».
+- «Tu propio número» tiene dos caminos: **«Ya uso WhatsApp Business»** (coexistencia) y **«Usar un
+  número nuevo»** (estándar). Bloque «Antes de empezar»: Facebook del negocio, celular a mano para
+  el QR, pasar a Business si está en WhatsApp normal.
+- Mientras conecta: explicación + botón «Cancelar» (por si la ventana nunca se abrió).
+- Aviso si se abre dentro del navegador de Facebook/Instagram.
+- Escucha `FINISH`, `FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING`, `FINISH_ONLY_WABA` y `CANCEL`
+  (enseña el `error_message` de Meta). Acepta el evento desde cualquier `*.facebook.com` (en móvil
+  llega de `m.`/`web.`; antes se exigía `www.` y se descartaba en silencio).
+- Si el evento no trae `phone_number_id` (o no llega), se canjea igual: el backend lo resuelve.
+- Conectado en coexistencia: se explica que los chats siguen en el celular, que si el dueño
+  responde el asistente se calla, y la regla de los 14 días.
+- Campana: `WHATSAPP_DESCONECTADO` lleva a `/admin/whatsapp/numero`.
+
+**Backend (`admin_ws`)**
+- `embeddedSignupApi.js`: `listarNumeros` (con `is_on_biz_app`, reintenta con campos mínimos si
+  Meta no reconoce uno), `registrarNumero` (`/register` con PIN), `solicitarSincronizacion`
+  (`smb_app_data`), `desuscribirApp`. Versión propia `META_EMBEDDED_SIGNUP_API_VERSION` (v23.0 por
+  defecto), separada de la de mensajería.
+- `canalEmbeddedSignup.conectar()`:
+  - `phoneNumberId` opcional; **se verifica contra los números de la WABA que concedió el token**
+    (un id ajeno → `CANAL_NUMERO_NO_CONCEDIDO`); si no viene, se descubre (`CANAL_SIN_NUMERO`,
+    `CANAL_NUMERO_AMBIGUO`).
+  - Coexistencia la decide Meta (`is_on_biz_app`); el `modo` del panel es solo la pista.
+  - Coexistencia: **no** se llama a `/register` (sacaría el número de la app del dueño); se piden
+    contactos e historial (solo posible en las 24 h siguientes; si falla, la conexión queda igual).
+  - Número dedicado: **se registra** con PIN de 6 dígitos guardado cifrado (`pin_cifrado`); al
+    reconectar se reutiliza el mismo PIN. Antes esto no se hacía: un número nuevo conectado
+    recibía webhooks pero no habría podido enviar. Errores de `/register` traducidos (133005 PIN
+    previo, 133006/133010 verificación pendiente, 133016 bloqueo temporal).
+  - Número activo en otro negocio → `CANAL_NUMERO_EN_OTRO_NEGOCIO` (antes el `ON CONFLICT` se lo
+    quitaba en silencio).
+  - Auditoría `canal_whatsapp`: `conectado`, `conexion_fallida` (con el error de Meta),
+    `desconectado`.
+- Desconectar desde el panel quita también la suscripción de la app a la WABA del cliente.
+- Webhook:
+  - `account_update` **no trae `phone_number_id`**; ahora se atribuye por la WABA (`entry.id`),
+    solo si es de un único negocio. Antes un `PARTNER_REMOVED` de Embedded Signup se descartaba
+    como «ajeno» (el test lo ocultaba porque inventaba un `metadata` que Meta no manda).
+  - Desconexión (`PARTNER_REMOVED`, `PARTNER_APP_UNINSTALLED`, `ACCOUNT_OFFBOARDED`) de un número
+    propio → fila revocada + notificación en la campana del negocio.
+  - `history` y `smb_app_state_sync` se cuentan y auditan; **nunca** entran como mensajes (van en
+    `history[].threads`, no en `messages`). El historial no se importa a la Bandeja: los chats
+    siguen en el celular del dueño y el asistente arranca con los mensajes nuevos.
+  - Límite del cuerpo 1 MB → 10 MB (lotes de historial).
+- Migración `migrate:embedded-signup-coexistencia`: `coexistencia`, `pin_cifrado`, índice por
+  `waba_id`. `numeros.js` tolera que aún no se haya corrido.
+- `scripts/whatsapp_webhook_campos.js`: revisa/añade los campos del webhook de la **app** de Meta.
+
+### 10.3 Lo que había que hacer en Meta
+
+Al 2026-09-28 la app solo tenía el campo `messages`. Faltaban `smb_message_echoes` (sin él el
+asistente le habla encima al dueño), `history`, `smb_app_state_sync` y `account_update` (sin él
+nunca nos enteramos de una desconexión — tampoco la del corte de 14 días). Se arregla con:
+
+```bash
+cd /var/www/admin_ws && node scripts/whatsapp_webhook_campos.js            # mira
+cd /var/www/admin_ws && node scripts/whatsapp_webhook_campos.js --aplicar  # añade los que falten
+```
+
+### 10.4 Despliegue (orden)
+
+1. `git pull` en el VPS → `npm run migrate:embedded-signup-coexistencia` (tras backup) →
+   `sudo systemctl restart escalapp-api`.
+2. `node scripts/whatsapp_webhook_campos.js --aplicar`.
+3. Build + subida de `admin_app_v21` (sin renombrar `index.csr.html`).
+4. Verificar: `grep -l whatsapp_business_app_onboarding /var/www/html/admin/*.js` y
+   `git log --oneline -1` en el servidor (§9.5).
+
+### 10.5 Con el cliente delante
+
+- Que entre con **su** Facebook (el del negocio). Si usa el de otra persona, el portafolio y la
+  cuenta de WhatsApp quedan a nombre de esa persona.
+- Celular con **WhatsApp Business actualizado** y a mano: Meta muestra un QR que se escanea desde
+  la app. Si el número está en WhatsApp «normal», primero pasarlo a Business.
+- Pulsar **«Ya uso WhatsApp Business»**. En el celular aceptar compartir el historial (opcional).
+- Después: abrir la app al menos una vez cada ~14 días. Si Meta la corta, llega la notificación.
+- Si falla, el motivo exacto queda en Auditoría (`canal_whatsapp` / `conexion_fallida`).
+- Al conectar el asistente responderá a **todos** los chats nuevos del número, incluidos contactos
+  personales si el dueño los tiene en ese WhatsApp. Si el dueño contesta él, el asistente se calla
+  en esa conversación.

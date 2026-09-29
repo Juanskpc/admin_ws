@@ -132,6 +132,15 @@ function resolverNegocio(phoneNumberId) {
 }
 
 /**
+ * Traduce la WABA (`entry.id` del webhook) al negocio, para los cambios que no traen
+ * `phone_number_id` — en la práctica `account_update`. Solo resuelve WABAs de un solo negocio
+ * (Embedded Signup); la WABA compartida de EscalApp devuelve `null`, igual que un número ajeno.
+ */
+function resolverNegocioPorWaba(wabaId) {
+    return numeros.negocioDeWaba(wabaId);
+}
+
+/**
  * Desde qué número contesta este negocio (F8-C, punto 6).
  *
  * Devuelve `null` si no lo sabe, y quien envía **debe negarse**: mandar «por el número que haya»
@@ -159,6 +168,7 @@ module.exports = {
     habilitado,
     estado,
     resolverNegocio,
+    resolverNegocioPorWaba,
     numeroDeNegocio,
     tokenDeNegocio,
     VERSION_API,

@@ -71,6 +71,7 @@
     "migrate:intelligence-reactivacion": "node migrations/migrate_intelligence_reactivacion.js",
     "migrate:planes-codigo": "node migrations/migrate_planes_codigo.js",    "migrate:platform-numeros-canal": "node migrations/migrate_platform_numeros_canal.js",
     "migrate:embedded-signup": "node migrations/migrate_embedded_signup.js",
+    "migrate:embedded-signup-coexistencia": "node migrations/migrate_embedded_signup_coexistencia.js",
     "evaluar": "node scripts/evaluar.js",
     "migrate:reserva-vitrina": "node migrations/migrate_reserva_vitrina.js",
     "migrate:reserva-categorias": "node migrations/migrate_reserva_categorias.js",

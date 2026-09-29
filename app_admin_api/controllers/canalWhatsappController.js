@@ -11,6 +11,7 @@ const { validationResult } = require('express-validator');
 
 const Respuesta = require('../../app_core/helpers/respuesta');
 const canalEmbeddedSignup = require('../../app_core/whatsapp/canalEmbeddedSignup');
+const Audit = require('../../app_core/helpers/auditHelper');
 const { resolverPrincipalUsuario } = require('../../app_core/authz/principal');
 
 async function autorizar(req, res, idNegocio) {
@@ -68,19 +69,38 @@ async function postCanjear(req, res) {
         const idNegocio = Number(req.params.id_negocio);
         if (!(await autorizar(req, res, idNegocio))) return;
 
-        const { code, phoneNumberId, numeroE164, businessId } = req.body;
+        const { code, phoneNumberId, numeroE164, businessId, modo } = req.body;
         const resultado = await canalEmbeddedSignup.conectar({
             idNegocio,
+            idUsuario: req.usuario?.id_usuario ?? null,
             code,
-            phoneNumberId,
+            phoneNumberId: phoneNumberId || null,
             numeroE164: numeroE164 || null,
             businessId: businessId || null,
+            modo: modo || 'nuevo',
         });
         return Respuesta.success(res, 'WhatsApp conectado', resultado);
     } catch (error) {
         // Errores de dominio (CANAL_YA_CONECTADO, META_CANJE_FALLIDO, ...) traen `.statusCode` y
         // un mensaje enseñable — se reenvían tal cual, sin volver a envolverlos.
         if (!error.statusCode) console.error('Error en postCanjear (canal-whatsapp):', error);
+        // Rastro de cada intento fallido: con un cliente delante, «no conectó» sin el código de
+        // Meta no se puede diagnosticar después. `META_REGISTRO_FALLIDO` ya se audita en el servicio.
+        if (error.code !== 'META_REGISTRO_FALLIDO') {
+            await Audit.registrarEvento({
+                modulo: 'canal_whatsapp',
+                accion: 'conexion_fallida',
+                resultado: 'error',
+                idUsuario: req.usuario?.id_usuario ?? null,
+                idNegocio: Number(req.params.id_negocio) || null,
+                detalle: {
+                    code: error.code || null,
+                    mensaje: error.message,
+                    meta: error.detalle ?? null,
+                    modo: req.body?.modo ?? null,
+                },
+            });
+        }
         return Respuesta.error(
             res,
             error.message || 'Error al conectar el canal de WhatsApp',
@@ -105,7 +125,9 @@ async function postDesconectar(req, res) {
 
         const { desconectado } = await canalEmbeddedSignup.desconectar({
             idNegocio,
+            idUsuario: req.usuario?.id_usuario ?? null,
             motivo: 'Desconectado manualmente desde el panel por el negocio',
+            desuscribir: true,
         });
         if (!desconectado) {
             return Respuesta.error(
