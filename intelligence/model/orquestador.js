@@ -152,6 +152,15 @@ const POLITICA = [
         cuando: (ctx) => Boolean(ctx.flujoReclama),
     },
     {
+        regla: 'apertura',
+        motivo:
+            'Primer mensaje de la conversación y el flujo de la vertical pidió atenderlo: se ' +
+            'saluda y se enseña qué se puede reservar, como menú. Sin esto, una primera pregunta ' +
+            'libre iba al modelo, que conversaba sin ofrecer los servicios del negocio.',
+        nivel: NIVEL.DETERMINISTA,
+        cuando: (ctx) => Boolean(ctx.primerMensaje),
+    },
+    {
         regla: 'saludo',
         motivo:
             'Saludar tiene una respuesta fija y buena —la bienvenida con el enlace del menú— y ' +

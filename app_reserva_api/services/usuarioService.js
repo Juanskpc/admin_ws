@@ -485,9 +485,10 @@ async function validarRolDelVertical(idRol) {
 /**
  * Crea un usuario del negocio.
  *
- * La contraseña inicial es la cédula y se marca `debe_cambiar_password`, igual que hace el
- * registro por invitación del admin: nadie tiene que inventarse una contraseña por otro, y el
- * dueño puede decirle al empleado cómo entrar sin enviarle nada por escrito.
+ * La contraseña inicial es la cédula —o la que escriba el admin— y siempre se marca
+ * `debe_cambiar_password`, igual que hace el registro por invitación del admin: nadie tiene que
+ * inventarse una contraseña por otro, y el dueño puede decirle al empleado cómo entrar sin
+ * enviarle nada por escrito.
  *
  * Si el rol es PROFESIONAL, se crea además su ficha en la agenda —o se enlaza la que ya
  * exista—, porque un profesional sin ficha no puede recibir citas y sería un acceso inútil.
@@ -539,7 +540,9 @@ async function crear({ idNegocio, datos: datosCrudos, idProfesionalExistente = n
             email,
             telefono,
             password: datos.password?.trim() || cedula,   // el hook del modelo aplica bcrypt
-            debe_cambiar_password: !datos.password?.trim(),
+            // También con una contraseña escrita por el admin: la conoce otra persona, y el
+            // formulario promete que se pedirá cambiarla al entrar (igual que al editar).
+            debe_cambiar_password: true,
             estado: 'A',
             es_admin_principal: false,
         }, { transaction: t });

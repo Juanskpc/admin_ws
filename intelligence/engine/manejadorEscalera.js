@@ -182,6 +182,12 @@ function crearManejadorEscalera({
             llmDisponible: Boolean(llm),
             // «Este mensaje es mío» — lo decide el adaptador, no esta tabla (ADR-009).
             flujoReclama: flujos.reclamaEl(flujo, ctx.texto),
+            // Primer mensaje de la conversación (el contador de turnos, que `conTurnoContado`
+            // lleva para todos los niveles, sigue en cero; también tras un reinicio por
+            // inactividad, que vacía `variables`) y el flujo pidió atenderlo.
+            primerMensaje: flujos.abreLaConversacion(flujo)
+                && !Number(ctx.conversacion?.variables?.turnos || 0)
+                && !ctx.conversacion?.tarea_actual,
         });
 
         const pasoDeRuta = {

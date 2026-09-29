@@ -387,6 +387,21 @@ describe('orquestador', () => {
         expect(r.nivel).toBe('determinista');
     });
 
+    it('el primer mensaje va al flujo aunque sea una pregunta libre (apertura, 2026-09-29)', () => {
+        // Sin esto, «buenas, ¿qué precios manejan?» iba al modelo, que conversaba sin ofrecer
+        // los servicios del negocio.
+        const r = orquestador.enrutar({
+            texto: 'buenas, ¿qué precios manejan?', tareaEnCurso: false, llmDisponible: true, primerMensaje: true,
+        });
+        expect(r).toMatchObject({ nivel: 'determinista', regla: 'apertura' });
+
+        // Del segundo mensaje en adelante, la pregunta libre sigue siendo del modelo.
+        const s = orquestador.enrutar({
+            texto: 'buenas, ¿qué precios manejan?', tareaEnCurso: false, llmDisponible: true, primerMensaje: false,
+        });
+        expect(s.nivel).toBe('llm');
+    });
+
     it('la política tiene una fila comodín: ningún turno se queda sin nivel', () => {
         expect(orquestador.POLITICA[orquestador.POLITICA.length - 1].cuando({})).toBe(true);
     });

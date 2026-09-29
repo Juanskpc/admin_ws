@@ -71,6 +71,12 @@ const { ESTADO_HANDOFF } = require('../../engine/handoff');
 
 /** Pasos de la tarea de agendar. Enum-like: se registran en el Ledger y se miden. */
 const PASO = {
+    /**
+     * El tipo de servicio («Cabello», «Uñas», «Faciales»). Solo cuando el catálogo es largo y
+     * está ordenado en categorías: leer quince servicios para encontrar uno es lo que hacía que
+     * el cliente escribiera en vez de pulsar (ver `usaCategorias`).
+     */
+    CATEGORIA: 'categoria',
     SERVICIO: 'servicio',
     /**
      * El largo del cabello, el tamaño de la mascota, la zona del cuerpo. Va **entre el servicio
@@ -86,16 +92,34 @@ const PASO = {
      * Firulais (grande) fija el precio del baño de perro grande sin preguntarlo aparte.
      */
     MASCOTA: 'mascota',
-    PROFESIONAL: 'profesional',
+    // Desde el 2026-09-29 el orden es servicio → día → hora → nombre → profesional: primero
+    // CUÁNDO y después CON QUIÉN, ofreciendo solo a quien tiene libre esa hora. Antes se elegía
+    // la persona primero y con frecuencia no tenía hueco el día que el cliente quería.
     FECHA: 'fecha',
     HORA: 'hora',
     NOMBRE: 'nombre',
+    PROFESIONAL: 'profesional',
     CONFIRMAR: 'confirmar',
 };
 
 const TAREA_AGENDAR = 'agendar_cita';
 
 const MAX_OPCIONES = 8;
+
+/**
+ * Con más servicios que esto, y el catálogo repartido en al menos dos categorías, se pregunta
+ * primero el tipo. Es MAX_OPCIONES a propósito: hasta ahí caben en una sola lista de WhatsApp
+ * (10 filas) con sitio para volver, y por encima había que recortar y el cliente no veía todo.
+ */
+const UMBRAL_CATEGORIAS = MAX_OPCIONES;
+
+/** «Ver más» en una lista larga. Prefijados como los de VOLVER para no chocar con un id real. */
+const MAS_SERVICIOS = 'mas_servicios';
+const MAS_CATEGORIAS = 'mas_categorias';
+
+/** Ids de categoría en el menú. Los servicios sin categoría van juntos en «Otros». */
+const CATEGORIA_OTROS = 'cat_otros';
+const idDeCategoria = (idCategoria) => (idCategoria == null ? CATEGORIA_OTROS : `cat_${idCategoria}`);
 
 /**
  * La opción «me da igual» del paso de profesional.
@@ -112,6 +136,7 @@ const CUALQUIER_PROFESIONAL = 'cualquiera';
 // servicio, una hora o un profesional: el resolvedor de cada paso compara contra texto, y un
 // «volver» que coincidiera con un dato real sería el peor de los errores posibles.
 const VOLVER = {
+    CATEGORIA: 'volver_categoria',
     SERVICIO: 'volver_servicio',
     PROFESIONAL: 'volver_profesional',
     FECHA: 'volver_fecha',
@@ -153,27 +178,25 @@ const OTRA_MASCOTA = 'otra_mascota';
  *
  * El orden de arriba abajo es el del flujo, y cada paso conserva lo del anterior:
  *
- *   · **Servicio**: nada. Cambiar de servicio cambia la duración y a quién lo presta; todo lo
- *     que venía después se calculó para otra cosa.
- *   · **Profesional**: solo el servicio. La fecha se conserva*a*, pero la hora no: la agenda de
- *     otra persona es otra agenda.
- *   · **Fecha**: servicio y profesional. Solo caen la hora y el hold.
+ *   · **Categoría**: nada.
+ *   · **Servicio**: solo la categoría. Cambiar de servicio cambia la duración y a quién lo
+ *     presta; todo lo que venía después se calculó para otra cosa.
+ *   · **Fecha**: lo del pedido (servicio, mascota, variante). Caen la hora y el hold.
  *   · **Hora**: además la fecha, porque volver a las horas es volver a las de ESE día.
- *
- * *a* La fecha no se conserva al cambiar de profesional aunque podría: se prefiere volver a
- * preguntarla antes que enseñar las horas de alguien para un día que quizá no trabaja, con el
- * cliente creyendo que sigue eligiendo sobre lo mismo.
+ *   · **Profesional**: además la hora y quién la tiene libre: cambiar de persona no mueve la cita.
  */
+const DEL_PEDIDO = ['id_servicio', 'categoria', 'id_mascota', 'mascota_nombre', 'mascota_tamano',
+    'id_variante', 'variante_nombre', 'perfil'];
 const SOBREVIVE_AL_VOLVER = {
-    servicio: [],
-    // La mascota y la variante sobreviven a partir de aquí: son del pedido, no del calendario.
-    // `perfil` sobrevive a todo — es cómo habla este oficio, no una elección del cliente.
-    profesional: ['id_servicio', 'id_mascota', 'mascota_nombre', 'mascota_tamano', 'id_variante',
-                  'variante_nombre', 'perfil'],
-    fecha: ['id_servicio', 'id_profesional_preferido', 'profesionales_ofrecidos',
-            'id_mascota', 'mascota_nombre', 'mascota_tamano', 'id_variante', 'variante_nombre', 'perfil'],
-    hora: ['id_servicio', 'id_profesional_preferido', 'profesionales_ofrecidos', 'fecha',
-           'id_mascota', 'mascota_nombre', 'mascota_tamano', 'id_variante', 'variante_nombre', 'perfil'],
+    categoria: [],
+    // Volver a los servicios es volver a los de la MISMA categoría: el cliente pidió otro
+    // servicio, no otro tipo.
+    servicio: ['categoria'],
+    fecha: DEL_PEDIDO,
+    hora: [...DEL_PEDIDO, 'fecha'],
+    // Cambiar de persona conserva el día y la hora: la lista de profesionales es la de quienes
+    // tienen libre ESA hora, así que no hay nada que recalcular.
+    profesional: [...DEL_PEDIDO, 'fecha', 'hora', 'libres_por_hora', 'profesional_por_hora', 'nombre'],
 };
 
 /**
@@ -199,6 +222,9 @@ function podarAlVolver(destino, datos) {
 const PISTA_DE_CAMBIO = /\b(otro|otra|otros|otras|cambiar|cambia|cambio|volver|atras|regresar|distinto|distinta|diferente)\b/;
 
 const DESTINOS_DE_RETROCESO = [
+    // Antes que el de servicio: «elegir otro tipo de servicio» nombra las dos cosas y pide la
+    // primera. En un negocio sin categorías, volver aquí acaba en la lista de servicios igual.
+    [PASO.CATEGORIA, VOLVER.CATEGORIA, /\b(tipo|tipos|categorias?)\b/],
     // Los términos de cada oficio entran aquí: en un spa el cliente escribe «otro tratamiento»
     // y en un tatuador «otra sesión». Sin ellos, «cambiar de tratamiento» no se reconocía como
     // un retroceso y se leía como una respuesta al paso en curso.
@@ -544,16 +570,53 @@ function crearManejadorDeterminista({
             : `👋 ${hora} Te saluda *${quien}*.`;
     }
 
-    async function ofrecerServicios(ctx, pasosPrevios = [], { saludar = false } = {}) {
+    /**
+     * ¿Se pregunta primero el tipo de servicio?
+     *
+     * Solo si el catálogo es largo **y** está repartido en al menos dos categorías. Con pocos
+     * servicios la lista entera cabe y un paso más es fricción; con todo en una misma categoría
+     * (o sin ninguna), preguntar el tipo sería ofrecer una sola opción.
+     */
+    function usaCategorias(servicios) {
+        if (servicios.length <= UMBRAL_CATEGORIAS) return false;
+        return new Set(servicios.map((s) => idDeCategoria(s.categoria?.id_categoria))).size > 1;
+    }
+
+    /** Las categorías del catálogo, en el orden que fijó el negocio, con «Otros» al final. */
+    function categoriasDe(servicios) {
+        const porId = new Map();
+        for (const s of servicios) {
+            const id = idDeCategoria(s.categoria?.id_categoria);
+            if (!porId.has(id)) {
+                porId.set(id, {
+                    id,
+                    nombre: s.categoria?.nombre || 'Otros',
+                    orden: s.categoria ? Number(s.categoria.orden ?? 0) : Number.MAX_SAFE_INTEGER,
+                    cuantos: 0,
+                });
+            }
+            porId.get(id).cuantos += 1;
+        }
+        return [...porId.values()].sort((a, b) => a.orden - b.orden || a.nombre.localeCompare(b.nombre, 'es'));
+    }
+
+    /**
+     * Arranque del agendamiento: saluda (si toca) y enseña qué se puede reservar.
+     *
+     * Con catálogo largo y en categorías, primero el tipo; si no, los servicios directamente.
+     * `categoria` en `undefined` significa «aún no se eligió» y deja que se decida aquí; con
+     * valor, se muestran solo los servicios de esa categoría.
+     */
+    async function ofrecerServicios(ctx, pasosPrevios = [], { saludar = false, categoria, pagina = 0 } = {}) {
         const { resultado } = await invocar({ ...ctx, capacidad: 'consultar_servicios', args: {} });
-        const servicios = (resultado?.servicios || []).slice(0, MAX_OPCIONES);
+        const todos = resultado?.servicios || [];
         const apertura = saludar ? `${saludo(ctx)} ` : '';
         // Cómo habla este oficio y qué tiene encendido. Viene con los servicios —una sola
         // llamada— y se guarda en la tarea para que los pasos siguientes no vuelvan a pedirlo.
         const perfil = resultado?.negocio || null;
         const t = terminos({ perfil });
 
-        if (servicios.length === 0) {
+        if (todos.length === 0) {
             return {
                 pasos: [...pasosPrevios, paso('sin_servicios')],
                 // También se saluda aquí: que no haya agenda no es motivo para que el cliente
@@ -566,27 +629,66 @@ function crearManejadorDeterminista({
             };
         }
 
+        const conCategorias = usaCategorias(todos);
+        if (conCategorias && categoria === undefined) {
+            return ofrecerCategorias(ctx, pasosPrevios, { apertura, perfil, t, todos, pagina });
+        }
+
+        const delTipo = conCategorias
+            ? todos.filter((s) => idDeCategoria(s.categoria?.id_categoria) === categoria)
+            : todos;
+        // Si la categoría guardada ya no existe (se vació a mitad de conversación), se vuelve a
+        // empezar por los tipos en vez de enseñar una lista vacía.
+        if (delTipo.length === 0) {
+            return ofrecerServicios(ctx, pasosPrevios, { saludar });
+        }
+
+        const inicio = pagina * MAX_OPCIONES;
+        const servicios = delTipo.slice(inicio, inicio + MAX_OPCIONES);
+        const hayMas = delTipo.length > inicio + MAX_OPCIONES;
+        const nombreCategoria = conCategorias
+            ? categoriasDe(todos).find((c) => c.id === categoria)?.nombre
+            : null;
+
+        const pregunta = nombreCategoria
+            ? `Estos son los ${t.servicios} de *${nombreCategoria}*. ¿Cuál te gustaría agendar?`
+            : `${apertura}¿Qué ${t.servicio} te gustaría agendar?`;
+
         return {
-            pasos: [...pasosPrevios, paso('menu_servicios', { cuantos: servicios.length })],
+            pasos: [...pasosPrevios, paso('menu_servicios', {
+                cuantos: servicios.length, categoria: categoria ?? null, pagina,
+            })],
             respuestas: [
                 {
-                    texto: `${apertura}¿Qué ${t.servicio} te gustaría agendar?`,
+                    texto: pregunta,
                     // Nunca numerado dentro del texto: va en `opciones` y cada canal lo pinta
-                    // como sabe (ADR-017). El WebChat los hace chips; WhatsApp, botones.
+                    // como sabe (ADR-017). El WebChat los hace chips; WhatsApp, una lista.
                     // El nombre va en `etiqueta` y lo demás en `detalle` (F8-A): en el WebChat
-                    // se pintan juntos como antes, y en WhatsApp el detalle cabe en la
-                    // descripción de la fila en vez de morir en el recorte de 20 caracteres del
-                    // título de un botón, que se comía justo el precio.
-                    opciones: servicios.map((s) => ({
-                        id: String(s.id_servicio),
-                        etiqueta: s.nombre,
-                        // Un servicio a cotizar NO lleva precio en el detalle: enseñar el de
-                        // lista es prometer algo que el negocio va a desmentir. Y uno con
-                        // variantes lleva «desde», porque el precio depende de cuál se elija.
-                        detalle: s.a_cotizar
-                            ? 'Precio a convenir'
-                            : `${s.duracion_min} min${formatearPrecio(s.precio, s.variantes?.length > 0)}`,
-                    })),
+                    // se pintan juntos, y en WhatsApp el detalle cabe en la descripción de la
+                    // fila en vez de morir en el recorte de 20 caracteres del título.
+                    opciones: [
+                        ...servicios.map((s) => ({
+                            id: String(s.id_servicio),
+                            etiqueta: s.nombre,
+                            // Un servicio a cotizar NO lleva precio en el detalle: enseñar el de
+                            // lista es prometer algo que el negocio va a desmentir. Y uno con
+                            // variantes lleva «desde», porque el precio depende de cuál se elija.
+                            detalle: s.a_cotizar
+                                ? 'Precio a convenir'
+                                : `${s.duracion_min} min${formatearPrecio(s.precio, s.variantes?.length > 0)}`,
+                        })),
+                        // 8 servicios + «Ver más» + «Otro tipo» = 10, el máximo de una lista.
+                        ...(hayMas ? [{ id: MAS_SERVICIOS, etiqueta: `Ver más ${t.servicios}` }] : []),
+                        // El título de una fila de WhatsApp corta en 24 caracteres: el texto
+                        // completo («Elegir otro tipo de servicio») va en el detalle.
+                        ...(conCategorias
+                            ? [{
+                                id: VOLVER.CATEGORIA,
+                                etiqueta: '← Otro tipo',
+                                detalle: `Elegir otro tipo de ${t.servicio}`,
+                            }]
+                            : []),
+                    ],
                 },
             ],
             variables: conMemoria(ctx.conversacion),
@@ -595,13 +697,15 @@ function crearManejadorDeterminista({
                 datos: {
                     paso: PASO.SERVICIO,
                     perfil,
+                    ...(conCategorias ? { categoria } : {}),
+                    pagina,
                     // Se recuerda QUÉ se ofreció para poder resolver la respuesta contra la
                     // lista real en vez de adivinar. Sin esto había que sacar un número del
                     // texto libre, y «Corte de cabello (30 min) — $35.000» daba el servicio 30.
                     //
-                    // Desde 2026-09-29 se guarda también lo que decide los pasos siguientes:
-                    // si hay que cotizarlo, qué variantes tiene y si pide consentimiento. Así
-                    // el paso siguiente no necesita volver a consultar el catálogo.
+                    // Se guarda también lo que decide los pasos siguientes: si hay que
+                    // cotizarlo, qué variantes tiene y si pide consentimiento. Así el paso
+                    // siguiente no necesita volver a consultar el catálogo.
                     ofrecidos: servicios.map((s) => ({
                         id: s.id_servicio,
                         nombre: s.nombre,
@@ -614,6 +718,60 @@ function crearManejadorDeterminista({
             resultado: 'resuelto',
             nivel: 'determinista',
         };
+    }
+
+    /** El menú de tipos de servicio. Una fila por categoría, con cuántos servicios tiene. */
+    function ofrecerCategorias(ctx, pasosPrevios, { apertura, perfil, t, todos, pagina = 0 }) {
+        const lista = categoriasDe(todos);
+        // Con diez o menos caben todas en una lista de WhatsApp; si no, nueve y «Ver más».
+        const porPagina = lista.length <= 10 ? 10 : 9;
+        const inicio = pagina * porPagina;
+        const categorias = lista.slice(inicio, inicio + porPagina);
+        const hayMas = lista.length > inicio + porPagina;
+
+        return {
+            pasos: [...pasosPrevios, paso('menu_categorias', { cuantas: categorias.length, pagina })],
+            respuestas: [
+                {
+                    texto: `${apertura}¿Qué tipo de ${t.servicio} te gustaría agendar?`,
+                    opciones: [
+                        ...categorias.map((c) => ({
+                            id: c.id,
+                            etiqueta: c.nombre,
+                            detalle: `${c.cuantos} ${c.cuantos === 1 ? t.servicio : t.servicios}`,
+                        })),
+                        ...(hayMas ? [{ id: MAS_CATEGORIAS, etiqueta: 'Ver más tipos' }] : []),
+                    ],
+                },
+            ],
+            variables: conMemoria(ctx.conversacion),
+            tarea: {
+                nombre: TAREA_AGENDAR,
+                datos: {
+                    paso: PASO.CATEGORIA,
+                    perfil,
+                    pagina,
+                    categorias_ofrecidas: categorias.map((c) => ({ id: c.id, nombre: c.nombre })),
+                },
+            },
+            resultado: 'resuelto',
+            nivel: 'determinista',
+        };
+    }
+
+    async function elegirCategoria(ctx, datos) {
+        const texto = ultimaLinea(ctx.texto);
+        const t = normalizar(texto);
+        if (t === MAS_CATEGORIAS || /\bver mas\b/.test(t)) {
+            return ofrecerServicios(ctx, [paso('mas_categorias')], { pagina: (datos.pagina || 0) + 1 });
+        }
+        const elegida = resolverOpcion(texto, datos.categorias_ofrecidas);
+        if (!elegida) {
+            return reintentar(ctx, datos, 'Elige uno de los tipos de la lista, por favor.');
+        }
+        return ofrecerServicios(ctx, [paso('categoria_elegida', { categoria: elegida.id })], {
+            categoria: elegida.id,
+        });
     }
 
     // ── Pasos de la tarea ───────────────────────────────────────────────────────────────
@@ -693,7 +851,13 @@ function crearManejadorDeterminista({
         }
 
         const t = terminos(datos);
-        const servicio = resolverServicio(ultimaLinea(ctx.texto), datos.ofrecidos);
+        const texto = ultimaLinea(ctx.texto);
+        if (normalizar(texto) === MAS_SERVICIOS || /\bver mas\b/.test(normalizar(texto))) {
+            return ofrecerServicios(ctx, [paso('mas_servicios')], {
+                categoria: datos.categoria, pagina: (datos.pagina || 0) + 1,
+            });
+        }
+        const servicio = resolverServicio(texto, datos.ofrecidos);
         if (!servicio) {
             return reintentar(ctx, datos, `Elige uno de los ${t.servicios} de la lista, por favor.`);
         }
@@ -719,9 +883,9 @@ function crearManejadorDeterminista({
      * Qué toca después de elegir servicio, según el oficio.
      *
      * Es el único sitio donde se decide el orden, y por eso se lee de un vistazo: mascota →
-     * variante → profesional. Cada paso se salta solo si el negocio no tiene esa función o si
-     * el dato ya está resuelto, así que en una barbería —todo apagado— se cae directo a
-     * profesional, que es exactamente el flujo de siempre.
+     * variante → día. Cada paso se salta solo si el negocio no tiene esa función o si el dato
+     * ya está resuelto, así que en una barbería —todo apagado— se cae directo al día. El
+     * profesional va después de la hora (`ofrecerProfesionales`).
      */
     async function despuesDelServicio(ctx, datos, pasosPrevios) {
         const servicio = (datos.ofrecidos || []).find((x) => Number(x.id) === Number(datos.id_servicio));
@@ -750,7 +914,8 @@ function crearManejadorDeterminista({
             return ofrecerVariantes(ctx, datos, variantes, pasosPrevios);
         }
 
-        return ofrecerProfesionales(ctx, datos, pasosPrevios);
+        // 3. El día. El profesional se pregunta después de la hora, entre quienes la tienen libre.
+        return pedirFecha(ctx, datos, pasosPrevios);
     }
 
     /**
@@ -1107,56 +1272,81 @@ function crearManejadorDeterminista({
     }
 
     /**
-     * Ofrece quién puede atender — y se salta el paso cuando preguntar no aporta nada.
+     * Ofrece con quién, **entre quienes tienen libre la hora elegida** — y se salta el paso
+     * cuando preguntar no aporta nada.
+     *
+     * ## Por qué va después de la hora (2026-09-29)
+     *
+     * Antes se preguntaba la persona primero y después el día, y era frecuente elegir a alguien
+     * que no tenía hueco cuando el cliente podía venir: vuelta atrás y a empezar. Ahora el
+     * cliente dice cuándo y el menú solo trae a quien puede atenderle en ese momento, así que
+     * cualquier opción que pulse termina en cita.
      *
      * ## Las dos decisiones que hacen que esto no estorbe
      *
      * **1. «Me da igual» va primero.** La mayoría de la gente no tiene preferencia, y para esa
-     * mayoría preguntar es fricción pura: un paso más entre «quiero un corte» y tenerlo
-     * agendado. Si el menú se añadiera sin una salida rápida y visible, el flujo empeoraría
-     * para casi todos con tal de mejorar para unos pocos. Por eso la primera opción —la que
-     * más se pulsa sin leer— es la que equivale al comportamiento anterior.
+     * mayoría la opción más a mano es la que equivale a no elegir.
      *
-     * **2. Con un solo profesional NO se pregunta.** Ofrecer un menú de una opción es pedirle
-     * a alguien que confirme lo inevitable. Se salta directo a la fecha y no se guarda
-     * `id_profesional`: dejar la disponibilidad sin filtrar da el mismo resultado —solo hay
-     * uno— y evita que la conversación afirme una elección que el cliente nunca hizo.
+     * **2. Con una sola persona libre NO se pregunta.** Ofrecer un menú de una opción es pedirle
+     * a alguien que confirme lo inevitable: se aparta directamente con ella y el resumen dice
+     * con quién es.
      *
-     * Si no hay ninguno, tampoco se pregunta: se sigue a la fecha y el paso de disponibilidad
-     * dirá «no hay horas», que es donde ese problema se explica bien.
+     * Aparta la hora en el mismo turno cuando no hay nada que preguntar. Son dos capacidades
+     * distintas (`consultar_profesionales` y `proponer_turno`), así que la regla de «cada
+     * capacidad una vez por turno» se cumple.
      */
     async function ofrecerProfesionales(ctx, datos, pasosPrevios) {
+        const libres = (datos.libres_por_hora?.[datos.hora] || []).map(Number);
+        const porDefecto = datos.profesional_por_hora?.[datos.hora] ?? libres[0] ?? null;
+
+        if (libres.length <= 1) {
+            return apartarHora(ctx, { ...datos, id_profesional: porDefecto }, datos.nombre, [
+                ...pasosPrevios,
+                paso('profesional_no_se_pregunta', { cuantos: libres.length }),
+            ]);
+        }
+
         const { resultado } = await invocar({
             ...ctx,
             capacidad: 'consultar_profesionales',
             args: { id_servicio: datos.id_servicio },
         });
-        const profesionales = (resultado?.profesionales || []).slice(0, MAX_OPCIONES);
+        const conocidos = new Map((resultado?.profesionales || []).map((pr) => [Number(pr.id_profesional), pr]));
+        const profesionales = libres
+            .map((id) => conocidos.get(id))
+            .filter(Boolean)
+            .slice(0, MAX_OPCIONES);
 
         if (profesionales.length <= 1) {
-            return pedirFecha(ctx, datos, [
-                ...pasosPrevios,
-                paso('profesional_no_se_pregunta', { cuantos: profesionales.length }),
-            ]);
+            return apartarHora(
+                ctx,
+                { ...datos, id_profesional: profesionales[0]?.id_profesional ?? porDefecto },
+                datos.nombre,
+                [...pasosPrevios, paso('profesional_no_se_pregunta', { cuantos: profesionales.length })],
+            );
         }
 
+        const t = terminos(datos);
         return {
             pasos: [...pasosPrevios, paso('menu_profesionales', { cuantos: profesionales.length })],
             respuestas: [
                 {
-                    texto: `¿Con quién prefieres?`,
+                    texto: `¿Con quién prefieres tu ${t.cita} del ${fechaLegible(datos.fecha)} a las ${datos.hora}?`,
+                    // Me da igual + 8 personas + «Otra hora» = 10 filas, el máximo de una lista.
                     opciones: [
-                        { id: CUALQUIER_PROFESIONAL, etiqueta: 'Me da igual', detalle: 'El primero que tenga hueco' },
+                        { id: CUALQUIER_PROFESIONAL, etiqueta: 'Me da igual', detalle: 'Cualquiera con esa hora libre' },
                         ...profesionales.map((pr) => ({
                             id: String(pr.id_profesional),
                             etiqueta: pr.nombre,
                             detalle: pr.especialidad || undefined,
                         })),
-                        { id: VOLVER.SERVICIO, etiqueta: '← Otro servicio' },
+                        { id: VOLVER.HORA, etiqueta: '← Otra hora' },
                     ],
                 },
             ],
-            variables: conMemoria(ctx.conversacion),
+            // El nombre se guarda ya: si la conversación se corta aquí, la próxima vez no se
+            // vuelve a preguntar.
+            variables: conMemoria(ctx.conversacion, datos.nombre ? { nombre: datos.nombre } : {}),
             tarea: {
                 nombre: TAREA_AGENDAR,
                 datos: {
@@ -1165,7 +1355,7 @@ function crearManejadorDeterminista({
                     // Misma razón que con los servicios: se recuerda lo ofrecido para resolver
                     // la respuesta contra la lista real en vez de sacar un número del texto.
                     profesionales_ofrecidos: profesionales.map((pr) => ({
-                        id: pr.id_profesional,
+                        id: Number(pr.id_profesional),
                         nombre: pr.nombre,
                     })),
                 },
@@ -1225,13 +1415,19 @@ function crearManejadorDeterminista({
         const rastro = [paso('retroceso', { desde: datos.paso ?? null, hacia: destino })];
 
         switch (destino) {
-            case PASO.SERVICIO:
+            case PASO.CATEGORIA:
+                // Sin `categoria`: es lo que hace que se vuelva a preguntar el tipo. En un
+                // negocio sin categorías acaba en la lista de servicios, que es lo correcto.
                 return ofrecerServicios(ctx, rastro);
+            case PASO.SERVICIO:
+                // Los servicios del MISMO tipo que ya había elegido.
+                return ofrecerServicios(ctx, rastro, { categoria: podados.categoria });
             case PASO.PROFESIONAL:
-                // Por `despuesDelServicio` y no directo al menú de profesionales: si el negocio
-                // pregunta mascota o variante, volver «atrás» tiene que pasar por donde
-                // corresponda en ESTE oficio, no saltárselo.
-                return despuesDelServicio(ctx, podados, rastro);
+                // Otra persona para el mismo día y hora. Sin hora guardada (se venía de más
+                // atrás) no hay a quién ofrecer todavía: se sigue por el día.
+                return podados.hora && podados.fecha
+                    ? ofrecerProfesionales(ctx, podados, rastro)
+                    : despuesDelServicio(ctx, podados, rastro);
             case PASO.HORA:
                 // Volver a las horas de ESE día. Si no hay día guardado —porque se venía de
                 // más atrás— no hay nada a lo que volver, y se pide la fecha.
@@ -1249,7 +1445,9 @@ function crearManejadorDeterminista({
         // existiera no tiene la lista guardada, así que se vuelve a ofrecer el menú en vez de
         // resolver a ciegas.
         if (!datos.profesionales_ofrecidos) {
-            return ofrecerProfesionales(ctx, datos, [paso('menu_repetido', { motivo: 'sin_profesionales_ofrecidos' })]);
+            return datos.hora
+                ? ofrecerProfesionales(ctx, datos, [paso('menu_repetido', { motivo: 'sin_profesionales_ofrecidos' })])
+                : pedirFecha(ctx, datos, [paso('menu_repetido', { motivo: 'sin_profesionales_ofrecidos' })]);
         }
 
         const elegido = resolverProfesional(ultimaLinea(ctx.texto), datos.profesionales_ofrecidos);
@@ -1257,11 +1455,22 @@ function crearManejadorDeterminista({
             return reintentar(ctx, datos, 'Dime con quién prefieres, o "me da igual".');
         }
 
-        return pedirFecha(
-            ctx,
-            { ...datos, id_profesional_preferido: elegido },
-            [paso('profesional_elegido', { id_profesional: elegido })]
-        );
+        // Una tarea abierta con el orden anterior (profesional antes que el día) no tiene hora
+        // todavía: se sigue como entonces, con la persona como filtro de los días.
+        if (!datos.hora) {
+            return pedirFecha(
+                ctx,
+                { ...datos, id_profesional_preferido: elegido },
+                [paso('profesional_elegido', { id_profesional: elegido })],
+            );
+        }
+
+        // «Me da igual» es quien ofreció la hora; si no, la persona elegida, que está libre a
+        // esa hora porque la lista solo traía a quien lo estaba.
+        const idProfesional = elegido ?? datos.profesional_por_hora?.[datos.hora] ?? null;
+        return apartarHora(ctx, { ...datos, id_profesional: idProfesional }, datos.nombre, [
+            paso('profesional_elegido', { id_profesional: elegido }),
+        ]);
     }
 
     async function elegirFecha(ctx, datos) {
@@ -1353,6 +1562,15 @@ function crearManejadorDeterminista({
         // el bot mismo acababa de ofrecer. Lo cazó el test de extremo a extremo en cuanto
         // hubo dos profesionales y una cita previa.
         const profesionalPorHora = Object.fromEntries(horas.map((h) => [h.hora, h.id_profesional]));
+        // Y TODOS los que la tienen libre: el profesional se elige después de la hora, y solo
+        // se ofrece a quien de verdad puede atender a esa hora. Un adaptador anterior que no
+        // mande la lista deja al primero, que es lo que se sabía.
+        const libresPorHora = Object.fromEntries(horas.map((h) => [
+            h.hora,
+            Array.isArray(h.id_profesionales) && h.id_profesionales.length
+                ? h.id_profesionales
+                : [h.id_profesional].filter((x) => x != null),
+        ]));
 
         return {
             pasos: [...pasosPrevios, paso('menu_horas', { fecha, cuantas: horas.length })],
@@ -1371,7 +1589,13 @@ function crearManejadorDeterminista({
             variables: conMemoria(ctx.conversacion),
             tarea: {
                 nombre: TAREA_AGENDAR,
-                datos: { ...datos, paso: PASO.HORA, fecha, profesional_por_hora: profesionalPorHora },
+                datos: {
+                    ...datos,
+                    paso: PASO.HORA,
+                    fecha,
+                    profesional_por_hora: profesionalPorHora,
+                    libres_por_hora: libresPorHora,
+                },
             },
             resultado: 'resuelto',
             nivel: 'determinista',
@@ -1396,6 +1620,8 @@ function crearManejadorDeterminista({
             id_profesional: datos.profesional_por_hora?.[hora[0]] ?? null,
         };
 
+        // El nombre solo se pregunta la primera vez: después sale de la memoria de la
+        // conversación o de la ficha del cliente (`identidad.resolver`).
         if (!ctx.identidad.nombre) {
             return {
                 pasos: [paso('hora_elegida', { hora: hora[0], pide_nombre: true })],
@@ -1406,7 +1632,7 @@ function crearManejadorDeterminista({
                 nivel: 'determinista',
             };
         }
-        return apartarHora(ctx, conHora, ctx.identidad.nombre, [
+        return ofrecerProfesionales(ctx, { ...conHora, nombre: ctx.identidad.nombre }, [
             paso('hora_elegida', { hora: hora[0], pide_nombre: false }),
         ]);
     }
@@ -1425,7 +1651,7 @@ function crearManejadorDeterminista({
                 `Necesito un nombre para la ${terminos(datos).cita}. ¿Cómo te llamas?`,
             );
         }
-        return apartarHora(ctx, datos, nombre, [paso('nombre_recibido')]);
+        return ofrecerProfesionales(ctx, { ...datos, nombre }, [paso('nombre_recibido')]);
     }
 
     /** Toma el hold y pide confirmación. Única invocación de `proponer_turno` del turno. */
@@ -1447,19 +1673,21 @@ function crearManejadorDeterminista({
         });
 
         const t = terminos(datos);
-        const detalle = [
-            `${resultado.servicio}`,
-            // La variante en el resumen: «Coloración (pelo largo)». Sin esto el cliente lee el
-            // nombre del servicio a secas y no puede comprobar que se entendió su caso.
-            resultado.variante ? `(${resultado.variante})` : null,
-            datos.mascota_nombre ? `para ${datos.mascota_nombre}` : null,
-            resultado.profesional ? `con ${resultado.profesional}` : null,
-            `el ${fechaLegible(datos.fecha)} a las ${datos.hora}`,
-            resultado.duracion_min ? `(${resultado.duracion_min} min)` : null,
-            resultado.precio != null ? formatearPrecio(resultado.precio).replace(' — ', '— ') : null,
-        ]
-            .filter(Boolean)
-            .join(' ');
+        const mayuscula = (x) => x.charAt(0).toLocaleUpperCase('es') + x.slice(1);
+        // Todo lo que se va a agendar, una línea por dato, para que el cliente lo revise de un
+        // vistazo antes de decir que sí. La negrita es la de WhatsApp: UN asterisco.
+        const lineas = [
+            // La variante junto al servicio: «Coloración (pelo largo)». Sin esto el cliente lee
+            // el nombre del servicio a secas y no puede comprobar que se entendió su caso.
+            `• *${mayuscula(t.servicio)}:* ${resultado.servicio}${resultado.variante ? ` (${resultado.variante})` : ''}`,
+            datos.mascota_nombre ? `• *Mascota:* ${datos.mascota_nombre}` : null,
+            resultado.profesional ? `• *${mayuscula(t.profesional)}:* ${resultado.profesional}` : null,
+            `• *Día:* ${fechaLegible(datos.fecha)}`,
+            `• *Hora:* ${datos.hora}`,
+            resultado.duracion_min ? `• *Duración:* ${resultado.duracion_min} min` : null,
+            resultado.precio != null ? `• *Precio:* $${Number(resultado.precio).toLocaleString('es-CO')}` : null,
+            nombre ? `• *A nombre de:* ${nombre}` : null,
+        ].filter(Boolean);
 
         // El consentimiento no se firma por chat: se avisa para que venga preparado. Callarlo y
         // que se entere en el mostrador es lo que convierte una cita en una discusión.
@@ -1472,10 +1700,18 @@ function crearManejadorDeterminista({
             respuestas: [
                 ...avisos,
                 {
-                    texto: `Te aparté ${detalle}. ¿Confirmo la ${t.cita}?`,
+                    texto: [
+                        `Estos son los datos de tu ${t.cita}:`,
+                        '',
+                        ...lineas,
+                        '',
+                        `¿Confirmas la ${t.cita}?`,
+                    ].join('\n'),
+                    // Dos botones y nada más: la decisión es sí o no. El «no» lleva de vuelta a
+                    // las horas de ese día (ver `confirmar`), desde donde se puede cambiar todo.
                     opciones: [
-                        { id: 'si', etiqueta: 'Sí, confirmar' },
-                        { id: 'no', etiqueta: 'Ver otras horas' },
+                        { id: 'si', etiqueta: 'Sí' },
+                        { id: 'no', etiqueta: 'No' },
                     ],
                 },
             ],
@@ -1648,6 +1884,8 @@ function crearManejadorDeterminista({
         }
 
         switch (datos.paso) {
+            case PASO.CATEGORIA:
+                return conRastro(await elegirCategoria(ctx, datos));
             case PASO.SERVICIO:
                 return conRastro(await elegirServicio(ctx, datos));
             case PASO.VARIANTE:
@@ -1692,6 +1930,8 @@ function crearManejadorDeterminista({
 
 function textoDelPaso(pasoActual, t = TERMINOS_POR_DEFECTO_MINUSCULA) {
     switch (pasoActual) {
+        case PASO.CATEGORIA:
+            return `Elige el tipo de ${t.servicio} de la lista.`;
         case PASO.SERVICIO:
             return `Elige el ${t.servicio} de la lista.`;
         case PASO.VARIANTE:

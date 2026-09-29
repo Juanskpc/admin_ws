@@ -97,12 +97,12 @@ async function listarProfesionales(req, res) {
         const where = { id_negocio: idNegocio, estado: 'A' };
         const include = [];
         if (idServicio) {
-            // Profesionales que tienen el servicio asignado, o sin asignaciones (consideran ofrecer todos)
+            // Solo los que tienen el servicio asignado: sin asignaciones no ofrecen nada.
             include.push({
                 model: Models.ReservaServicio, as: 'servicios',
                 attributes: ['id_servicio'], through: { attributes: [] },
                 where: { id_servicio: idServicio, estado: 'A' },
-                required: false,
+                required: true,
             });
         }
 
@@ -112,24 +112,9 @@ async function listarProfesionales(req, res) {
             order: [['nombre', 'ASC']],
         });
 
-        let resultado = profesionales;
-        if (idServicio) {
-            // Si el profesional tiene servicios asignados pero ninguno coincide, lo excluimos.
-            // Si no tiene asignaciones, lo incluimos (ofrece todos).
-            const ids = profesionales.map(p => p.id_profesional);
-            const conAsignacion = await Models.ReservaProfesionalServicio.findAll({
-                where: { id_profesional: ids },
-                attributes: ['id_profesional'],
-                group: ['id_profesional'],
-            });
-            const setConAsignacion = new Set(conAsignacion.map(r => r.id_profesional));
-            resultado = profesionales.filter(p => {
-                const tieneCoincidencia = (p.servicios || []).length > 0;
-                return tieneCoincidencia || !setConAsignacion.has(p.id_profesional);
-            }).map(p => {
-                const o = p.toJSON(); delete o.servicios; return o;
-            });
-        }
+        const resultado = idServicio
+            ? profesionales.map(p => { const o = p.toJSON(); delete o.servicios; return o; })
+            : profesionales;
 
         return Respuesta.success(res, 'Profesionales disponibles', resultado);
     } catch (err) {

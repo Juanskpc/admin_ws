@@ -45,9 +45,8 @@ function error(mensaje, statusCode = 400) {
 /**
  * Profesionales activos que ofrecen el servicio.
  *
- * Uno sin ninguna asignación ofrece el catálogo entero: misma convención que `listarProfesionales`
- * y que la validación de `citaService`. Si aquí se excluyera, el portal ofrecería menos gente de
- * la que en realidad puede atender.
+ * Solo los que tienen el servicio asignado; uno sin ninguna asignación no ofrece nada. Misma
+ * regla que `listarProfesionales` y que la validación de `citaService`.
  */
 async function profesionalesDe(idNegocio, idServicio) {
     const servicio = await Models.ReservaServicio.findOne({
@@ -78,7 +77,7 @@ async function profesionalesDe(idNegocio, idServicio) {
 
     const ofrecen = profesionales.filter(p => {
         const suyos = asignadosPorProfesional.get(p.id_profesional);
-        return !suyos || suyos.has(idServicio);
+        return suyos?.has(idServicio) ?? false;
     });
 
     return { servicio, profesionales: ofrecen };

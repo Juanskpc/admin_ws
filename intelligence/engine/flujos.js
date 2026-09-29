@@ -41,8 +41,11 @@ const porTipo = new Map();
  * @param {Function} [registro.reclama] — `(texto) => boolean`: «este mensaje es mío, no lo mandes
  *                   al modelo». Opcional; sin ella el flujo solo recibe lo que la política de
  *                   enrutado ya le manda (comandos, tareas abiertas). Ver más abajo.
+ * @param {boolean}  [registro.abreConversacion] — el PRIMER mensaje de una conversación lo
+ *                   atiende este flujo, diga lo que diga (saludo + qué se puede reservar), en vez
+ *                   de dejar que el modelo converse sin ofrecer nada. Ver `abreLaConversacion`.
  */
-function registrar({ vertical, tipos, manejar, reclama = null }) {
+function registrar({ vertical, tipos, manejar, reclama = null, abreConversacion = false }) {
     if (!vertical || !Array.isArray(tipos) || typeof manejar !== 'function') {
         throw new Error('Un flujo necesita { vertical, tipos: [], manejar() }.');
     }
@@ -59,7 +62,7 @@ function registrar({ vertical, tipos, manejar, reclama = null }) {
                     `"${porTipo.get(clave).vertical}"; "${vertical}" no puede reclamarlo también.`
             );
         }
-        porTipo.set(clave, { vertical, manejar, reclama });
+        porTipo.set(clave, { vertical, manejar, reclama, abreConversacion: Boolean(abreConversacion) });
     }
 }
 
@@ -93,6 +96,18 @@ function reclamaEl(flujo, texto) {
     }
 }
 
+/**
+ * ¿Atiende este flujo el primer mensaje de la conversación?
+ *
+ * Lo pidió el negocio (2026-09-29): en reserva, el primer mensaje tiene que saludar y enseñar
+ * qué se puede agendar, siempre. Un «buenas, ¿cuánto vale un corte?» caía en `pregunta_libre`
+ * y el modelo conversaba sin ofrecer los servicios, así que el cliente tenía que escribir lo
+ * que un menú le habría dado con un toque. Es opt-in: el restaurante no lo declara y sigue igual.
+ */
+function abreLaConversacion(flujo) {
+    return Boolean(flujo?.abreConversacion);
+}
+
 /** El flujo de esta clase de negocio, o `null` si nadie la declaró. */
 function para(tipoNegocio) {
     if (!tipoNegocio) return null;
@@ -109,4 +124,4 @@ function _limpiar() {
     porTipo.clear();
 }
 
-module.exports = { registrar, para, reclamaEl, listar, _limpiar };
+module.exports = { registrar, para, reclamaEl, abreLaConversacion, listar, _limpiar };

@@ -151,13 +151,10 @@ async function validarProfesionalYServicios(
         where: { id_profesional: idProfesional, id_servicio: { [Op.in]: idServicios } },
         transaction,
     });
-    // Si el profesional aún no tiene asignaciones, lo permitimos (ofrece todos por defecto).
-    // Si ya tiene asignaciones, deben cubrir todos los pedidos.
-    const totalAsignados = await Models.ReservaProfesionalServicio.count({
-        where: { id_profesional: idProfesional },
-        transaction,
-    });
-    if (totalAsignados > 0 && ofrecidos.length !== idServicios.length) {
+    // Solo lo que tiene asignado. Sin ninguna asignación no ofrece nada: antes eso significaba
+    // «ofrece todo el catálogo», y un profesional recién creado aparecía haciendo servicios que
+    // nadie le había dado.
+    if (ofrecidos.length !== idServicios.length) {
         const e = new Error('El profesional no ofrece alguno de los servicios solicitados');
         e.statusCode = 400; e.code = 'SERVICIO_NO_OFRECIDO'; throw e;
     }

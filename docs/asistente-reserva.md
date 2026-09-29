@@ -295,3 +295,27 @@ peluquería canina con el bot conectado hoy no agenda ni una cita.
   existen. Es lo que hoy no hay: `e2e_agendar.test.js` prueba la barbería y nada más.
 - **El flujo no nombra perfiles.** Un grep en las pruebas: si aparece `'SALON'` o `'MASCOTAS'` fuera
   del registro de perfiles, la regla de §1 ya se rompió.
+
+---
+
+## 12. Flujo guiado por menús (implementado 2026-09-29)
+
+Pedido del negocio: que el cliente **no tenga que escribir**, solo pulsar.
+
+1. **El primer mensaje siempre lo atiende la FSM.** Regla `apertura` en `model/orquestador.js`:
+   el flujo de reserva se registra con `abreConversacion: true` (`flujos.abreLaConversacion`) y la
+   escalera marca `primerMensaje` cuando `variables.turnos` está en cero y no hay tarea. Antes, un
+   «buenas, ¿cuánto vale un corte?» iba al modelo y conversaba sin ofrecer los servicios. El
+   restaurante no lo declara y sigue igual.
+2. **Saludo + tipos o servicios.** Con más de 8 servicios (`UMBRAL_CATEGORIAS`) y al menos dos
+   categorías, primero las categorías (los servicios sin categoría van en «Otros»); si no, la lista
+   de servicios. Las listas se paginan con «Ver más» para no pasar de las 10 filas de WhatsApp.
+   Dentro de una categoría hay una fila `← Otro tipo` («Elegir otro tipo de servicio»).
+3. **Servicio → día → hora → nombre → profesional → resumen.** El nombre solo se pregunta si no se
+   conoce (memoria de la conversación o ficha del cliente) y se guarda en cuanto se da. El
+   profesional se elige **después** de la hora y solo entre quienes la tienen libre
+   (`consultar_disponibilidad` devuelve `id_profesionales` por hora); con uno solo, no se pregunta.
+4. **Resumen con todos los datos y dos botones: «Sí» / «No».** «No» vuelve a las horas del día.
+
+Tareas abiertas con el orden anterior (profesional antes que el día) siguen funcionando: sin hora
+guardada, elegir profesional lleva al día como antes.

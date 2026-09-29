@@ -122,6 +122,28 @@ describe('el registro de flujos', () => {
         ).toThrow(/ya lo atiende/);
     });
 
+    it('el flujo que abre la conversación se queda el PRIMER mensaje, aunque sea una pregunta', async () => {
+        // Reserva lo declara (2026-09-29): el primer mensaje saluda y enseña los servicios en vez
+        // de que el modelo converse sin ofrecerlos.
+        flujos.registrar({ vertical: 'reserva', tipos: ['BARBERIA'], manejar: flujoQueDice('menú'), abreConversacion: true });
+        flujos.registrar({ vertical: 'restaurante', tipos: ['RESTAURANTE'], manejar: flujoQueDice('menú resto') });
+        const llm = async () => ({ pasos: [], respuestas: ['del modelo'], variables: {}, tarea: null, resultado: 'resuelto', nivel: 'llm' });
+
+        const conTipo = (tipo) => crearManejadorEscalera({ llm, resolverNegocio: negocioDeTipo(tipo) });
+        const pregunta = 'buenas, ¿cuánto vale un corte?';
+
+        const primero = await conTipo('BARBERIA')(entrada(pregunta));
+        expect(primero.respuestas).toEqual(['menú']);
+
+        // El segundo mensaje ya no es apertura: la pregunta libre vuelve al modelo.
+        const segundo = entrada(pregunta);
+        segundo.conversacion.variables = { turnos: 1 };
+        expect((await conTipo('BARBERIA')(segundo)).respuestas).toEqual(['del modelo']);
+
+        // Opt-in: el restaurante no lo declaró y su primer mensaje libre sigue yendo al modelo.
+        expect((await conTipo('RESTAURANTE')(entrada(pregunta))).respuestas).toEqual(['del modelo']);
+    });
+
     it('exige las tres piezas', () => {
         expect(() => flujos.registrar({ vertical: 'x', tipos: ['Y'] })).toThrow();
         expect(() => flujos.registrar({ tipos: ['Y'], manejar: flujoQueDice('a') })).toThrow();

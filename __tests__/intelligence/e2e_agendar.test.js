@@ -125,6 +125,28 @@ async function esperarRespuestas(idSesion, cuantas, ms = 8000) {
     );
 }
 
+/**
+ * Desde la lista de horas hasta el resumen con «Sí / No» (orden de 2026-09-29: hora → nombre →
+ * profesional). El menú de profesional solo sale si a esa hora hay más de una persona libre,
+ * así que el número de turnos depende de la agenda del fixture: se devuelve cuántas respuestas
+ * van para que el test pueda seguir contando exacto.
+ */
+async function hastaElResumen(idSesion, hora, nombre, respuestasPrevias) {
+    let n = respuestasPrevias;
+    const pideNombre = await decir(idSesion, hora, ++n);
+    expect(pideNombre.contenido).toMatch(/a nombre de quién/i);
+
+    let r = await decir(idSesion, nombre, ++n);
+    if (/con quién/i.test(r.contenido)) {
+        // «Me da igual» es la PRIMERA opción a propósito: la vía rápida de quien no tiene
+        // preferencia, que es casi todo el mundo.
+        expect(opcionesDe(r)[0].id).toBe('cualquiera');
+        r = await decir(idSesion, 'me da igual', ++n);
+    }
+    expect(r.contenido).toMatch(/¿Confirmas la cita\?/);
+    return { resumen: r, respuestas: n };
+}
+
 /** Un paso de conversación: escribe y espera la respuesta que le toca. */
 async function decir(idSesion, texto, respuestaNumero) {
     await enviar(idSesion, texto);
@@ -304,23 +326,16 @@ describe('criterio 1: una cita completa por WebChat', () => {
         // El menú NO va numerado dentro del texto (ADR-017): va en `opciones`.
         expect(menu.contenido).not.toMatch(/1\)/);
 
-        // Desde 2026-08-24 se pregunta con quién, porque este servicio lo prestan dos
-        // personas. La PRIMERA opción es «me da igual» a propósito: es la vía rápida de quien
-        // no tiene preferencia, que es casi todo el mundo. Si algún día deja de ser la
-        // primera, este test lo dice.
-        const quien = await decir(s, servicios[0].id, 2);
-        expect(quien.contenido).toMatch(/con quién/i);
-        expect(opcionesDe(quien)[0].id).toBe('cualquiera');
+        // Desde 2026-09-29: servicio → día → hora → nombre → con quién (entre los libres).
+        const dias = await decir(s, servicios[0].id, 2);
+        expect(dias.contenido).toMatch(/qué día/i);
 
-        await decir(s, 'me da igual', 3);
-        const horas = horasDe(await decir(s, fechaConAgenda, 4));
+        const horas = horasDe(await decir(s, fechaConAgenda, 3));
         expect(horas.length).toBeGreaterThan(0);
 
-        await decir(s, horas[0].id, 5);
-        const propuesta = await decir(s, 'E2E Cliente', 6);
-        expect(propuesta.contenido).toMatch(/¿Confirmo la cita\?/);
+        const { respuestas } = await hastaElResumen(s, horas[0].id, 'E2E Cliente', 3);
 
-        const final = await decir(s, 'sí', 7);
+        const final = await decir(s, 'sí', respuestas + 1);
         expect(final.contenido).toMatch(/agendada/i);
 
         // La prueba de verdad no es el texto del bot: es la fila en el dominio.
@@ -414,16 +429,14 @@ describe('criterio 2: la ráfaga', () => {
 
         const menu = await decir(s, 'hola', 1);
         await decir(s, opcionesDe(menu)[0].id, 2);
-        await decir(s, 'me da igual', 3);
-        const horas = horasDe(await decir(s, fechaConAgenda, 4));
-        await decir(s, horas[0].id, 5);
-        await decir(s, 'E2E Doble', 6);
+        const horas = horasDe(await decir(s, fechaConAgenda, 3));
+        const { respuestas } = await hastaElResumen(s, horas[0].id, 'E2E Doble', 3);
 
         for (let i = 0; i < 3; i++) {
             await enviar(s, 'sí');
             await dormir(20);
         }
-        await esperarRespuestas(s, 6);
+        await esperarRespuestas(s, respuestas + 1);
         await dormir(DEBOUNCE_TEST * 4);
 
         const citas = await consulta(
@@ -432,10 +445,9 @@ describe('criterio 2: la ráfaga', () => {
             { idNegocio }
         );
         expect(citas[0].n).toBe(1);
-        // Siete y no seis desde 2026-08-24: el menú de profesional añadió un turno. Se afirma
-        // el número exacto a propósito — es lo que caza que la ráfaga NO haya producido una
-        // respuesta de más, que es justo lo que este test vigila.
-        expect(await salientesDe(s)).toHaveLength(7);
+        // Se afirma el número exacto a propósito — es lo que caza que la ráfaga NO haya
+        // producido una respuesta de más, que es justo lo que este test vigila.
+        expect(await salientesDe(s)).toHaveLength(respuestas + 1);
     }, 60000);
 });
 
@@ -450,9 +462,9 @@ describe('criterio 3: la continuidad', () => {
 
         const antes = await conversacionDe(s);
         expect(antes.tarea_actual).toBe('agendar_cita');
-        // 'profesional' desde 2026-08-24: tras elegir servicio se pregunta con quién. Lo que
-        // este test prueba es que la tarea sobrevive al reinicio, no en qué paso se quedó.
-        expect(antes.tarea_datos.paso).toBe('profesional');
+        // 'fecha' desde 2026-09-29: tras elegir servicio se pregunta el día. Lo que este test
+        // prueba es que la tarea sobrevive al reinicio, no en qué paso se quedó.
+        expect(antes.tarea_datos.paso).toBe('fecha');
 
         // El "reinicio": se tira el motor entero, con su cola en memoria y su manejador.
         // Si el estado de la conversación viviera en memoria, aquí se perdería.
@@ -465,7 +477,7 @@ describe('criterio 3: la continuidad', () => {
 
         const conv = await conversacionDe(s);
         expect(conv.tarea_actual).toBe('agendar_cita');
-        expect(conv.tarea_datos.paso).toBe('profesional');
+        expect(conv.tarea_datos.paso).toBe('fecha');
         expect(conv.tarea_datos.id_servicio).toBe(antes.tarea_datos.id_servicio);
     }, 60000);
 
@@ -481,11 +493,9 @@ describe('criterio 3: la continuidad', () => {
         motor._reiniciar();
         motor.registrarManejador(manejarDeterminista);
 
-        await decir(s, 'me da igual', 3);
-        const horas = horasDe(await decir(s, fechaConAgenda, 4));
-        await decir(s, horas[0].id, 5);
-        await decir(s, 'E2E Retomada', 6);
-        await decir(s, 'sí', 7);
+        const horas = horasDe(await decir(s, fechaConAgenda, 3));
+        const { respuestas } = await hastaElResumen(s, horas[0].id, 'E2E Retomada', 3);
+        await decir(s, 'sí', respuestas + 1);
 
         const cita = await unaFila(
             `SELECT codigo_publico FROM reserva.reserva_cita

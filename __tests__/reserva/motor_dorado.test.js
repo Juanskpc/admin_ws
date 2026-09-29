@@ -30,7 +30,7 @@ const Disponibilidad = require('../../app_reserva_api/services/disponibilidadSer
 const AgendaServicio = require('../../app_reserva_api/services/agendaServicioService');
 
 const NEGOCIO = 1;
-const ANA = 10;   // ofrece todo (sin asignaciones), horario propio el martes
+const ANA = 10;   // todos los servicios activos (asignados uno a uno), horario propio el martes
 const BETO = 11;  // solo corte y barba
 const CARO = 12;  // inactiva
 
@@ -72,7 +72,11 @@ function cargarFixture(config = CONFIGS.base) {
         { id_profesional: CARO, id_negocio: NEGOCIO, nombre: 'Caro', especialidad: null, foto_url: null, color_hex: '#333333', estado: 'I' },
     ];
 
+    // Sin asignaciones un profesional no ofrece nada: a Ana se le dan todos los activos.
     mockDatos.ReservaProfesionalServicio = [
+        { id_profesional: ANA, id_servicio: 1 },
+        { id_profesional: ANA, id_servicio: 2 },
+        { id_profesional: ANA, id_servicio: 3 },
         { id_profesional: BETO, id_servicio: 1 },
         { id_profesional: BETO, id_servicio: 2 },
     ];

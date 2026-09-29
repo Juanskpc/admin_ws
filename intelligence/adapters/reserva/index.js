@@ -164,15 +164,17 @@ async function horasDelDia(idNegocio, args, profesionalesPrecargados = null) {
 
         for (const slot of resultado.slots) {
             if (!slot.disponible) continue;
-            // Una hora la ofrece quien la tenga libre; se guarda el primero para que la
-            // capacidad de reserva no tenga que volver a calcularlo.
-            if (!porHora.has(slot.hora)) porHora.set(slot.hora, p.id_profesional);
+            // Todos los que la tienen libre, en orden. El primero es el que se propone por
+            // defecto («me da igual»); la lista entera deja que el cliente elija persona
+            // DESPUÉS de la hora, entre quienes de verdad pueden atenderle entonces.
+            if (!porHora.has(slot.hora)) porHora.set(slot.hora, []);
+            porHora.get(slot.hora).push(p.id_profesional);
         }
     }
 
     const horas = [...porHora.entries()]
         .sort(([a], [b]) => a.localeCompare(b))
-        .map(([hora, idProfesional]) => ({ hora, id_profesional: idProfesional }));
+        .map(([hora, ids]) => ({ hora, id_profesional: ids[0], id_profesionales: ids }));
 
     return { fecha: args.fecha, duracion_min: duracionMin, horas };
 }
@@ -304,6 +306,11 @@ function registrarCapacidades() {
                     nombre: s.nombre,
                     duracion_min: s.duracion_min,
                     precio: s.precio != null ? Number(s.precio) : null,
+                    // La categoría del portal. Con un catálogo largo el asistente pregunta primero
+                    // el tipo («Cabello», «Uñas») y después enseña solo los de ése.
+                    categoria: s.categoria
+                        ? { id_categoria: s.categoria.id_categoria, nombre: s.categoria.nombre, orden: s.categoria.orden }
+                        : null,
                     // Los tres campos que deciden si este servicio se puede agendar por chat y
                     // qué hay que preguntar antes. Solo se exponen si el negocio tiene la
                     // función encendida: un dato que el oficio no usa es ruido para el modelo.
@@ -916,7 +923,11 @@ const TIPOS_NEGOCIO = ['RESERVA', 'BARBERIA', 'SALON DE BELLEZA'];
 
 function registrarFlujo({ flujos }) {
     const { manejarDeterminista } = require('./flujoCita');
-    flujos.registrar({ vertical: VERTICAL, tipos: TIPOS_NEGOCIO, manejar: manejarDeterminista });
+    // `abreConversacion`: el primer mensaje siempre saluda y enseña los servicios (o sus tipos)
+    // como menú, diga lo que diga el cliente. Ver `flujos.abreLaConversacion`.
+    flujos.registrar({
+        vertical: VERTICAL, tipos: TIPOS_NEGOCIO, manejar: manejarDeterminista, abreConversacion: true,
+    });
     // Alojamientos: mismo módulo, otro flujo (reservan noches, no citas).
     require('./flujoEstancia').registrarFlujo({ flujos });
 }

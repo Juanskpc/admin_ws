@@ -115,7 +115,7 @@ async function crear(req, res) {
             id_usuario: r.usuario.id_usuario,
             // Se devuelve la contraseña inicial para que el administrador pueda dictársela al
             // empleado; solo la ve quien acaba de crear la cuenta y obliga a cambiarla al entrar.
-            password_temporal: r.usuario.debe_cambiar_password ? r.usuario.num_identificacion : null,
+            password_temporal: String(req.body.password ?? '').trim() ? null : r.usuario.num_identificacion,
             id_profesional: r.profesional?.id_profesional ?? null,
         });
     } catch (err) {

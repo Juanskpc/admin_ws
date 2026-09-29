@@ -179,9 +179,8 @@ async function getVitrina(idNegocio) {
         })
         : [];
 
-    // Un profesional **sin ninguna** asignación ofrece todo el catálogo: es la misma convención
-    // que usa `listarProfesionales` y la que espera `citaService` al validar la reserva. Si aquí
-    // se mostrara vacío, el cliente creería que ese profesional no atiende nada.
+    // Un profesional ofrece solo lo que tiene asignado; sin ninguna asignación, nada. Es la misma
+    // regla que usa `listarProfesionales` y la que aplica `citaService` al validar la reserva.
     const serviciosPorProfesional = new Map();
     for (const r of relaciones) {
         if (!serviciosPorProfesional.has(r.id_profesional)) serviciosPorProfesional.set(r.id_profesional, []);
@@ -199,16 +198,13 @@ async function getVitrina(idNegocio) {
 
     const profesionalesSalida = profesionales.map(p => {
         const asignados = serviciosPorProfesional.get(p.id_profesional);
-        const idsServicios = asignados
-            ? asignados.filter(id => setActivos.has(id))
-            : [...idsServiciosActivos];
+        const idsServicios = (asignados ?? []).filter(id => setActivos.has(id));
         return {
             id_profesional: p.id_profesional,
             nombre: p.nombre,
             especialidad: limpio(p.especialidad),
             foto_url: p.foto_url,
             color_hex: p.color_hex,
-            ofrece_todo: !asignados,
             // El enlace, no el número: la página solo necesita a dónde lleva el botón, y armar el
             // `wa.me` aquí deja la regla —qué es un móvil en cada país— en un único sitio.
             // `null` cuando el teléfono no se reconoce, y eso es lo que hace que el botón no se

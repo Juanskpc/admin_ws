@@ -59,8 +59,9 @@ const DISPONIBILIDAD = {
     fecha: '2026-08-20',
     duracion_min: 30,
     horas: [
-        { hora: '09:00', id_profesional: 4 },
-        { hora: '10:00', id_profesional: 4 },
+        { hora: '09:00', id_profesional: 4, id_profesionales: [4] },
+        // A las 10:00 están libres los dos: es la hora en la que el cliente elige con quién.
+        { hora: '10:00', id_profesional: 4, id_profesionales: [4, 5] },
     ],
 };
 
@@ -145,7 +146,7 @@ const gateCompleto = () =>
 // ── El camino completo ──────────────────────────────────────────────────────────────────
 
 describe('agendar una cita de principio a fin', () => {
-    test('seis turnos: servicio, profesional, fecha, hora, nombre, confirmar', async () => {
+    test('siete turnos: servicio, fecha, hora, nombre, profesional, confirmar', async () => {
         const gate = gateCompleto();
         const manejar = crearManejadorDeterminista({ gate, contextoNegocio: NEGOCIO_FALSO, identidad: identidadFalsa() });
 
@@ -155,34 +156,40 @@ describe('agendar una cita de principio a fin', () => {
         expect(d.tarea.datos.paso).toBe(PASO.SERVICIO);
         expect(d.respuestas[0].opciones).toHaveLength(2);
 
-        // 2. Elige servicio → pregunta con quién (este servicio lo prestan dos personas)
+        // 2. Elige servicio → pide el día (el profesional va después de la hora, 2026-09-29)
         conv = conversacion({ tarea: TAREA_AGENDAR, datos: d.tarea.datos });
         d = await manejar(entrada('1', conv));
-        expect(d.tarea.datos).toMatchObject({ paso: PASO.PROFESIONAL, id_servicio: 1 });
+        expect(d.tarea.datos).toMatchObject({ paso: PASO.FECHA, id_servicio: 1 });
 
-        // 3. «Me da igual» → pide fecha, y sin filtrar por nadie
-        conv = conversacion({ tarea: TAREA_AGENDAR, datos: d.tarea.datos });
-        d = await manejar(entrada('me da igual', conv));
-        expect(d.tarea.datos).toMatchObject({ paso: PASO.FECHA, id_profesional_preferido: null });
-
-        // 4. Da fecha → menú de horas
+        // 3. Da fecha → menú de horas, sin filtrar por nadie
         conv = conversacion({ tarea: TAREA_AGENDAR, datos: d.tarea.datos });
         d = await manejar(entrada('2026-08-20', conv));
         expect(d.tarea.datos.paso).toBe(PASO.HORA);
         // Las horas, y al final la salida para cambiar de día (2026-08-24).
         expect(d.respuestas[0].opciones.map((o) => o.id)).toEqual(['09:00', '10:00', 'volver_fecha']);
+        const disponibilidad = gate.llamadas.find((l) => l.capacidad === 'consultar_disponibilidad');
+        expect('id_profesional' in disponibilidad.args).toBe(false);
 
         // 4. Elige hora → pide nombre (no lo conocemos)
         conv = conversacion({ tarea: TAREA_AGENDAR, datos: d.tarea.datos });
         d = await manejar(entrada('10:00', conv));
         expect(d.tarea.datos.paso).toBe(PASO.NOMBRE);
 
-        // 5. Da nombre → aparta y pide confirmación
+        // 5. Da nombre → pregunta con quién, entre los libres a las 10:00
         conv = conversacion({ tarea: TAREA_AGENDAR, datos: d.tarea.datos });
         d = await manejar(entrada('Nicolás', conv));
-        expect(d.tarea.datos).toMatchObject({ paso: PASO.CONFIRMAR, codigo_hold: 'HOLD-ABC' });
+        expect(d.tarea.datos).toMatchObject({ paso: PASO.PROFESIONAL, nombre: 'Nicolás' });
+        // El nombre ya queda en la memoria: la próxima vez no se pregunta.
+        expect(d.variables.nombre).toBe('Nicolás');
 
-        // 6. Confirma → cita creada y tarea cerrada
+        // 6. Elige a Marco → aparta con él y pide confirmación
+        conv = conversacion({ tarea: TAREA_AGENDAR, datos: d.tarea.datos });
+        d = await manejar(entrada('Marco', conv));
+        expect(d.tarea.datos).toMatchObject({ paso: PASO.CONFIRMAR, codigo_hold: 'HOLD-ABC', id_profesional: 5 });
+        const propuesta = gate.llamadas.find((l) => l.capacidad === 'proponer_turno');
+        expect(propuesta.args).toMatchObject({ inicio: '2026-08-20T10:00:00', id_profesional: 5 });
+
+        // 7. Confirma → cita creada y tarea cerrada
         conv = conversacion({ tarea: TAREA_AGENDAR, datos: d.tarea.datos });
         d = await manejar(entrada('sí', conv));
         expect(d.tarea).toBeNull();
@@ -723,8 +730,16 @@ describe('elegir profesional (2026-08-24)', () => {
         // fricción. Si la salida rápida deja de ser la primera —la que se pulsa sin leer—,
         // el menú empeora el flujo para casi todos con tal de mejorarlo para unos pocos.
         const gate = gateCompleto();
-        const conv = conversacion({ tarea: TAREA_AGENDAR, datos: { paso: PASO.SERVICIO, ofrecidos: SERVICIOS_OFRECIDOS } });
-        const d = await manejador(gate)(entrada('1', conv));
+        const conv = conversacion({
+            tarea: TAREA_AGENDAR,
+            datos: {
+                paso: PASO.HORA, id_servicio: 1, fecha: '2026-08-20',
+                profesional_por_hora: { '10:00': 4 }, libres_por_hora: { '10:00': [4, 5] },
+            },
+        });
+        const d = await crearManejadorDeterminista({
+            gate, contextoNegocio: NEGOCIO_FALSO, identidad: identidadFalsa({ nombre: 'Ana' }),
+        })(entrada('10:00', conv));
 
         const opciones = d.respuestas[0].opciones;
         expect(opciones[0]).toMatchObject({ id: 'cualquiera', etiqueta: 'Me da igual' });
@@ -733,8 +748,40 @@ describe('elegir profesional (2026-08-24)', () => {
             'Me da igual',
             'Laura Gómez',
             'Marco Ruiz',
-            '← Otro servicio',
+            '← Otra hora',
         ]);
+    });
+
+    test('solo se ofrece a quien tiene libre la hora elegida', async () => {
+        // Marco no está libre a las 09:00: ofrecerlo terminaría en «esa hora ya no está».
+        const gate = gateCompleto();
+        const conv = conversacion({
+            tarea: TAREA_AGENDAR,
+            datos: {
+                paso: PASO.HORA, id_servicio: 1, fecha: '2026-08-20',
+                profesional_por_hora: { '09:00': 4, '10:00': 4 },
+                libres_por_hora: { '09:00': [4], '10:00': [4, 5] },
+            },
+        });
+        const d = await crearManejadorDeterminista({
+            gate, contextoNegocio: NEGOCIO_FALSO, identidad: identidadFalsa({ nombre: 'Ana' }),
+        })(entrada('09:00', conv));
+
+        // Con una sola persona libre no se pregunta: se aparta con ella.
+        expect(d.tarea.datos.paso).toBe(PASO.CONFIRMAR);
+        const propuesta = gate.llamadas.find((l) => l.capacidad === 'proponer_turno');
+        expect(propuesta.args.id_profesional).toBe(4);
+    });
+
+    test('«me da igual» aparta con quien ofreció la hora', async () => {
+        const gate = gateCompleto();
+        const d = await manejador(gate)(entrada('me da igual', conPaso({
+            fecha: '2026-08-20', hora: '10:00', nombre: 'Ana',
+            profesional_por_hora: { '10:00': 4 }, libres_por_hora: { '10:00': [4, 5] },
+        })));
+
+        expect(d.tarea.datos.paso).toBe(PASO.CONFIRMAR);
+        expect(gate.llamadas.find((l) => l.capacidad === 'proponer_turno').args.id_profesional).toBe(4);
     });
 
     test('con UN solo profesional no se pregunta: se salta al día', async () => {
@@ -805,7 +852,10 @@ describe('elegir profesional (2026-08-24)', () => {
     test('una conversación abierta antes de que esto existiera vuelve a ver el menú', async () => {
         // `tarea_datos` está persistido y no se migra solo: sin la lista guardada no se puede
         // resolver sin adivinar, así que se reofrece el menú, que la repuebla.
-        const d = await manejador(gateCompleto())(entrada('Laura', conPaso({ profesionales_ofrecidos: undefined })));
+        const d = await manejador(gateCompleto())(entrada('Laura', conPaso({
+            profesionales_ofrecidos: undefined,
+            fecha: '2026-08-20', hora: '10:00', nombre: 'Ana', libres_por_hora: { '10:00': [4, 5] },
+        })));
         expect(d.tarea.datos.paso).toBe(PASO.PROFESIONAL);
         expect(d.tarea.datos.profesionales_ofrecidos).toHaveLength(2);
     });
@@ -831,6 +881,7 @@ describe('retroceder sin empezar de cero (2026-08-24)', () => {
                 fecha: '2026-08-20',
                 hora: '10:00',
                 profesional_por_hora: { '10:00': 5 },
+                libres_por_hora: { '10:00': [4, 5] },
                 codigo_hold: 'HOLD-ABC',
                 nombre: 'Ana',
             },
@@ -848,23 +899,21 @@ describe('retroceder sin empezar de cero (2026-08-24)', () => {
         }
     });
 
-    test('cambiar de profesional conserva el servicio y tira la hora', async () => {
-        const d = await manejador(gateCompleto())(entrada('con otra persona', todoElegido(PASO.HORA)));
+    test('cambiar de profesional conserva día y hora, y ofrece a quien la tiene libre', async () => {
+        // Desde 2026-09-29 la persona se elige DESPUÉS de la hora: cambiarla no mueve la cita.
+        const d = await manejador(gateCompleto())(entrada('con otra persona', todoElegido(PASO.CONFIRMAR)));
 
         expect(d.tarea.datos.paso).toBe(PASO.PROFESIONAL);
-        expect(d.tarea.datos.id_servicio).toBe(1);
-        // La agenda de otra persona es otra agenda: la hora y el día no valen.
-        expect(d.tarea.datos.hora).toBeUndefined();
-        expect(d.tarea.datos.fecha).toBeUndefined();
+        expect(d.tarea.datos).toMatchObject({ id_servicio: 1, fecha: '2026-08-20', hora: '10:00' });
+        // El hold de la persona anterior no se arrastra: se toma otro al elegir.
         expect(d.tarea.datos.codigo_hold).toBeUndefined();
     });
 
-    test('cambiar de día conserva servicio y profesional, y tira la hora', async () => {
+    test('cambiar de día conserva el servicio y tira la hora', async () => {
         const d = await manejador(gateCompleto())(entrada('otro día', todoElegido(PASO.HORA)));
 
         expect(d.tarea.datos.paso).toBe(PASO.FECHA);
         expect(d.tarea.datos.id_servicio).toBe(1);
-        expect(d.tarea.datos.id_profesional_preferido).toBe(5);
         expect(d.tarea.datos.hora).toBeUndefined();
         expect(d.tarea.datos.codigo_hold).toBeUndefined();
     });
@@ -898,7 +947,8 @@ describe('retroceder sin empezar de cero (2026-08-24)', () => {
         // El falso positivo que más caro saldría: quedarse en bucle en el primer paso.
         const conv = conversacion({ tarea: TAREA_AGENDAR, datos: { paso: PASO.SERVICIO, ofrecidos: SERVICIOS_OFRECIDOS } });
         const d = await manejador(gateCompleto())(entrada('Corte', conv));
-        expect(d.tarea.datos.paso).toBe(PASO.PROFESIONAL);
+        expect(d.tarea.datos.paso).toBe(PASO.FECHA);
+        expect(d.tarea.datos.id_servicio).toBe(1);
     });
 
     test('pedir el paso en el que ya se está no hace nada raro', async () => {
@@ -942,5 +992,117 @@ describe('retroceder sin empezar de cero (2026-08-24)', () => {
         const d = await manejador(gate)(entrada('2026-08-20', conv));
 
         expect(d.respuestas[0].opciones.map((o) => o.id)).not.toContain('volver_profesional');
+    });
+});
+
+
+// ── Catálogo largo: primero el tipo, después el servicio (2026-09-29) ───────────────────
+
+describe('catálogo largo en categorías', () => {
+    const CABELLO = { id_categoria: 10, nombre: 'Cabello', orden: 0 };
+    const UNAS = { id_categoria: 20, nombre: 'Uñas', orden: 1 };
+
+    /** 12 servicios: 9 de cabello, 2 de uñas y uno sin categoría. */
+    const CATALOGO = {
+        servicios: [
+            ...Array.from({ length: 9 }, (_, i) => ({
+                id_servicio: 100 + i, nombre: `Cabello ${i + 1}`, duracion_min: 30, precio: 20000, categoria: CABELLO,
+            })),
+            { id_servicio: 200, nombre: 'Manicure', duracion_min: 40, precio: 25000, categoria: UNAS },
+            { id_servicio: 201, nombre: 'Pedicure', duracion_min: 50, precio: 30000, categoria: UNAS },
+            { id_servicio: 300, nombre: 'Masaje', duracion_min: 60, precio: 80000, categoria: null },
+        ],
+    };
+
+    function manejador(gate) {
+        return crearManejadorDeterminista({ gate, contextoNegocio: NEGOCIO_FALSO, identidad: identidadFalsa() });
+    }
+    const gateCatalogo = () => gateFalso({
+        consultar_servicios: CATALOGO,
+        consultar_profesionales: PROFESIONALES,
+        consultar_disponibilidad: DISPONIBILIDAD,
+    });
+
+    test('el primer mensaje saluda y enseña los TIPOS, no la lista entera', async () => {
+        const d = await manejador(gateCatalogo())(entrada('buenas, qué precios manejan?', conversacion()));
+
+        expect(d.tarea.datos.paso).toBe(PASO.CATEGORIA);
+        expect(d.respuestas[0].texto).toMatch(/Te saluda \*Barbería Don Nico\*/);
+        expect(d.respuestas[0].opciones.map((o) => o.etiqueta)).toEqual(['Cabello', 'Uñas', 'Otros']);
+        expect(d.respuestas[0].opciones[1].detalle).toBe('2 servicios');
+    });
+
+    test('elegir un tipo enseña solo sus servicios, con «Otro tipo» para volver', async () => {
+        const conv = conversacion({
+            tarea: TAREA_AGENDAR,
+            datos: { paso: PASO.CATEGORIA, categorias_ofrecidas: [{ id: 'cat_10', nombre: 'Cabello' }, { id: 'cat_20', nombre: 'Uñas' }] },
+        });
+        const d = await manejador(gateCatalogo())(entrada('cat_20', conv));
+
+        expect(d.tarea.datos).toMatchObject({ paso: PASO.SERVICIO, categoria: 'cat_20' });
+        const opciones = d.respuestas[0].opciones;
+        expect(opciones.map((o) => o.id)).toEqual(['200', '201', 'volver_categoria']);
+        expect(opciones[2]).toMatchObject({ etiqueta: '← Otro tipo', detalle: 'Elegir otro tipo de servicio' });
+    });
+
+    test('«Otro tipo» vuelve al menú de tipos', async () => {
+        const conv = conversacion({
+            tarea: TAREA_AGENDAR,
+            datos: { paso: PASO.SERVICIO, categoria: 'cat_20', ofrecidos: [{ id: 200, nombre: 'Manicure' }] },
+        });
+        const d = await manejador(gateCatalogo())(entrada('volver_categoria', conv));
+        expect(d.tarea.datos.paso).toBe(PASO.CATEGORIA);
+
+        // Y escrito a mano también.
+        const e = await manejador(gateCatalogo())(entrada('elegir otro tipo de servicio', conv));
+        expect(e.tarea.datos.paso).toBe(PASO.CATEGORIA);
+    });
+
+    test('una categoría con más de 8 servicios se pagina con «Ver más»', async () => {
+        const conv = conversacion({
+            tarea: TAREA_AGENDAR,
+            datos: { paso: PASO.CATEGORIA, categorias_ofrecidas: [{ id: 'cat_10', nombre: 'Cabello' }] },
+        });
+        let d = await manejador(gateCatalogo())(entrada('Cabello', conv));
+        let ids = d.respuestas[0].opciones.map((o) => o.id);
+        // 8 servicios + Ver más + Otro tipo = 10 filas, el máximo de una lista de WhatsApp.
+        expect(ids).toHaveLength(10);
+        expect(ids.slice(-2)).toEqual(['mas_servicios', 'volver_categoria']);
+
+        d = await manejador(gateCatalogo())(entrada('mas_servicios', conversacion({ tarea: TAREA_AGENDAR, datos: d.tarea.datos })));
+        ids = d.respuestas[0].opciones.map((o) => o.id);
+        expect(ids).toEqual(['108', 'volver_categoria']);
+    });
+
+    test('con pocos servicios no se pregunta el tipo aunque haya categorías', async () => {
+        const gate = gateFalso({
+            consultar_servicios: { servicios: CATALOGO.servicios.slice(8) },
+        });
+        const d = await manejador(gate)(entrada('hola', conversacion()));
+        expect(d.tarea.datos.paso).toBe(PASO.SERVICIO);
+        expect(d.respuestas[0].opciones.map((o) => o.id)).not.toContain('volver_categoria');
+    });
+});
+
+describe('resumen final con Sí / No', () => {
+    test('reúne todos los datos y ofrece exactamente «Sí» y «No»', async () => {
+        const gate = gateCompleto();
+        const conv = conversacion({
+            tarea: TAREA_AGENDAR,
+            datos: {
+                paso: PASO.HORA, id_servicio: 1, fecha: '2026-08-20',
+                profesional_por_hora: { '10:00': 4 }, libres_por_hora: { '10:00': [4] },
+            },
+        });
+        const d = await crearManejadorDeterminista({
+            gate, contextoNegocio: NEGOCIO_FALSO, identidad: identidadFalsa({ nombre: 'Nicolás' }),
+        })(entrada('10:00', conv));
+
+        const final = d.respuestas[d.respuestas.length - 1];
+        expect(final.opciones).toEqual([{ id: 'si', etiqueta: 'Sí' }, { id: 'no', etiqueta: 'No' }]);
+        for (const dato of ['Corte', 'Laura', 'jueves 20 de agosto', '10:00', '30 min', '$25.000', 'Nicolás']) {
+            expect(final.texto).toContain(dato);
+        }
+        expect(final.texto).toMatch(/¿Confirmas la cita\?$/);
     });
 });
