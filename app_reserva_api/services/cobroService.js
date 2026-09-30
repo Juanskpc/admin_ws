@@ -106,7 +106,15 @@ function normalizarPagos({ idMetodoPago, pagos, total }) {
  *
  * @returns la cita actualizada, o `null` si no existe (el controlador lo traduce a 404).
  */
-async function completarYCobrar({ idCita, idNegocio, idUsuario, idMetodoPago, pagos }) {
+async function completarYCobrar({
+    idCita, idNegocio, idUsuario, idMetodoPago, pagos,
+    // [{ id_servicio, precio }] — el precio final de los servicios con rango (o a cotizar), que
+    // se decide al cobrar: el catálogo solo daba «$25.000 - $40.000».
+    precios = null,
+    // 'SERVICIO' (por defecto) o 'ASESORIA': una asesoría no mueve dinero (ver abajo).
+    tipoCobro = 'SERVICIO',
+}) {
+    const esAsesoria = String(tipoCobro || '').toUpperCase() === 'ASESORIA';
     const cfg = await Models.ReservaConfig.findByPk(idNegocio);
     const permiteMultipago = !!cfg?.permite_multipago;
 
@@ -125,12 +133,17 @@ async function completarYCobrar({ idCita, idNegocio, idUsuario, idMetodoPago, pa
         const funciones = new Set((await Perfiles.perfilDeNegocio(idNegocio, { transaction: t })).funciones);
         if (funciones.has('consentimiento')) await exigirConsentimiento(cita, t);
 
+        // Precio final de los servicios con rango o a cotizar, escrito en el diálogo de cobro.
+        if (Array.isArray(precios) && precios.length > 0) {
+            await aplicarPreciosFinales(cita, precios, t);
+        }
+
         // Un servicio «a cotizar» (tatuajes, estética a medida) nace sin precio de lista — el
         // catálogo da como mucho un rango de referencia — y si nadie escribió el precio acordado
         // al agendar o editar la cita, la línea se quedó con `precio_snapshot = 0`. Completar así
         // factura la cita por nada, y no se nota hasta que se cuadra la caja. La barbería no
         // tiene esta función y estas líneas no existen para ella.
-        if (funciones.has('a_cotizar')) {
+        if (funciones.has('a_cotizar') && !esAsesoria) {
             const lineas = await Models.ReservaCitaServicio.findAll({
                 where: { id_cita: cita.id_cita },
                 include: [{ model: Models.ReservaServicio, as: 'servicio', attributes: ['a_cotizar'] }],
@@ -152,8 +165,12 @@ async function completarYCobrar({ idCita, idNegocio, idUsuario, idMetodoPago, pa
             ? Math.min(Number(cita.monto_abono), total)
             : 0;
         const abonoPorAsentar = abono > 0 && !cita.id_caja_abono;
-        const saldo = Math.max(0, total - abono);
-        const { modo, lista } = normalizarPagos({ idMetodoPago, pagos, total: saldo });
+        // Una asesoría no cobra saldo: el abono que ya se hubiera pagado sigue siendo dinero
+        // recibido, pero no se pide nada más.
+        const saldo = esAsesoria ? 0 : Math.max(0, total - abono);
+        const { modo, lista } = esAsesoria
+            ? { modo: 'ninguno', lista: [] }
+            : normalizarPagos({ idMetodoPago, pagos, total: saldo });
 
         if (modo === 'multi' && !permiteMultipago) {
             throw errorValidacion('Este negocio no tiene habilitado el pago con varias formas.');
@@ -198,6 +215,21 @@ async function completarYCobrar({ idCita, idNegocio, idUsuario, idMetodoPago, pa
             idCaja = idCaja ?? caja.id_caja;
         }
 
+        // Asesoría: queda en el historial del turno como un movimiento propio, sin sumar ni restar.
+        if (esAsesoria) {
+            const caja = await CajaService.requireCajaAbierta(idNegocio, { transaction: t });
+            await Models.ReservaMovimientoCaja.create({
+                id_caja: caja.id_caja,
+                tipo: 'ASESORIA',
+                monto: 0,
+                concepto: `Asesoría · cita #${cita.id_cita} · ${cita.cliente_nombre}`,
+                id_cita: cita.id_cita,
+                id_profesional: cita.id_profesional,
+                id_usuario: idUsuario,
+            }, { transaction: t });
+            idCaja = idCaja ?? caja.id_caja;
+        }
+
         // El desglose solo se guarda en multipago; en pago simple `id_metodo_pago` ya lo dice
         // todo y una tabla de detalle con una sola fila es ruido.
         if (modo === 'multi') {
@@ -210,12 +242,49 @@ async function completarYCobrar({ idCita, idNegocio, idUsuario, idMetodoPago, pa
 
         return cita.update({
             estado: 'completada',
+            tipo_cobro: esAsesoria ? 'ASESORIA' : 'SERVICIO',
+            // Una asesoría no factura: su total es lo que de verdad se recibió (el abono, si lo
+            // hubo). Así los informes y el dashboard no la cuentan como ingreso.
+            ...(esAsesoria ? { monto_total: abono } : {}),
             id_metodo_pago: modo === 'simple' ? lista[0].id_metodo_pago : null,
             id_caja: idCaja,
             ...(abonoPorAsentar ? { id_caja_abono: idCajaAbono } : {}),
             fecha_actualizacion: new Date(),
         }, { transaction: t });
     });
+}
+
+/**
+ * Fija el precio final de las líneas con rango de precio o «a cotizar» y ajusta el total.
+ *
+ * El total se ajusta por DIFERENCIA (nuevo − anterior) y no se recalcula desde cero: así no se
+ * pierde nada que la cita sume aparte de sus líneas. Una línea de precio fijo no se toca aunque
+ * venga en la lista: su precio lo decide el catálogo, no el mostrador.
+ */
+async function aplicarPreciosFinales(cita, precios, transaction) {
+    const lineas = await Models.ReservaCitaServicio.findAll({
+        where: { id_cita: cita.id_cita },
+        include: [{ model: Models.ReservaServicio, as: 'servicio', attributes: ['a_cotizar', 'precio_min', 'precio_max'] }],
+        transaction,
+    });
+    let delta = 0;
+    for (const { id_servicio: idServicio, precio } of precios) {
+        const linea = lineas.find((l) => Number(l.id_servicio) === Number(idServicio));
+        if (!linea) continue;
+        const s = linea.servicio;
+        const editable = s && (s.a_cotizar || s.precio_min != null || s.precio_max != null);
+        if (!editable) continue;
+        const valor = Number(precio);
+        if (!Number.isFinite(valor) || valor < 0) {
+            throw errorValidacion('El precio a cobrar no es válido.', 'PRECIO_NO_VALIDO');
+        }
+        delta += valor - Number(linea.precio_snapshot || 0);
+        await linea.update({ precio_snapshot: valor }, { transaction });
+    }
+    if (delta !== 0) {
+        cita.monto_total = Math.max(0, Number(cita.monto_total || 0) + delta);
+        await cita.save({ transaction });
+    }
 }
 
 /**

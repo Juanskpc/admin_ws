@@ -133,7 +133,8 @@ describe('el registro de flujos', () => {
         const pregunta = 'buenas, ¿cuánto vale un corte?';
 
         const primero = await conTipo('BARBERIA')(entrada(pregunta));
-        expect(primero.respuestas).toEqual(['menú']);
+        // Desde 2026-09-29 la pregunta libre la contesta el modelo y el menú va detrás.
+        expect(primero.respuestas).toEqual(['del modelo', 'menú']);
 
         // El segundo mensaje ya no es apertura: la pregunta libre vuelve al modelo.
         const segundo = entrada(pregunta);
@@ -142,6 +143,54 @@ describe('el registro de flujos', () => {
 
         // Opt-in: el restaurante no lo declaró y su primer mensaje libre sigue yendo al modelo.
         expect((await conTipo('RESTAURANTE')(entrada(pregunta))).respuestas).toEqual(['del modelo']);
+    });
+
+    describe('apertura con el menú obligatorio (2026-09-29)', () => {
+        const menu = async ({ sinSaludo }) => ({
+            pasos: [],
+            respuestas: [{ texto: sinSaludo ? '¿Qué te gustaría agendar?' : '👋 Hola. ¿Qué te gustaría agendar?', opciones: [{ id: '1', etiqueta: 'Corte' }] }],
+            variables: { nombre: 'Juanda' },
+            tarea: { nombre: 'agendar_cita', datos: { paso: 'servicio' } },
+            resultado: 'resuelto',
+            nivel: 'determinista',
+        });
+        const llm = jest.fn(async () => ({ pasos: [], respuestas: ['¡Todo bien por acá, Juanda! 😊'], variables: {}, resultado: 'resuelto', nivel: 'llm' }));
+        const escalera = () => crearManejadorEscalera({ llm, resolverNegocio: negocioDeTipo('BARBERIA') });
+
+        beforeEach(() => {
+            llm.mockClear();
+            flujos.registrar({ vertical: 'reserva', tipos: ['BARBERIA'], manejar: menu, abreConversacion: true });
+        });
+
+        it('una pregunta libre al abrir: respuesta del modelo + menú en UN mensaje, sin doble saludo', async () => {
+            const d = await escalera()(entrada('Qué más, cómo vamos'));
+            expect(llm).toHaveBeenCalledTimes(1);
+            expect(d.respuestas).toHaveLength(1);
+            expect(d.respuestas[0].texto).toBe('¡Todo bien por acá, Juanda! 😊\n\n¿Qué te gustaría agendar?');
+            expect(d.respuestas[0].opciones).toHaveLength(1);
+            expect(d.tarea.datos.paso).toBe('servicio');
+            expect(d.nivel).toBe('llm');
+        });
+
+        it('un saludo al abrir va directo al menú, sin gastar modelo', async () => {
+            const d = await escalera()(entrada('hola'));
+            expect(llm).not.toHaveBeenCalled();
+            expect(d.respuestas[0].opciones).toHaveLength(1);
+        });
+
+        it('quien vuelve tras un rato de silencio también ve el menú, y la marca se consume', async () => {
+            const e = entrada('En qué puedes ayudarme?');
+            e.conversacion.variables = { turnos: 12, nombre: 'Juanda', _sesion_nueva: true };
+            const d = await escalera()(e);
+            expect(d.respuestas[0].opciones).toHaveLength(1);
+            expect(d.variables._sesion_nueva).toBeUndefined();
+
+            // Sin la marca, a mitad de conversación la pregunta libre sigue siendo del modelo.
+            const e2 = entrada('En qué puedes ayudarme?');
+            e2.conversacion.variables = { turnos: 13 };
+            const d2 = await escalera()(e2);
+            expect(d2.respuestas).toEqual(['¡Todo bien por acá, Juanda! 😊']);
+        });
     });
 
     it('un flujo que lanza NO deja al cliente sin respuesta y conserva la memoria (2026-09-29)', async () => {

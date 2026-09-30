@@ -18,7 +18,7 @@ async function listar({ idNegocio, desde, hasta, idProfesional, estado, soloPend
               attributes: ['id_profesional', 'nombre', 'color_hex'] },
             { model: Models.ReservaCitaServicio, as: 'servicios',
               include: [{ model: Models.ReservaServicio, as: 'servicio',
-                          attributes: ['id_servicio', 'nombre', 'requiere_consentimiento', 'a_cotizar'] }] },
+                          attributes: ['id_servicio', 'nombre', 'requiere_consentimiento', 'a_cotizar', 'precio_min', 'precio_max'] }] },
             // Perfiles de rubro: para quién es la cita (mascota) y en qué cabina. Nulos en la
             // barbería, y el LEFT JOIN no cambia las filas que ya devolvía.
             { model: Models.ReservaMascota, as: 'mascota', required: false,
@@ -38,7 +38,7 @@ async function getById(idCita, idNegocio) {
               attributes: ['id_profesional', 'nombre', 'color_hex', 'foto_url', 'especialidad'] },
             { model: Models.ReservaCitaServicio, as: 'servicios',
               include: [{ model: Models.ReservaServicio, as: 'servicio',
-                          attributes: ['id_servicio', 'nombre', 'requiere_consentimiento', 'a_cotizar'] }] },
+                          attributes: ['id_servicio', 'nombre', 'requiere_consentimiento', 'a_cotizar', 'precio_min', 'precio_max'] }] },
             // Perfiles de rubro: para quién es la cita (mascota) y en qué cabina. Nulos en la
             // barbería, y el LEFT JOIN no cambia las filas que ya devolvía.
             { model: Models.ReservaMascota, as: 'mascota', required: false,

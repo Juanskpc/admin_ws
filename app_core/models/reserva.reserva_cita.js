@@ -28,6 +28,11 @@ module.exports = (sequelize, DataTypes) => {
     cancelado_motivo:              DataTypes.TEXT,
     requiere_pago:                 { type: DataTypes.BOOLEAN, defaultValue: false },
     monto_total:                   { type: DataTypes.DECIMAL(14, 2), defaultValue: 0 },
+    /**
+     * Cómo se cerró la cita: SERVICIO (se cobra, entra a la caja) o ASESORIA (no mueve dinero;
+     * queda en la caja como movimiento de 0). Ver `cobroService.completarYCobrar`.
+     */
+    tipo_cobro:                    { type: DataTypes.STRING(10), allowNull: false, defaultValue: 'SERVICIO' },
     comprobante_pago_url:          DataTypes.STRING(500),
     pago_estado:                   { type: DataTypes.STRING(25), defaultValue: 'no_aplica' },
     pago_validado_por_id_usuario:  DataTypes.INTEGER,

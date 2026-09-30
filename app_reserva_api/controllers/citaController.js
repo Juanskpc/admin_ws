@@ -159,6 +159,7 @@ async function confirmar(req, res) {
  * misma transacción, para que no exista el caso de «completada pero sin registrar el dinero».
  */
 async function completar(req, res) {
+    if (!check(req, res)) return;
     try {
         const c = await CobroService.completarYCobrar({
             idCita: Number(req.params.id),
@@ -166,6 +167,8 @@ async function completar(req, res) {
             idUsuario: req.usuario?.id_usuario,
             idMetodoPago: req.body.id_metodo_pago ?? null,
             pagos: req.body.pagos,
+            precios: req.body.precios ?? null,
+            tipoCobro: req.body.tipo_cobro ?? 'SERVICIO',
         });
         if (!c) return Respuesta.error(res, 'Cita no encontrada', 404);
         return Respuesta.success(res, 'Cita completada y cobrada', c);

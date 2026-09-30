@@ -25,7 +25,13 @@
  */
 'use strict';
 
-const { NIVEL, enrutar } = require('../model/orquestador');
+const { NIVEL, enrutar, esPreguntaLibre } = require('../model/orquestador');
+
+/**
+ * Tope del cuerpo de un mensaje interactivo de WhatsApp (1024) con margen. Por encima, la
+ * respuesta del modelo y el menú salen en dos mensajes en vez de recortar la respuesta.
+ */
+const TOPE_CUERPO_UNIDO = 950;
 const flujos = require('./flujos');
 const contextoNegocio = require('../core/contextoNegocio');
 const confirmacion = require('./confirmacion');
@@ -115,7 +121,10 @@ function crearManejadorEscalera({
     function conTurnoContado(ctx, decision) {
         if (!decision) return decision;
         const previos = Number(ctx.conversacion?.variables?.turnos || 0);
-        return { ...decision, variables: { ...(decision.variables || {}), turnos: previos + 1 } };
+        // La marca de sesión nueva (`repositorio.asegurarConversacionSinReglas`) es de UN turno:
+        // se consume aquí para que no reabra la conversación en el mensaje siguiente.
+        const { _sesion_nueva: _consumida, ...variables } = decision.variables || {};
+        return { ...decision, variables: { ...variables, turnos: previos + 1 } };
     }
 
     return async function manejarEscalera(ctx) {
@@ -185,8 +194,11 @@ function crearManejadorEscalera({
             // Primer mensaje de la conversación (el contador de turnos, que `conTurnoContado`
             // lleva para todos los niveles, sigue en cero; también tras un reinicio por
             // inactividad, que vacía `variables`) y el flujo pidió atenderlo.
+            // Desde 2026-09-29 también cuando el cliente vuelve tras un rato de silencio
+            // (`_sesion_nueva`): quien escribe al día siguiente también tiene que ver el menú.
             primerMensaje: flujos.abreLaConversacion(flujo)
-                && !Number(ctx.conversacion?.variables?.turnos || 0)
+                && (!Number(ctx.conversacion?.variables?.turnos || 0)
+                    || ctx.conversacion?.variables?._sesion_nueva === true)
                 && !ctx.conversacion?.tarea_actual,
         });
 
@@ -217,6 +229,17 @@ function crearManejadorEscalera({
                 ],
             };
         };
+
+        // ── Apertura con pregunta libre: respuesta personalizada + menú, en un solo mensaje ──
+        //
+        // Pedido del negocio (2026-09-29): el primer contacto tiene que dar a conocer los
+        // servicios SIEMPRE, pero sin ignorar lo que el cliente dijo. Un saludo o «quiero
+        // agendar» lo resuelve el menú solo (gratis); una pregunta («¿qué precios manejan?»,
+        // «¿cómo vamos?») la contesta el modelo y el menú va pegado a esa misma respuesta.
+        if (ruta.regla === 'apertura' && llm && flujo && esPreguntaLibre(ctx.texto)) {
+            const unida = await aperturaConModelo(ctx, flujo);
+            if (unida) return conPaso(conPaso(conAviso(unida), pasoDeRuta), pasoDeCaducidad);
+        }
 
         if (ruta.nivel === NIVEL.LLM) {
             try {
@@ -365,6 +388,48 @@ function crearManejadorEscalera({
      * de negocio sin flujo acaba en «te contesta una persona» en vez de en el menú de otra
      * vertical o en una excepción.
      */
+    /**
+     * La respuesta del modelo con el menú del flujo pegado. Devuelve `null` si no se pudo armar
+     * (el modelo falló o no dijo nada) y entonces la apertura sigue por el menú solo.
+     *
+     * Si el modelo abrió algo que necesita el hilo —una confirmación de mutación—, manda su
+     * decisión entera: el menú encima rompería esa tarea.
+     */
+    async function aperturaConModelo(ctx, flujo) {
+        let delModelo;
+        try {
+            delModelo = await llm(ctx);
+        } catch (error) {
+            console.warn(`[intelligence] apertura: el modelo falló, sigue el menú solo: ${error.message}`);
+            return null;
+        }
+        if (sinNadaQueDecir(delModelo)) return null;
+        if (delModelo.tarea) return delModelo;
+
+        const menu = await ejecutarNivel1({ ...ctx, sinSaludo: true }, flujo);
+        const [primera, ...resto] = menu?.respuestas || [];
+        const textoModelo = (delModelo.respuestas || [])
+            .map((r) => (typeof r === 'string' ? r : r?.texto || ''))
+            .filter(Boolean)
+            .join('\n\n');
+        if (!primera || !textoModelo) return null;
+
+        const cuerpoMenu = typeof primera === 'string' ? primera : primera.texto || '';
+        const unido = `${textoModelo}\n\n${cuerpoMenu}`;
+        const respuestas = unido.length <= TOPE_CUERPO_UNIDO && typeof primera !== 'string'
+            ? [{ ...primera, texto: unido }, ...resto]
+            : [textoModelo, primera, ...resto];
+
+        return {
+            ...menu,
+            pasos: [...(delModelo.pasos || []), ...(menu.pasos || [])],
+            invocaciones: [...(delModelo.invocaciones || []), ...(menu.invocaciones || [])],
+            respuestas,
+            // Hubo tokens: el turno es del modelo aunque la tarea la abra el flujo.
+            nivel: delModelo.nivel || NIVEL.LLM,
+        };
+    }
+
     async function ejecutarNivel1(ctx, flujo) {
         if (flujo) return flujo.manejar(ctx);
         if (determinista) return determinista(ctx);

@@ -96,6 +96,11 @@ const PASO = {
     // CUÁNDO y después CON QUIÉN, ofreciendo solo a quien tiene libre esa hora. Antes se elegía
     // la persona primero y con frecuencia no tenía hueco el día que el cliente quería.
     FECHA: 'fecha',
+    /**
+     * La jornada (mañana, tarde, noche) cuando el día tiene más horas libres de las que caben en
+     * una lista de WhatsApp (10 filas). Antes se recortaba a 8 y el cliente no veía la tarde.
+     */
+    FRANJA: 'franja',
     HORA: 'hora',
     NOMBRE: 'nombre',
     PROFESIONAL: 'profesional',
@@ -112,6 +117,50 @@ const MAX_OPCIONES = 8;
  * (10 filas) con sitio para volver, y por encima había que recortar y el cliente no veía todo.
  */
 const UMBRAL_CATEGORIAS = MAX_OPCIONES;
+
+/**
+ * Horas que caben en una lista de WhatsApp dejando una fila para volver (10 filas en total).
+ * Con más, se pregunta primero la jornada (`franjasDelDia`).
+ */
+const HORAS_POR_LISTA = 9;
+
+/** Jornadas del día. Los límites son los de la hora de pared del negocio. */
+const JORNADAS = [
+    { clave: 'manana', nombre: 'Mañana', hasta: '12:00' },
+    { clave: 'tarde', nombre: 'Tarde', hasta: '18:00' },
+    { clave: 'noche', nombre: 'Noche', hasta: '24:00' },
+];
+
+/**
+ * Reparte las horas libres («HH:MM», ordenadas) en jornadas, y parte en tramos seguidos la
+ * jornada que no quepa en una lista. Solo salen las jornadas con horas.
+ *
+ * Etiqueta corta («Tarde», o «Tarde · 12:00 PM» si hay tramos) porque el título de una fila de
+ * WhatsApp corta en 24 caracteres; el rango y cuántas horas hay van en el detalle.
+ */
+function franjasDelDia(horas) {
+    const franjas = [];
+    for (const j of JORNADAS) {
+        const suyas = horas.filter((h) => {
+            const previa = JORNADAS[JORNADAS.indexOf(j) - 1];
+            return (!previa || h >= previa.hasta) && h < j.hasta;
+        });
+        if (suyas.length === 0) continue;
+        const tramos = [];
+        for (let i = 0; i < suyas.length; i += HORAS_POR_LISTA) tramos.push(suyas.slice(i, i + HORAS_POR_LISTA));
+        tramos.forEach((tramo, i) => {
+            const n = tramo.length;
+            franjas.push({
+                id: `franja_${j.clave}_${i}`,
+                jornada: j.nombre,
+                etiqueta: tramos.length > 1 ? `${j.nombre} · ${hora12(tramo[0])}` : j.nombre,
+                detalle: `${hora12(tramo[0])} a ${hora12(tramo[n - 1])} · ${n} ${n === 1 ? 'hora' : 'horas'}`,
+                horas: tramo,
+            });
+        });
+    }
+    return franjas;
+}
 
 /** «Ver más» en una lista larga. Prefijados como los de VOLVER para no chocar con un id real. */
 const MAS_SERVICIOS = 'mas_servicios';
@@ -141,6 +190,7 @@ const VOLVER = {
     PROFESIONAL: 'volver_profesional',
     FECHA: 'volver_fecha',
     HORA: 'volver_hora',
+    FRANJA: 'volver_franja',
 };
 
 /**
@@ -194,6 +244,7 @@ const SOBREVIVE_AL_VOLVER = {
     servicio: ['categoria'],
     fecha: DEL_PEDIDO,
     hora: [...DEL_PEDIDO, 'fecha'],
+    franja: [...DEL_PEDIDO, 'fecha'],
     // Cambiar de persona conserva el día y la hora: la lista de profesionales es la de quienes
     // tienen libre ESA hora, así que no hay nada que recalcular.
     profesional: [...DEL_PEDIDO, 'fecha', 'hora', 'libres_por_hora', 'profesional_por_hora', 'nombre'],
@@ -232,6 +283,7 @@ const DESTINOS_DE_RETROCESO = [
     [PASO.PROFESIONAL, VOLVER.PROFESIONAL,
      /\b(profesional|persona|estilista|barbero|peluquer\w*|manicurista|terapeuta|especialista|artista|groomer|tatuador\w*)\b/],
     [PASO.FECHA, VOLVER.FECHA, /\b(dia|dias|fecha|fechas)\b/],
+    [PASO.FRANJA, VOLVER.FRANJA, /\b(jornada|jornadas|franja)\b/],
     [PASO.HORA, VOLVER.HORA, /\b(hora|horas|horario)\b/],
 ];
 
@@ -1488,6 +1540,11 @@ function crearManejadorDeterminista({
                 return podados.hora && podados.fecha
                     ? ofrecerProfesionales(ctx, podados, rastro)
                     : despuesDelServicio(ctx, podados, rastro);
+            case PASO.FRANJA:
+                // Otra jornada del mismo día: se vuelve a consultar, por si algo se ocupó.
+                return podados.fecha
+                    ? mostrarHoras(ctx, podados, podados.fecha, rastro)
+                    : pedirFecha(ctx, podados, rastro);
             case PASO.HORA:
                 // Volver a las horas de ESE día. Si no hay día guardado —porque se venía de
                 // más atrás— no hay nada a lo que volver, y se pide la fecha.
@@ -1566,7 +1623,8 @@ function crearManejadorDeterminista({
                 ...(datos.id_variante ? { id_variante: datos.id_variante } : {}),
             },
         });
-        const horas = (resultado?.horas || []).slice(0, MAX_OPCIONES);
+        // Todas, sin recortar: si no caben en una lista se agrupan por jornada (ver abajo).
+        const horas = resultado?.horas || [];
 
         if (horas.length === 0) {
             // ⚠️ Se buscan los próximos días CON horas, no el siguiente a ciegas (2026-09-29).
@@ -1632,16 +1690,64 @@ function crearManejadorDeterminista({
                 : [h.id_profesional].filter((x) => x != null),
         ]));
 
+        const conHoras = {
+            ...datos,
+            fecha,
+            profesional_por_hora: profesionalPorHora,
+            libres_por_hora: libresPorHora,
+        };
+
+        // Caben en una lista (9 horas + «otro día» = 10 filas): se ofrecen todas de una vez.
+        if (horas.length <= HORAS_POR_LISTA) {
+            return listaDeHoras(ctx, conHoras, horas.map((h) => h.hora), {
+                texto: `Estas son las horas libres el ${fechaLegible(fecha)}:`,
+                volver: { id: VOLVER.FECHA, etiqueta: '← Otro día' },
+                pasos: [...pasosPrevios, paso('menu_horas', { fecha, cuantas: horas.length })],
+            });
+        }
+
+        // No caben: primero la jornada. Es UN mensaje más, y a cambio el cliente ve todas las
+        // horas del día en vez de las ocho primeras.
+        return ofrecerFranjas(ctx, conHoras, horas.map((h) => h.hora), pasosPrevios);
+    }
+
+    /** La lista de horas (ya cabe en una lista de WhatsApp) y el paso HORA. */
+    function listaDeHoras(ctx, datos, horas, { texto, volver, pasos }) {
         return {
-            pasos: [...pasosPrevios, paso('menu_horas', { fecha, cuantas: horas.length })],
+            pasos,
             respuestas: [
                 {
-                    texto: `Estas son las horas libres el ${fechaLegible(fecha)}:`,
-                    // Ocho horas + «otro día» = nueve filas, dentro del límite de diez de una
-                    // lista de WhatsApp (`channels/whatsapp/adaptador.js`, LIMITES). Añadir
-                    // aquí una segunda opción de volver rompería ese margen.
+                    texto,
                     opciones: [
-                        ...horas.map((h) => ({ id: h.hora, etiqueta: hora12(h.hora) })),
+                        ...horas.map((h) => ({ id: h, etiqueta: hora12(h) })),
+                        volver,
+                    ],
+                },
+            ],
+            variables: conMemoria(ctx.conversacion),
+            tarea: { nombre: TAREA_AGENDAR, datos: { ...datos, paso: PASO.HORA } },
+            resultado: 'resuelto',
+            nivel: 'determinista',
+        };
+    }
+
+    /**
+     * Agrupa las horas del día en jornadas —mañana, tarde, noche— y las ofrece como menú.
+     *
+     * Una jornada con más horas de las que caben en una lista se parte en tramos seguidos
+     * («Tarde · 12:00 PM», «Tarde · 4:30 PM»), así que en este primer menú ya están TODAS las
+     * horas del día: nunca hace falta un «ver más», que sería otro mensaje.
+     */
+    function ofrecerFranjas(ctx, datos, horas, pasosPrevios) {
+        const franjas = franjasDelDia(horas);
+        return {
+            pasos: [...pasosPrevios, paso('menu_franjas', { fecha: datos.fecha, horas: horas.length, franjas: franjas.length })],
+            respuestas: [
+                {
+                    texto: `Hay ${horas.length} horas libres el ${fechaLegible(datos.fecha)}. ` +
+                        '¿En qué jornada te queda mejor? También puedes escribirme la hora (por ejemplo, «3 pm»).',
+                    opciones: [
+                        ...franjas.map((fr) => ({ id: fr.id, etiqueta: fr.etiqueta, detalle: fr.detalle })),
                         { id: VOLVER.FECHA, etiqueta: '← Otro día' },
                     ],
                 },
@@ -1651,16 +1757,37 @@ function crearManejadorDeterminista({
                 nombre: TAREA_AGENDAR,
                 datos: {
                     ...datos,
-                    paso: PASO.HORA,
-                    fecha,
-                    profesional_por_hora: profesionalPorHora,
-                    libres_por_hora: libresPorHora,
+                    paso: PASO.FRANJA,
+                    franjas_ofrecidas: franjas.map((fr) => ({ id: fr.id, nombre: fr.etiqueta, jornada: fr.jornada, horas: fr.horas })),
                 },
             },
             resultado: 'resuelto',
             nivel: 'determinista',
         };
     }
+
+    async function elegirFranja(ctx, datos) {
+        const texto = ultimaLinea(ctx.texto);
+        const franjas = datos.franjas_ofrecidas || [];
+
+        // Escribió la hora directamente («a las 3 pm»): se salta la jornada.
+        const todas = Object.keys(datos.profesional_por_hora || {});
+        const hora = resolverHora(texto, todas);
+        if (hora) return elegirHora({ ...ctx, texto: hora }, { ...datos, paso: PASO.HORA });
+
+        const elegida = resolverOpcion(texto, franjas)
+            || franjas.find((fr) => normalizar(texto).includes(normalizar(fr.jornada)));
+        if (!elegida) {
+            return reintentar(ctx, datos, 'Elige una jornada de la lista, o escríbeme la hora que prefieres.');
+        }
+        return listaDeHoras(ctx, datos, elegida.horas, {
+            texto: `Horas libres en la ${elegida.jornada.toLocaleLowerCase('es')} del ${fechaLegible(datos.fecha)}:`,
+            volver: { id: VOLVER.FRANJA, etiqueta: '← Otra jornada' },
+            pasos: [paso('franja_elegida', { franja: elegida.id, cuantas: elegida.horas.length })],
+        });
+    }
+
+
 
     /**
      * Elegida la hora, hace falta el nombre **antes** de apartar nada.
@@ -1938,7 +2065,7 @@ function crearManejadorDeterminista({
 
     // ── Entrada ─────────────────────────────────────────────────────────────────────────
 
-    return async function manejarDeterminista({ conversacion, mensajes, turno, texto }) {
+    return async function manejarDeterminista({ conversacion, mensajes, turno, texto, sinSaludo = false }) {
         const identidad = await identidad_(conversacion);
         const negocio = await contextoNegocio.obtener(conversacion.id_negocio);
         // Se acumulan aquí y se adjuntan al final en UN solo sitio: hacerlo en cada rama sería
@@ -2002,8 +2129,10 @@ function crearManejadorDeterminista({
             // Se saluda cuando NO había tarea —es decir, alguien que llega, no alguien que
             // vuelve al menú a mitad de un agendamiento—. Repetir «¡Hola! Te comunicas con…»
             // a quien lleva cinco turnos hablando suena a que el bot se olvidó de él.
+            // `sinSaludo`: la escalera ya puso delante la respuesta personalizada del modelo
+            // (apertura con pregunta libre) y un segundo «¡Hola!» sonaría a robot.
             return conRastro(
-                await ofrecerServicios(ctx, [paso('inicio_conversacion')], { saludar: !hayTarea })
+                await ofrecerServicios(ctx, [paso('inicio_conversacion')], { saludar: !hayTarea && !sinSaludo })
             );
         }
 
@@ -2026,6 +2155,8 @@ function crearManejadorDeterminista({
                 return conRastro(await elegirProfesional(ctx, datos));
             case PASO.FECHA:
                 return conRastro(await elegirFecha(ctx, datos));
+            case PASO.FRANJA:
+                return conRastro(await elegirFranja(ctx, datos));
             case PASO.HORA:
                 return conRastro(await elegirHora(ctx, datos));
             case PASO.NOMBRE:
@@ -2066,6 +2197,8 @@ function textoDelPaso(pasoActual, t = TERMINOS_POR_DEFECTO_MINUSCULA) {
             return '¿Con quién prefieres? También puedes decir "me da igual".';
         case PASO.FECHA:
             return '¿Para qué día lo quieres?';
+        case PASO.FRANJA:
+            return 'Elige una jornada, o escríbeme la hora que prefieres.';
         case PASO.HORA:
             return 'Elige una de las horas libres.';
         case PASO.NOMBRE:

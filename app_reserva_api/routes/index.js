@@ -473,6 +473,11 @@ router.post('/citas/:id/completar', [
     body('pagos').optional().isArray({ min: 1 }),
     body('pagos.*.id_metodo_pago').optional().isInt({ min: 1 }),
     body('pagos.*.valor').optional().isFloat({ gt: 0 }),
+    // Precio final de los servicios con rango / a cotizar, y si se cierra como asesoría.
+    body('precios').optional().isArray(),
+    body('precios.*.id_servicio').optional().isInt({ min: 1 }),
+    body('precios.*.precio').optional().isFloat({ min: 0 }),
+    body('tipo_cobro').optional().isIn(['SERVICIO', 'ASESORIA']),
 ], exigirAccion('citas_completar'), Citas.completar);
 router.post('/citas/:id/no-show', [
     param('id').isInt({ min: 1 }),

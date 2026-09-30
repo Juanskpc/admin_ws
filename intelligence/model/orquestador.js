@@ -204,6 +204,17 @@ const POLITICA = [
 ];
 
 /**
+ * ¿Es una pregunta libre? Ni comando, ni saludo, ni ganas de agendar. Es lo que, en la apertura,
+ * merece que el modelo conteste antes del menú; lo demás lo resuelve el menú solo, gratis.
+ */
+function esPreguntaLibre(texto) {
+    if (!String(texto || '').trim()) return false;
+    if (esAlgunComando(texto) || esSaludo(texto)) return false;
+    const t = normalizar(texto);
+    return !INTENCION_AGENDAR.some((p) => new RegExp(`\\b${p}\\b`).test(t));
+}
+
+/**
  * Enruta un turno.
  *
  * @param {Object}  ctx
@@ -224,4 +235,4 @@ function enrutar(ctx) {
     throw new Error('La política de enrutado no tiene fila por defecto.');
 }
 
-module.exports = { NIVEL, POLITICA, enrutar, INTENCION_AGENDAR, INTENCION_MUTACION };
+module.exports = { NIVEL, POLITICA, enrutar, INTENCION_AGENDAR, INTENCION_MUTACION, esPreguntaLibre };

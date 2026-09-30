@@ -148,9 +148,11 @@ async function asegurarConversacion(
         ? await reiniciarSiInactivaMucho({ idNegocio, canal, idExterno }, { transaction })
         : null;
 
+    // Solo quien procesa un mensaje ENTRANTE marca la sesión nueva (mismo criterio que el
+    // reinicio): un recordatorio saliente no es el cliente volviendo a escribir.
     const conversacion = await asegurarConversacionSinReglas(
         { idNegocio, canal, idExterno },
-        { transaction }
+        { transaction, marcarSesionNueva: reiniciarPorInactividad }
     );
     if (reactivada) conversacion.reactivada_automaticamente = true;
     if (reiniciada) conversacion.reiniciada_por_inactividad = reiniciada;
@@ -297,14 +299,27 @@ async function reactivarSiVencioElPlazo({ idNegocio, canal, idExterno }, { trans
     return fila;
 }
 
-/** El upsert de siempre: ver `asegurarConversacion`. */
-async function asegurarConversacionSinReglas({ idNegocio, canal, idExterno }, { transaction }) {
+/**
+ * El upsert de siempre: ver `asegurarConversacion`.
+ *
+ * Con `marcarSesionNueva`, si el cliente llevaba más de `INACTIVIDAD_RESET_MIN` en silencio se
+ * deja `variables._sesion_nueva = true`. Es lo que permite que el flujo de la vertical abra la
+ * conversación (saludo + menú) aunque no sea el primer mensaje de siempre: quien vuelve al día
+ * siguiente y escribe «¿qué más, cómo vamos?» también tiene que ver qué se puede agendar. La
+ * marca la consume el turno (`manejadorEscalera` la quita de las variables que guarda).
+ */
+async function asegurarConversacionSinReglas({ idNegocio, canal, idExterno }, { transaction, marcarSesionNueva = false }) {
     return unaFila(
         `
         INSERT INTO intelligence.conversacion (id_negocio, canal, id_externo, ultimo_mensaje_en)
         VALUES (:idNegocio, :canal, :idExterno, now())
         ON CONFLICT (id_negocio, canal, id_externo) DO UPDATE
            SET ultimo_mensaje_en = now(),
+               variables = CASE
+                   WHEN :marcarSesionNueva
+                    AND conversacion.ultimo_mensaje_en < now() - make_interval(mins => :minutosSesion)
+                   THEN COALESCE(conversacion.variables, '{}'::jsonb) || '{"_sesion_nueva": true}'::jsonb
+                   ELSE conversacion.variables END,
                estado = CASE WHEN conversacion.estado IN ('dormida', 'cerrada')
                              THEN 'activa' ELSE conversacion.estado END,
                cerrado_en = CASE WHEN conversacion.estado = 'cerrada'
@@ -318,7 +333,7 @@ async function asegurarConversacionSinReglas({ idNegocio, canal, idExterno }, { 
         RETURNING id_conversacion, id_negocio, canal, id_externo, estado,
                   variables, tarea_actual, tarea_datos;
         `,
-        { idNegocio, canal, idExterno },
+        { idNegocio, canal, idExterno, marcarSesionNueva: Boolean(marcarSesionNueva), minutosSesion: INACTIVIDAD_RESET_MIN },
         transaction
     );
 }

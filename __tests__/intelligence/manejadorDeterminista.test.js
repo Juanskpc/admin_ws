@@ -1190,3 +1190,61 @@ describe('cómo se leen los días y las horas', () => {
         expect(d.respuestas[d.respuestas.length - 1].texto).toContain('• *Hora:* 4:30 PM');
     });
 });
+
+// ── Días con muchas horas: primero la jornada (2026-09-29) ───────────────────────────────
+
+describe('días con más horas de las que caben en una lista', () => {
+    const HORAS_DIA = ['09:00', '09:30', '10:00', '10:30', '11:00', '11:30', '12:00',
+        '14:00', '14:30', '15:00', '15:30', '16:00', '16:30', '17:00', '17:30', '18:00', '18:30']
+        .map((hora) => ({ hora, id_profesional: 4, id_profesionales: [4] }));
+    const gateDia = () => gateFalso({
+        consultar_disponibilidad: { fecha: '2026-10-10', horas: HORAS_DIA },
+        proponer_turno: HOLD,
+    });
+    const manejador = (gate) => crearManejadorDeterminista({
+        gate, contextoNegocio: NEGOCIO_FALSO, identidad: identidadFalsa({ nombre: 'Ana' }),
+    });
+
+    test('se pregunta la jornada, y entre todas están TODAS las horas del día', async () => {
+        const d = await manejador(gateDia())(entrada('2026-10-10', conversacion({
+            tarea: TAREA_AGENDAR, datos: { paso: PASO.FECHA, id_servicio: 1 },
+        })));
+        expect(d.tarea.datos.paso).toBe(PASO.FRANJA);
+        const opciones = d.respuestas[0].opciones;
+        expect(opciones.length).toBeLessThanOrEqual(10);
+        expect(opciones.map((o) => o.etiqueta)).toEqual(['Mañana', 'Tarde', 'Noche', '← Otro día']);
+        expect(opciones[0].detalle).toBe('9:00 AM a 11:30 AM · 6 horas');
+        const todas = d.tarea.datos.franjas_ofrecidas.flatMap((f) => f.horas);
+        expect(todas).toEqual(HORAS_DIA.map((h) => h.hora));
+    });
+
+    test('elegir la tarde enseña sus horas con «← Otra jornada»', async () => {
+        const manejar = manejador(gateDia());
+        let d = await manejar(entrada('2026-10-10', conversacion({ tarea: TAREA_AGENDAR, datos: { paso: PASO.FECHA, id_servicio: 1 } })));
+        const tarde = d.respuestas[0].opciones.find((o) => o.etiqueta === 'Tarde');
+        d = await manejar(entrada(tarde.id, conversacion({ tarea: TAREA_AGENDAR, datos: d.tarea.datos })));
+        expect(d.tarea.datos.paso).toBe(PASO.HORA);
+        expect(d.respuestas[0].opciones.map((o) => o.etiqueta)).toEqual([
+            '12:00 PM', '2:00 PM', '2:30 PM', '3:00 PM', '3:30 PM', '4:00 PM', '4:30 PM', '5:00 PM', '5:30 PM', '← Otra jornada',
+        ]);
+        // Y «Otra jornada» vuelve al menú de jornadas.
+        d = await manejar(entrada('volver_franja', conversacion({ tarea: TAREA_AGENDAR, datos: d.tarea.datos })));
+        expect(d.tarea.datos.paso).toBe(PASO.FRANJA);
+    });
+
+    test('escribir la hora en el paso de jornada se salta la jornada', async () => {
+        const gate = gateDia();
+        const manejar = manejador(gate);
+        const d0 = await manejar(entrada('2026-10-10', conversacion({ tarea: TAREA_AGENDAR, datos: { paso: PASO.FECHA, id_servicio: 1 } })));
+        const d = await manejar(entrada('a las 3 pm', conversacion({ tarea: TAREA_AGENDAR, datos: d0.tarea.datos })));
+        expect(d.tarea.datos.paso).toBe(PASO.CONFIRMAR);
+        expect(gate.llamadas.find((l) => l.capacidad === 'proponer_turno').args.inicio).toBe('2026-10-10T15:00:00');
+    });
+
+    test('con 9 horas o menos se listan directamente, sin jornadas', async () => {
+        const gate = gateFalso({ consultar_disponibilidad: { fecha: '2026-10-10', horas: HORAS_DIA.slice(0, 9) } });
+        const d = await manejador(gate)(entrada('2026-10-10', conversacion({ tarea: TAREA_AGENDAR, datos: { paso: PASO.FECHA, id_servicio: 1 } })));
+        expect(d.tarea.datos.paso).toBe(PASO.HORA);
+        expect(d.respuestas[0].opciones).toHaveLength(10);
+    });
+});

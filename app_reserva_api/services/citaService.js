@@ -403,7 +403,7 @@ async function getCitaConDetalle(idCita, { transaction = null } = {}) {
               attributes: ['id_profesional', 'nombre', 'foto_url', 'color_hex', 'especialidad'] },
             { model: Models.ReservaCitaServicio, as: 'servicios',
               include: [{ model: Models.ReservaServicio, as: 'servicio',
-                          attributes: ['id_servicio', 'nombre', 'requiere_consentimiento', 'a_cotizar'] }] },
+                          attributes: ['id_servicio', 'nombre', 'requiere_consentimiento', 'a_cotizar', 'precio_min', 'precio_max'] }] },
             { model: Models.ReservaMascota, as: 'mascota', required: false,
               attributes: ['id_mascota', 'nombre', 'especie', 'raza', 'tamano', 'comportamiento'] },
             { model: Models.ReservaRecurso, as: 'recurso', required: false,
