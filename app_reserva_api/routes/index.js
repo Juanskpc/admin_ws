@@ -273,6 +273,12 @@ router.use(verificarToken);
 const { exigirPertenenciaNegocio } = require('../../app_core/middleware/authzNegocio');
 router.use(exigirPertenenciaNegocio);
 
+// --- Avisos en vivo (SSE) ---
+// La Agenda se entera sola de las citas que entran por el asistente, el portal o un compañero.
+// Los hooks de ReservaCita/ReservaBloqueo emiten el aviso tras el commit (ver avisoService).
+require('../services/avisoService').registrarHooks();
+router.get('/eventos', require('../controllers/eventosController').suscribirEventos);
+
 router.get('/dashboard/resumen', [query('id_negocio').isInt({ min: 1 })], Dashboard.getResumen);
 router.get('/perfil', Dashboard.getPerfil);
 
@@ -1021,9 +1027,14 @@ router.post('/unidades/sincronizar', [idNeg('body'), body('id_unidad').optional(
 router.get('/config', [query('id_negocio').isInt({ min: 1 })], Config.get);
 router.put('/config', [
     body('id_negocio').isInt({ min: 1 }),
+    // En minutos desde 2026-09-29 (hasta 7 días de anticipación; 30 días de ventana, que cubre
+    // los alojamientos). Las de horas se siguen aceptando por compatibilidad: el modelo las
+    // traduce a minutos.
+    body('anticipacion_min_minutos').optional().isInt({ min: 0, max: 10080 }),
+    body('ventana_cancelacion_min').optional().isInt({ min: 0, max: 43200 }),
     body('anticipacion_min_horas').optional().isInt({ min: 0, max: 168 }),
     body('buffer_limpieza_min').optional().isInt({ min: 0, max: 240 }),
-    body('ventana_cancelacion_horas').optional().isInt({ min: 0, max: 168 }),
+    body('ventana_cancelacion_horas').optional().isInt({ min: 0, max: 720 }),
     body('paso_slot_min').optional().isInt({ min: 5, max: 60 }),
     body('cobro_adelantado').optional().isBoolean(),
     body('instrucciones_pago').optional({ nullable: true }).isString(),

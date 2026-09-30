@@ -113,10 +113,10 @@ const PERFILES = {
         disponibles: ['tiempo_proceso', 'variantes', 'deposito', 'consentimiento', 'portafolio', 'productos'],
         activas: ['tiempo_proceso', 'variantes'],
         config_inicial: {
-            anticipacion_min_horas: 2,
-            buffer_limpieza_min: 10,
-            ventana_cancelacion_horas: 12,
-            paso_slot_min: 15,
+            anticipacion_min_minutos: 15,
+            buffer_limpieza_min: 0,
+            ventana_cancelacion_min: 60,
+            paso_slot_min: 30,
         },
         portal: {
             titulo: 'Reserva tu cita',
@@ -136,9 +136,9 @@ const PERFILES = {
         disponibles: ['recursos', 'deposito', 'variantes', 'consentimiento', 'tiempo_proceso', 'productos'],
         activas: ['recursos', 'deposito'],
         config_inicial: {
-            anticipacion_min_horas: 4,
-            buffer_limpieza_min: 15,
-            ventana_cancelacion_horas: 24,
+            anticipacion_min_minutos: 15,
+            buffer_limpieza_min: 0,
+            ventana_cancelacion_min: 60,
             paso_slot_min: 30,
             deposito_pct: 30,
         },
@@ -160,10 +160,10 @@ const PERFILES = {
         disponibles: ['consentimiento', 'recursos', 'deposito', 'variantes', 'productos'],
         activas: ['consentimiento', 'recursos', 'deposito'],
         config_inicial: {
-            anticipacion_min_horas: 12,
-            buffer_limpieza_min: 15,
-            ventana_cancelacion_horas: 24,
-            paso_slot_min: 15,
+            anticipacion_min_minutos: 15,
+            buffer_limpieza_min: 0,
+            ventana_cancelacion_min: 60,
+            paso_slot_min: 30,
             deposito_pct: 30,
         },
         portal: {
@@ -184,9 +184,9 @@ const PERFILES = {
         disponibles: ['a_cotizar', 'deposito', 'consentimiento', 'portafolio', 'variantes', 'productos'],
         activas: ['a_cotizar', 'deposito', 'consentimiento', 'portafolio'],
         config_inicial: {
-            anticipacion_min_horas: 24,
-            buffer_limpieza_min: 30,
-            ventana_cancelacion_horas: 48,
+            anticipacion_min_minutos: 15,
+            buffer_limpieza_min: 0,
+            ventana_cancelacion_min: 60,
             paso_slot_min: 30,
             deposito_pct: 30,
             deposito_reembolsable: false,
@@ -208,9 +208,9 @@ const PERFILES = {
         disponibles: ['variantes', 'deposito', 'tiempo_proceso', 'productos'],
         activas: ['variantes'],
         config_inicial: {
-            anticipacion_min_horas: 2,
-            buffer_limpieza_min: 15,
-            ventana_cancelacion_horas: 12,
+            anticipacion_min_minutos: 15,
+            buffer_limpieza_min: 0,
+            ventana_cancelacion_min: 60,
             paso_slot_min: 30,
         },
         portal: {
@@ -231,8 +231,9 @@ const PERFILES = {
         disponibles: ['deposito', 'productos'],
         activas: ['deposito'],
         config_inicial: {
-            anticipacion_min_horas: 0,
-            ventana_cancelacion_horas: 72,
+            anticipacion_min_minutos: 0,
+            // Un hotel necesita más margen que una cita: 72 horas antes de la llegada.
+            ventana_cancelacion_min: 72 * 60,
             deposito_pct: 50,
             hora_checkin: '15:00',
             hora_checkout: '12:00',

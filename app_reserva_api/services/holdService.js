@@ -23,6 +23,8 @@
  * instante exacto en que caduca. Borrar las filas viejas es housekeeping, no correctitud.
  */
 'use strict';
+
+const { duracionLegible } = require('./duracionTexto');
 const Models = require('../../app_core/models/conection');
 const { Op } = Models.Sequelize;
 const Disponibilidad = require('./disponibilidadService');
@@ -101,6 +103,20 @@ async function tomar(
     const inicio = parsearInicio(fechaHoraInicioISO);
     const duracion = comp.duracion;
     const fin = Reglas.addMinutes(inicio, duracion);
+
+    // La anticipación mínima se exige AQUÍ, al apartar, y no solo al crear la cita. Antes solo
+    // la miraba `crearCita`: el asistente ofrecía las 16:00 a las 14:59, apartaba a las 15:02 y
+    // al confirmar (58 min antes) la cita se rechazaba con ANTICIPACION_INSUFICIENTE después de
+    // haberle dicho al cliente «te aparté». Con la regla en el hold, el rechazo llega antes del
+    // resumen, y una hora ya apartada se respeta al confirmar (ver `crearCita`).
+    const minimoInicio = Reglas.addMinutes(new Date(), Number(cfg.anticipacion_min_minutos || 0));
+    if (inicio.getTime() < minimoInicio.getTime()) {
+        throw error(
+            'ANTICIPACION_INSUFICIENTE',
+            `Debe reservar con al menos ${duracionLegible(cfg.anticipacion_min_minutos)} de anticipación`,
+            400,
+        );
+    }
 
     // Si quien llama ya tiene una transacción abierta, se trabaja dentro de la suya y NO se
     // confirma: la decisión de commit es de quien la abrió. Es lo que hace que el dry-run

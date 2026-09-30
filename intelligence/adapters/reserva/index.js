@@ -271,6 +271,10 @@ async function exigirConfiguracion(idNegocio) {
 }
 
 function registrarCapacidades() {
+    // Las citas que crea el asistente avisan a la Agenda en vivo. Idempotente con el registro
+    // que hacen las rutas de reserva: si el asistente corriera en otro proceso, también avisaría.
+    require('../../../app_reserva_api/services/avisoService').registrarHooks();
+
     registry.registrar({
         nombre: 'consultar_servicios',
         descripcion:
@@ -760,7 +764,7 @@ function registrarCapacidades() {
         // El único límite económico real del proyecto hoy (ADR-011). Lo aplica el dominio
         // dentro de su transacción, no el Gate: aquí solo se declara para que la auditoría
         // registre bajo qué regla se ejecutó.
-        politica: ['ventana_cancelacion_horas'],
+        politica: ['ventana_cancelacion_min'],
         parametros: {
             codigo_cita: { tipo: 'string', requerido: true, max_longitud: 40 },
             motivo: { tipo: 'string', requerido: false, max_longitud: 300 },

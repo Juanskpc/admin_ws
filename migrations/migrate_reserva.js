@@ -69,7 +69,7 @@ async function migrate() {
                 anticipacion_min_horas    INTEGER     NOT NULL DEFAULT 1,
                 buffer_limpieza_min       INTEGER     NOT NULL DEFAULT 10,
                 ventana_cancelacion_horas INTEGER     NOT NULL DEFAULT 4,
-                paso_slot_min             INTEGER     NOT NULL DEFAULT 15,
+                paso_slot_min             INTEGER     NOT NULL DEFAULT 30,
                 cobro_adelantado          BOOLEAN     NOT NULL DEFAULT FALSE,
                 instrucciones_pago        TEXT,
                 fecha_creacion            TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP,

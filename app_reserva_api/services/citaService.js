@@ -7,6 +7,7 @@ const personaNegocioDao = require('../../app_core/dao/personaNegocioDao');
 const Disponibilidad = require('./disponibilidadService');
 const Notificacion = require('./notificacionService');
 const Reglas = require('./reglasAgenda');
+const { duracionLegible } = require('./duracionTexto');
 const EstadoCita = require('./estadoCita');
 const CodigoCita = require('./codigoCita');
 const Audit = require('../../app_core/helpers/auditHelper');
@@ -210,11 +211,16 @@ async function crearCita(params, { transaction: transaccionExterna = null } = {}
     const fechaInicio = parsearInicio(fechaHoraInicioISO);
     const fechaFin = new Date(fechaInicio.getTime() + duracionTotal * 60_000);
 
-    // Validar anticipación mínima
+    // Validar anticipación mínima.
+    //
+    // No se exige al materializar un hold: la hora ya se validó al apartarla (`holdService.tomar`)
+    // y el cliente la tiene «apartada». Exigirla otra vez rechazaba citas porque el reloj corrió
+    // mientras el cliente leía el resumen (16:00 apartada a las 15:02, confirmada 58 min antes).
+    // Quien llama con `consumirHoldId` ya comprobó que el hold sigue vigente (HOLD_NO_VIGENTE).
     const ahora = new Date();
-    const minimoMs = cfg.anticipacion_min_horas * 3600_000;
-    if (creadoPorIdUsuario == null && fechaInicio.getTime() < ahora.getTime() + minimoMs) {
-        const e = new Error(`Debe reservar con al menos ${cfg.anticipacion_min_horas}h de anticipación`);
+    const minimoMs = Number(cfg.anticipacion_min_minutos || 0) * 60_000;
+    if (creadoPorIdUsuario == null && !consumirHoldId && fechaInicio.getTime() < ahora.getTime() + minimoMs) {
+        const e = new Error(`Debe reservar con al menos ${duracionLegible(cfg.anticipacion_min_minutos)} de anticipación`);
         e.statusCode = 400; e.code = 'ANTICIPACION_INSUFICIENTE'; throw e;
     }
 
@@ -486,9 +492,9 @@ async function cancelarPorCliente(codigoPublico, motivo, { idNegocio = null, tra
 
     const cfg = await Disponibilidad.getConfig(cita.id_negocio);
     const ahora = new Date();
-    const ventanaMs = cfg.ventana_cancelacion_horas * 3600_000;
+    const ventanaMs = Number(cfg.ventana_cancelacion_min || 0) * 60_000;
     if (new Date(cita.fecha_hora_inicio).getTime() - ahora.getTime() < ventanaMs) {
-        const e = new Error(`Solo se puede cancelar con ${cfg.ventana_cancelacion_horas}h de anticipación`);
+        const e = new Error(`Solo se puede cancelar con ${duracionLegible(cfg.ventana_cancelacion_min)} de anticipación`);
         e.statusCode = 400; e.code = 'CANCELACION_TARDE'; throw e;
     }
 

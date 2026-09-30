@@ -483,7 +483,7 @@ describe('Aislamiento: los handles públicos no cruzan inquilinos', () => {
 // ────────────────────────────────────────────────────────────────────────────────────────
 describe('Capa económica declarada (ADR-011)', () => {
     it('cancelar_cita declara la ventana de cancelación en su manifiesto', () => {
-        expect(intelligence.registry.describir('cancelar_cita').politica).toEqual(['ventana_cancelacion_horas']);
+        expect(intelligence.registry.describir('cancelar_cita').politica).toEqual(['ventana_cancelacion_min']);
     });
 
     it('y el límite lo aplica el DOMINIO, no el Gate', async () => {

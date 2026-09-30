@@ -51,8 +51,8 @@ function cargarFixture(config = CONFIGS.base) {
 
     mockDatos.ReservaConfig = [{
         id_negocio: NEGOCIO,
-        anticipacion_min_horas: 1,
-        ventana_cancelacion_horas: 4,
+        anticipacion_min_minutos: 60,
+        ventana_cancelacion_min: 240,
         cobro_adelantado: false,
         permite_cobro_profesional: false,
         permite_multipago: false,

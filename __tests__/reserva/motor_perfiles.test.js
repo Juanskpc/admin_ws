@@ -25,8 +25,8 @@ const t = (hhmm) => new Date(`${LUNES}T${hhmm}:00-05:00`);
 function fixture() {
     for (const k of Object.keys(mockDatos)) delete mockDatos[k];
     mockDatos.ReservaConfig = [{
-        id_negocio: N, anticipacion_min_horas: 1, buffer_limpieza_min: 10, paso_slot_min: 15,
-        ventana_cancelacion_horas: 4, funciones: {},
+        id_negocio: N, anticipacion_min_minutos: 60, buffer_limpieza_min: 10, paso_slot_min: 15,
+        ventana_cancelacion_min: 240, funciones: {},
     }];
     mockDatos.ReservaServicio = [
         { id_servicio: 1, id_negocio: N, nombre: 'Corte', duracion_min: 30, precio: '30000', estado: 'A', proceso_desde_min: 0, proceso_min: 0 },

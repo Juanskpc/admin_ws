@@ -62,6 +62,10 @@ async function getInfoNegocio(req, res) {
             cobro_adelantado: cfg.cobro_adelantado,
             instrucciones_pago: pago.modo !== 'ninguno' ? cfg.instrucciones_pago : null,
             pago,
+            // En minutos desde 2026-09-29. Las de horas siguen viajando (espejo) para no romper
+            // un portal viejo que esté abierto en el navegador de un cliente.
+            anticipacion_min_minutos: cfg.anticipacion_min_minutos,
+            ventana_cancelacion_min: cfg.ventana_cancelacion_min,
             anticipacion_min_horas: cfg.anticipacion_min_horas,
             ventana_cancelacion_horas: cfg.ventana_cancelacion_horas,
             perfil: { clave: perfil.clave, modos: perfil.modos, terminos: perfil.terminos, portal: perfil.portal },

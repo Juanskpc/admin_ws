@@ -99,7 +99,7 @@ async function calcularSlots({
         slots: [],
     };
 
-    const minimoInicio = Reglas.addMinutes(new Date(), cfg.anticipacion_min_horas * 60);
+    const minimoInicio = Reglas.addMinutes(new Date(), Number(cfg.anticipacion_min_minutos || 0));
     const paso = cfg.paso_slot_min;
     const slots = [];
     const empujar = (t) => {

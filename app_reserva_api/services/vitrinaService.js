@@ -398,6 +398,10 @@ async function getVitrina(idNegocio) {
             pais: codigoPais(negocio.pais) || 'CO',
         },
         reglas: {
+            // En minutos desde 2026-09-29. Las de horas siguen viajando (espejo) para no romper
+            // un portal viejo que esté abierto en el navegador de un cliente.
+            anticipacion_min_minutos: cfg.anticipacion_min_minutos,
+            ventana_cancelacion_min: cfg.ventana_cancelacion_min,
             anticipacion_min_horas: cfg.anticipacion_min_horas,
             ventana_cancelacion_horas: cfg.ventana_cancelacion_horas,
             paso_slot_min: cfg.paso_slot_min,

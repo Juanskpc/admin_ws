@@ -144,6 +144,23 @@ describe('el registro de flujos', () => {
         expect((await conTipo('RESTAURANTE')(entrada(pregunta))).respuestas).toEqual(['del modelo']);
     });
 
+    it('un flujo que lanza NO deja al cliente sin respuesta y conserva la memoria (2026-09-29)', async () => {
+        const revienta = async () => {
+            throw Object.assign(new Error('boom'), { code: 'ALGO_RARO' });
+        };
+        flujos.registrar({ vertical: 'reserva', tipos: ['BARBERIA'], manejar: revienta });
+        const manejar = crearManejadorEscalera({ resolverNegocio: negocioDeTipo('BARBERIA') });
+
+        const e = entrada('sí', 7);
+        e.conversacion.variables = { nombre: 'Juanda', turnos: 5 };
+        const d = await manejar(e);
+
+        expect(d.respuestas[0]).toMatch(/tuve un problema/i);
+        expect(d.resultado).toBe('error');
+        expect(d.variables).toMatchObject({ nombre: 'Juanda', turnos: 6 });
+        expect(d.pasos.some((p) => p.tipo === 'error' && p.decision === 'ALGO_RARO')).toBe(true);
+    });
+
     it('exige las tres piezas', () => {
         expect(() => flujos.registrar({ vertical: 'x', tipos: ['Y'] })).toThrow();
         expect(() => flujos.registrar({ tipos: ['Y'], manejar: flujoQueDice('a') })).toThrow();

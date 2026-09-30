@@ -1,10 +1,27 @@
 module.exports = (sequelize, DataTypes) => {
   const ReservaConfig = sequelize.define('ReservaConfig', {
     id_negocio:                { type: DataTypes.INTEGER, primaryKey: true },
+    /**
+     * Anticipación mínima para reservar, en MINUTOS (2026-09-29). Por defecto 15: un negocio
+     * nuevo ofrece horas hasta un cuarto de hora antes. Antes era en horas (mínimo 1 h), y la
+     * agenda de «ya mismo» nunca aparecía.
+     */
+    anticipacion_min_minutos:  { type: DataTypes.INTEGER, allowNull: false, defaultValue: 15 },
+    /**
+     * Hasta cuánto antes de la cita puede cancelar el cliente, en MINUTOS. Por defecto 60.
+     */
+    ventana_cancelacion_min:   { type: DataTypes.INTEGER, allowNull: false, defaultValue: 60 },
+    /**
+     * ⚠️ Columnas viejas, en horas. Ya no las lee nadie: se mantienen sincronizadas (ver el hook
+     * de abajo) solo para que volver al backend anterior no deje a los negocios con otras reglas.
+     */
     anticipacion_min_horas:    { type: DataTypes.INTEGER, allowNull: false, defaultValue: 1 },
-    buffer_limpieza_min:       { type: DataTypes.INTEGER, allowNull: false, defaultValue: 10 },
-    ventana_cancelacion_horas: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 4 },
-    paso_slot_min:             { type: DataTypes.INTEGER, allowNull: false, defaultValue: 15 },
+    ventana_cancelacion_horas: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 1 },
+    /** «Tiempo de limpieza» entre dos citas, en minutos. 0 por defecto desde 2026-09-29. */
+    buffer_limpieza_min:       { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
+    // 30 desde 2026-09-29: un negocio nuevo nace ofreciendo horas cada media hora (pedido del
+    // negocio). Los que ya existen conservan lo que tengan.
+    paso_slot_min:             { type: DataTypes.INTEGER, allowNull: false, defaultValue: 30 },
     cobro_adelantado:          { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
     instrucciones_pago:        DataTypes.TEXT,
     /**
@@ -41,6 +58,25 @@ module.exports = (sequelize, DataTypes) => {
     fecha_actualizacion:       { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
   }, {
     tableName: 'reserva_config', schema: 'reserva', timestamps: false,
+  });
+
+  /**
+   * Los minutos mandan; las horas son un espejo (redondeado hacia arriba, para que el backend
+   * viejo nunca sea MÁS permisivo que el nuevo). Si alguien escribe todavía en horas —un script
+   * antiguo—, se traduce a minutos para que la regla no se quede con el valor de antes.
+   */
+  ReservaConfig.addHook('beforeSave', 'espejoHoras', (cfg) => {
+    const pares = [
+      ['anticipacion_min_minutos', 'anticipacion_min_horas'],
+      ['ventana_cancelacion_min', 'ventana_cancelacion_horas'],
+    ];
+    for (const [minutos, horas] of pares) {
+      if (cfg.isNewRecord || cfg.changed(minutos)) {
+        cfg.set(horas, Math.ceil(Number(cfg.get(minutos) || 0) / 60));
+      } else if (cfg.changed(horas)) {
+        cfg.set(minutos, Number(cfg.get(horas) || 0) * 60);
+      }
+    }
   });
 
   ReservaConfig.associate = (models) => {

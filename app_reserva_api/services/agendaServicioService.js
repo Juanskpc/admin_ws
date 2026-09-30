@@ -116,7 +116,7 @@ async function diasDelServicio({ idNegocio, idServicio, desde, hasta, idVariante
     const duracion = await duracionCon(idNegocio, servicio, idVariante, funciones);
 
     const cfg = await Disponibilidad.getConfig(idNegocio);
-    const desdeMs = Date.now() + (cfg.anticipacion_min_horas || 0) * 3_600_000;
+    const desdeMs = Date.now() + Number(cfg.anticipacion_min_minutos || 0) * 60_000;
 
     const porProfesional = await Promise.all(profesionales.map(p =>
         Disponibilidad.diasDisponibles({

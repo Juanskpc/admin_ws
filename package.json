@@ -82,6 +82,8 @@
     "migrate:reserva-productos": "node migrations/migrate_reserva_productos.js",
     "migrate:reserva-hold-variantes": "node migrations/migrate_reserva_hold_variantes.js",
     "migrate:reserva-asignacion-explicita": "node migrations/migrate_reserva_asignacion_explicita.js",
+    "migrate:reserva-paso-slot-30": "node migrations/migrate_reserva_paso_slot_30.js",
+    "migrate:reserva-config-minutos": "node migrations/migrate_reserva_config_minutos.js",
     "migrate:intelligence-consultas-reserva": "node migrations/migrate_intelligence_consultas_reserva.js",
     "migrate:intelligence-reportes": "node migrations/migrate_intelligence_reportes.js",
     "migrate:restaurante-pago-domicilio": "node migrations/migrate_restaurante_pago_domicilio.js",

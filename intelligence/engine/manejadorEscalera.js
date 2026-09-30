@@ -264,7 +264,39 @@ function crearManejadorEscalera({
             }
         }
 
-        const decision = await ejecutarNivel1(ctx, flujo);
+        let decision;
+        try {
+            decision = await ejecutarNivel1(ctx, flujo);
+        } catch (error) {
+            // ⚠️ Un flujo que lanza NO puede dejar al cliente sin respuesta (producción,
+            // 2026-09-29): el «Sí» que confirmaba una cita reventó en el dominio, el motor marcó el
+            // turno en error y no salió ni una palabra. Se contesta algo cierto, se conserva la
+            // tarea (el motor la guarda al no venir `tarea` en la decisión) y el error queda en el
+            // rastro del turno para diagnosticarlo.
+            console.warn(`[intelligence] el flujo determinista falló: ${error.code || ''} ${error.message}`);
+            return conPaso(
+                conPaso(
+                    conAviso({
+                        pasos: [{
+                            tipo: 'error',
+                            decision: String(error.code || 'FLUJO_FALLO').slice(0, 80),
+                            motivo: { mensaje: error.message },
+                        }],
+                        respuestas: [
+                            'Perdona, tuve un problema con ese paso. Inténtalo de nuevo o escríbeme ' +
+                                '«menú» para empezar otra vez.',
+                        ],
+                        // Las de siempre, enteras: `variables` reemplaza en vez de fusionar, y sin
+                        // esto `conTurnoContado` dejaría solo el contador y se perdería el nombre.
+                        variables: { ...(ctx.conversacion?.variables || {}) },
+                        resultado: 'error',
+                        nivel: NIVEL.DETERMINISTA,
+                    }),
+                    pasoDeRuta
+                ),
+                pasoDeCaducidad
+            );
+        }
 
         // ── La cesión al modelo, por fin recogida ──────────────────────────────────────────
         //

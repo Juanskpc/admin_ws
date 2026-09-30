@@ -439,11 +439,67 @@ function diaSiguiente(fechaISO) {
 
 const DIAS = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
 
-/** «viernes 15» — una fecha ISO no se lee, y el chip tiene que poder leerse de un vistazo. */
-function etiquetaDia(fechaISO) {
+/** `YYYY-MM-DD` de hoy en Bogotá, la hora de pared de toda la plataforma. */
+function hoyEnBogota(ahora = new Date()) {
+    return new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'America/Bogota', year: 'numeric', month: '2-digit', day: '2-digit',
+    }).format(ahora);
+}
+
+/**
+ * «miércoles 30 septiembre», u «Hoy» si es hoy (2026-09-29, pedido del negocio).
+ *
+ * Antes era «miércoles 30» a secas: a fin de mes, «jueves 1» no decía de qué mes. Cabe en el
+ * título de una fila de WhatsApp (24 caracteres): el más largo, «miércoles 30 septiembre», son 23.
+ */
+function etiquetaDia(fechaISO, ahora = new Date()) {
+    return fechaISO === hoyEnBogota(ahora) ? 'Hoy' : diaConMes(fechaISO);
+}
+
+/** «miércoles 30 septiembre», sin mirar si es hoy. */
+function diaConMes(fechaISO) {
     const [anio, mes, dia] = fechaISO.split('-').map(Number);
     const d = new Date(Date.UTC(anio, mes - 1, dia));
-    return `${DIAS[d.getUTCDay()]} ${dia}`;
+    return `${DIAS[d.getUTCDay()]} ${dia} ${MESES[mes - 1]}`;
+}
+
+/**
+ * «16:00» → «4:00 PM». Lo que lee el cliente va en 12 horas; el id de la opción sigue siendo
+ * «16:00», que es lo que entienden la disponibilidad y el hold.
+ */
+function hora12(hhmm) {
+    const m = /^(\d{1,2}):(\d{2})/.exec(String(hhmm || ''));
+    if (!m) return String(hhmm || '');
+    const h = Number(m[1]);
+    const sufijo = h >= 12 ? 'PM' : 'AM';
+    return `${h % 12 === 0 ? 12 : h % 12}:${m[2]} ${sufijo}`;
+}
+
+/**
+ * La hora que eligió, en 24 h, entre las que se ofrecieron. Acepta el id de la opción («16:00»,
+ * lo que manda WhatsApp), la etiqueta («4:00 PM», lo que manda el WebChat) y lo que escribe una
+ * persona («4 pm», «a las 4:30 p. m.»). Con `ofrecidas`, una hora que no está en la lista no vale.
+ */
+function resolverHora(texto, ofrecidas = null) {
+    const t = normalizar(texto).replace(/\./g, '').replace(/\s+/g, ' ');
+    const m = /(\d{1,2})(?::(\d{2}))?\s*(am|pm|a m|p m)?/.exec(t);
+    if (!m) return null;
+    let h = Number(m[1]);
+    const min = m[2] ?? '00';
+    const sufijo = (m[3] || '').replace(' ', '');
+    if (!m[2] && !sufijo) return null; // un número suelto no es una hora
+    if (sufijo === 'pm' && h < 12) h += 12;
+    if (sufijo === 'am' && h === 12) h = 0;
+    if (h > 23) return null;
+    const candidata = `${String(h).padStart(2, '0')}:${min}`;
+    if (!ofrecidas || ofrecidas.length === 0) return candidata;
+    if (ofrecidas.includes(candidata)) return candidata;
+    // «4:00» sin AM/PM cuando se ofrecieron las 16:00 (y no las 04:00): la de la tarde.
+    if (!sufijo && h < 12) {
+        const tarde = `${String(h + 12).padStart(2, '0')}:${min}`;
+        if (ofrecidas.includes(tarde)) return tarde;
+    }
+    return null;
 }
 
 const MESES = [
@@ -1182,8 +1238,12 @@ function crearManejadorDeterminista({
     function chipDeDia(d) {
         return {
             id: d.fecha,
-            etiqueta: etiquetaDia(d.fecha),
-            detalle: d.primera_hora ? `Desde las ${d.primera_hora}` : undefined,
+            etiqueta: etiquetaDia(d.fecha, ahora()),
+            // «Hoy» lleva también la fecha debajo: el cliente tiene que poder comprobar qué día es.
+            detalle: [
+                etiquetaDia(d.fecha, ahora()) === 'Hoy' ? diaConMes(d.fecha) : null,
+                d.primera_hora ? `desde las ${hora12(d.primera_hora)}` : null,
+            ].filter(Boolean).join(' · ').replace(/^./, (c) => c.toUpperCase()) || undefined,
         };
     }
 
@@ -1331,7 +1391,7 @@ function crearManejadorDeterminista({
             pasos: [...pasosPrevios, paso('menu_profesionales', { cuantos: profesionales.length })],
             respuestas: [
                 {
-                    texto: `¿Con quién prefieres tu ${t.cita} del ${fechaLegible(datos.fecha)} a las ${datos.hora}?`,
+                    texto: `¿Con quién prefieres tu ${t.cita} del ${fechaLegible(datos.fecha)} a las ${hora12(datos.hora)}?`,
                     // Me da igual + 8 personas + «Otra hora» = 10 filas, el máximo de una lista.
                     opciones: [
                         { id: CUALQUIER_PROFESIONAL, etiqueta: 'Me da igual', detalle: 'Cualquiera con esa hora libre' },
@@ -1534,7 +1594,7 @@ function crearManejadorDeterminista({
                         opciones: [
                             ...(busqueda
                                 ? busqueda.dias.map(chipDeDia)
-                                : [{ id: siguiente, etiqueta: etiquetaDia(siguiente) }]),
+                                : [{ id: siguiente, etiqueta: etiquetaDia(siguiente, ahora()) }]),
                             // Solo si había preferencia: sin ella, «otra persona» no significa
                             // nada y sería una opción que no lleva a ninguna parte.
                             ...(datos.id_profesional_preferido
@@ -1581,7 +1641,7 @@ function crearManejadorDeterminista({
                     // lista de WhatsApp (`channels/whatsapp/adaptador.js`, LIMITES). Añadir
                     // aquí una segunda opción de volver rompería ese margen.
                     opciones: [
-                        ...horas.map((h) => ({ id: h.hora, etiqueta: h.hora })),
+                        ...horas.map((h) => ({ id: h.hora, etiqueta: hora12(h.hora) })),
                         { id: VOLVER.FECHA, etiqueta: '← Otro día' },
                     ],
                 },
@@ -1610,10 +1670,14 @@ function crearManejadorDeterminista({
      * caduque justo cuando el cliente está a punto de confirmar.
      */
     async function elegirHora(ctx, datos) {
-        const hora = normalizar(ultimaLinea(ctx.texto)).match(/\d{1,2}:\d{2}/);
-        if (!hora) {
+        // Contra las horas que se ofrecieron: el WebChat manda la etiqueta en 12 h («4:00 PM») y
+        // leer solo «4:00» agendaría a las cuatro de la madrugada.
+        const ofrecidas = datos.profesional_por_hora ? Object.keys(datos.profesional_por_hora) : null;
+        const elegida = resolverHora(ultimaLinea(ctx.texto), ofrecidas);
+        if (!elegida) {
             return reintentar(ctx, datos, 'Elige una de las horas de la lista, por favor.');
         }
+        const hora = [elegida];
         const conHora = {
             ...datos,
             hora: hora[0],
@@ -1657,20 +1721,30 @@ function crearManejadorDeterminista({
     /** Toma el hold y pide confirmación. Única invocación de `proponer_turno` del turno. */
     async function apartarHora(ctx, datos, nombre, pasosPrevios) {
         const inicio = `${datos.fecha}T${datos.hora}:00`;
-        const { resultado } = await invocar({
-            ...ctx,
-            capacidad: 'proponer_turno',
-            args: {
-                id_servicio: datos.id_servicio,
-                inicio,
-                // El mismo profesional que tenía libre esa hora cuando se ofreció. Sin esto,
-                // el adaptador vuelve a elegir y puede caer en uno ya ocupado.
-                ...(datos.id_profesional ? { id_profesional: datos.id_profesional } : {}),
-                // La variante va AL APARTAR, no al confirmar: es lo que decide cuánto dura el
-                // hueco. Sin ella se apartaban 40 minutos para una cita de 90.
-                ...(datos.id_variante ? { id_variante: datos.id_variante } : {}),
-            },
-        });
+        let resultado;
+        try {
+            ({ resultado } = await invocar({
+                ...ctx,
+                capacidad: 'proponer_turno',
+                args: {
+                    id_servicio: datos.id_servicio,
+                    inicio,
+                    // El mismo profesional que tenía libre esa hora cuando se ofreció. Sin esto,
+                    // el adaptador vuelve a elegir y puede caer en uno ya ocupado.
+                    ...(datos.id_profesional ? { id_profesional: datos.id_profesional } : {}),
+                    // La variante va AL APARTAR, no al confirmar: es lo que decide cuánto dura el
+                    // hueco. Sin ella se apartaban 40 minutos para una cita de 90.
+                    ...(datos.id_variante ? { id_variante: datos.id_variante } : {}),
+                },
+            }));
+        } catch (error) {
+            // La hora se ocupó o ya está demasiado cerca mientras el cliente elegía: se le dice
+            // y se le ofrecen las horas que quedan, en vez de dejar el turno en error y mudo.
+            if (esRechazoDelDominio(error)) {
+                return horaRechazada(ctx, { ...datos, nombre }, error, pasosPrevios);
+            }
+            throw error;
+        }
 
         const t = terminos(datos);
         const mayuscula = (x) => x.charAt(0).toLocaleUpperCase('es') + x.slice(1);
@@ -1683,7 +1757,7 @@ function crearManejadorDeterminista({
             datos.mascota_nombre ? `• *Mascota:* ${datos.mascota_nombre}` : null,
             resultado.profesional ? `• *${mayuscula(t.profesional)}:* ${resultado.profesional}` : null,
             `• *Día:* ${fechaLegible(datos.fecha)}`,
-            `• *Hora:* ${datos.hora}`,
+            `• *Hora:* ${hora12(datos.hora)}`,
             resultado.duracion_min ? `• *Duración:* ${resultado.duracion_min} min` : null,
             resultado.precio != null ? `• *Precio:* $${Number(resultado.precio).toLocaleString('es-CO')}` : null,
             nombre ? `• *A nombre de:* ${nombre}` : null,
@@ -1766,7 +1840,7 @@ function crearManejadorDeterminista({
             return {
                 pasos: [paso('cita_creada', { codigo_cita: resultado.codigo_cita })],
                 respuestas: [
-                    `¡Listo! Tu ${terminos(datos).cita} quedó agendada para el ${fechaLegible(datos.fecha)} a las ${datos.hora}. ` +
+                    `¡Listo! Tu ${terminos(datos).cita} quedó agendada para el ${fechaLegible(datos.fecha)} a las ${hora12(datos.hora)}. ` +
                         `El código es ${resultado.codigo_cita} — guárdalo por si quieres cambiarla o cancelarla.`,
                 ],
                 // El código va a `variables` y no solo al texto: sin `consultar_mis_citas`, es
@@ -1787,7 +1861,7 @@ function crearManejadorDeterminista({
                     respuestas: [
                         {
                             texto: 'Se me liberó esa hora mientras esperábamos. ¿Miramos las horas libres otra vez?',
-                            opciones: [{ id: datos.fecha, etiqueta: `Ver el ${etiquetaDia(datos.fecha)}` }],
+                            opciones: [{ id: datos.fecha, etiqueta: `Ver ${etiquetaDia(datos.fecha, ahora()).replace(/^Hoy$/, 'hoy')}` }],
                         },
                     ],
                     variables: conMemoria(ctx.conversacion),
@@ -1796,7 +1870,57 @@ function crearManejadorDeterminista({
                     nivel: 'determinista',
                 };
             }
+            // Cualquier otro «no» del dominio después del «Sí»: se explica y se ofrecen horas.
+            // Antes subía como excepción y el cliente se quedaba sin respuesta (2026-09-29).
+            if (esRechazoDelDominio(error)) {
+                return horaRechazada(ctx, datos, error, [paso('confirmacion_rechazada', { codigo: error.code ?? null })]);
+            }
             throw error;
+        }
+    }
+
+    /**
+     * ¿Es un «no» del dominio (hora ocupada, anticipación, fuera de horario…) y no una avería?
+     * Los rechazos traen `statusCode` 4xx; lo demás es un fallo de verdad y se deja subir.
+     */
+    function esRechazoDelDominio(error) {
+        const s = Number(error?.statusCode);
+        return Number.isInteger(s) && s >= 400 && s < 500;
+    }
+
+    /**
+     * La hora ya no se puede agendar: se dice por qué y se ofrecen las horas libres de ese día
+     * recalculadas en este momento.
+     *
+     * ## El fallo que obliga a esto (producción, 2026-09-29)
+     *
+     * Solo se atrapaba `HOLD_NO_VIGENTE`. Cualquier otro rechazo —`ANTICIPACION_INSUFICIENTE`,
+     * `SLOT_NO_DISPONIBLE`…— subía como excepción, el turno terminaba en error y el cliente que
+     * acababa de decir «Sí» no recibía NADA: ni cita ni mensaje. Un rechazo es parte de la
+     * conversación y se contesta como tal.
+     */
+    async function horaRechazada(ctx, datos, error, pasosPrevios) {
+        const motivo = error.code === 'SLOT_NO_DISPONIBLE'
+            ? 'esa hora se acaba de ocupar'
+            : String(error.message || 'esa hora ya no está disponible').replace(/^./, (c) => c.toLowerCase());
+        const aviso = `No pude agendar esa hora: ${motivo}.`;
+        const rastro = [...pasosPrevios, paso('hora_rechazada', { codigo: error.code ?? null })];
+        const podados = podarAlVolver(PASO.HORA, datos);
+
+        try {
+            const decision = podados.fecha
+                ? await mostrarHoras(ctx, podados, podados.fecha, rastro)
+                : await pedirFecha(ctx, podados, rastro);
+            return { ...decision, respuestas: [aviso, ...(decision.respuestas || [])] };
+        } catch {
+            return {
+                pasos: rastro,
+                respuestas: [`${aviso} Escríbeme «menú» para buscar otra hora.`],
+                variables: conMemoria(ctx.conversacion),
+                tarea: { nombre: TAREA_AGENDAR, datos: { ...podados, paso: PASO.FECHA } },
+                resultado: 'resuelto',
+                nivel: 'determinista',
+            };
         }
     }
 

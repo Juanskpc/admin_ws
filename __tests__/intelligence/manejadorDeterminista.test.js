@@ -1106,3 +1106,87 @@ describe('resumen final con Sí / No', () => {
         expect(final.texto).toMatch(/¿Confirmas la cita\?$/);
     });
 });
+
+// ── Producción 2026-09-29: el «Sí» que no contestaba ────────────────────────────────────
+
+describe('un rechazo del dominio nunca deja al cliente sin respuesta', () => {
+    const errorDominio = (code, message) => Object.assign(new Error(message), { code, statusCode: 400 });
+
+    test('ANTICIPACION_INSUFICIENTE al confirmar: se explica y se ofrecen las horas de ese día', async () => {
+        const gate = gateFalso({
+            consultar_disponibilidad: DISPONIBILIDAD,
+            reservar_turno: errorDominio('ANTICIPACION_INSUFICIENTE', 'Debe reservar con al menos 1h de anticipación'),
+        });
+        const conv = conversacion({
+            tarea: TAREA_AGENDAR,
+            datos: { paso: PASO.CONFIRMAR, id_servicio: 1, fecha: '2026-08-20', hora: '16:00', codigo_hold: 'H', nombre: 'Juanda' },
+        });
+        const d = await crearManejadorDeterminista({ gate, contextoNegocio: NEGOCIO_FALSO, identidad: identidadFalsa() })(
+            entrada('Sí', conv)
+        );
+
+        expect(d.respuestas[0]).toMatch(/No pude agendar esa hora: debe reservar con al menos 1h/);
+        expect(d.tarea.datos.paso).toBe(PASO.HORA);
+        expect(d.tarea.datos.codigo_hold).toBeUndefined();
+    });
+
+    test('la hora se ocupó al apartar: se dice y se reofrecen horas', async () => {
+        const gate = gateFalso({
+            consultar_disponibilidad: DISPONIBILIDAD,
+            proponer_turno: errorDominio('SLOT_NO_DISPONIBLE', 'Ocupado'),
+        });
+        const conv = conversacion({
+            tarea: TAREA_AGENDAR,
+            datos: { paso: PASO.HORA, id_servicio: 1, fecha: '2026-08-20', profesional_por_hora: { '10:00': 4 } },
+        });
+        const d = await crearManejadorDeterminista({
+            gate, contextoNegocio: NEGOCIO_FALSO, identidad: identidadFalsa({ nombre: 'Ana' }),
+        })(entrada('10:00', conv));
+
+        expect(d.respuestas[0]).toBe('No pude agendar esa hora: esa hora se acaba de ocupar.');
+        expect(d.tarea.datos.paso).toBe(PASO.HORA);
+    });
+});
+
+describe('cómo se leen los días y las horas', () => {
+    const ahora = () => new Date('2026-09-29T15:00:00-05:00');
+
+    test('los días llevan el mes, y el de hoy dice «Hoy»', async () => {
+        const gate = gateFalso({
+            consultar_dias_con_horas: {
+                dias: [
+                    { fecha: '2026-09-29', primera_hora: '16:00' },
+                    { fecha: '2026-09-30', primera_hora: '09:00' },
+                    { fecha: '2026-10-01', primera_hora: '09:00' },
+                ],
+            },
+        });
+        const conv = conversacion({ tarea: TAREA_AGENDAR, datos: { paso: PASO.SERVICIO, ofrecidos: SERVICIOS_OFRECIDOS } });
+        const d = await crearManejadorDeterminista({ gate, contextoNegocio: NEGOCIO_FALSO, identidad: identidadFalsa(), ahora })(
+            entrada('1', conv)
+        );
+
+        const opciones = d.respuestas[0].opciones;
+        expect(opciones.map((o) => o.etiqueta)).toEqual(['Hoy', 'miércoles 30 septiembre', 'jueves 1 octubre']);
+        expect(opciones[0].detalle).toBe('Martes 29 septiembre · desde las 4:00 PM');
+        expect(opciones[1].detalle).toBe('Desde las 9:00 AM');
+    });
+
+    test('las horas se muestran en 12 h y se aceptan escritas así', async () => {
+        const gate = gateFalso({
+            consultar_disponibilidad: { fecha: '2026-08-20', horas: [{ hora: '09:00', id_profesional: 4 }, { hora: '16:30', id_profesional: 4 }] },
+            proponer_turno: HOLD,
+        });
+        const manejar = crearManejadorDeterminista({ gate, contextoNegocio: NEGOCIO_FALSO, identidad: identidadFalsa({ nombre: 'Ana' }) });
+
+        let d = await manejar(entrada('2026-08-20', conversacion({ tarea: TAREA_AGENDAR, datos: { paso: PASO.FECHA, id_servicio: 1 } })));
+        expect(d.respuestas[0].opciones.map((o) => [o.id, o.etiqueta])).toEqual([
+            ['09:00', '9:00 AM'], ['16:30', '4:30 PM'], ['volver_fecha', '← Otro día'],
+        ]);
+
+        // El WebChat manda la etiqueta: «4:30 PM» son las 16:30, no las 04:30.
+        d = await manejar(entrada('4:30 PM', conversacion({ tarea: TAREA_AGENDAR, datos: d.tarea.datos })));
+        expect(gate.llamadas.find((l) => l.capacidad === 'proponer_turno').args.inicio).toBe('2026-08-20T16:30:00');
+        expect(d.respuestas[d.respuestas.length - 1].texto).toContain('• *Hora:* 4:30 PM');
+    });
+});

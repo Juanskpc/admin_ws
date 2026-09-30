@@ -28,6 +28,7 @@
 const Models = require('../../../app_core/models/conection');
 const { Op } = Models.Sequelize;
 const personaNegocioDao = require('../../../app_core/dao/personaNegocioDao');
+const { duracionLegible } = require('../duracionTexto');
 const Audit = require('../../../app_core/helpers/auditHelper');
 const CodigoCita = require('../codigoCita');
 const ConfigService = require('../configService');
@@ -693,9 +694,9 @@ async function cancelarPorCliente(codigo, motivo = null) {
     if (!e) throw error('Reserva no encontrada.', 'ESTANCIA_NO_ENCONTRADA', 404);
     const cfg = await ConfigService.get(e.id_negocio);
     const llegada = new Date(`${e.fecha_entrada}T${String(cfg.hora_checkin || '15:00').slice(0, 5)}:00-05:00`);
-    const limite = llegada.getTime() - Number(cfg.ventana_cancelacion_horas || 0) * 3600_000;
+    const limite = llegada.getTime() - Number(cfg.ventana_cancelacion_min || 0) * 60_000;
     if (Date.now() > limite) {
-        throw error(`Ya no se puede cancelar en línea: el plazo es de ${cfg.ventana_cancelacion_horas} horas antes de la llegada. Escríbenos.`,
+        throw error(`Ya no se puede cancelar en línea: el plazo es de ${duracionLegible(cfg.ventana_cancelacion_min)} antes de la llegada. Escríbenos.`,
             'FUERA_DE_VENTANA', 409);
     }
     return cancelar(e.id_negocio, e.id_estancia, { motivo, por: 'cliente' });
