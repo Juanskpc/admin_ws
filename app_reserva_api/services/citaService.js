@@ -595,6 +595,9 @@ async function reagendarCita(
             { transaction: t, excluirCita: idCita, excluirHold: consumirHoldId },
         );
 
+        // Para el correo: «antes → ahora», y avisar al profesional que se queda sin la cita.
+        const anterior = { fecha_hora_inicio: cita.fecha_hora_inicio, id_profesional: cita.id_profesional };
+
         await cita.update(
             {
                 id_profesional: profesionalDestino,
@@ -616,7 +619,7 @@ async function reagendarCita(
 
         if (propia) {
             await t.commit();
-            Notificacion.enviar('cita_reagendada', { cita: cita.toJSON() })
+            Notificacion.enviar('cita_reagendada', { cita: cita.toJSON(), anterior })
                 .catch(err => console.error('[Reserva] notif error:', err.message));
         }
 
@@ -796,7 +799,7 @@ async function actualizarCita(
             await t.commit();
             // Al cliente le cambió lo que va a recibir o cuándo: se le avisa con el mismo
             // canal del reagendado, que es el aviso que ya entiende.
-            Notificacion.enviar('cita_reagendada', { cita: cita.toJSON() })
+            Notificacion.enviar('cita_reagendada', { cita: cita.toJSON(), anterior: antes })
                 .catch(err => console.error('[Reserva] notif error:', err.message));
         }
 

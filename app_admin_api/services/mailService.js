@@ -794,4 +794,36 @@ async function sendConversacionEscaladaEmail(email, datos) {
     console.info(`✉️  Aviso de conversacion escalada enviado a ${email} — messageId: ${info.messageId}`);
 }
 
-module.exports = { sendPasswordResetEmail, sendRegistroVerificationEmail, sendWelcomeEmail, sendAdminNotificationEmail, sendAlertaAdminEmail, sendPlanExpiryWarningEmail, sendConversacionEscaladaEmail, verifyTransport };
+/**
+ * Envío genérico para correos cuya plantilla vive en su propio módulo (p. ej. las notificaciones
+ * de citas de Reserva, `app_reserva_api/services/notificacionService.js`). Comparte transporte,
+ * remitente y el mismo comportamiento sin SMTP que el resto: en desarrollo solo avisa por consola.
+ *
+ * @param {object} correo
+ * @param {string} correo.to
+ * @param {string} correo.subject
+ * @param {string} correo.text
+ * @param {string} correo.html
+ * @param {string} [correo.replyTo] - Para que la respuesta del cliente llegue al negocio y no a EscalApp.
+ * @returns {Promise<boolean>} true si salió; false si no hay SMTP en desarrollo.
+ */
+async function sendHtmlEmail({ to, subject, text, html, replyTo }) {
+    const from = process.env.MAIL_FROM || '"EscalApp" <escalappsystem@gmail.com>';
+
+    if (!process.env.MAIL_USER || !process.env.MAIL_PASS) {
+        if (process.env.NODE_ENV !== 'production') {
+            console.warn(`⚠️  MAIL sin configurar. Correo (dev) a ${to}: ${subject}`);
+            return false;
+        }
+        throw new Error('Configuración de correo incompleta');
+    }
+
+    const info = await transporter.sendMail({
+        from, to, subject, text, html,
+        ...(replyTo ? { replyTo } : {}),
+    });
+    console.info(`✉️  Correo enviado a ${to} («${subject}») — messageId: ${info.messageId}`);
+    return true;
+}
+
+module.exports = { sendPasswordResetEmail, sendRegistroVerificationEmail, sendWelcomeEmail, sendAdminNotificationEmail, sendAlertaAdminEmail, sendPlanExpiryWarningEmail, sendConversacionEscaladaEmail, sendHtmlEmail, verifyTransport };

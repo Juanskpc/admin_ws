@@ -1,6 +1,7 @@
 'use strict';
 const Models = require('../../app_core/models/conection');
 const EstadoCita = require('./estadoCita');
+const Notificacion = require('./notificacionService');
 const { Op } = Models.Sequelize;
 
 async function listar({ idNegocio, desde, hasta, idProfesional, estado, soloPendientesPago = false }) {
@@ -60,7 +61,7 @@ async function getById(idCita, idNegocio) {
  * origen: dos peticiones simultáneas sobre la misma cita no pueden ganar las dos.
  */
 async function cambiarEstado(idCita, idNegocio, nuevoEstado, extra = {}) {
-    return Models.sequelize.transaction(async (t) => {
+    const cita = await Models.sequelize.transaction(async (t) => {
         const cita = await Models.ReservaCita.findOne({
             where: { id_cita: idCita, id_negocio: idNegocio },
             transaction: t,
@@ -75,6 +76,14 @@ async function cambiarEstado(idCita, idNegocio, nuevoEstado, extra = {}) {
             { transaction: t }
         );
     });
+
+    // Cancelada desde el panel: al cliente y al profesional, después del commit (un correo
+    // enviado no se deshace). Completar y no-show no avisan: el cliente ya estuvo, o no vino.
+    if (cita && nuevoEstado === EstadoCita.ESTADO.CANCELADA) {
+        Notificacion.enviar('cita_cancelada', { cita: cita.toJSON() })
+            .catch(err => console.error('[Reserva] notif error:', err.message));
+    }
+    return cita;
 }
 
 module.exports = { listar, getById, cambiarEstado };
