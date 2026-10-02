@@ -120,22 +120,102 @@ async function buscarEnLaCarta(idNegocio, termino) {
     const palabras = normalizarTexto(termino)
         .split(/\s+/)
         .filter((w) => w.length >= 3);
-    // Con una sola palabra la segunda pasada sería idéntica a la primera.
-    if (palabras.length < 2) return directa;
+    // Con una sola palabra la segunda pasada sería idéntica a la primera: se salta a la tercera.
+    if (palabras.length >= 2) {
+        const ancla = palabras.slice().sort((a, b) => b.length - a.length)[0];
+        const candidatos = await cartaService.buscarProductos(idNegocio, ancla);
 
-    const ancla = palabras.slice().sort((a, b) => b.length - a.length)[0];
-    const candidatos = await cartaService.buscarProductos(idNegocio, ancla);
+        const segunda = candidatos.filter((c) => {
+            const donde = normalizarTexto(`${c.nombre} ${c.descripcion || ''}`);
+            return palabras.every((w) => donde.includes(w));
+        });
+        if (segunda.length > 0) return segunda;
+    }
 
-    return candidatos.filter((c) => {
-        const donde = normalizarTexto(`${c.nombre} ${c.descripcion || ''}`);
-        return palabras.every((w) => donde.includes(w));
-    });
+    return buscarPorCategoriaYNombre(idNegocio, termino);
+}
+
+/** Palabras de relleno: no dicen QUÉ producto es, así que no se le exigen a la carta. */
+const RELLENO = new Set([
+    'una', 'uno', 'unos', 'unas', 'del', 'los', 'las', 'por', 'favor', 'porfa', 'porfis',
+    'con', 'sin', 'para', 'que', 'quiero', 'quisiera', 'pedir', 'dame', 'deme', 'tienen',
+    'tiene', 'hay', 'precio', 'cuanto', 'vale', 'cuesta', 'tamano', 'size', 'me', 'regala',
+    'regalas', 'regalame', 'mas', 'otra', 'otro', 'también', 'tambien',
+]);
+
+/** Tamaños que NO figuran en el nombre cuando el producto es el básico («criollita» = personal). */
+const TAMANO_BASICO = new Set(['pequena', 'pequeno', 'chica', 'chico', 'personal', 'individual', 'sencilla', 'sencillo', 'normal']);
+
+/** Marcas de tamaño que sí se escriben en el nombre de las variantes grandes. */
+const MARCA_TAMANO = /\b(mediana|mediano|grande|familiar|xl|jumbo|gigante)\b/;
+
+/** ¿Estas dos palabras son la misma, salvo plural o diminutivo? («criolla» ~ «criollita») */
+function mismaPalabra(a, b) {
+    if (a === b) return true;
+    const [corta, larga] = a.length <= b.length ? [a, b] : [b, a];
+    if (corta.length >= 4 && larga.startsWith(corta)) return true;
+    let i = 0;
+    while (i < corta.length && corta[i] === larga[i]) i++;
+    return i >= 5 && i >= corta.length * 0.7;
+}
+
+/**
+ * Tercera pasada: la forma en que HABLA el cliente frente a la forma en que está escrita la carta.
+ *
+ * Producción, 2026-10-01 (Zona Burger): el cliente pide «una salchipapa criolla pequeña» y la carta
+ * tiene, dentro de la categoría SALCHIPAPAS, un producto que se llama solo `criollita`, más
+ * `criolla mediana` y `criollita GRANDE`. La palabra «salchipapa» está en la CATEGORÍA, no en el
+ * producto, así que las dos pasadas anteriores devolvían vacío —incluso para «salchipapa» a secas—
+ * y el bot decía «no hay salchipapas» con diez en la carta.
+ *
+ * Se busca sobre la carta PÚBLICA (visible y disponible: lo oculto o agotado no se ofrece) y cada
+ * palabra con contenido debe casar con la categoría, el nombre o la descripción. Sigue siendo
+ * estricta: «hamburguesa doble» no devuelve cualquier hamburguesa si «doble» no aparece.
+ */
+async function buscarPorCategoriaYNombre(idNegocio, termino) {
+    const palabras = normalizarTexto(termino)
+        .replace(/[^a-z0-9ñ\s]/g, ' ')
+        .split(/\s+/)
+        .filter((w) => w.length >= 3 && !RELLENO.has(w));
+    const pedidoBasico = palabras.some((w) => TAMANO_BASICO.has(w));
+    const exigidas = palabras.filter((w) => !TAMANO_BASICO.has(w));
+    if (exigidas.length === 0) return [];
+
+    const categorias = await cartaService.getCartaPublicaCompleta(idNegocio);
+    const encontrados = [];
+    for (const cat of categorias || []) {
+        const palabrasCategoria = normalizarTexto(cat.nombre).split(/\s+/);
+        for (const p of cat.productos || []) {
+            const palabrasProducto = normalizarTexto(`${p.nombre} ${p.descripcion || ''}`)
+                .replace(/[^a-z0-9ñ\s]/g, ' ')
+                .split(/\s+/)
+                .filter(Boolean);
+            const bolsa = [...palabrasCategoria, ...palabrasProducto];
+            if (!exigidas.every((w) => bolsa.some((b) => mismaPalabra(w, b)))) continue;
+            const enNombre = exigidas.filter((w) =>
+                palabrasProducto.some((b) => mismaPalabra(w, b))
+            ).length;
+            encontrados.push({ ...p.toJSON?.() ?? p, categoria: cat.nombre, _afinidad: enNombre });
+        }
+    }
+
+    // «Pequeña/personal» es el producto básico: sin marca de tamaño en el nombre. Si hay de esos,
+    // las variantes mediana/grande no se ofrecen en su lugar.
+    const resultado = pedidoBasico
+        ? (() => {
+              const basicos = encontrados.filter((p) => !MARCA_TAMANO.test(normalizarTexto(p.nombre)));
+              return basicos.length > 0 ? basicos : encontrados;
+          })()
+        : encontrados;
+
+    return resultado.sort((a, b) => b._afinidad - a._afinidad);
 }
 
 function producto(p) {
     return {
         id_producto: p.id_producto,
         nombre: p.nombre,
+        ...(p.categoria ? { categoria: p.categoria } : {}),
         descripcion: p.descripcion || null,
         precio: precio(p.precio),
         es_popular: Boolean(p.es_popular),

@@ -54,10 +54,16 @@ function buscarComoElServicio(idNegocio, termino) {
 
 let cartaService;
 let originalBuscar;
+let originalCompleta;
+
+/** La carta pública agrupada por categoría, como la devuelve . */
+let CATEGORIAS = [{ nombre: 'VARIOS', productos: CARTA.filter((p) => p.visible) }];
 
 beforeAll(() => {
     cartaService = require('../../app_restaurante_api/services/cartaService');
     originalBuscar = cartaService.buscarProductos;
+    originalCompleta = cartaService.getCartaPublicaCompleta;
+    cartaService.getCartaPublicaCompleta = async () => CATEGORIAS;
     cartaService.buscarProductos = async (idNegocio, termino) =>
         buscarComoElServicio(idNegocio, termino);
     adaptador.registrarCapacidades();
@@ -65,6 +71,7 @@ beforeAll(() => {
 
 afterAll(() => {
     cartaService.buscarProductos = originalBuscar;
+    cartaService.getCartaPublicaCompleta = originalCompleta;
     registry._limpiar();
 });
 
@@ -129,5 +136,60 @@ describe('buscar_producto', () => {
         // ser la puerta de atrás por la que se cuela — fue un agujero real el 2026-08-26.
         expect(nombres(await buscar('plato del personal'))).toEqual([]);
         expect(nombres(await buscar('personal no se muestra'))).toEqual([]);
+    });
+});
+
+/**
+ * Zona Burger, 2026-10-01. El cliente habla de «salchipapa criolla pequeña»; la carta tiene la
+ * categoría SALCHIPAPAS con productos que se llaman , … La palabra
+ * «salchipapa» solo está en la categoría y el bot contestaba «no hay salchipapas».
+ */
+describe('buscar_producto: categoría + nombre + tamaño (Zona Burger)', () => {
+    const p = (id, nombre, precio) => ({ id_producto: id, nombre, descripcion: null, precio, visible: true });
+    const ZONA = [
+        {
+            nombre: 'SALCHIPAPAS',
+            productos: [
+                p(30, 'criollita', 15500), p(32, 'the house', 15500), p(33, 'choripapa', 9000),
+                p(59, 'criolla mediana', 28000), p(60, 'the house mediana', 28000),
+                p(63, 'criollita GRANDE', 39000), p(64, 'the house GRANDE', 39000),
+            ],
+        },
+        { nombre: 'HAMBURGUESAS', productos: [p(1, 'clasica', 18000), p(2, 'doble carne', 25000)] },
+    ];
+    let anterior;
+    beforeAll(() => { anterior = CATEGORIAS; CATEGORIAS = ZONA; });
+    afterAll(() => { CATEGORIAS = anterior; });
+    // En la carta real ninguna búsqueda directa casa: el nombre no trae la palabra de la categoría.
+    const sinDirecta = () => { cartaService.buscarProductos = async () => []; };
+    beforeEach(sinDirecta);
+
+    test('EL CASO: «salchipapa criolla pequeña» → la criollita básica, no la mediana ni la grande', async () => {
+        expect(nombres(await buscar('salchipapa criolla pequeña'))).toEqual(['criollita']);
+    });
+
+    test('«salchipapa criollita tamaño personal» también', async () => {
+        expect(nombres(await buscar('Salchipapa criollita tamaño personal'))).toEqual(['criollita']);
+    });
+
+    test('«salchipapa the house grande» → solo la grande', async () => {
+        expect(nombres(await buscar('salchipapa the house grande'))).toEqual(['the house GRANDE']);
+    });
+
+    test('«salchipapa» a secas → toda la categoría', async () => {
+        const r = await buscar('salchipapa');
+        expect(r.productos).toHaveLength(7);
+        expect(r.productos[0].categoria).toBe('SALCHIPAPAS');
+    });
+
+    test('sin tamaño, devuelve todas las variantes para que se pregunte cuál', async () => {
+        expect(nombres(await buscar('salchipapa criolla'))).toEqual(
+            expect.arrayContaining(['criollita', 'criolla mediana', 'criollita GRANDE'])
+        );
+    });
+
+    test('lo que no existe sigue sin existir', async () => {
+        expect(nombres(await buscar('salchipapa de camarón'))).toEqual([]);
+        expect(nombres(await buscar('hamburguesa triple'))).toEqual([]);
     });
 });
