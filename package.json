@@ -8,6 +8,7 @@
   "scripts": {
     "start": "node app.js",
     "dev": "nodemon app.js",
+    "whatsapp:cuota": "node scripts/whatsapp_cuota.js",
     "migrate": "node migrations/migrate.js",
     "migrate:admin-principal": "node migrations/migrate_usuario_admin_principal.js",
     "migrate:nivel-negocio": "node migrations/migrate_nivel_negocio.js",

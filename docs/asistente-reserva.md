@@ -319,3 +319,172 @@ Pedido del negocio: que el cliente **no tenga que escribir**, solo pulsar.
 
 Tareas abiertas con el orden anterior (profesional antes que el día) siguen funcionando: sin hora
 guardada, elegir profesional lleva al día como antes.
+
+---
+
+## 13. Menos mensajes por cita (implementado 2026-10-02)
+
+> **Lo que lo obliga.** Desde el 1 de octubre de 2026 Meta cobra los mensajes de servicio pasada una
+> asignación de 1.000 por número y mes (ver [`whatsapp-costo-mensajes.md`](whatsapp-costo-mensajes.md)).
+> El flujo de §12 estaba diseñado cuando contestar era gratis: partía los menús sin pensarlo porque
+> partirlos no costaba nada. Medido sobre el catálogo real de D'ALEX —17 servicios en 4 categorías,
+> 10 profesionales, 09:00 a 19:00 cada 30 min— una cita costaba **9 o 10 mensajes**.
+>
+> Ahora cuesta **6 por el camino del menú y 3 si el cliente escribe lo que quiere.**
+
+### 13.1 El atajo: no tirar lo que el cliente acaba de escribir
+
+El agujero más grande no eran los menús: era que **el contenido del primer mensaje se descartaba**.
+`ofrecerServicios` no miraba `ctx.texto`, así que «quiero un corte de cabello mañana a las 10» recibía
+el menú de categorías y las cuatro cosas dichas se perdían.
+
+Y los lectores ya existían, todos gratis: `resolverServicio`, `interpretarFecha` (que desde el
+2026-09-29 entiende «el viernes» y «el 15»), `resolverHora`. Solo no se usaban sobre el primer mensaje.
+
+`intentarAtajo` llena los huecos en el orden del flujo —servicio → variante → día → hora— y para en el
+primero que no resuelve; lo que falte lo pregunta el paso de siempre. **El peor caso del atajo es el
+comportamiento de antes.** Tres reglas lo hacen seguro:
+
+1. **Cada dato se exige explícito.** `servicioEnElTexto` no acepta números y exige que no haya empate
+   (gana el nombre más largo: «Corte y barba» no es «Corte»); `interpretarFecha` recibe
+   `diaSueltoVale: false`, porque un «2» suelto es cualquier cosa menos el día 2.
+2. **Nunca se auto-confirma.** El atajo acaba, como el menú, en el resumen con Sí / No. Un dato leído
+   mal cuesta un «No», no una cita equivocada.
+3. **Se dice lo que se entendió** («Anoto *Corte de cabello*.»), pegado al mensaje siguiente, para que
+   el malentendido se cace en el primer mensaje y no en el resumen.
+
+Un saludo o un «menú» pedido a mano **no** pasan por el atajo: el primero no tiene nada que
+aprovechar y el segundo está pidiendo justamente la lista.
+
+### 13.2 Menú desplegable o listado enumerado, según cuántas opciones haya
+
+La pregunta que lo abrió: *«cuando hay muchos servicios u horarios, ¿no es mejor listarlos todos en
+un mensaje?»*. Sí, en el tramo de en medio, y la regla es `seEnumera`:
+
+| Filas | Forma | Por qué |
+|---|---|---|
+| ≤ 10 | lista interactiva | La mejor del canal: un toque, sin escribir. Nada cambia |
+| ≤ 24 | **un mensaje enumerado** | Antes eran dos o tres menús. El cliente ve todo de una vez |
+| > 24 | se agrupa (tipos, jornadas) | Veinticinco líneas no se leen; ahí partir sí ayuda |
+
+El tope son 24 porque es lo que mide un día entero de media en horas (8 a 20 cada media hora): que la
+cota la fije el caso real más largo evita que el día más ocupado sea justo el que vuelve a partirse.
+
+Consecuencias en D'ALEX: los 17 servicios caben en un mensaje, así que **el paso de categorías
+desaparece** (`UMBRAL_CATEGORIAS` pasó de 8 a `MAX_LISTADO - 1`); las 19 horas de un día caben, así que
+**el paso de la jornada desaparece**; y los 10 profesionales se enseñan todos — antes se recortaban a
+8 y dos quedaban invisibles sin que nadie lo supiera.
+
+⚠️ **El número lo pone el núcleo, no el canal.** Es el asa con la que vuelve la respuesta: si cada
+canal numerara a su manera, «3» querría decir una cosa en WhatsApp y otra en el WebChat. Viaja en la
+opción (`atajo`, aditivo como `detalle`, ADR-017) y se traduce **una sola vez**, en la entrada del
+manejador, así que ningún resolvedor ni el retroceso saben que existe la numeración.
+
+Y la numeración **está atada al paso que preguntó** (`atajos_de`). Sin eso se heredaría —los pasos se
+escriben con `{ ...datos, paso: otro }`— y un «3» contestado al paso de la fecha se habría traducido al
+tercer servicio de un menú de cuatro mensajes antes.
+
+### 13.3 El nombre ya venía en el webhook
+
+Cada webhook de Meta trae `contacts[].profile.name` y se tiraba, así que el bot preguntaba «¿a nombre
+de quién?» a alguien cuyo nombre tenía delante: un mensaje por cada cliente nuevo.
+
+Es una **pista, no un hecho** —lo escribe el cliente en su teléfono y puede ser «Mamá»—, así que:
+
+- viaja en `crudo` (lo que dijo el canal), no como un dato del núcleo;
+- `identidad.resolver` lo pone **último**: lo dicho en esta conversación manda sobre la ficha del
+  negocio, y la ficha sobre el perfil, con `nombreEsPista` para quien lo consuma;
+- un perfil que no sirve como nombre («🔥») se trata como si no hubiera (`nombreLegible`);
+- **no se guarda en `variables.nombre` hasta confirmar**: guardarlo lo convertiría en «lo que dijo» y
+  le quitaría para siempre la oportunidad de corregirlo;
+- y el resumen ofrece una tercera opción, «Otro nombre», que pide el nombre **sin volver a apartar la
+  hora** (el resumen se repinta desde `datos.propuesta`). Cero mensajes de más para el 95 %, uno para
+  quien lo quiera corregir.
+
+### 13.4 Dos mensajes que podían ser uno
+
+`unirRespuestas`, en `conRastro`, junta hacia delante lo que cabe: el aviso + la pregunta, el saludo +
+el menú, el aviso de consentimiento + el resumen. Una respuesta **con** opciones no absorbe a la
+siguiente, porque el menú tiene que quedar al final. Afecta a `sinAgenda`, `cederAlNegocio`,
+`horaRechazada`, el consentimiento y el aviso de tarea caducada.
+
+### 13.5 El horario y la dirección, por fin
+
+`contextoNegocio.leerAtencion()` devolvía `null` siempre, y la nota que había ahí descartaba los dos
+atajos con razón: leer `reserva_horario` desde el núcleo rompe ADR-005, y una capacidad
+`consultar_horario` contradice ADR-020. **Ninguna de las dos objeciones aplica a un adaptador**, que es
+donde vive ese acoplamiento.
+
+Así que el núcleo pone una costura (`registrarProveedor`) y `adapters/reserva/contexto.js` la llena
+leyendo las filas con `id_profesional IS NULL`, que son el horario del negocio y no el de una persona
+—la misma distinción que hace `vitrinaService.horarioEfectivo` para la web, y conviene que digan lo
+mismo—. Dirección y teléfono salían de `gener_negocio`, en la fila que ya se leía; nadie los pedía.
+
+Van al **prefijo estable** del prompt, que es lo que los hace casi gratis, con la frase que impide que
+el modelo rellene el hueco: *«ése es el horario completo y es el único que conoces»*. Antes, «¿a qué
+hora abren?» se pagaba al modelo **y** se contestaba que no se sabía.
+
+### 13.6 El bug que estaba delante del cliente
+
+El servicio 26 de D'ALEX («Tatuajes», `precio = 0`, `a_cotizar = false`) se ofrecía como
+**«30 min — $0»**: el bot prometía un tatuaje gratis y lo desmentía el mostrador. `formatearPrecio`
+solo protegía `null`. Ahora cero no es un precio (`seCotiza`): sale «precio a convenir», y el resumen
+omite la línea del precio en vez de escribir `$0`.
+
+### 13.7 `consultar_mis_citas`, por fin (y lo que obligó a tocar con ella)
+
+Era §7.2 y el punto E de §9: lo más valioso que quedaba. **Ya existe.**
+
+La capacidad devuelve las citas próximas y vivas de quien escribe, con su código, y su descripción
+le dice al modelo lo único que importa: **nunca pidas el código, sácalo de aquí**. Antes, «cancélame
+la cita del martes» acababa en un «dime el código de tu cita» sobre un código que nadie guarda, y el
+cliente llamaba por teléfono.
+
+**Dos formas de reconocer al cliente, y hacen falta las dos.** `id_persona_negocio` (desde el
+2026-09-09) cubre a quien ya era persona del negocio; el **teléfono** cubre las citas que el negocio
+apuntó a mano desde el panel, que son muchas y pueden no tener persona asociada. Con solo la primera,
+media agenda real quedaría invisible.
+
+Y el teléfono se compara por sus **últimos diez dígitos**, porque en la base conviven
+`3001234567`, `+573001234567` y `57 300 123 4567` según quién creó la cita. Comparar las cadenas tal
+cual dejaba fuera a casi todas.
+
+> ⚠️ **El desajuste que esto habría creado, y que se cerró con ella.** `buscarCitaPorCodigo`
+> comprobaba la pertenencia **solo** por `cliente_telefono` normalizado a E.164. O sea que la
+> capacidad nueva habría listado citas que `cancelar_cita` después rechazaba: el bot diciendo
+> «tienes una cita el sábado» y, al pedir anularla, «no puedo comprobar que sea tuya». Peor que no
+> tener la función.
+>
+> Las dos preguntas —qué citas **enseñar** y qué citas se pueden **tocar**— viven ahora en una sola
+> función, `esDeQuienPide`, con las tres pruebas (persona, E.164, últimos diez dígitos). Sigue
+> fallando **cerrada**: sin teléfono probado por el canal no hay ninguna prueba que valer. Nunca
+> contra `args.cliente_telefono` ni contra las variables de la conversación, que los rellena el
+> modelo o el propio cliente.
+
+**Y «¿qué citas tengo?» se contesta gratis.** Esa pregunta caía en `intencion_agendar` —la palabra
+«cita» está en las dos cosas— y el cliente recibía el menú de servicios. Ahora la resuelve el Nivel 1
+con la lista, en un mensaje, sin un token: no hay nada que redactar.
+
+Se exigen **dos señales**, como en el retroceso: un posesivo («mi», «mis», «tengo») y la palabra cita.
+Más una exclusión para el caso que las dos señales no separan — «quiero reservar mi turno» tiene las
+dos y es alguien que viene a agendar—, que se descarta cuando hay intención explícita de pedir algo
+nuevo **salvo** que además pregunte o quiera anular: «quiero ver mis citas» y «quiero cancelar mi
+cita» son las dos cosas a la vez, y en las dos la lista es la respuesta útil.
+
+Verificado contra la base de producción: el SQL devuelve las dos citas reales del `3188887013` en
+D'ALEX y el mensaje sale en uno, con el día y la hora y **sin el código**, que a nadie le dice nada y
+ocupa la línea que debería decir «el sábado a las 2:30».
+
+### 13.8 Lo que sigue sin hacer
+
+- **Cancelar y mover siguen yendo al modelo.** Es correcto —«muéveme la del sábado a las 5» es
+  conversación, no un formulario— y ahora funciona de verdad, porque el modelo tiene la lista. Lo que
+  no hay es un flujo de Nivel 1 para anular, y mientras cancelar sea raro comparado con agendar, no
+  lo merece.
+- **`e2e_agendar.test.js` no se pudo correr** (necesita Postgres). Lo cubierto es
+  `manejadorDeterminista.test.js`, que corre sin base y pasó de 74 a 103 pruebas, más
+  `cuota_whatsapp.test.js`.
+- **`LLM_MODELO` sigue sin fijar en el `.env` de producción.** Hoy corre `gpt-5.6-terra` porque solo
+  hay `OPENAI_API_KEY`, pero el respaldo del código es `claude-opus-5`: el día que alguien ponga una
+  clave de Anthropic ahí, la factura se multiplica en silencio.
+- **El idioma del oficio** (§6) ya estaba; el punto G de §9 (hospedaje) sigue pendiente.

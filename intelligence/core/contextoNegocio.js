@@ -33,37 +33,65 @@ const Models = require('../../app_core/models/conection');
 const GENERICO = {
     id: null, nombre: null, tratamiento: 'el negocio', atencion: null,
     tipoNegocio: null, rubro: null, perfilReserva: null, tiempoEstimado: null, domicilioRango: null,
+    direccion: null, telefono: null, horario: null,
 };
 
 /**
- * Horario de atención del negocio — hoy **siempre `null`**, y es un estado correcto.
+ * ── Lo que cada vertical sabe de su propio negocio ───────────────────────────────────────
  *
- * Lo usa el handoff para decir *cuándo* habrá alguien en vez de prometer un «en un momento» que a
- * las once de la noche no cumple nadie. Con `null`, el mensaje cae a «en el transcurso del día»,
- * que es la decisión del dueño del 2026-08-18: si el negocio no tiene horario, no inventarse uno.
+ * Un adaptador registra aquí una función que devuelve datos de *Business Context* que solo él
+ * puede leer, y `obtener()` los mezcla en lo que devuelve.
  *
- * ## Por qué no se lee de ningún sitio todavía
+ * ## Por qué una costura y no un `require`
  *
- * Porque el sitio correcto no existe aún. [ADR-020](../../docs/adr/ADR-020-knowledge.md) lista
- * los **horarios** como *Business Context* —configuración del inquilino, pequeña, escrita a mano,
- * parte del prefijo estable del prompt— y `platform.business_context` está sin crear.
+ * El horario de atención era el ejemplo que se quedó sin resolver, y la nota que había aquí
+ * explicaba bien por qué se descartaron los dos atajos:
  *
- * Los dos atajos disponibles se descartaron a propósito:
+ * - **Leer `reserva.reserva_horario` desde el núcleo** rompe
+ *   [ADR-005](../../docs/adr/ADR-005-independencia-verticales.md): el acoplamiento con el esquema
+ *   de una vertical vive en su adaptador y en ningún otro sitio.
+ * - **Una capacidad `consultar_horario`** contradice [ADR-020](../../docs/adr/ADR-020-knowledge.md):
+ *   el horario es configuración, va en el prefijo estable del prompt, no se consulta por turno.
  *
- * - **Leer `reserva.reserva_horario`.** Es el esquema de una vertical, e `intelligence/` no lo
- *   toca: el acoplamiento con el dominio vive en los adaptadores y en ningún otro sitio
- *   ([ADR-005](../../docs/adr/ADR-005-independencia-verticales.md)). Además esas filas son el
- *   horario **de cada profesional**, no el de atención del negocio: parecido no es lo mismo, y
- *   usarlo diría una hora que nadie prometió.
- * - **Una capacidad `consultar_horario`.** Contradice la categoría que ADR-020 congeló: el
- *   horario es configuración que va **siempre** en el prefijo, no un dato que se consulta por
- *   turno. Y una capacidad para componer una frase es un viaje al Gate por nada.
+ * Las dos objeciones siguen siendo correctas, y **ninguna aplica a un adaptador**, que es
+ * literalmente donde vive ese acoplamiento. Así que el núcleo pone el hueco y la vertical lo
+ * llena (`adapters/reserva/contexto.js`). El día que exista `platform.business_context`, esto se
+ * rellena de ahí y los proveedores se borran sin que nada más cambie.
  *
- * Cuando exista `business_context`, esto se rellena **aquí dentro** y ni el handoff ni el motor
- * se enteran. La forma que espera quien lo consume: `{ desde: 'HH:MM', hasta: 'HH:MM' }`.
+ * Lo que un proveedor puede devolver: `{ atencion, horario, cerradoHoy }`. Lo que **no** puede es
+ * contenido —el menú en PDF, el reglamento, las FAQ—: eso es Knowledge, va después del corte de
+ * caché, y meterlo aquí invalidaría el prefijo de todas las conversaciones del inquilino cada vez
+ * que lo suban. Es el error de categoría con factura mensual que ADR-020 existe para prevenir.
  */
-function leerAtencion(/* fila */) {
-    return null;
+const proveedores = [];
+
+function registrarProveedor(fn) {
+    if (typeof fn !== 'function') throw new Error('Un proveedor de contexto tiene que ser una función.');
+    proveedores.push(fn);
+}
+
+/** Solo para los tests y para `_reiniciar`. */
+function limpiarProveedores() {
+    proveedores.length = 0;
+}
+
+/**
+ * Lo que aporten las verticales, con la falla contenida.
+ *
+ * Un proveedor que revienta —una tabla sin migrar, una conexión perdida— **no puede tumbar la
+ * conversación** por un dato opcional: el asistente sigue sin saber el horario, que es lo que
+ * hacía hasta ayer. Mismo criterio que `leerTiempoEstimado`.
+ */
+async function deLasVerticales(idNegocio, fila) {
+    const extra = {};
+    for (const proveedor of proveedores) {
+        try {
+            Object.assign(extra, (await proveedor(idNegocio, fila)) || {});
+        } catch (error) {
+            console.warn(`[contextoNegocio] un proveedor de contexto falló: ${error.message}`);
+        }
+    }
+    return extra;
 }
 
 /**
@@ -87,7 +115,7 @@ async function obtener(idNegocio) {
     // - `r` es el **rubro**: cómo se llama el negocio para su cliente («Salón de belleza»), y
     //   su perfil de reserva. Sin él el asistente solo sabía que hablaba con un «RESERVA».
     const filas = await Models.sequelize.query(
-        `SELECT n.id_negocio, n.nombre,
+        `SELECT n.id_negocio, n.nombre, n.direccion, n.telefono,
                 COALESCE(m.nombre, t.nombre) AS tipo_negocio,
                 COALESCE(r.descripcion, r.nombre) AS rubro,
                 r.perfil_reserva
@@ -105,12 +133,17 @@ async function obtener(idNegocio) {
     // no este módulo — aquí se resuelve identidad, no autorización.
     if (!fila) return GENERICO;
 
-    const nombre = String(fila.nombre || '').trim() || null;
+    const nombre = texto(fila.nombre);
     return {
         id,
         nombre,
         tratamiento: nombre || GENERICO.tratamiento,
-        atencion: leerAtencion(fila),
+        // Lo mas preguntado por WhatsApp, y hasta hoy el asistente no lo sabia: «donde quedan»,
+        // «a que hora abren». Las dos primeras estan en la misma fila que ya se leia — nadie las
+        // pedia—; el horario lo aporta la vertical por la costura de arriba.
+        direccion: texto(fila.direccion),
+        telefono: texto(fila.telefono),
+        ...(await deLasVerticales(id, fila)),
         // Qué CLASE de negocio es. No se traduce aquí a una vertical: este módulo no sabe qué
         // verticales existen y no debe saberlo (ADR-009). Devuelve el nombre del tipo tal como
         // está en el catálogo —`RESTAURANTE`, `RESERVA`— y quien enruta lo traduce con lo que
@@ -206,10 +239,17 @@ function normalizarDomicilioRango(fila) {
  * citas** —reserva noches—. Enviarlo al flujo de citas le ofrecería horas a quien pregunta por
  * una habitación. Se le da un tipo propio para que lo atienda el flujo que sí sabe de estancias.
  */
+/** Un campo de texto opcional: la cadena limpia, o `null` si no dice nada. */
+function texto(valor) {
+    return String(valor ?? '').trim() || null;
+}
+
 function tipoParaEnrutar(fila) {
     const modulo = String(fila.tipo_negocio || '').trim().toUpperCase() || null;
     if (String(fila.perfil_reserva || '').trim().toUpperCase() === 'ALOJAMIENTO') return 'ALOJAMIENTO';
     return modulo;
 }
 
-module.exports = { obtener, GENERICO, normalizarDomicilioRango };
+module.exports = {
+    obtener, GENERICO, normalizarDomicilioRango, registrarProveedor, limpiarProveedores,
+};

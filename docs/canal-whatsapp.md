@@ -513,7 +513,15 @@ factura ajena.
 ## F8-C TERMINADA — el canal en producción (2026-08-24)
 
 **El asistente atiende por WhatsApp en producción.** Dos personas conversaron con él desde sus
-teléfonos, agendó dos citas reales y no costó un centavo. Lo que sigue es el registro de cómo se
+teléfonos, agendó dos citas reales y no costó un centavo.
+
+> ⚠️ **«No costó un centavo» caducó el 2026-10-01.** Era verdad: las *service conversations* eran
+> gratis desde noviembre de 2024. Desde esa fecha Meta cobra **por mensaje entregado** pasada una
+> asignación de 1.000 por número y mes, y las plantillas dentro de la ventana también se cobran. Lo
+> vigente está en [`whatsapp-costo-mensajes.md`](whatsapp-costo-mensajes.md); el resto de esta
+> sección sigue siendo el registro correcto de cómo se llegó a producción.
+
+Lo que sigue es el registro de cómo se
 llegó ahí y, sobre todo, de **las tres trampas que costaron la tarde**, porque ninguna daba error.
 
 ### Lo que quedó encendido

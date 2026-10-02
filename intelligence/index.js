@@ -54,6 +54,10 @@ function _reiniciar() {
     registry._limpiar();
     require('./engine/flujos')._limpiar();
     require('./model/puerto')._limpiar();
+    // Los proveedores de Business Context de las verticales (el horario de `reserva`). Sin
+    // limpiarlos, dos arranques en el mismo proceso —la suite— dejarían el mismo proveedor dos
+    // veces y cada turno haría la consulta por duplicado.
+    require('./core/contextoNegocio').limpiarProveedores();
     motor._reiniciar();
     gateway.detener();
     gateway.limpiar();
@@ -261,10 +265,19 @@ function arrancarRecordatorios({ iniciarSondeos = true } = {}) {
  * que haya al menos uno, y de eso ya se encargan los recordatorios. Aun así se llama antes en
  * `app.js`, que es donde se lee el arranque.
  */
-function arrancarAvisos() {
+function arrancarAvisos({ iniciarCuota = true } = {}) {
     const relay = require('../app_core/outbox/outboxRelay');
     require('./avisos/escalado').registrar({ relay });
-    return { avisos: ['aviso-escalado'] };
+
+    // La cuota de WhatsApp no cuelga del outbox: no la dispara un evento, la dispara el paso del
+    // tiempo. Desde el 1 de octubre de 2026 Meta cobra los mensajes de servicio pasada la
+    // asignación mensual de cada número, y sin esto la primera noticia sería la factura.
+    const avisos = ['aviso-escalado'];
+    if (iniciarCuota) {
+        require('./avisos/cuotaWhatsapp').iniciar();
+        avisos.push('aviso-cuota-whatsapp');
+    }
+    return { avisos };
 }
 
 module.exports = {

@@ -218,7 +218,13 @@ async function buscarPersonaPorTelefono(idNegocio, telefonoE164, opciones = {}) 
  * orden natural en un canal anónimo, y la FSM está escrita sabiéndolo.
  *
  * @param {Object} conversacion — la fila de `intelligence.conversacion`.
- * @returns {Promise<{principal, persona, telefono, nombre}>}
+ * @param {Object} [opciones]
+ * @param {string} [opciones.nombrePerfil] — el nombre que el canal trae del perfil de la persona
+ *        (en WhatsApp, `contacts[].profile.name`). Es la **última** opción y por eso llega aparte:
+ *        no lo dijo en esta conversación ni lo registró el negocio, lo tiene puesto en su teléfono.
+ *        Sirve para no preguntar lo que ya se sabe; `nombreEsPista` dice que conviene poder
+ *        corregirlo antes de escribirlo en una cita.
+ * @returns {Promise<{principal, persona, telefono, nombre, nombreEsPista}>}
  */
 async function resolver(conversacion, opciones = {}) {
     const idNegocio = Number(conversacion.id_negocio);
@@ -237,15 +243,38 @@ async function resolver(conversacion, opciones = {}) {
         ? await buscarPersonaPorTelefono(idNegocio, telefono, opciones)
         : null;
 
+    // Tres orígenes, de más fiable a menos. Lo que dijo en esta conversación manda sobre la ficha
+    // —si se corrige el nombre, la corrección es más reciente—, y la ficha manda sobre el perfil
+    // del canal, que no lo escribió para nosotros.
+    const dicho = conversacion.variables?.nombre ?? null;
+    const registrado = persona?.nombre_mostrado ?? null;
+    const delPerfil = nombreLegible(opciones.nombrePerfil);
+    const nombre = dicho ?? registrado ?? delPerfil;
+
     return {
         principal,
         persona,
         telefonoVerificado,
         telefono: persona?.telefono_e164 ?? telefono,
-        // Lo que dijo en esta conversación manda sobre la ficha: si se corrige el nombre, la
-        // corrección es más reciente que lo que hubiera guardado.
-        nombre: conversacion.variables?.nombre ?? persona?.nombre_mostrado ?? null,
+        nombre,
+        // Solo el del perfil es una pista: quien lo consuma tiene que dejar corregirlo antes de
+        // escribirlo en una cita o una orden.
+        nombreEsPista: Boolean(!dicho && !registrado && delPerfil),
     };
+}
+
+/**
+ * El nombre del perfil, si sirve como nombre de una persona.
+ *
+ * Lo pone el cliente en su propio teléfono, así que llega de todo: un emoji, un apodo de empresa,
+ * un número. Se exige **algo de letra y dos caracteres**, que es lo que separa «Juan» de «🔥» sin
+ * entrar a juzgar cómo se llama la gente. Lo que no pase por aquí se trata como si no hubiera
+ * nombre, y el asistente pregunta como siempre.
+ */
+function nombreLegible(valor) {
+    const limpio = String(valor ?? '').trim().replace(/\s+/g, ' ');
+    if (limpio.length < 2 || limpio.length > 80) return null;
+    return /\p{L}{2}/u.test(limpio) ? limpio : null;
 }
 
 module.exports = {
@@ -256,4 +285,5 @@ module.exports = {
     telefonoVerificadoDe,
     normalizarTelefono,
     buscarPersonaPorTelefono,
+    nombreLegible,
 };

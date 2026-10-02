@@ -62,7 +62,10 @@ const contextoNegocioReal = require('../../core/contextoNegocio');
 // Leer «sí», «cancelar» y la última línea de una ráfaga vive en `texto.js` desde F7: la
 // confirmación de una mutación necesita exactamente la misma lectura, y dos lecturas distintas
 // de «sí» sería un bot que confirma en un sitio y repregunta en el otro.
-const { COMANDO, normalizar, ultimaLinea, esComando, esAfirmacion, saludoPorLaHora } = require('../../engine/texto');
+const {
+    COMANDO, normalizar, ultimaLinea, esComando, esAfirmacion, saludoPorLaHora,
+    esSaludo, esAlgunComando,
+} = require('../../engine/texto');
 const confirmacion = require('../../engine/confirmacion');
 // El estado que apaga el bot, pone la conversación en la bandeja y avisa al negocio (campanita y
 // correo, `avisos/escalado.js`). `resultado: 'handoff'` a secas solo cuenta en el Ledger: un
@@ -111,18 +114,132 @@ const TAREA_AGENDAR = 'agendar_cita';
 
 const MAX_OPCIONES = 8;
 
+/** Filas que admite una lista interactiva de WhatsApp. Es el límite de Meta, no nuestro. */
+const FILAS_LISTA = 10;
+
 /**
- * Con más servicios que esto, y el catálogo repartido en al menos dos categorías, se pregunta
- * primero el tipo. Es MAX_OPCIONES a propósito: hasta ahí caben en una sola lista de WhatsApp
- * (10 filas) con sitio para volver, y por encima había que recortar y el cliente no veía todo.
+ * ── Listado enumerado: una decisión de conversación, no de canal (2026-10-02) ───────────────
+ *
+ * Hasta hoy, un catálogo que no cabía en una lista se **partía**: tipos primero, luego ocho
+ * servicios y un «Ver más», y dentro de un día con veinte horas libres una jornada antes que las
+ * horas. Tres mensajes para enseñar lo que hay. Eso tenía sentido cuando los mensajes salientes
+ * eran gratis; desde el 1 de octubre de 2026 Meta los cobra por mensaje entregado pasada la
+ * asignación mensual, así que **partir un menú tiene precio** — y lo paga el negocio dos veces,
+ * en factura y en clientes que se cansan a mitad.
+ *
+ * La alternativa es enumerar: un solo mensaje con todas las opciones numeradas, y el cliente
+ * responde el número. Se pierde el toque directo de la fila pulsable y se gana ver el catálogo
+ * entero de una vez. El cambio vale la pena en el tramo de en medio y **solo ahí**:
+ *
+ *   · hasta `FILAS_LISTA` filas  → lista interactiva. Nada cambia: un toque, sin escribir.
+ *   · hasta `MAX_LISTADO` filas  → un mensaje enumerado. Antes eran dos o tres mensajes.
+ *   · por encima                 → se agrupa (tipos de servicio, jornadas del día). Veinticinco
+ *                                  líneas no se leen; ahí partir sí ayuda al cliente.
+ *
+ * El tope son 24 porque es lo que mide un día entero de media en horas: de 8 a 20 en pasos de
+ * media hora. Que la cota la fije el caso real más largo —y no un número redondo— es lo que evita
+ * que el día más ocupado del negocio sea justo el que vuelve a partirse en dos mensajes.
+ *
+ * ⚠️ **El número lo pone el núcleo, no el canal.** Es el asa con la que vuelve la respuesta: si
+ * cada canal numerara a su manera, «3» querría decir una cosa en WhatsApp y otra en el WebChat, y
+ * el resolvedor no tendría contra qué comparar. El canal decide **cómo** se pinta (ADR-017); el
+ * número viaja en la opción, como el `id`.
  */
-const UMBRAL_CATEGORIAS = MAX_OPCIONES;
+const MAX_LISTADO = Number(process.env.RESERVA_MAX_LISTADO) || 24;
+
+/**
+ * Con más servicios que esto —y el catálogo repartido en al menos dos categorías— se pregunta
+ * primero el tipo.
+ *
+ * Era `MAX_OPCIONES` (8), de cuando la única alternativa a una lista corta era paginarla. Con el
+ * listado enumerado, diecisiete servicios caben en un mensaje, así que preguntar el tipo antes
+ * sería cobrar un mensaje por una pregunta que el cliente no necesita. Se agrupa cuando ni
+ * enumerando se puede leer de un tirón.
+ */
+const UMBRAL_CATEGORIAS = MAX_LISTADO - 1;
 
 /**
  * Horas que caben en una lista de WhatsApp dejando una fila para volver (10 filas en total).
- * Con más, se pregunta primero la jornada (`franjasDelDia`).
+ * Con más se enumeran, y solo pasadas `MAX_LISTADO` se pregunta la jornada (`franjasDelDia`).
  */
-const HORAS_POR_LISTA = 9;
+const HORAS_POR_LISTA = FILAS_LISTA - 1;
+
+/**
+ * ¿Este menú sale enumerado en un mensaje en vez de como lista pulsable?
+ *
+ * `cuantas` son las opciones **con** las de volver: lo que decide es cuántas filas habría que
+ * pintar, no cuántos datos hay.
+ */
+function seEnumera(cuantas) {
+    return cuantas > FILAS_LISTA && cuantas <= MAX_LISTADO;
+}
+
+/**
+ * Numera las opciones de un listado. El `atajo` es lo que el cliente escribe para elegir.
+ *
+ * Se numeran **todas**, incluidas las de volver: un listado donde unas opciones tienen número y
+ * otras hay que adivinar cómo se piden es peor que no numerar ninguna.
+ */
+function numerar(opciones) {
+    return opciones.map((o, i) => ({ ...o, atajo: String(i + 1) }));
+}
+
+/**
+ * «3», «el 3», «opción 3» → **el id** que ocupaba esa posición en un listado enumerado.
+ *
+ * Devuelve el id y no la opción entera a propósito: así la traducción se hace **una vez**, en la
+ * entrada del manejador, y el resto del flujo recibe exactamente lo que recibiría si el cliente
+ * hubiera pulsado una fila. Ningún resolvedor ni el retroceso necesitan saber que existe la
+ * numeración, que es lo que evita tener que acordarse de ella en el paso que nadie probó.
+ *
+ * **Solo si el menú se enumeró.** Si el cliente vio filas pulsables, un «3» suelto no es una
+ * posición: puede ser el id de un servicio, o parte de una frase. Tratarlo como posición elegiría
+ * por él, que es el error que `resolverServicio` ya pagó una vez con «Corte de cabello (30 min)».
+ *
+ * Y tiene que ser **todo** el mensaje: en «el 15 a las 3» el 15 es un día, no la opción quince.
+ */
+function porAtajo(texto, datos) {
+    const atajos = datos?.atajos;
+    // ⚠️ `atajos_de` y no un simple booleano: los pasos se escriben con `{ ...datos, paso: otro }`,
+    // así que la numeración del menú de servicios se **hereda** hasta el final de la tarea. Sin
+    // esta comprobación, un «3» contestado al paso de la fecha se traduciría al tercer servicio
+    // de un menú que el cliente vio cuatro mensajes antes. Atarla al paso que preguntó es lo que
+    // hace que caduque sola, sin que cada paso tenga que acordarse de limpiarla.
+    if (!datos?.enumerado || datos.atajos_de !== datos.paso) return null;
+    if (!Array.isArray(atajos) || atajos.length === 0) return null;
+    const m = /^(?:el|la|los|las|opcion|numero|n|#)?\s*#?\s*(\d{1,2})$/.exec(normalizar(texto));
+    if (!m) return null;
+    const id = atajos[Number(m[1]) - 1];
+    return id == null ? null : String(id);
+}
+
+/**
+ * Compone la respuesta de un menú y decide la forma: lista pulsable o listado enumerado.
+ *
+ * Es el único sitio donde se toma esa decisión. Devuelve además `numeracion`, que se **esparce en
+ * los datos de la tarea**: es lo que permite traducir un número suelto en la respuesta siguiente
+ * (`porAtajo`), y lleva dentro el paso al que pertenece para que no sobreviva a su menú.
+ *
+ * @param {string} paso — el paso que está preguntando. Obligatorio: sin él la numeración no
+ *                 caduca y acaba leyéndose en un paso que no la ofreció.
+ */
+function menu({ texto, opciones, paso: pasoDelMenu, comoElegir = 'Respóndeme con el número.' }) {
+    const filas = opciones.filter(Boolean);
+    if (!pasoDelMenu) throw new Error('menu() necesita el paso al que pertenece la numeración.');
+
+    if (!seEnumera(filas.length)) {
+        return {
+            respuesta: { texto, opciones: filas },
+            enumerado: false,
+            numeracion: { enumerado: false, atajos: null, atajos_de: null },
+        };
+    }
+    return {
+        respuesta: { texto: `${texto}\n\n${comoElegir}`, opciones: numerar(filas) },
+        enumerado: true,
+        numeracion: { enumerado: true, atajos: filas.map((o) => String(o.id)), atajos_de: pasoDelMenu },
+    };
+}
 
 /** Jornadas del día. Los límites son los de la hora de pared del negocio. */
 const JORNADAS = [
@@ -216,6 +333,15 @@ function etiquetaTamano(clave) {
 
 /** La mascota nueva, cuando el cliente no quiere ninguna de las que ya tiene registradas. */
 const OTRA_MASCOTA = 'otra_mascota';
+
+/**
+ * «Agéndala a otro nombre», en el resumen.
+ *
+ * Existe por el nombre que sale del perfil de WhatsApp: el cliente no lo escribió, así que puede
+ * ser «Mamá» o el nombre de su empresa, y tiene que poder arreglarlo **sin perder la hora ya
+ * apartada**. Sale solo en ese caso; cuando el nombre lo dijo él, la opción sobra.
+ */
+const OTRO_NOMBRE = 'otro_nombre';
 
 /**
  * Qué sobrevive al volver a cada paso. **Es una lista blanca a propósito.**
@@ -378,13 +504,134 @@ function paso(decision, motivo = {}) {
 }
 
 /**
+ * Tope del cuerpo de un mensaje interactivo de WhatsApp (1024 de Meta), con margen; y del de un
+ * mensaje de texto suelto (4096), también con margen. Son del canal, pero la decisión de **juntar
+ * o no** es de aquí: ver `unirRespuestas`.
+ */
+const TOPE_CUERPO = 950;
+const TOPE_TEXTO = 3500;
+
+/**
+ * ── Dos mensajes que podían ser uno ──────────────────────────────────────────────────────
+ *
+ * Varias ramas devuelven un aviso y después una pregunta: «no pude agendar esa hora» + las horas
+ * que quedan, «no hay agenda» + «le aviso al negocio», el saludo + el menú. Eran dos mensajes
+ * porque daba igual: salían gratis. Desde el 1 de octubre de 2026 Meta cobra los service messages
+ * pasada la asignación mensual, así que el aviso suelto tiene precio — y leerlo pegado a la
+ * pregunta no es peor, es mejor: una notificación en lugar de dos para la misma cosa.
+ *
+ * Se junta **lo que cabe** y solo hacia delante: una respuesta con opciones no absorbe a la
+ * siguiente, porque el menú tiene que quedar al final, que es donde el canal lo pinta. El tope
+ * depende de dónde acabe el texto, porque un cuerpo interactivo admite mucho menos que un texto
+ * suelto; cuando no cabe, se mandan los dos mensajes como antes.
+ */
+function unirRespuestas(decision) {
+    const respuestas = decision?.respuestas || [];
+    if (respuestas.length <= 1) return decision;
+
+    const unidas = [];
+    for (const cruda of respuestas) {
+        const actual = typeof cruda === 'string' ? { texto: cruda } : { ...cruda };
+        const previa = unidas[unidas.length - 1];
+        if (previa && !previa.opciones?.length && typeof actual.texto === 'string') {
+            const juntas = `${previa.texto}\n\n${actual.texto}`;
+            if (juntas.length <= (actual.opciones?.length ? TOPE_CUERPO : TOPE_TEXTO)) {
+                unidas[unidas.length - 1] = { ...actual, texto: juntas };
+                continue;
+            }
+        }
+        unidas.push(actual);
+    }
+    return { ...decision, respuestas: unidas };
+}
+
+/**
+ * ¿Es un «hola», un «menú» o cualquier otro comando?
+ *
+ * Son los mensajes que **no tienen nada que aprovechar**: quien saluda no ha dicho qué quiere, y
+ * quien escribe «menú» está pidiendo justo la lista. El atajo se los salta y el menú contesta
+ * igual que siempre, que es lo que mantiene congelado el camino de quien solo pulsa.
+ */
+function esSaludoOComando(texto) {
+    return esSaludo(texto) || esAlgunComando(texto);
+}
+
+/**
+ * ── «¿Qué citas tengo?» ──────────────────────────────────────────────────────────────────
+ *
+ * Hasta el 2026-10-02 esto caía en `intencion_agendar` —la palabra «cita» está en las dos cosas— y
+ * el cliente que preguntaba por la cita que ya tenía recibía el menú de servicios. El mismo
+ * agujero que `intencion_mutacion` tapó para «cancelar», un paso más allá.
+ *
+ * Se resuelve en el Nivel 1 y no en el modelo porque es una lectura exacta: la lista sale de
+ * `consultar_mis_citas` tal cual, no hay nada que redactar, y pagar un turno de modelo para recitar
+ * una consulta es justo lo que la escalera de costo existe para no hacer.
+ *
+ * **Exige dos señales**, como el retroceso: un posesivo («mi», «mis», «tengo») y la palabra cita.
+ * Sin el posesivo, «quiero una cita» entraría aquí y el cliente que viene a agendar recibiría un
+ * «no tienes citas próximas», que es la respuesta correcta a una pregunta que nadie hizo.
+ *
+ * Y una exclusión, para el caso que las dos señales no separan: **«quiero reservar mi turno» tiene
+ * posesivo y tiene «turno», y es alguien que viene a agendar.** Se descarta cuando hay intención
+ * explícita de pedir algo nuevo… salvo que además pregunte o quiera anular, porque «quiero ver mis
+ * citas» y «quiero cancelar mi cita» son las dos cosas a la vez y en las dos la lista es la
+ * respuesta útil.
+ */
+const PISTA_POSESIVA = /\b(mi|mis|tengo|tenia|tenemos|mia|mias)\b/;
+const PISTA_CITA = /\b(citas?|turnos?|reservas?|agendad[oa]s?|tratamientos?|sesiones?)\b/;
+const PISTA_DE_AGENDAR = /\b(quiero|queria|necesito|agendar|reservar|separar|apartar|sacar|pedir)\b/;
+const PISTA_DE_CONSULTA = /\b(que|cuando|cuanto|cuantas|cual|cuales|ver|consultar|revisar|cancel\w*|anul\w*)\b/;
+
+function preguntaPorSusCitas(texto) {
+    const t = normalizar(ultimaLinea(texto));
+    if (!t) return false;
+    if (!PISTA_POSESIVA.test(t) || !PISTA_CITA.test(t)) return false;
+    // Un retroceso manda sobre esto: «cambiar mi cita» a mitad del flujo no es una consulta.
+    if (PISTA_DE_CAMBIO.test(t)) return false;
+    if (PISTA_DE_AGENDAR.test(t) && !PISTA_DE_CONSULTA.test(t)) return false;
+    return true;
+}
+
+/** «cita» → «Cita». Para empezar una frase con un término del oficio. */
+function mayusculaDe(palabra) {
+    const p = String(palabra || '');
+    return p.charAt(0).toLocaleUpperCase('es') + p.slice(1);
+}
+
+/** Las palabras de un texto ya normalizado, sin signos. */
+function enPalabras(texto) {
+    return String(texto || '').split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+}
+
+/** Pega un texto delante de la primera respuesta, en el mismo mensaje si cabe. */
+function anteponer(decision, encabezado) {
+    if (!encabezado || !decision) return decision;
+    return unirRespuestas({ ...decision, respuestas: [encabezado, ...(decision.respuestas || [])] });
+}
+
+/**
+ * El nombre que el canal trajo del perfil de quien escribe, del mensaje más reciente del turno.
+ *
+ * Viaja en `crudo` porque es lo que dijo el canal, no un dato del núcleo (lo pone
+ * `channels/whatsapp/adaptador.js`). El WebChat no lo trae y aquí sale `null`, que es lo correcto:
+ * una sesión de navegador no sabe cómo se llama nadie.
+ */
+function nombreDelPerfil(mensajes) {
+    for (let i = (mensajes || []).length - 1; i >= 0; i--) {
+        const nombre = mensajes[i]?.crudo?.perfil_nombre;
+        if (nombre) return nombre;
+    }
+    return null;
+}
+
+/**
  * Fecha en zona de Bogotá, que es la hora de pared con la que trabaja toda la plataforma.
  *
  * Acepta ISO y dos atajos. Deliberadamente pobre: en Nivel 1, entender «el jueves de la semana
  * que viene» es trabajo del LLM, y fingirlo aquí con expresiones regulares produce el peor de
  * los mundos — un parser que acierta lo justo para que nadie note cuándo falla.
  */
-function interpretarFecha(texto, ahora = new Date()) {
+function interpretarFecha(texto, ahora = new Date(), { diaSueltoVale = true } = {}) {
     const t = normalizar(texto);
     if (!t) return null;
 
@@ -433,8 +680,14 @@ function interpretarFecha(texto, ahora = new Date()) {
 
     if (/\bpasado\s+manana\b/.test(sinHoras)) return masDias(2);
 
-    // «el 15», «viernes 2» (el número manda sobre el nombre del día: es más preciso)
-    const numero = sinHoras.match(/\b(\d{1,2})\b/);
+    // ⚠️ «el 15», «viernes 2» — y **solo si se está preguntando el día**.
+    //
+    // Un número suelto es una fecha cuando es la respuesta a «¿qué día?», y cualquier otra cosa
+    // en cualquier otro sitio: el id de un servicio, el número de una opción de un listado, «somos
+    // 2». Por eso quien lee un mensaje que NO es una respuesta al paso de la fecha —el pre-llenado
+    // del primer mensaje— pasa `diaSueltoVale: false`, y así «quiero el servicio 2» no se convierte
+    // en una cita para el día 2.
+    const numero = diaSueltoVale ? sinHoras.match(/\b(\d{1,2})\b/) : null;
     if (numero) {
         const dia = Number(numero[1]);
         if (dia >= 1 && dia <= 31) return proximaFechaCon(dia, null, hoyISO);
@@ -573,8 +826,38 @@ function fechaLegible(fechaISO) {
     return `${DIAS[d.getUTCDay()]} ${dia} de ${MESES[mes - 1]}`;
 }
 
+/**
+ * ¿Hay un precio que se pueda decir en voz alta?
+ *
+ * `a_cotizar` lo marca explícitamente. Un precio de **cero** dice lo mismo sin marcarlo, y en
+ * producción había uno: «Tatuajes», 30 min, `precio = 0`, `a_cotizar = false`. El bot lo ofrecía
+ * como «30 min — $0», o sea prometía un tatuaje gratis, y lo desmentía el mostrador. Ningún
+ * servicio de una agenda vale cero: cuando el precio falta, lo honesto es decir que se conviene.
+ */
+function seCotiza(servicio) {
+    return Boolean(servicio?.a_cotizar) || !(Number(servicio?.precio) > 0);
+}
+
+/**
+ * El detalle de una fila de servicio: «30 min — desde $35.000».
+ *
+ * Un servicio **a cotizar** no lleva ni precio ni duración: las dos las fija el artista después de
+ * ver el trabajo, y enseñar la de la tabla sería prometer un rato que nadie prometió. Uno con
+ * precio en cero sí lleva duración —esa se conoce— y dice que el precio se conviene.
+ */
+function detalleDeServicio(s) {
+    if (s?.a_cotizar) return 'Precio a convenir';
+    const minutos = Number(s?.duracion_min) > 0 ? `${s.duracion_min} min` : null;
+    if (!(Number(s?.precio) > 0)) {
+        return [minutos, 'precio a convenir'].filter(Boolean).join(' — ') || 'Precio a convenir';
+    }
+    return `${minutos ?? ''}${formatearPrecio(s.precio, s.variantes?.length > 0)}`;
+}
+
 function formatearPrecio(valor, desde = false) {
-    if (valor == null) return '';
+    // Cero no es un precio: ver `seCotiza`. Un «— $0» en una fila es la clase de promesa que el
+    // negocio tiene que desmentir en persona.
+    if (valor == null || !(Number(valor) > 0)) return '';
     // «desde $35.000» cuando el servicio tiene variantes: el precio de lista es el del caso más
     // barato, y enseñarlo a secas haría que la clienta de pelo largo se sintiera engañada al
     // llegar. Una palabra evita esa conversación en el mostrador.
@@ -715,8 +998,17 @@ function crearManejadorDeterminista({
      * `categoria` en `undefined` significa «aún no se eligió» y deja que se decida aquí; con
      * valor, se muestran solo los servicios de esa categoría.
      */
-    async function ofrecerServicios(ctx, pasosPrevios = [], { saludar = false, categoria, pagina = 0 } = {}) {
-        const { resultado } = await invocar({ ...ctx, capacidad: 'consultar_servicios', args: {} });
+    async function ofrecerServicios(
+        ctx,
+        pasosPrevios = [],
+        { saludar = false, categoria, pagina = 0, catalogo = null } = {}
+    ) {
+        // `catalogo` lo trae quien ya lo pidió en este turno (el atajo). Volver a invocar la
+        // capacidad no daría mal resultado —el Gate guarda la idempotencia por turno y devolvería
+        // lo mismo— pero dejaría dos invocaciones en el Ledger para una sola lectura, y el Ledger
+        // es donde se mira cuánto hace el asistente por turno.
+        const traido = catalogo ?? (await invocar({ ...ctx, capacidad: 'consultar_servicios', args: {} }));
+        const resultado = traido?.resultado ?? traido;
         const todos = resultado?.servicios || [];
         const apertura = saludar ? `${saludo(ctx)} ` : '';
         // Cómo habla este oficio y qué tiene encendido. Viene con los servicios —una sola
@@ -748,12 +1040,20 @@ function crearManejadorDeterminista({
         // Si la categoría guardada ya no existe (se vació a mitad de conversación), se vuelve a
         // empezar por los tipos en vez de enseñar una lista vacía.
         if (delTipo.length === 0) {
-            return ofrecerServicios(ctx, pasosPrevios, { saludar });
+            return ofrecerServicios(ctx, pasosPrevios, { saludar, catalogo: resultado });
         }
 
-        const inicio = pagina * MAX_OPCIONES;
-        const servicios = delTipo.slice(inicio, inicio + MAX_OPCIONES);
-        const hayMas = delTipo.length > inicio + MAX_OPCIONES;
+        // ── Cuántos caben, y por qué ya no siempre son ocho ─────────────────────────────
+        //
+        // La fila de «Otro tipo» solo existe si hay categorías, así que ocupa sitio solo entonces.
+        // Con eso se mira si el catálogo entero cabe —como lista o enumerado— y solo si no cabe de
+        // ninguna de las dos formas se pagina, que es lo que antes se hacía siempre.
+        const extras = conCategorias ? 1 : 0;
+        const deUnaVez = delTipo.length + extras <= FILAS_LISTA || seEnumera(delTipo.length + extras);
+        const porPagina = deUnaVez ? delTipo.length : MAX_OPCIONES;
+        const inicio = pagina * porPagina;
+        const servicios = delTipo.slice(inicio, inicio + porPagina);
+        const hayMas = delTipo.length > inicio + porPagina;
         const nombreCategoria = conCategorias
             ? categoriasDe(todos).find((c) => c.id === categoria)?.nombre
             : null;
@@ -762,43 +1062,40 @@ function crearManejadorDeterminista({
             ? `Estos son los ${t.servicios} de *${nombreCategoria}*. ¿Cuál te gustaría agendar?`
             : `${apertura}¿Qué ${t.servicio} te gustaría agendar?`;
 
+        const { respuesta, enumerado, numeracion } = menu({
+            texto: pregunta,
+            paso: PASO.SERVICIO,
+            // Nunca numerado dentro del texto: va en `opciones` y cada canal lo pinta
+            // como sabe (ADR-017). El WebChat los hace chips; WhatsApp, una lista.
+            // El nombre va en `etiqueta` y lo demás en `detalle` (F8-A): en el WebChat
+            // se pintan juntos, y en WhatsApp el detalle cabe en la descripción de la
+            // fila en vez de morir en el recorte de 20 caracteres del título.
+            opciones: [
+                ...servicios.map((s) => ({
+                    id: String(s.id_servicio),
+                    etiqueta: s.nombre,
+                    detalle: detalleDeServicio(s),
+                })),
+                // Solo cuando ni enumerando cabe el catálogo entero.
+                ...(hayMas ? [{ id: MAS_SERVICIOS, etiqueta: `Ver más ${t.servicios}` }] : []),
+                // El título de una fila de WhatsApp corta en 24 caracteres: el texto
+                // completo («Elegir otro tipo de servicio») va en el detalle.
+                ...(conCategorias
+                    ? [{
+                        id: VOLVER.CATEGORIA,
+                        etiqueta: '← Otro tipo',
+                        detalle: `Elegir otro tipo de ${t.servicio}`,
+                    }]
+                    : []),
+            ],
+            comoElegir: `Respóndeme con el número del ${t.servicio} que quieras.`,
+        });
+
         return {
             pasos: [...pasosPrevios, paso('menu_servicios', {
-                cuantos: servicios.length, categoria: categoria ?? null, pagina,
+                cuantos: servicios.length, categoria: categoria ?? null, pagina, enumerado,
             })],
-            respuestas: [
-                {
-                    texto: pregunta,
-                    // Nunca numerado dentro del texto: va en `opciones` y cada canal lo pinta
-                    // como sabe (ADR-017). El WebChat los hace chips; WhatsApp, una lista.
-                    // El nombre va en `etiqueta` y lo demás en `detalle` (F8-A): en el WebChat
-                    // se pintan juntos, y en WhatsApp el detalle cabe en la descripción de la
-                    // fila en vez de morir en el recorte de 20 caracteres del título.
-                    opciones: [
-                        ...servicios.map((s) => ({
-                            id: String(s.id_servicio),
-                            etiqueta: s.nombre,
-                            // Un servicio a cotizar NO lleva precio en el detalle: enseñar el de
-                            // lista es prometer algo que el negocio va a desmentir. Y uno con
-                            // variantes lleva «desde», porque el precio depende de cuál se elija.
-                            detalle: s.a_cotizar
-                                ? 'Precio a convenir'
-                                : `${s.duracion_min} min${formatearPrecio(s.precio, s.variantes?.length > 0)}`,
-                        })),
-                        // 8 servicios + «Ver más» + «Otro tipo» = 10, el máximo de una lista.
-                        ...(hayMas ? [{ id: MAS_SERVICIOS, etiqueta: `Ver más ${t.servicios}` }] : []),
-                        // El título de una fila de WhatsApp corta en 24 caracteres: el texto
-                        // completo («Elegir otro tipo de servicio») va en el detalle.
-                        ...(conCategorias
-                            ? [{
-                                id: VOLVER.CATEGORIA,
-                                etiqueta: '← Otro tipo',
-                                detalle: `Elegir otro tipo de ${t.servicio}`,
-                            }]
-                            : []),
-                    ],
-                },
-            ],
+            respuestas: [respuesta],
             variables: conMemoria(ctx.conversacion),
             tarea: {
                 nombre: TAREA_AGENDAR,
@@ -807,6 +1104,7 @@ function crearManejadorDeterminista({
                     perfil,
                     ...(conCategorias ? { categoria } : {}),
                     pagina,
+                    ...numeracion,
                     // Se recuerda QUÉ se ofreció para poder resolver la respuesta contra la
                     // lista real en vez de adivinar. Sin esto había que sacar un número del
                     // texto libre, y «Corte de cabello (30 min) — $35.000» daba el servicio 30.
@@ -831,27 +1129,29 @@ function crearManejadorDeterminista({
     /** El menú de tipos de servicio. Una fila por categoría, con cuántos servicios tiene. */
     function ofrecerCategorias(ctx, pasosPrevios, { apertura, perfil, t, todos, pagina = 0 }) {
         const lista = categoriasDe(todos);
-        // Con diez o menos caben todas en una lista de WhatsApp; si no, nueve y «Ver más».
-        const porPagina = lista.length <= 10 ? 10 : 9;
+        // Todas de una vez mientras quepan como lista o enumeradas; solo por encima se pagina.
+        const porPagina = lista.length <= FILAS_LISTA || seEnumera(lista.length) ? lista.length : FILAS_LISTA - 1;
         const inicio = pagina * porPagina;
         const categorias = lista.slice(inicio, inicio + porPagina);
         const hayMas = lista.length > inicio + porPagina;
 
-        return {
-            pasos: [...pasosPrevios, paso('menu_categorias', { cuantas: categorias.length, pagina })],
-            respuestas: [
-                {
-                    texto: `${apertura}¿Qué tipo de ${t.servicio} te gustaría agendar?`,
-                    opciones: [
-                        ...categorias.map((c) => ({
-                            id: c.id,
-                            etiqueta: c.nombre,
-                            detalle: `${c.cuantos} ${c.cuantos === 1 ? t.servicio : t.servicios}`,
-                        })),
-                        ...(hayMas ? [{ id: MAS_CATEGORIAS, etiqueta: 'Ver más tipos' }] : []),
-                    ],
-                },
+        const { respuesta, enumerado, numeracion } = menu({
+            paso: PASO.CATEGORIA,
+            texto: `${apertura}¿Qué tipo de ${t.servicio} te gustaría agendar?`,
+            opciones: [
+                ...categorias.map((c) => ({
+                    id: c.id,
+                    etiqueta: c.nombre,
+                    detalle: `${c.cuantos} ${c.cuantos === 1 ? t.servicio : t.servicios}`,
+                })),
+                ...(hayMas ? [{ id: MAS_CATEGORIAS, etiqueta: 'Ver más tipos' }] : []),
             ],
+            comoElegir: 'Respóndeme con el número del tipo que quieras.',
+        });
+
+        return {
+            pasos: [...pasosPrevios, paso('menu_categorias', { cuantas: categorias.length, pagina, enumerado })],
+            respuestas: [respuesta],
             variables: conMemoria(ctx.conversacion),
             tarea: {
                 nombre: TAREA_AGENDAR,
@@ -859,6 +1159,7 @@ function crearManejadorDeterminista({
                     paso: PASO.CATEGORIA,
                     perfil,
                     pagina,
+                    ...numeracion,
                     categorias_ofrecidas: categorias.map((c) => ({ id: c.id, nombre: c.nombre })),
                 },
             },
@@ -947,6 +1248,219 @@ function crearManejadorDeterminista({
             if (o) return o;
         }
         return null;
+    }
+
+    /**
+     * Las citas próximas del cliente, enseñadas con el día y la hora — nunca con el código.
+     *
+     * El código viaja en la tarea y en el Ledger, no en el texto: a nadie le dice nada y ocupa la
+     * línea que debería decir «el martes a las 10». Se guarda en `variables` para que, si después
+     * pide cancelar, el modelo ya lo tenga sin volver a preguntar nada.
+     *
+     * Un solo mensaje, con el consejo de qué escribir al final. Antes esto no existía: el bot
+     * contestaba con el menú de servicios a quien preguntaba por la cita que ya tenía.
+     */
+    async function misCitas(ctx, pasosPrevios = []) {
+        const { resultado } = await invocar({ ...ctx, capacidad: 'consultar_mis_citas', args: {} });
+        const citas = resultado?.citas || [];
+        const t = terminos({});
+        const quien = ctx.negocio?.tratamiento || 'el negocio';
+
+        if (citas.length === 0) {
+            // El motivo lo pone la capacidad cuando no pudo ni buscar (sin teléfono probado). Es
+            // distinto de «no tienes citas» y decirlo igual sería mentir en un caso de los dos.
+            const porque = resultado?.motivo
+                ? `No puedo ver tus ${t.citas} ahora mismo: ${resultado.motivo}.`
+                : `No veo ninguna ${t.cita} próxima a tu nombre.`;
+            return {
+                pasos: [...pasosPrevios, paso('mis_citas', { cuantas: 0, motivo: resultado?.motivo ?? null })],
+                respuestas: [
+                    {
+                        texto: `${porque} ¿Quieres agendar una?`,
+                        opciones: [
+                            { id: COMANDO.MENU[0], etiqueta: `Ver ${t.servicios}` },
+                        ],
+                    },
+                ],
+                variables: conMemoria(ctx.conversacion),
+                tarea: null,
+                resultado: 'resuelto',
+                nivel: 'determinista',
+            };
+        }
+
+        const lineas = citas.map((c) => {
+            const [fecha, hora] = String(c.inicio || '').split('T');
+            const cuando = `${fechaLegible(fecha)} a las ${hora12((hora || '').slice(0, 5))}`;
+            const quienAtiende = c.profesional ? ` · con ${c.profesional}` : '';
+            return `• *${cuando}*\n  ${c.servicio || mayusculaDe(t.cita)}${quienAtiende}`;
+        });
+
+        const encabezado = citas.length === 1
+            ? `Tienes una ${t.cita} con *${quien}*:`
+            : `Tienes ${citas.length} ${t.citas} con *${quien}*:`;
+
+        return {
+            pasos: [...pasosPrevios, paso('mis_citas', { cuantas: citas.length })],
+            respuestas: [
+                `${encabezado}\n\n${lineas.join('\n')}\n\n` +
+                    `Si necesitas cambiarla o anularla, dime cuál y me encargo.`,
+            ],
+            // El código de la primera queda a mano: es lo que `cancelar_cita` y `reagendar_cita`
+            // necesitan, y así el paso siguiente no vuelve a pedir nada.
+            variables: conMemoria(ctx.conversacion, { ultima_cita: citas[0].codigo_cita }),
+            tarea: null,
+            resultado: 'resuelto',
+            nivel: 'determinista',
+        };
+    }
+
+    /**
+     * ── El servicio que el cliente nombró en una frase, o nada ───────────────────────────
+     *
+     * `resolverServicio` resuelve una **respuesta a un menú**: compara contra las ocho opciones
+     * que acabamos de ofrecer y acepta hasta un número. Esto es otra cosa: leer «quiero un corte
+     * de cabello mañana a las 3» contra el catálogo entero, sin menú delante.
+     *
+     * Por eso es **deliberadamente estricto**. Devolver el servicio equivocado aquí es peor que no
+     * devolver ninguno: quien no acierta acaba en el menú de siempre y no pierde nada, mientras que
+     * quien se equivoca lleva al cliente a un resumen con otro servicio y otro precio. Dos pasadas,
+     * y las dos exigen que no haya empate:
+     *
+     *   1. **El nombre completo dentro de la frase.** Si encajan varios gana el más largo, que es
+     *      lo que distingue «Corte y barba» de «Corte»; si dos empatan en largo, no se elige.
+     *   2. **Todas las palabras largas del nombre, en cualquier orden.** «quiero arreglo barba»
+     *      encuentra «Arreglo de barba», que la primera pasada no ve. Las palabras de menos de
+     *      cuatro letras no cuentan: «de», «y», «con» están en cualquier frase.
+     *
+     * Lo que NO hace, y es la mitad del valor: **no acepta números**. Un «2» en una frase libre es
+     * cualquier cosa menos el id de un servicio.
+     */
+    function servicioEnElTexto(texto, catalogo) {
+        const t = normalizar(texto);
+        if (!t || !catalogo?.length) return null;
+
+        const masLargoSinEmpate = (candidatos) => {
+            if (candidatos.length === 0) return null;
+            const porLargo = [...candidatos].sort((a, b) => b.nombre.length - a.nombre.length);
+            if (porLargo.length > 1 && porLargo[0].nombre.length === porLargo[1].nombre.length) return null;
+            return porLargo[0];
+        };
+
+        const contenidos = catalogo.filter((s) => {
+            const n = normalizar(s.nombre);
+            return n.length >= 3 && t.includes(n);
+        });
+        if (contenidos.length) return masLargoSinEmpate(contenidos);
+
+        // ⚠️ Sin expresiones regulares construidas con el nombre del servicio. Un negocio puede
+        // llamar a algo «Corte + barba», y `new RegExp('\\b+')` no es un regex que no encuentre
+        // nada: es un `SyntaxError` que se lleva por delante el primer mensaje de ese negocio.
+        // Comparar palabra a palabra con `startsWith` hace el mismo trabajo —«barbas» encuentra
+        // «barba»— y no se puede romper con un nombre.
+        const enElTexto = enPalabras(t);
+        const porPalabras = catalogo.filter((s) => {
+            const palabras = enPalabras(normalizar(s.nombre)).filter((p) => p.length >= 4);
+            return palabras.length > 0
+                && palabras.every((p) => enElTexto.some((w) => w.startsWith(p)));
+        });
+        return masLargoSinEmpate(porPalabras);
+    }
+
+    /** Lo que de cada servicio necesitan los pasos siguientes, sin volver al catálogo. */
+    function comoOfrecido(s) {
+        return {
+            id: s.id_servicio,
+            nombre: s.nombre,
+            a_cotizar: Boolean(s.a_cotizar),
+            requiere_consentimiento: Boolean(s.requiere_consentimiento),
+            variantes: s.variantes || [],
+        };
+    }
+
+    /**
+     * ── El atajo: no tirar lo que el cliente acaba de escribir ───────────────────────────
+     *
+     * Hasta hoy el primer mensaje se leía solo para decidir si era un saludo: `ofrecerServicios` no
+     * miraba su contenido. Un cliente que escribía «quiero un corte de cabello mañana a las 3»
+     * recibía el menú de categorías, y las cuatro cosas que había dicho se perdían. Nueve mensajes
+     * después llegaba al mismo sitio al que podía haber llegado en uno.
+     *
+     * Aquí se intenta **llenar los huecos con lo que ya dijo**, en el orden del flujo y parando en
+     * el primero que no se pueda resolver: servicio → variante → día → hora. Lo que falte lo
+     * pregunta el paso de siempre, así que el peor caso del atajo es el comportamiento de antes.
+     *
+     * Las tres reglas que lo hacen seguro:
+     *
+     *   1. **Cada dato se exige explícito.** Nada de números sueltos (ver `interpretarFecha` y
+     *      `servicioEnElTexto`): se prefiere no entender a entender mal.
+     *   2. **Nunca se auto-confirma.** El atajo termina, como el menú, en el resumen con Sí / No.
+     *      Un dato leído mal cuesta un «No», no una cita equivocada.
+     *   3. **Un solo turno, una mutación.** Se consultan varias capacidades distintas —catálogo,
+     *      disponibilidad, profesionales— y se aparta la hora una vez, que es exactamente lo que
+     *      hace el camino del menú en su último paso.
+     *
+     * @returns {{catalogo: Array, perfil: Object|null, decision: Object|null}} — `decision` en
+     *          `null` significa «no había nada que atajar»; el catálogo se devuelve igual para que
+     *          quien siga no tenga que volver a pedirlo.
+     */
+    async function intentarAtajo(ctx, pasosPrevios, { saludar }) {
+        const { resultado } = await invocar({ ...ctx, capacidad: 'consultar_servicios', args: {} });
+        const servicios = resultado?.servicios || [];
+        const perfil = resultado?.negocio || null;
+        // El catálogo se devuelve tal como llegó para que `ofrecerServicios` lo reutilice: el
+        // turno ya pagó esa lectura.
+        const sinAtajo = { catalogo: resultado, decision: null };
+
+        const servicio = servicioEnElTexto(ctx.texto, servicios);
+        if (!servicio) return sinAtajo;
+
+        const datos = {
+            paso: PASO.SERVICIO,
+            perfil,
+            ofrecidos: servicios.map(comoOfrecido),
+            id_servicio: Number(servicio.id_servicio),
+            servicio_nombre: servicio.nombre,
+        };
+        const pasos = [...pasosPrevios, paso('atajo_servicio', { id_servicio: datos.id_servicio })];
+
+        // Lo que se cotiza no se agenda por chat, igual que desde el menú.
+        if (servicio.a_cotizar) {
+            return { ...sinAtajo, decision: cederAlNegocio(ctx, datos, comoOfrecido(servicio)) };
+        }
+
+        // Se dice lo que se entendió y se pega al mensaje siguiente. Confirmar en voz alta lo que
+        // se leyó de una frase libre es lo que permite al cliente cazar el malentendido en el
+        // primer mensaje en vez de en el resumen.
+        const encabezado = `${saludar ? `${saludo(ctx)} ` : ''}Anoto *${servicio.nombre}*.`;
+        const conEncabezado = (decision) => anteponer(decision, encabezado);
+
+        // Lo que impide saltar directo a las horas, y por qué:
+        //
+        //   · **Sin día** no hay nada que consultar.
+        //   · **Con variantes** la duración todavía no se sabe, y la duración decide qué horas
+        //     caben: ofrecerlas antes sería retirar después una hora ya ofrecida.
+        //   · **Con mascotas** la vertical rechaza la cita sin ella (`MASCOTA_REQUERIDA`).
+        //
+        // En los tres casos se sigue por el paso de siempre, que ya pregunta lo que falta en el
+        // orden correcto. El atajo ya ahorró el menú de servicios, que era el mensaje caro.
+        const fecha = interpretarFecha(ctx.texto, ahora(), { diaSueltoVale: false });
+        const variantes = datos.ofrecidos.find((x) => x.id === datos.id_servicio)?.variantes || [];
+        const faltaAlgo = !fecha
+            || tiene(datos, 'mascotas')
+            || (tiene(datos, 'variantes') && variantes.length > 0);
+
+        if (faltaAlgo) {
+            return { ...sinAtajo, decision: conEncabezado(await despuesDelServicio(ctx, datos, pasos)) };
+        }
+
+        const conDia = [...pasos, paso('atajo_fecha', { fecha })];
+        return {
+            ...sinAtajo,
+            decision: conEncabezado(
+                await mostrarHoras(ctx, datos, fecha, conDia, { consumirHora: true })
+            ),
+        };
     }
 
     async function elegirServicio(ctx, datos) {
@@ -1424,10 +1938,14 @@ function crearManejadorDeterminista({
             args: { id_servicio: datos.id_servicio },
         });
         const conocidos = new Map((resultado?.profesionales || []).map((pr) => [Number(pr.id_profesional), pr]));
+        // ⚠️ El recorte era `MAX_OPCIONES` (8) y escondía gente que SÍ tenía la hora libre: en
+        // D'ALEX hay diez profesionales, así que dos quedaban invisibles sin que nadie lo supiera.
+        // Ahora se enseñan todos los que quepan en un listado; el tope solo existe para que un
+        // negocio con treinta no mande un mensaje ilegible.
         const profesionales = libres
             .map((id) => conocidos.get(id))
             .filter(Boolean)
-            .slice(0, MAX_OPCIONES);
+            .slice(0, MAX_LISTADO - 2);
 
         if (profesionales.length <= 1) {
             return apartarHora(
@@ -1439,23 +1957,25 @@ function crearManejadorDeterminista({
         }
 
         const t = terminos(datos);
-        return {
-            pasos: [...pasosPrevios, paso('menu_profesionales', { cuantos: profesionales.length })],
-            respuestas: [
-                {
-                    texto: `¿Con quién prefieres tu ${t.cita} del ${fechaLegible(datos.fecha)} a las ${hora12(datos.hora)}?`,
-                    // Me da igual + 8 personas + «Otra hora» = 10 filas, el máximo de una lista.
-                    opciones: [
-                        { id: CUALQUIER_PROFESIONAL, etiqueta: 'Me da igual', detalle: 'Cualquiera con esa hora libre' },
-                        ...profesionales.map((pr) => ({
-                            id: String(pr.id_profesional),
-                            etiqueta: pr.nombre,
-                            detalle: pr.especialidad || undefined,
-                        })),
-                        { id: VOLVER.HORA, etiqueta: '← Otra hora' },
-                    ],
-                },
+        const { respuesta, enumerado, numeracion } = menu({
+            paso: PASO.PROFESIONAL,
+            texto: `¿Con quién prefieres tu ${t.cita} del ${fechaLegible(datos.fecha)} a las ${hora12(datos.hora)}?`,
+            // «Me da igual» primero: es lo que quiere la mayoría, y lo más a mano tiene que ser
+            // lo que equivale a no elegir.
+            opciones: [
+                { id: CUALQUIER_PROFESIONAL, etiqueta: 'Me da igual', detalle: 'Cualquiera con esa hora libre' },
+                ...profesionales.map((pr) => ({
+                    id: String(pr.id_profesional),
+                    etiqueta: pr.nombre,
+                    detalle: pr.especialidad || undefined,
+                })),
+                { id: VOLVER.HORA, etiqueta: '← Otra hora' },
             ],
+            comoElegir: 'Respóndeme con el número, o con el nombre de quien prefieras.',
+        });
+        return {
+            pasos: [...pasosPrevios, paso('menu_profesionales', { cuantos: profesionales.length, enumerado })],
+            respuestas: [respuesta],
             // El nombre se guarda ya: si la conversación se corta aquí, la próxima vez no se
             // vuelve a preguntar.
             variables: conMemoria(ctx.conversacion, datos.nombre ? { nombre: datos.nombre } : {}),
@@ -1464,6 +1984,7 @@ function crearManejadorDeterminista({
                 datos: {
                     ...datos,
                     paso: PASO.PROFESIONAL,
+                    ...numeracion,
                     // Misma razón que con los servicios: se recuerda lo ofrecido para resolver
                     // la respuesta contra la lista real en vez de sacar un número del texto.
                     profesionales_ofrecidos: profesionales.map((pr) => ({
@@ -1606,7 +2127,7 @@ function crearManejadorDeterminista({
      * confirmación mandaba al paso de fecha y había que volver a teclear el día — un paso de
      * castigo por cambiar de opinión.
      */
-    async function mostrarHoras(ctx, datos, fecha, pasosPrevios) {
+    async function mostrarHoras(ctx, datos, fecha, pasosPrevios, { consumirHora = false } = {}) {
         const { resultado } = await invocar({
             ...ctx,
             capacidad: 'consultar_disponibilidad',
@@ -1697,35 +2218,60 @@ function crearManejadorDeterminista({
             libres_por_hora: libresPorHora,
         };
 
-        // Caben en una lista (9 horas + «otro día» = 10 filas): se ofrecen todas de una vez.
-        if (horas.length <= HORAS_POR_LISTA) {
-            return listaDeHoras(ctx, conHoras, horas.map((h) => h.hora), {
-                texto: `Estas son las horas libres el ${fechaLegible(fecha)}:`,
+        const soloHoras = horas.map((h) => h.hora);
+
+        // El cliente ya había dicho la hora en el mismo mensaje («mañana a las 3»): se comprueba
+        // contra las que de verdad están libres y se sigue. Es lo que convierte una frase en una
+        // cita sin pasar por dos menús; si la hora que pidió no está libre, cae en la lista de
+        // abajo y ve las que sí, que es la respuesta correcta a «a esa hora no puedo atenderte».
+        if (consumirHora) {
+            const pedida = resolverHora(ultimaLinea(ctx.texto), soloHoras);
+            if (pedida) {
+                return conHoraElegida(ctx, conHoras, pedida, [
+                    ...pasosPrevios,
+                    paso('atajo_hora', { hora: pedida }),
+                ]);
+            }
+        }
+
+        // ── Un mensaje con el día entero, hasta donde se pueda leer ──────────────────────
+        //
+        // Caben en una lista (9 horas + «otro día» = 10 filas) → lista pulsable, como siempre.
+        // No caben pero sí en un listado enumerado → **un** mensaje con todas las horas del día.
+        // Eso se come el paso de la jornada, que era un mensaje entero para preguntar algo que
+        // el cliente no había pedido: él quiere una hora, no una franja. Solo un día con más de
+        // `MAX_LISTADO` horas libres sigue pasando por las jornadas, porque ahí el listado deja
+        // de ser legible y partirlo ayuda de verdad.
+        if (horas.length <= HORAS_POR_LISTA || seEnumera(horas.length + 1)) {
+            return listaDeHoras(ctx, conHoras, soloHoras, {
+                texto: horas.length > HORAS_POR_LISTA
+                    ? `Hay ${horas.length} horas libres el ${fechaLegible(fecha)}:`
+                    : `Estas son las horas libres el ${fechaLegible(fecha)}:`,
                 volver: { id: VOLVER.FECHA, etiqueta: '← Otro día' },
                 pasos: [...pasosPrevios, paso('menu_horas', { fecha, cuantas: horas.length })],
             });
         }
 
-        // No caben: primero la jornada. Es UN mensaje más, y a cambio el cliente ve todas las
-        // horas del día en vez de las ocho primeras.
-        return ofrecerFranjas(ctx, conHoras, horas.map((h) => h.hora), pasosPrevios);
+        // Demasiadas para un solo mensaje legible: primero la jornada.
+        return ofrecerFranjas(ctx, conHoras, soloHoras, pasosPrevios);
     }
 
-    /** La lista de horas (ya cabe en una lista de WhatsApp) y el paso HORA. */
+    /** La lista de horas y el paso HORA. Pulsable si cabe, enumerada si no. */
     function listaDeHoras(ctx, datos, horas, { texto, volver, pasos }) {
+        const { respuesta, numeracion } = menu({
+            paso: PASO.HORA,
+            texto,
+            opciones: [...horas.map((h) => ({ id: h, etiqueta: hora12(h) })), volver],
+            // La hora escrita sigue valiendo y es lo más natural cuando ya se sabe a qué hora se
+            // quiere venir: `resolverHora` exige dos puntos o am/pm, así que nunca se confunde
+            // con el número de una posición.
+            comoElegir: 'Respóndeme con el número, o escríbeme la hora (por ejemplo, «3 pm»).',
+        });
         return {
             pasos,
-            respuestas: [
-                {
-                    texto,
-                    opciones: [
-                        ...horas.map((h) => ({ id: h, etiqueta: hora12(h) })),
-                        volver,
-                    ],
-                },
-            ],
+            respuestas: [respuesta],
             variables: conMemoria(ctx.conversacion),
-            tarea: { nombre: TAREA_AGENDAR, datos: { ...datos, paso: PASO.HORA } },
+            tarea: { nombre: TAREA_AGENDAR, datos: { ...datos, paso: PASO.HORA, ...numeracion } },
             resultado: 'resuelto',
             nivel: 'determinista',
         };
@@ -1740,24 +2286,26 @@ function crearManejadorDeterminista({
      */
     function ofrecerFranjas(ctx, datos, horas, pasosPrevios) {
         const franjas = franjasDelDia(horas);
+        const { respuesta, numeracion } = menu({
+            paso: PASO.FRANJA,
+            texto: `Hay ${horas.length} horas libres el ${fechaLegible(datos.fecha)}. ` +
+                '¿En qué jornada te queda mejor? También puedes escribirme la hora (por ejemplo, «3 pm»).',
+            opciones: [
+                ...franjas.map((fr) => ({ id: fr.id, etiqueta: fr.etiqueta, detalle: fr.detalle })),
+                { id: VOLVER.FECHA, etiqueta: '← Otro día' },
+            ],
+            comoElegir: 'Respóndeme con el número, o escríbeme la hora que prefieres.',
+        });
         return {
             pasos: [...pasosPrevios, paso('menu_franjas', { fecha: datos.fecha, horas: horas.length, franjas: franjas.length })],
-            respuestas: [
-                {
-                    texto: `Hay ${horas.length} horas libres el ${fechaLegible(datos.fecha)}. ` +
-                        '¿En qué jornada te queda mejor? También puedes escribirme la hora (por ejemplo, «3 pm»).',
-                    opciones: [
-                        ...franjas.map((fr) => ({ id: fr.id, etiqueta: fr.etiqueta, detalle: fr.detalle })),
-                        { id: VOLVER.FECHA, etiqueta: '← Otro día' },
-                    ],
-                },
-            ],
+            respuestas: [respuesta],
             variables: conMemoria(ctx.conversacion),
             tarea: {
                 nombre: TAREA_AGENDAR,
                 datos: {
                     ...datos,
                     paso: PASO.FRANJA,
+                    ...numeracion,
                     franjas_ofrecidas: franjas.map((fr) => ({ id: fr.id, nombre: fr.etiqueta, jornada: fr.jornada, horas: fr.horas })),
                 },
             },
@@ -1804,18 +2352,30 @@ function crearManejadorDeterminista({
         if (!elegida) {
             return reintentar(ctx, datos, 'Elige una de las horas de la lista, por favor.');
         }
-        const hora = [elegida];
+        return conHoraElegida(ctx, datos, elegida, []);
+    }
+
+    /**
+     * Con la hora ya fijada: el nombre si falta, y si no, con quién.
+     *
+     * Va aparte de `elegirHora` porque hay dos formas de llegar a tener una hora —elegirla de la
+     * lista o haberla dicho en el primer mensaje— y lo que viene después es exactamente lo mismo.
+     * Escrito dos veces, el camino nuevo se olvidaría del nombre o del `profesional_por_hora`.
+     */
+    async function conHoraElegida(ctx, datos, hora, pasosPrevios) {
         const conHora = {
             ...datos,
-            hora: hora[0],
-            id_profesional: datos.profesional_por_hora?.[hora[0]] ?? null,
+            hora,
+            id_profesional: datos.profesional_por_hora?.[hora] ?? null,
         };
+        const pideNombre = !ctx.identidad.nombre;
+        const pasos = [...pasosPrevios, paso('hora_elegida', { hora, pide_nombre: pideNombre })];
 
-        // El nombre solo se pregunta la primera vez: después sale de la memoria de la
-        // conversación o de la ficha del cliente (`identidad.resolver`).
-        if (!ctx.identidad.nombre) {
+        // El nombre solo se pregunta cuando no se sabe: lo dicho en esta conversación, la ficha
+        // del cliente o el perfil del canal ya lo traen casi siempre (`identidad.resolver`).
+        if (pideNombre) {
             return {
-                pasos: [paso('hora_elegida', { hora: hora[0], pide_nombre: true })],
+                pasos,
                 respuestas: [`¿A nombre de quién agendo la ${terminos(datos).cita}?`],
                 variables: conMemoria(ctx.conversacion),
                 tarea: { nombre: TAREA_AGENDAR, datos: { ...conHora, paso: PASO.NOMBRE } },
@@ -1823,9 +2383,7 @@ function crearManejadorDeterminista({
                 nivel: 'determinista',
             };
         }
-        return ofrecerProfesionales(ctx, { ...conHora, nombre: ctx.identidad.nombre }, [
-            paso('hora_elegida', { hora: hora[0], pide_nombre: false }),
-        ]);
+        return ofrecerProfesionales(ctx, { ...conHora, nombre: ctx.identidad.nombre }, pasos);
     }
 
     async function recibirNombre(ctx, datos) {
@@ -1842,6 +2400,18 @@ function crearManejadorDeterminista({
                 `Necesito un nombre para la ${terminos(datos).cita}. ¿Cómo te llamas?`,
             );
         }
+
+        // Si la hora ya estaba apartada —se llegó aquí corrigiendo el nombre desde el resumen— no
+        // se vuelve a apartar: sería una segunda mutación por un cambio de texto, y la hora es la
+        // misma. Se repinta el resumen con el nombre nuevo y ya.
+        if (datos.codigo_hold && datos.propuesta) {
+            return resumenParaConfirmar(
+                ctx,
+                { ...datos, nombre, nombre_es_pista: false },
+                [paso('nombre_corregido')],
+            );
+        }
+
         return ofrecerProfesionales(ctx, { ...datos, nombre }, [paso('nombre_recibido')]);
     }
 
@@ -1873,60 +2443,119 @@ function crearManejadorDeterminista({
             throw error;
         }
 
+        // Lo que hace falta para volver a pintar el resumen sin apartar la hora otra vez. Se
+        // guarda porque corregir el nombre no puede costar un `proponer_turno` de más: sería una
+        // segunda mutación por un cambio de texto, y la hora ya está apartada.
+        const propuesta = {
+            servicio: resultado.servicio ?? null,
+            variante: resultado.variante ?? null,
+            profesional: resultado.profesional ?? null,
+            duracion_min: resultado.duracion_min ?? null,
+            precio: resultado.precio ?? null,
+            requiere_consentimiento: Boolean(resultado.requiere_consentimiento),
+        };
+
+        return resumenParaConfirmar(ctx, {
+            ...datos,
+            propuesta,
+            codigo_hold: resultado.codigo_hold,
+            nombre,
+            nombre_es_pista: Boolean(ctx.identidad.nombreEsPista && nombre === ctx.identidad.nombre),
+        }, [...pasosPrevios, paso('hora_apartada', { codigo_hold: resultado.codigo_hold })]);
+    }
+
+    /**
+     * El resumen de la cita y la pregunta de confirmación.
+     *
+     * Va aparte de `apartarHora` porque se pinta **dos veces**: al apartar la hora y cuando el
+     * cliente corrige el nombre. Con el texto escrito en dos sitios, el que nadie mirara acabaría
+     * diciendo otra cosa, y es justo el mensaje que decide si hay cita.
+     */
+    function resumenParaConfirmar(ctx, datos, pasos) {
         const t = terminos(datos);
+        const p = datos.propuesta || {};
         const mayuscula = (x) => x.charAt(0).toLocaleUpperCase('es') + x.slice(1);
         // Todo lo que se va a agendar, una línea por dato, para que el cliente lo revise de un
         // vistazo antes de decir que sí. La negrita es la de WhatsApp: UN asterisco.
         const lineas = [
             // La variante junto al servicio: «Coloración (pelo largo)». Sin esto el cliente lee
             // el nombre del servicio a secas y no puede comprobar que se entendió su caso.
-            `• *${mayuscula(t.servicio)}:* ${resultado.servicio}${resultado.variante ? ` (${resultado.variante})` : ''}`,
+            `• *${mayuscula(t.servicio)}:* ${p.servicio}${p.variante ? ` (${p.variante})` : ''}`,
             datos.mascota_nombre ? `• *Mascota:* ${datos.mascota_nombre}` : null,
-            resultado.profesional ? `• *${mayuscula(t.profesional)}:* ${resultado.profesional}` : null,
+            p.profesional ? `• *${mayuscula(t.profesional)}:* ${p.profesional}` : null,
             `• *Día:* ${fechaLegible(datos.fecha)}`,
             `• *Hora:* ${hora12(datos.hora)}`,
-            resultado.duracion_min ? `• *Duración:* ${resultado.duracion_min} min` : null,
-            resultado.precio != null ? `• *Precio:* $${Number(resultado.precio).toLocaleString('es-CO')}` : null,
-            nombre ? `• *A nombre de:* ${nombre}` : null,
+            p.duracion_min ? `• *Duración:* ${p.duracion_min} min` : null,
+            // Cero no es un precio: ver `seCotiza`. Un «Precio: $0» en el resumen es la promesa
+            // que el negocio tiene que desmentir en el mostrador.
+            Number(p.precio) > 0 ? `• *Precio:* $${Number(p.precio).toLocaleString('es-CO')}` : null,
+            datos.nombre ? `• *A nombre de:* ${datos.nombre}` : null,
         ].filter(Boolean);
 
         // El consentimiento no se firma por chat: se avisa para que venga preparado. Callarlo y
-        // que se entere en el mostrador es lo que convierte una cita en una discusión.
-        const avisos = resultado.requiere_consentimiento
-            ? ['Antes de empezar firmarás un consentimiento, así que trae tu documento.']
-            : [];
+        // que se entere en el mostrador es lo que convierte una cita en una discusión. Va dentro
+        // del mismo mensaje y no en uno aparte: dos mensajes cuestan dos, y éste se lee igual.
+        const aviso = p.requiere_consentimiento
+            ? '_Antes de empezar firmarás un consentimiento, así que trae tu documento._'
+            : null;
 
         return {
-            pasos: [...pasosPrevios, paso('hora_apartada', { codigo_hold: resultado.codigo_hold })],
+            pasos,
             respuestas: [
-                ...avisos,
                 {
+                    // ⚠️ Se filtra por `null`, no por cadena vacía: las cadenas vacías de aquí son
+                    // los renglones en blanco que separan el resumen, y quitarlos deja un bloque
+                    // apelotonado que es justo lo que el resumen existe para evitar.
                     texto: [
                         `Estos son los datos de tu ${t.cita}:`,
                         '',
                         ...lineas,
                         '',
+                        ...(aviso ? [aviso, ''] : []),
                         `¿Confirmas la ${t.cita}?`,
-                    ].join('\n'),
-                    // Dos botones y nada más: la decisión es sí o no. El «no» lleva de vuelta a
-                    // las horas de ese día (ver `confirmar`), desde donde se puede cambiar todo.
+                    ].filter((l) => l !== null).join('\n'),
+                    // La decisión es sí o no. El «no» lleva de vuelta a las horas de ese día (ver
+                    // `confirmar`), desde donde se puede cambiar todo.
+                    //
+                    // La tercera opción sale **solo** cuando el nombre lo pusimos nosotros a
+                    // partir del perfil de WhatsApp: ahí el cliente no lo escribió, así que tiene
+                    // que poder arreglarlo sin tirar la hora. Cuando lo dijo él, sobra.
                     opciones: [
                         { id: 'si', etiqueta: 'Sí' },
                         { id: 'no', etiqueta: 'No' },
+                        ...(datos.nombre_es_pista
+                            ? [{ id: OTRO_NOMBRE, etiqueta: 'Otro nombre' }]
+                            : []),
                     ],
                 },
             ],
-            variables: conMemoria(ctx.conversacion, { nombre }),
-            tarea: {
-                nombre: TAREA_AGENDAR,
-                datos: { ...datos, paso: PASO.CONFIRMAR, codigo_hold: resultado.codigo_hold, nombre },
-            },
+            // Un nombre que el cliente DIJO se recuerda ya: si la conversación se corta aquí, la
+            // próxima vez no se le vuelve a preguntar. Uno sacado del perfil **no** se guarda
+            // todavía — guardarlo lo convertiría en «lo que dijo» y le quitaría para siempre la
+            // oportunidad de corregirlo. Se guarda al confirmar, que es cuando lo acepta.
+            variables: conMemoria(
+                ctx.conversacion,
+                datos.nombre && !datos.nombre_es_pista ? { nombre: datos.nombre } : {}
+            ),
+            tarea: { nombre: TAREA_AGENDAR, datos: { ...datos, paso: PASO.CONFIRMAR } },
             resultado: 'resuelto',
             nivel: 'determinista',
         };
     }
 
     async function confirmar(ctx, datos) {
+        // Antes del sí y del no: «otro nombre» no es ninguno de los dos, y el hold se queda.
+        if (normalizar(ultimaLinea(ctx.texto)) === OTRO_NOMBRE) {
+            return {
+                pasos: [paso('pide_otro_nombre')],
+                respuestas: [`¿A nombre de quién agendo la ${terminos(datos).cita}?`],
+                variables: conMemoria(ctx.conversacion),
+                tarea: { nombre: TAREA_AGENDAR, datos: { ...datos, paso: PASO.NOMBRE } },
+                resultado: 'resuelto',
+                nivel: 'determinista',
+            };
+        }
+
         if (esComando(ctx.texto, COMANDO.NO)) {
             // No se libera el hold a mano: caduca solo. Soltarlo aquí exigiría otra mutación
             // en el mismo turno, y eso choca con la regla de una capacidad por turno.
@@ -2066,12 +2695,27 @@ function crearManejadorDeterminista({
     // ── Entrada ─────────────────────────────────────────────────────────────────────────
 
     return async function manejarDeterminista({ conversacion, mensajes, turno, texto, sinSaludo = false }) {
-        const identidad = await identidad_(conversacion);
+        const identidad = await identidad_(conversacion, nombreDelPerfil(mensajes));
         const negocio = await contextoNegocio.obtener(conversacion.id_negocio);
         // Se acumulan aquí y se adjuntan al final en UN solo sitio: hacerlo en cada rama sería
         // olvidarlo en la rama que nadie probó, y el Ledger quedaría con agujeros que no
         // parecen agujeros.
         const invocaciones = [];
+
+        const datos = conversacion.tarea_datos || {};
+        const hayTarea = conversacion.tarea_actual === TAREA_AGENDAR;
+
+        // ── El número de un listado enumerado se traduce aquí, y solo aquí ───────────────
+        //
+        // Cuando el menú anterior salió como listado («3. Corte y barba») el cliente contesta un
+        // número, y ese número solo significa algo al lado de la lista que lo acompañaba. Se
+        // cambia por el id **antes de todo lo demás** —retroceso incluido— para que el resto del
+        // flujo reciba exactamente lo que recibiría si hubiera pulsado una fila. La alternativa
+        // era enseñarle la numeración a cada resolvedor, y el que se olvidara sería el paso que
+        // nadie prueba.
+        const traducido = hayTarea ? porAtajo(ultimaLinea(texto), datos) : null;
+        if (traducido) texto = traducido;
+
         const ctx = {
             conversacion,
             mensajes,
@@ -2083,9 +2727,6 @@ function crearManejadorDeterminista({
             principal: identidad.principal,
             idNegocio: Number(conversacion.id_negocio),
         };
-
-        const datos = conversacion.tarea_datos || {};
-        const hayTarea = conversacion.tarea_actual === TAREA_AGENDAR;
 
         // Una mutación esperando el sí del cliente manda sobre todo lo demás, incluso sobre
         // «cancelar»: ahí esa palabra no significa «sal del flujo», significa «no lo hagas»
@@ -2125,15 +2766,32 @@ function crearManejadorDeterminista({
             }
         }
 
+        // «¿Qué citas tengo?» — antes de abrir el menú, porque preguntar por la cita que ya
+        // tienes no es querer una nueva. Solo sin tarea en curso: a mitad de un agendamiento,
+        // «mi cita» es la que se está armando.
+        if (!hayTarea && preguntaPorSusCitas(texto)) {
+            return conRastro(await misCitas(ctx, [paso('consulta_mis_citas')]));
+        }
+
         if (!hayTarea || esComando(texto, COMANDO.MENU)) {
             // Se saluda cuando NO había tarea —es decir, alguien que llega, no alguien que
             // vuelve al menú a mitad de un agendamiento—. Repetir «¡Hola! Te comunicas con…»
             // a quien lleva cinco turnos hablando suena a que el bot se olvidó de él.
             // `sinSaludo`: la escalera ya puso delante la respuesta personalizada del modelo
             // (apertura con pregunta libre) y un segundo «¡Hola!» sonaría a robot.
-            return conRastro(
-                await ofrecerServicios(ctx, [paso('inicio_conversacion')], { saludar: !hayTarea && !sinSaludo })
-            );
+            const saludar = !hayTarea && !sinSaludo;
+            const inicio = [paso('inicio_conversacion')];
+
+            // ⚠️ «menú» pedido a mano NO pasa por el atajo: el cliente está pidiendo ver la lista,
+            // no agendar algo que nombró. Y un saludo tampoco tiene nada que aprovechar.
+            if (!hayTarea && !esSaludoOComando(texto)) {
+                const { catalogo, decision } = await intentarAtajo(ctx, inicio, { saludar });
+                if (decision) return conRastro(decision);
+                // No había nada que atajar: el menú de siempre, con el catálogo ya leído.
+                return conRastro(await ofrecerServicios(ctx, inicio, { saludar, catalogo }));
+            }
+
+            return conRastro(await ofrecerServicios(ctx, inicio, { saludar }));
         }
 
         switch (datos.paso) {
@@ -2172,14 +2830,19 @@ function crearManejadorDeterminista({
                 );
         }
 
-        /** Adjunta al Ledger lo que se invocó. Un solo sitio para todas las ramas. */
+        /**
+         * Adjunta al Ledger lo que se invocó y junta los mensajes que caben juntos. Un solo sitio
+         * para todas las ramas: hacerlo en cada rama sería olvidarlo en la que nadie probó, y en
+         * este caso el olvido se paga en la factura de Meta.
+         */
         function conRastro(decision) {
-            return invocaciones.length ? { ...decision, invocaciones } : decision;
+            const unida = unirRespuestas(decision);
+            return invocaciones.length ? { ...unida, invocaciones } : unida;
         }
     };
 
-    function identidad_(conversacion) {
-        return identidad.resolver(conversacion);
+    function identidad_(conversacion, nombrePerfil) {
+        return identidad.resolver(conversacion, { nombrePerfil });
     }
 }
 

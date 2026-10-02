@@ -192,7 +192,17 @@ describe('interpretar el webhook', () => {
         const { mensajes } = interpretarWebhook(webhook(imagen), { config });
 
         expect(mensajes[0].texto).toBe('[image]');
-        expect(mensajes[0].crudo).toEqual({ tipo: 'image', soportado: false });
+        expect(mensajes[0].crudo).toEqual({ tipo: 'image', soportado: false, perfil_nombre: null });
+    });
+
+    test('el nombre del perfil viaja en `crudo`, para no preguntar lo que ya se sabe', () => {
+        const conPerfil = {
+            contacts: [{ wa_id: '573001234567', profile: { name: 'Juan Pérez' } }],
+            messages: [{ from: '573001234567', id: 'wamid.P', timestamp: '1700000000', type: 'text', text: { body: 'hola' } }],
+        };
+        const { mensajes } = interpretarWebhook(webhook(conPerfil), { config });
+
+        expect(mensajes[0].crudo.perfil_nombre).toBe('Juan Pérez');
     });
 
     test('un eco del negocio NO es un mensaje del cliente', () => {

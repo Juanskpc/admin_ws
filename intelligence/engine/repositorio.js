@@ -556,7 +556,7 @@ async function insertarMensajeEntrante(
 async function mensajesPendientes(idConversacion, { ventanaDias, transaction }) {
     return sequelize.query(
         `
-        SELECT id_mensaje, creado_en, contenido, id_externo, enviado_en
+        SELECT id_mensaje, creado_en, contenido, id_externo, enviado_en, crudo
           FROM intelligence.mensaje m
          WHERE id_conversacion = :idConversacion
            AND direccion = 'entrante'

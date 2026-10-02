@@ -89,13 +89,20 @@ function gateFalso(respuestas = {}) {
     };
 }
 
+/**
+ * Resolver de identidad de mentira, con la misma precedencia que el de verdad: lo que dijo o
+ * tiene registrado manda sobre el nombre del perfil del canal, que es solo una pista.
+ */
 function identidadFalsa({ nombre = null, telefono = null } = {}) {
+    const { nombreLegible } = require('../../intelligence/engine/identidad');
     return {
-        async resolver() {
+        async resolver(_conversacion, opciones = {}) {
+            const delPerfil = nombreLegible(opciones.nombrePerfil);
             return {
                 principal: { tipo: 'contacto', puedeOperarEn: () => true },
                 persona: null,
-                nombre,
+                nombre: nombre ?? delPerfil,
+                nombreEsPista: Boolean(!nombre && delPerfil),
                 telefono,
             };
         },
@@ -132,6 +139,16 @@ function conversacion({ variables = {}, tarea = null, datos = {} } = {}) {
 
 function entrada(texto, conv, turno = { id_turno: 'turno-1' }) {
     return { conversacion: conv, mensajes: [{ contenido: texto }], turno, texto };
+}
+
+/** Como `entrada`, pero con el nombre que WhatsApp trae del perfil de quien escribe. */
+function entradaConPerfil(texto, conv, perfilNombre) {
+    return {
+        conversacion: conv,
+        mensajes: [{ contenido: texto, crudo: { tipo: 'text', perfil_nombre: perfilNombre } }],
+        turno: { id_turno: 'turno-1' },
+        texto,
+    };
 }
 
 const gateCompleto = () =>
@@ -1023,11 +1040,73 @@ describe('catálogo largo en categorías', () => {
         consultar_disponibilidad: DISPONIBILIDAD,
     });
 
-    test('el primer mensaje saluda y enseña los TIPOS, no la lista entera', async () => {
+    /** 28 servicios: 25 de cabello, 2 de uñas y uno sin categoría. Ni enumerado se lee. */
+    const CATALOGO_ENORME = {
+        servicios: [
+            ...Array.from({ length: 25 }, (_, i) => ({
+                id_servicio: 100 + i, nombre: `Cabello ${i + 1}`, duracion_min: 30, precio: 20000, categoria: CABELLO,
+            })),
+            { id_servicio: 200, nombre: 'Manicure', duracion_min: 40, precio: 25000, categoria: UNAS },
+            { id_servicio: 201, nombre: 'Pedicure', duracion_min: 50, precio: 30000, categoria: UNAS },
+            { id_servicio: 300, nombre: 'Masaje', duracion_min: 60, precio: 80000, categoria: null },
+        ],
+    };
+    const gateEnorme = () => gateFalso({
+        consultar_servicios: CATALOGO_ENORME,
+        consultar_profesionales: PROFESIONALES,
+        consultar_disponibilidad: DISPONIBILIDAD,
+    });
+
+    test('12 servicios caben enumerados en UN mensaje: no se pregunta el tipo', async () => {
         const d = await manejador(gateCatalogo())(entrada('buenas, qué precios manejan?', conversacion()));
 
-        expect(d.tarea.datos.paso).toBe(PASO.CATEGORIA);
+        // Antes esto preguntaba la categoría y costaba un mensaje de más para llegar al mismo
+        // sitio. Enumerado, el cliente ve el catálogo entero con precios de una sola vez.
+        expect(d.tarea.datos.paso).toBe(PASO.SERVICIO);
+        expect(d.respuestas).toHaveLength(1);
         expect(d.respuestas[0].texto).toMatch(/Te saluda \*Barbería Don Nico\*/);
+        expect(d.respuestas[0].texto).toMatch(/Respóndeme con el número/);
+        const opciones = d.respuestas[0].opciones;
+        expect(opciones).toHaveLength(12);
+        expect(opciones.map((o) => o.atajo)).toEqual(
+            ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12']
+        );
+        expect(d.tarea.datos).toMatchObject({ enumerado: true, atajos_de: PASO.SERVICIO });
+    });
+
+    test('el número de un listado de servicios elige ese servicio', async () => {
+        const manejar = manejador(gateCatalogo());
+        const d0 = await manejar(entrada('hola', conversacion()));
+        // El décimo del catálogo es Manicure (200).
+        const d = await manejar(entrada('10', conversacion({ tarea: TAREA_AGENDAR, datos: d0.tarea.datos })));
+
+        expect(d.tarea.datos).toMatchObject({ id_servicio: 200, servicio_nombre: 'Manicure' });
+    });
+
+    test('un número que no está en el listado se repregunta, no se inventa', async () => {
+        const manejar = manejador(gateCatalogo());
+        const d0 = await manejar(entrada('hola', conversacion()));
+        const d = await manejar(entrada('99', conversacion({ tarea: TAREA_AGENDAR, datos: d0.tarea.datos })));
+
+        expect(d.tarea.datos.paso).toBe(PASO.SERVICIO);
+        expect(d.pasos.some((p) => p.decision === 'entrada_no_entendida')).toBe(true);
+    });
+
+    test('la numeración no sobrevive al paso que la ofreció', async () => {
+        const manejar = manejador(gateCatalogo());
+        const d0 = await manejar(entrada('hola', conversacion()));
+        const d1 = await manejar(entrada('10', conversacion({ tarea: TAREA_AGENDAR, datos: d0.tarea.datos })));
+
+        // Se avanzó al paso de la fecha arrastrando `atajos` del menú de servicios. Un «3» aquí
+        // es el día 3, nunca el tercer servicio de un menú de hace dos mensajes.
+        expect(d1.tarea.datos.paso).toBe(PASO.FECHA);
+        expect(d1.tarea.datos.atajos_de).not.toBe(PASO.FECHA);
+    });
+
+    test('28 servicios sí se agrupan: el primer mensaje enseña los TIPOS', async () => {
+        const d = await manejador(gateEnorme())(entrada('buenas, qué precios manejan?', conversacion()));
+
+        expect(d.tarea.datos.paso).toBe(PASO.CATEGORIA);
         expect(d.respuestas[0].opciones.map((o) => o.etiqueta)).toEqual(['Cabello', 'Uñas', 'Otros']);
         expect(d.respuestas[0].opciones[1].detalle).toBe('2 servicios');
     });
@@ -1037,7 +1116,7 @@ describe('catálogo largo en categorías', () => {
             tarea: TAREA_AGENDAR,
             datos: { paso: PASO.CATEGORIA, categorias_ofrecidas: [{ id: 'cat_10', nombre: 'Cabello' }, { id: 'cat_20', nombre: 'Uñas' }] },
         });
-        const d = await manejador(gateCatalogo())(entrada('cat_20', conv));
+        const d = await manejador(gateEnorme())(entrada('cat_20', conv));
 
         expect(d.tarea.datos).toMatchObject({ paso: PASO.SERVICIO, categoria: 'cat_20' });
         const opciones = d.respuestas[0].opciones;
@@ -1050,37 +1129,339 @@ describe('catálogo largo en categorías', () => {
             tarea: TAREA_AGENDAR,
             datos: { paso: PASO.SERVICIO, categoria: 'cat_20', ofrecidos: [{ id: 200, nombre: 'Manicure' }] },
         });
-        const d = await manejador(gateCatalogo())(entrada('volver_categoria', conv));
+        const d = await manejador(gateEnorme())(entrada('volver_categoria', conv));
         expect(d.tarea.datos.paso).toBe(PASO.CATEGORIA);
 
         // Y escrito a mano también.
-        const e = await manejador(gateCatalogo())(entrada('elegir otro tipo de servicio', conv));
+        const e = await manejador(gateEnorme())(entrada('elegir otro tipo de servicio', conv));
         expect(e.tarea.datos.paso).toBe(PASO.CATEGORIA);
     });
 
-    test('una categoría con más de 8 servicios se pagina con «Ver más»', async () => {
+    test('una categoría que no cabe ni enumerada se pagina con «Ver más»', async () => {
         const conv = conversacion({
             tarea: TAREA_AGENDAR,
             datos: { paso: PASO.CATEGORIA, categorias_ofrecidas: [{ id: 'cat_10', nombre: 'Cabello' }] },
         });
-        let d = await manejador(gateCatalogo())(entrada('Cabello', conv));
+        let d = await manejador(gateEnorme())(entrada('Cabello', conv));
         let ids = d.respuestas[0].opciones.map((o) => o.id);
         // 8 servicios + Ver más + Otro tipo = 10 filas, el máximo de una lista de WhatsApp.
         expect(ids).toHaveLength(10);
         expect(ids.slice(-2)).toEqual(['mas_servicios', 'volver_categoria']);
 
-        d = await manejador(gateCatalogo())(entrada('mas_servicios', conversacion({ tarea: TAREA_AGENDAR, datos: d.tarea.datos })));
+        d = await manejador(gateEnorme())(entrada('mas_servicios', conversacion({ tarea: TAREA_AGENDAR, datos: d.tarea.datos })));
         ids = d.respuestas[0].opciones.map((o) => o.id);
-        expect(ids).toEqual(['108', 'volver_categoria']);
+        expect(ids.slice(0, 8)).toEqual(['108', '109', '110', '111', '112', '113', '114', '115']);
     });
 
-    test('con pocos servicios no se pregunta el tipo aunque haya categorías', async () => {
+    test('con pocos servicios la lista es pulsable, sin numerar', async () => {
         const gate = gateFalso({
             consultar_servicios: { servicios: CATALOGO.servicios.slice(8) },
         });
         const d = await manejador(gate)(entrada('hola', conversacion()));
         expect(d.tarea.datos.paso).toBe(PASO.SERVICIO);
         expect(d.respuestas[0].opciones.map((o) => o.id)).not.toContain('volver_categoria');
+        expect(d.respuestas[0].opciones.every((o) => o.atajo === undefined)).toBe(true);
+        expect(d.tarea.datos.enumerado).toBe(false);
+    });
+});
+
+describe('«¿qué citas tengo?» se contesta gratis, en el Nivel 1', () => {
+    const CITAS = { citas: [
+        { codigo_cita: 'CITA-1', inicio: '2026-10-06T10:00:00', fin: '2026-10-06T10:30:00',
+          estado: 'confirmada', servicio: 'Corte de cabello', profesional: 'Dilan Torres' },
+        { codigo_cita: 'CITA-2', inicio: '2026-10-20T16:30:00', fin: '2026-10-20T17:15:00',
+          estado: 'pendiente', servicio: 'Corte y barba', profesional: null },
+    ]};
+    const manejar = (respuesta) => crearManejadorDeterminista({
+        gate: gateFalso({ consultar_mis_citas: respuesta, consultar_servicios: SERVICIOS }),
+        contextoNegocio: NEGOCIO_FALSO,
+        identidad: identidadFalsa({ nombre: 'Ana', telefono: '+573001112233' }),
+    });
+
+    test('las enseña por día y hora, nunca por código', async () => {
+        const d = await manejar(CITAS)(entrada('qué citas tengo?', conversacion()));
+
+        // Antes esto caía en «intencion_agendar» —la palabra «cita» está en las dos cosas— y el
+        // cliente recibía el menú de servicios cuando preguntaba por la cita que ya tenía.
+        expect(d.nivel).toBe('determinista');
+        expect(d.respuestas).toHaveLength(1);
+        const texto = typeof d.respuestas[0] === 'string' ? d.respuestas[0] : d.respuestas[0].texto;
+        expect(texto).toMatch(/Tienes 2 citas/);
+        expect(texto).toMatch(/martes 6 de octubre a las 10:00 AM/);
+        expect(texto).toMatch(/Corte de cabello · con Dilan Torres/);
+        expect(texto).toMatch(/martes 20 de octubre a las 4:30 PM/);
+        // Un código no le dice nada a nadie y ocupa la línea que debería decir el día.
+        expect(texto).not.toMatch(/CITA-1|CITA-2/);
+    });
+
+    test('el código queda a mano para cancelar, aunque no se diga', async () => {
+        const d = await manejar(CITAS)(entrada('mis citas', conversacion()));
+        expect(d.variables.ultima_cita).toBe('CITA-1');
+    });
+
+    test('sin citas próximas lo dice y ofrece agendar, en un solo mensaje', async () => {
+        const d = await manejar({ citas: [] })(entrada('tengo alguna cita?', conversacion()));
+
+        expect(d.respuestas).toHaveLength(1);
+        expect(d.respuestas[0].texto).toMatch(/No veo ninguna cita próxima/);
+        expect(d.respuestas[0].opciones).toHaveLength(1);
+    });
+
+    test('«no puedo comprobar tu número» no se confunde con «no tienes citas»', async () => {
+        const d = await manejar({ citas: [], motivo: 'no puedo comprobar desde qué número escribes' })(
+            entrada('mis citas', conversacion())
+        );
+        expect(d.respuestas[0].texto).toMatch(/No puedo ver tus citas ahora mismo/);
+        expect(d.respuestas[0].texto).not.toMatch(/No veo ninguna/);
+    });
+
+    test('«quiero una cita» NO es una consulta: sigue siendo agendar', async () => {
+        const d = await manejar(CITAS)(entrada('quiero una cita', conversacion()));
+        expect(d.tarea?.datos.paso).toBe(PASO.SERVICIO);
+    });
+
+    test('«quiero reservar mi turno» es agendar; «quiero ver mis citas» es consultar', async () => {
+        // Las dos frases tienen posesivo y palabra de cita. Lo que las separa es si además pide
+        // algo nuevo o pregunta — y «quiero cancelar mi cita» pide las dos cosas, así que la lista
+        // sigue siendo la respuesta útil.
+        const agendar = await manejar(CITAS)(entrada('quiero reservar mi turno', conversacion()));
+        expect(agendar.tarea?.datos.paso).toBe(PASO.SERVICIO);
+
+        const consultar = await manejar(CITAS)(entrada('quiero ver mis citas', conversacion()));
+        expect(consultar.pasos.some((p) => p.decision === 'mis_citas')).toBe(true);
+
+        const anular = await manejar(CITAS)(entrada('quiero cancelar mi cita', conversacion()));
+        expect(anular.pasos.some((p) => p.decision === 'mis_citas')).toBe(true);
+    });
+
+    test('«cambiar mi cita» tampoco: eso es un retroceso o una mutación', async () => {
+        const d = await manejar(CITAS)(entrada('quiero cambiar mi cita', conversacion()));
+        expect(d.pasos.some((p) => p.decision === 'mis_citas')).toBe(false);
+    });
+
+    test('a mitad de un agendamiento, «mi cita» es la que se está armando', async () => {
+        const conv = conversacion({
+            tarea: TAREA_AGENDAR,
+            datos: { paso: PASO.NOMBRE, id_servicio: 1, fecha: '2026-08-20', hora: '10:00' },
+        });
+        const d = await manejar(CITAS)(entrada('a nombre de mi cita', conv));
+        expect(d.pasos.some((p) => p.decision === 'mis_citas')).toBe(false);
+    });
+});
+
+describe('el atajo: usar lo que el cliente ya escribió', () => {
+    const CATALOGO_BARBERIA = {
+        servicios: [
+            { id_servicio: 1, nombre: 'Corte de cabello', duracion_min: 30, precio: 35000 },
+            { id_servicio: 2, nombre: 'Corte y barba', duracion_min: 45, precio: 50000 },
+            { id_servicio: 3, nombre: 'Arreglo de barba', duracion_min: 20, precio: 22000 },
+            { id_servicio: 4, nombre: 'Tinte', duracion_min: 90, precio: 120000 },
+        ],
+    };
+    const ahora = () => new Date('2026-08-19T10:00:00-05:00'); // un miércoles
+    const gateAtajo = () => gateFalso({
+        consultar_servicios: CATALOGO_BARBERIA,
+        consultar_dias_con_horas: { dias: [{ fecha: '2026-08-20', primera_hora: '09:00' }] },
+        consultar_disponibilidad: DISPONIBILIDAD,
+        consultar_profesionales: UN_SOLO_PROFESIONAL,
+        proponer_turno: HOLD,
+    });
+    const manejar = (gate, identidad = identidadFalsa({ nombre: 'Ana' })) =>
+        crearManejadorDeterminista({ gate, contextoNegocio: NEGOCIO_FALSO, identidad, ahora });
+
+    test('servicio + día + hora en un mensaje llegan directos al resumen', async () => {
+        const gate = gateAtajo();
+        const d = await manejar(gate)(
+            entrada('hola, quiero un corte de cabello mañana a las 10 am', conversacion())
+        );
+
+        // Antes esto contestaba el menú de servicios y hacían falta cinco mensajes más.
+        expect(d.tarea.datos.paso).toBe(PASO.CONFIRMAR);
+        expect(d.respuestas).toHaveLength(1);
+        expect(d.respuestas[0].texto).toMatch(/Te saluda \*Barbería Don Nico\*/);
+        expect(d.respuestas[0].texto).toMatch(/Anoto \*Corte de cabello\*/);
+        expect(d.respuestas[0].texto).toMatch(/Estos son los datos de tu cita/);
+        expect(gate.llamadas.find((l) => l.capacidad === 'proponer_turno').args.inicio)
+            .toBe('2026-08-20T10:00:00');
+    });
+
+    test('solo el servicio: se salta el menú y pregunta el día', async () => {
+        const gate = gateAtajo();
+        const d = await manejar(gate)(entrada('quiero agendar un tinte', conversacion()));
+
+        expect(d.tarea.datos).toMatchObject({ paso: PASO.FECHA, id_servicio: 4 });
+        expect(d.respuestas).toHaveLength(1);
+        expect(d.respuestas[0].texto).toMatch(/Anoto \*Tinte\*/);
+        expect(d.respuestas[0].texto).toMatch(/Qué día te queda bien/);
+    });
+
+    test('el nombre más largo gana: «corte y barba» no es «corte de cabello»', async () => {
+        const gate = gateAtajo();
+        const d = await manejar(gate)(entrada('me hago corte y barba', conversacion()));
+        expect(d.tarea.datos.id_servicio).toBe(2);
+    });
+
+    test('palabras sueltas en otro orden también valen', async () => {
+        const gate = gateAtajo();
+        const d = await manejar(gate)(entrada('necesito arreglo barba', conversacion()));
+        expect(d.tarea.datos.id_servicio).toBe(3);
+    });
+
+    test('ambiguo o vago: el menú de siempre, y sin pedir el catálogo dos veces', async () => {
+        const gate = gateAtajo();
+        const d = await manejar(gate)(entrada('quiero un corte', conversacion()));
+
+        // «corte» está en dos servicios: elegir uno sería decidir por el cliente.
+        expect(d.tarea.datos.paso).toBe(PASO.SERVICIO);
+        expect(d.respuestas[0].opciones).toHaveLength(4);
+        expect(gate.llamadas.filter((l) => l.capacidad === 'consultar_servicios')).toHaveLength(1);
+    });
+
+    test('un número suelto NO es una fecha fuera del paso de la fecha', async () => {
+        const gate = gateAtajo();
+        const d = await manejar(gate)(entrada('quiero el tinte, para 2 personas', conversacion()));
+
+        // Antes `interpretarFecha` leía el 2 como «el día 2» y agendaba un mes equivocado.
+        expect(d.tarea.datos).toMatchObject({ paso: PASO.FECHA, id_servicio: 4 });
+    });
+
+    test('un saludo a secas no ataja nada: menú, como siempre', async () => {
+        const gate = gateAtajo();
+        const d = await manejar(gate)(entrada('buenas tardes', conversacion()));
+        expect(d.tarea.datos.paso).toBe(PASO.SERVICIO);
+    });
+
+    test('«menú» pedido a mano enseña la lista, aunque nombre un servicio', async () => {
+        const gate = gateAtajo();
+        const d = await manejar(gate)(entrada('menu', conversacion()));
+        expect(d.tarea.datos.paso).toBe(PASO.SERVICIO);
+        expect(d.respuestas[0].opciones).toHaveLength(4);
+    });
+
+    test('la hora pedida no está libre: se ofrecen las que sí, sin perder el servicio', async () => {
+        const gate = gateAtajo();
+        const d = await manejar(gate)(
+            entrada('un corte de cabello mañana a las 7 pm', conversacion())
+        );
+
+        expect(d.tarea.datos).toMatchObject({ paso: PASO.HORA, id_servicio: 1, fecha: '2026-08-20' });
+        expect(d.respuestas[0].opciones.map((o) => o.etiqueta)).toContain('10:00 AM');
+    });
+
+    test('un nombre de servicio con signos no revienta el atajo', async () => {
+        // `new RegExp('\\b+')` no es un regex que no encuentre nada: es un SyntaxError que se
+        // llevaría por delante el primer mensaje de cualquier negocio con un «+» en el catálogo.
+        const gate = gateFalso({
+            consultar_servicios: {
+                servicios: [
+                    { id_servicio: 9, nombre: 'Corte + barba (combo)', duracion_min: 45, precio: 50000 },
+                    { id_servicio: 10, nombre: 'Manicure *premium*', duracion_min: 40, precio: 30000 },
+                ],
+            },
+            consultar_dias_con_horas: { dias: [{ fecha: '2026-08-20', primera_hora: '09:00' }] },
+        });
+        const d = await manejar(gate)(entrada('quiero el combo', conversacion()));
+
+        // No hace falta que acierte: hace falta que no se caiga y que el cliente reciba algo.
+        expect(d.respuestas.length).toBeGreaterThan(0);
+        expect([PASO.SERVICIO, PASO.FECHA]).toContain(d.tarea.datos.paso);
+    });
+
+    test('si falta el nombre, el atajo lo pide y no se inventa uno', async () => {
+        const gate = gateAtajo();
+        const d = await manejar(gate, identidadFalsa())(
+            entrada('corte de cabello mañana a las 10 am', conversacion())
+        );
+
+        expect(d.tarea.datos).toMatchObject({ paso: PASO.NOMBRE, hora: '10:00' });
+        expect(d.respuestas[0].texto).toMatch(/A nombre de quién/);
+    });
+});
+
+describe('el nombre del perfil de WhatsApp', () => {
+    const enLaHora = () => conversacion({
+        tarea: TAREA_AGENDAR,
+        datos: {
+            paso: PASO.HORA, id_servicio: 1, fecha: '2026-08-20',
+            profesional_por_hora: { '09:00': 4 }, libres_por_hora: { '09:00': [4] },
+        },
+    });
+    const manejar = (gate) => crearManejadorDeterminista({
+        gate, contextoNegocio: NEGOCIO_FALSO, identidad: identidadFalsa(),
+    });
+
+    test('no se pregunta el nombre si el canal ya lo trae', async () => {
+        const gate = gateCompleto();
+        const d = await manejar(gate)(entradaConPerfil('09:00', enLaHora(), 'Juan Pérez'));
+
+        // Era un mensaje por cada cliente nuevo para preguntar algo que venía en el webhook.
+        expect(d.tarea.datos.paso).toBe(PASO.CONFIRMAR);
+        expect(d.respuestas[0].texto).toMatch(/A nombre de:\* Juan Pérez/);
+    });
+
+    test('al venir del perfil se ofrece «Otro nombre», que no vuelve a apartar la hora', async () => {
+        const gate = gateCompleto();
+        const manejarlo = manejar(gate);
+        let d = await manejarlo(entradaConPerfil('09:00', enLaHora(), 'Juan Pérez'));
+        expect(d.respuestas[0].opciones.map((o) => o.id)).toEqual(['si', 'no', 'otro_nombre']);
+        // Y el nombre del perfil NO se guarda todavía: guardarlo le quitaría la corrección.
+        expect(d.variables.nombre).toBeNull();
+
+        d = await manejarlo(entrada('otro_nombre', conversacion({ tarea: TAREA_AGENDAR, datos: d.tarea.datos })));
+        expect(d.tarea.datos.paso).toBe(PASO.NOMBRE);
+
+        const holdsAntes = gate.llamadas.filter((l) => l.capacidad === 'proponer_turno').length;
+        d = await manejarlo(entrada('Juan Camilo', conversacion({ tarea: TAREA_AGENDAR, datos: d.tarea.datos })));
+
+        expect(d.tarea.datos.paso).toBe(PASO.CONFIRMAR);
+        expect(d.respuestas[0].texto).toMatch(/A nombre de:\* Juan Camilo/);
+        expect(d.respuestas[0].opciones.map((o) => o.id)).toEqual(['si', 'no']);
+        expect(gate.llamadas.filter((l) => l.capacidad === 'proponer_turno')).toHaveLength(holdsAntes);
+    });
+
+    test('un nombre dicho antes manda sobre el del perfil, y no ofrece corregirlo', async () => {
+        const gate = gateCompleto();
+        const manejarlo = crearManejadorDeterminista({
+            gate, contextoNegocio: NEGOCIO_FALSO, identidad: identidadFalsa({ nombre: 'Nicolás' }),
+        });
+        const d = await manejarlo(entradaConPerfil('09:00', enLaHora(), 'Mamá'));
+
+        expect(d.respuestas[0].texto).toMatch(/A nombre de:\* Nicolás/);
+        expect(d.respuestas[0].opciones.map((o) => o.id)).toEqual(['si', 'no']);
+    });
+
+    test('un perfil que no sirve como nombre se trata como si no hubiera', async () => {
+        const gate = gateCompleto();
+        const d = await manejar(gate)(entradaConPerfil('09:00', enLaHora(), '🔥'));
+
+        expect(d.tarea.datos.paso).toBe(PASO.NOMBRE);
+        expect(d.respuestas[0]).toMatch(/A nombre de quién/);
+    });
+});
+
+describe('el aviso de consentimiento va DENTRO del resumen', () => {
+    test('un servicio que pide consentimiento lo dice en el mismo mensaje', async () => {
+        // Antes era un mensaje aparte delante del resumen. Dos mensajes cuestan dos y se leen
+        // peor: el aviso llegaba suelto, sin la cita al lado a la que se refería.
+        const gate = gateFalso({
+            consultar_disponibilidad: DISPONIBILIDAD,
+            consultar_profesionales: UN_SOLO_PROFESIONAL,
+            proponer_turno: { ...HOLD, requiere_consentimiento: true },
+        });
+        const conv = conversacion({
+            tarea: TAREA_AGENDAR,
+            datos: {
+                paso: PASO.HORA, id_servicio: 1, fecha: '2026-08-20',
+                profesional_por_hora: { '09:00': 4 }, libres_por_hora: { '09:00': [4] },
+            },
+        });
+        const d = await crearManejadorDeterminista({
+            gate, contextoNegocio: NEGOCIO_FALSO, identidad: identidadFalsa({ nombre: 'Ana' }),
+        })(entrada('09:00', conv));
+
+        expect(d.respuestas).toHaveLength(1);
+        expect(d.respuestas[0].texto).toMatch(/firmarás un consentimiento/);
+        expect(d.respuestas[0].texto).toMatch(/¿Confirmas la cita\?$/);
     });
 });
 
@@ -1125,7 +1506,11 @@ describe('un rechazo del dominio nunca deja al cliente sin respuesta', () => {
             entrada('Sí', conv)
         );
 
-        expect(d.respuestas[0]).toMatch(/No pude agendar esa hora: debe reservar con al menos 1h/);
+        // El aviso y las horas van en UN mensaje, no en dos: se lee igual y Meta cobra uno.
+        expect(d.respuestas).toHaveLength(1);
+        expect(d.respuestas[0].texto).toMatch(/No pude agendar esa hora: debe reservar con al menos 1h/);
+        expect(d.respuestas[0].texto).toMatch(/Estas son las horas libres/);
+        expect(d.respuestas[0].opciones.length).toBeGreaterThan(0);
         expect(d.tarea.datos.paso).toBe(PASO.HORA);
         expect(d.tarea.datos.codigo_hold).toBeUndefined();
     });
@@ -1143,7 +1528,8 @@ describe('un rechazo del dominio nunca deja al cliente sin respuesta', () => {
             gate, contextoNegocio: NEGOCIO_FALSO, identidad: identidadFalsa({ nombre: 'Ana' }),
         })(entrada('10:00', conv));
 
-        expect(d.respuestas[0]).toBe('No pude agendar esa hora: esa hora se acaba de ocupar.');
+        expect(d.respuestas).toHaveLength(1);
+        expect(d.respuestas[0].texto).toMatch(/^No pude agendar esa hora: esa hora se acaba de ocupar./);
         expect(d.tarea.datos.paso).toBe(PASO.HORA);
     });
 });
@@ -1197,35 +1583,78 @@ describe('días con más horas de las que caben en una lista', () => {
     const HORAS_DIA = ['09:00', '09:30', '10:00', '10:30', '11:00', '11:30', '12:00',
         '14:00', '14:30', '15:00', '15:30', '16:00', '16:30', '17:00', '17:30', '18:00', '18:30']
         .map((hora) => ({ hora, id_profesional: 4, id_profesionales: [4] }));
+    /** Un día de verdad lleno: de 8 a 20 cada media hora. 25 horas no se leen en un mensaje. */
+    const HORAS_LLENO = Array.from({ length: 25 }, (_, i) => {
+        const minutos = 8 * 60 + i * 30;
+        const hora = `${String(Math.floor(minutos / 60)).padStart(2, '0')}:${minutos % 60 === 0 ? '00' : '30'}`;
+        return { hora, id_profesional: 4, id_profesionales: [4] };
+    });
     const gateDia = () => gateFalso({
         consultar_disponibilidad: { fecha: '2026-10-10', horas: HORAS_DIA },
+        proponer_turno: HOLD,
+    });
+    const gateLleno = () => gateFalso({
+        consultar_disponibilidad: { fecha: '2026-10-10', horas: HORAS_LLENO },
         proponer_turno: HOLD,
     });
     const manejador = (gate) => crearManejadorDeterminista({
         gate, contextoNegocio: NEGOCIO_FALSO, identidad: identidadFalsa({ nombre: 'Ana' }),
     });
+    const alDia = (datos = {}) => conversacion({
+        tarea: TAREA_AGENDAR, datos: { paso: PASO.FECHA, id_servicio: 1, ...datos },
+    });
 
-    test('se pregunta la jornada, y entre todas están TODAS las horas del día', async () => {
-        const d = await manejador(gateDia())(entrada('2026-10-10', conversacion({
-            tarea: TAREA_AGENDAR, datos: { paso: PASO.FECHA, id_servicio: 1 },
-        })));
+    test('17 horas salen enumeradas en UN mensaje, sin preguntar la jornada', async () => {
+        const d = await manejador(gateDia())(entrada('2026-10-10', alDia()));
+
+        // El paso de la jornada era un mensaje entero para preguntar algo que el cliente no
+        // pidió: él quiere una hora. Enumerarlas se lo ahorra y le enseña el día completo.
+        expect(d.tarea.datos.paso).toBe(PASO.HORA);
+        expect(d.respuestas).toHaveLength(1);
+        const opciones = d.respuestas[0].opciones;
+        expect(opciones.map((o) => o.id)).toEqual([...HORAS_DIA.map((h) => h.hora), 'volver_fecha']);
+        expect(d.respuestas[0].texto).toMatch(/Hay 17 horas libres/);
+        expect(d.respuestas[0].texto).toMatch(/Respóndeme con el número/);
+        // Numeradas por el núcleo: el canal no inventa el número con el que vuelve la respuesta.
+        expect(opciones[0].atajo).toBe('1');
+        expect(opciones[16].atajo).toBe('17');
+        expect(d.tarea.datos).toMatchObject({ enumerado: true, atajos_de: PASO.HORA });
+    });
+
+    test('el número de un listado de horas elige esa hora', async () => {
+        const gate = gateDia();
+        const manejar = manejador(gate);
+        const d0 = await manejar(entrada('2026-10-10', alDia()));
+        // La cuarta de la lista es 10:30.
+        const d = await manejar(entrada('4', conversacion({ tarea: TAREA_AGENDAR, datos: d0.tarea.datos })));
+
+        expect(d.tarea.datos.paso).toBe(PASO.CONFIRMAR);
+        expect(gate.llamadas.find((l) => l.capacidad === 'proponer_turno').args.inicio)
+            .toBe('2026-10-10T10:30:00');
+    });
+
+    test('un día entero (25 horas) sí pregunta la jornada: un listado así no se lee', async () => {
+        const d = await manejador(gateLleno())(entrada('2026-10-10', alDia()));
+
         expect(d.tarea.datos.paso).toBe(PASO.FRANJA);
         const opciones = d.respuestas[0].opciones;
         expect(opciones.length).toBeLessThanOrEqual(10);
-        expect(opciones.map((o) => o.etiqueta)).toEqual(['Mañana', 'Tarde', 'Noche', '← Otro día']);
-        expect(opciones[0].detalle).toBe('9:00 AM a 11:30 AM · 6 horas');
+        expect(opciones[0].etiqueta).toBe('Mañana');
+        expect(opciones[opciones.length - 1].etiqueta).toBe('← Otro día');
         const todas = d.tarea.datos.franjas_ofrecidas.flatMap((f) => f.horas);
-        expect(todas).toEqual(HORAS_DIA.map((h) => h.hora));
+        expect(todas).toEqual(HORAS_LLENO.map((h) => h.hora));
     });
 
-    test('elegir la tarde enseña sus horas con «← Otra jornada»', async () => {
-        const manejar = manejador(gateDia());
-        let d = await manejar(entrada('2026-10-10', conversacion({ tarea: TAREA_AGENDAR, datos: { paso: PASO.FECHA, id_servicio: 1 } })));
-        const tarde = d.respuestas[0].opciones.find((o) => o.etiqueta === 'Tarde');
-        d = await manejar(entrada(tarde.id, conversacion({ tarea: TAREA_AGENDAR, datos: d.tarea.datos })));
+    test('elegir la mañana enseña sus horas con «← Otra jornada»', async () => {
+        const manejar = manejador(gateLleno());
+        let d = await manejar(entrada('2026-10-10', alDia()));
+        const manana = d.respuestas[0].opciones.find((o) => o.etiqueta === 'Mañana');
+        d = await manejar(entrada(manana.id, conversacion({ tarea: TAREA_AGENDAR, datos: d.tarea.datos })));
+
         expect(d.tarea.datos.paso).toBe(PASO.HORA);
         expect(d.respuestas[0].opciones.map((o) => o.etiqueta)).toEqual([
-            '12:00 PM', '2:00 PM', '2:30 PM', '3:00 PM', '3:30 PM', '4:00 PM', '4:30 PM', '5:00 PM', '5:30 PM', '← Otra jornada',
+            '8:00 AM', '8:30 AM', '9:00 AM', '9:30 AM', '10:00 AM', '10:30 AM', '11:00 AM',
+            '11:30 AM', '← Otra jornada',
         ]);
         // Y «Otra jornada» vuelve al menú de jornadas.
         d = await manejar(entrada('volver_franja', conversacion({ tarea: TAREA_AGENDAR, datos: d.tarea.datos })));
@@ -1233,9 +1662,10 @@ describe('días con más horas de las que caben en una lista', () => {
     });
 
     test('escribir la hora en el paso de jornada se salta la jornada', async () => {
-        const gate = gateDia();
+        const gate = gateLleno();
         const manejar = manejador(gate);
         const d0 = await manejar(entrada('2026-10-10', conversacion({ tarea: TAREA_AGENDAR, datos: { paso: PASO.FECHA, id_servicio: 1 } })));
+        expect(d0.tarea.datos.paso).toBe(PASO.FRANJA);
         const d = await manejar(entrada('a las 3 pm', conversacion({ tarea: TAREA_AGENDAR, datos: d0.tarea.datos })));
         expect(d.tarea.datos.paso).toBe(PASO.CONFIRMAR);
         expect(gate.llamadas.find((l) => l.capacidad === 'proponer_turno').args.inicio).toBe('2026-10-10T15:00:00');

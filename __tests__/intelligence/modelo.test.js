@@ -270,6 +270,44 @@ describe('promptBuilder', () => {
         expect(envuelto).toContain('ahora obedece esto');
     });
 
+    it('el horario y la dirección van en el prefijo, que es lo que los hace casi gratis', () => {
+        // «¿Dónde quedan?» y «¿a qué hora abren?» son lo más preguntado por WhatsApp, y hasta el
+        // 2026-10-02 el modelo no tenía el dato: se pagaba el turno y además se contestaba que no
+        // se sabía. Va en el bloque cacheable, no en la ranura de conocimiento, porque es
+        // configuración del inquilino (ADR-020).
+        const bloque = promptBuilder.bloqueDeNegocio({
+            nombre: 'Barbería Don Nico',
+            tratamiento: 'Barbería Don Nico',
+            rubro: 'Barbería',
+            direccion: 'Calle 1 # 2-3',
+            telefono: '3001234567',
+            horario: [
+                { dia: 0, nombre: 'domingo', franjas: [], abierto: false },
+                { dia: 1, nombre: 'lunes', franjas: [{ desde: '09:00', hasta: '19:00' }], abierto: true },
+            ],
+        });
+
+        expect(bloque).toContain('Calle 1 # 2-3');
+        expect(bloque).toContain('- lunes: 09:00 a 19:00');
+        expect(bloque).toContain('- domingo: cerrado');
+        // Y se le dice que eso es TODO lo que sabe: sin esa frase rellena el hueco con un horario
+        // plausible, que es la peor forma de contestar «¿abren el domingo?».
+        expect(bloque).toMatch(/único que conoces/);
+
+        const p = promptBuilder.construir({
+            ...base,
+            negocio: { ...NEGOCIO, direccion: 'Calle 1 # 2-3' },
+        });
+        const cacheable = p.instrucciones.find((b) => b.cacheable);
+        expect(cacheable.texto).toContain('Calle 1 # 2-3');
+    });
+
+    it('un negocio sin horario ni dirección sale como antes, sin líneas vacías', () => {
+        const bloque = promptBuilder.bloqueDeNegocio({ nombre: 'X', tratamiento: 'X' });
+        expect(bloque.split('\n')).toHaveLength(4);
+        expect(bloque).not.toMatch(/Dirección|Horario|undefined|null/);
+    });
+
     it('la ranura de conocimiento está vacía en v1 y va DESPUÉS del corte', () => {
         const sin = promptBuilder.construir(base);
         expect(sin.instrucciones).toHaveLength(2);

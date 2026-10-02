@@ -122,6 +122,169 @@ async function personaDelCanal(idNegocio, principal, transaction = null) {
 }
 
 /**
+ * ── Las citas próximas de quien está escribiendo ─────────────────────────────────────────
+ *
+ * ## El agujero que cierra
+ *
+ * Hasta hoy el asistente solo podía tocar una cita **cuyo código ya conociera**, y el código solo
+ * lo conocía si él mismo había creado la cita en esa misma conversación. Quien volvía al día
+ * siguiente a cancelar recibía un «dime el código de tu cita» sobre un código que nadie guarda, y
+ * acababa llamando por teléfono. Era, de lejos, el peor momento del producto.
+ *
+ * Lo que lo bloqueaba desapareció el 2026-09-09, cuando `reserva_cita.id_persona_negocio` se añadió
+ * con su backfill (`migrate:reserva-clientes`). Faltaba la capacidad, y es ésta.
+ *
+ * ## Las dos formas de reconocer al cliente, y por qué hacen falta las dos
+ *
+ * 1. **`id_persona_negocio`**, cuando la cita la creó alguien que ya era persona del negocio.
+ * 2. **El teléfono de la cita**, normalizado con el país del negocio. Las citas creadas desde el
+ *    panel a mano —que son muchas— guardan `cliente_telefono` y pueden no tener persona asociada.
+ *
+ * Con solo la primera, media agenda de D'ALEX quedaría invisible para su propio dueño del teléfono.
+ * Con solo la segunda, se perdería a quien cambió de número. Se buscan las dos y se unen.
+ *
+ * ## Lo que NO se acepta, y es la mitad del valor
+ *
+ * **Un teléfono dictado, jamás.** Esto devuelve datos de un cliente concreto, así que el único
+ * identificador válido es el que **probó el canal** (`principal.telefono_verificado`). Si se
+ * aceptara un número escrito, cualquiera podría pedir —y luego cancelar— las citas de otro
+ * diciendo su número. Es la misma regla con la que `buscarCitaPorCodigo` comprueba la pertenencia,
+ * y falla igual: cerrada.
+ *
+ * Y **solo las próximas y vivas**: una cita de hace tres meses no se puede mover ni cancelar, así
+ * que enseñarla sería ofrecer algo que no se puede hacer.
+ */
+const ESTADOS_VIVOS_CITA = ['pendiente', 'confirmada'];
+
+/**
+ * Los últimos diez dígitos de un teléfono, que es lo que de verdad identifica a una persona.
+ *
+ * En la base conviven `3001234567`, `+573001234567` y `57 300 123 4567` según quién creó la cita
+ * —el panel, el portal, el asistente— y comparar las cadenas tal cual deja fuera a casi todas. Diez
+ * dígitos son el número nacional completo en los dos países que hay hoy: dos personas distintas no
+ * los comparten.
+ */
+function ultimosDiez(telefono) {
+    const digitos = String(telefono ?? '').replace(/[^0-9]/g, '');
+    return digitos.length >= 10 ? digitos.slice(-10) : null;
+}
+
+/**
+ * ── ¿Esta cita es de quien está escribiendo? ─────────────────────────────────────────────
+ *
+ * **Una sola función para las dos preguntas**, y no es estética: `consultar_mis_citas` decide qué
+ * citas *enseñar* y `buscarCitaPorCodigo` decide qué citas se pueden *tocar*. Si cada una tuviera
+ * su propio criterio, la primera acabaría listando una cita que la segunda rechaza — el bot diría
+ * «tienes una cita el martes» y, al pedir cancelarla, «no puedo comprobar que sea tuya». Peor que
+ * no tener la función.
+ *
+ * Tres pruebas, y basta una:
+ *
+ *   1. **La persona del negocio** (`id_persona_negocio`), desde el 2026-09-09. Es la más fuerte.
+ *   2. **El teléfono normalizado** a E.164 con el país del negocio.
+ *   3. **Los últimos diez dígitos**, para las citas que el negocio apuntó a mano con el número
+ *      escrito de cualquier manera. Sin esta tercera, media agenda real queda intocable.
+ *
+ * Sigue fallando **cerrada**: sin teléfono probado por el canal no hay ninguna prueba que valer, y
+ * se deniega. El coste —quien escribe desde el WebChat, que no autentica a nadie, no puede cancelar—
+ * es el lado correcto en el que equivocarse.
+ *
+ * ⚠️ Nunca contra `args.cliente_telefono` ni contra las variables de la conversación: los rellena el
+ * modelo o el propio cliente, y pedirle a un atacante que declare quién es no es una comprobación.
+ */
+async function esDeQuienPide(cita, idNegocio, principal, transaction = null) {
+    const telefono = principal?.telefono_verificado;
+    if (!telefono) return false;
+
+    // ⚠️ Con el país del NEGOCIO, no con Colombia fija (2026-09-29). Hasta entonces esto usaba
+    // `normalizarE164Colombia`, así que en un negocio chileno los dos teléfonos salían `null` y la
+    // comparación fallaba siempre: **ningún cliente de D'ALEX podía cancelar por WhatsApp**. Un
+    // fallo de seguridad correcto convertido en una puerta tapiada para un cliente entero.
+    const pais = await paisDeNegocio(idNegocio, { transaction });
+
+    const deQuienPide = normalizarE164(telefono, pais);
+    const deLaCita = normalizarE164(cita.cliente_telefono, pais);
+    if (deQuienPide && deLaCita && deQuienPide === deLaCita) return true;
+
+    const diezDePide = ultimosDiez(telefono);
+    const diezDeLaCita = ultimosDiez(cita.cliente_telefono);
+    if (diezDePide && diezDeLaCita && diezDePide === diezDeLaCita) return true;
+
+    if (cita.id_persona_negocio) {
+        const idPersona = await personaDelCanal(idNegocio, principal, transaction);
+        if (idPersona && String(idPersona) === String(cita.id_persona_negocio)) return true;
+    }
+
+    return false;
+}
+
+async function citasDelCliente(idNegocio, contexto = {}) {
+    const transaction = contexto?.transaction ?? null;
+    const principal = contexto?.principal ?? null;
+
+    // El canal tiene que haber probado quién es. Sin eso no hay a quién enseñarle nada, y el
+    // mensaje lo dice sin pedir datos: pedirlos es justo lo que esta capacidad viene a quitar.
+    const telefono = principal?.telefono_verificado || null;
+    if (!telefono) {
+        return { citas: [], motivo: 'no puedo comprobar desde qué número escribes' };
+    }
+
+    const diez = ultimosDiez(telefono);
+    if (!diez) return { citas: [], motivo: 'no puedo leer tu número de teléfono' };
+
+    const idPersona = await personaDelCanal(idNegocio, principal, transaction);
+
+    // Las mismas pruebas que `esDeQuienPide`, pero en SQL para no traerse la agenda entera y
+    // filtrarla en memoria. Que las dos digan lo mismo es lo que evita enseñar una cita que luego
+    // no se puede tocar; el comentario de `esDeQuienPide` explica por qué los últimos diez dígitos.
+    const filas = await Models.sequelize.query(
+        `SELECT c.codigo_publico, c.fecha_hora_inicio, c.fecha_hora_fin, c.estado,
+                c.cliente_nombre, p.nombre AS profesional,
+                (SELECT string_agg(s.nombre, ', ' ORDER BY s.nombre)
+                   FROM reserva.reserva_cita_servicio cs
+                   JOIN reserva.reserva_servicio s ON s.id_servicio = cs.id_servicio
+                  WHERE cs.id_cita = c.id_cita) AS servicios
+           FROM reserva.reserva_cita c
+           LEFT JOIN reserva.reserva_profesional p ON p.id_profesional = c.id_profesional
+          WHERE c.id_negocio = :idNegocio
+            AND c.estado = ANY(:estados)
+            AND c.fecha_hora_inicio >= (now() AT TIME ZONE 'America/Bogota')
+            AND (
+                  (:idPersona::uuid IS NOT NULL AND c.id_persona_negocio = :idPersona::uuid)
+                  OR right(regexp_replace(COALESCE(c.cliente_telefono, ''), '[^0-9]', '', 'g'), 10)
+                     = right(:digitos, 10)
+                )
+          ORDER BY c.fecha_hora_inicio
+          LIMIT 10`,
+        {
+            replacements: {
+                idNegocio,
+                estados: ESTADOS_VIVOS_CITA,
+                idPersona: idPersona || null,
+                digitos: diez,
+            },
+            type: Models.sequelize.QueryTypes.SELECT,
+            transaction,
+        },
+    );
+
+    return {
+        citas: filas.map((f) => ({
+            // El código va el primero porque es lo que necesitan `cancelar_cita` y
+            // `reagendar_cita`. Que lo tenga el asistente es precisamente lo que le permite
+            // dejar de pedírselo al cliente.
+            codigo_cita: f.codigo_publico,
+            inicio: formatearWallTime(f.fecha_hora_inicio),
+            fin: formatearWallTime(f.fecha_hora_fin),
+            estado: f.estado,
+            servicio: f.servicios || null,
+            profesional: f.profesional || null,
+            cliente_nombre: f.cliente_nombre || null,
+        })),
+    };
+}
+
+/**
  * Las horas libres de UN día, fundiendo las agendas de quienes prestan el servicio.
  *
  * Anticorrupción: `calcularSlots` exige un profesional concreto, porque nació para un formulario
@@ -476,6 +639,24 @@ function registrarCapacidades() {
                     tamano: m.tamano || null,
                 })),
             };
+        },
+    });
+
+    registry.registrar({
+        nombre: 'consultar_mis_citas',
+        descripcion:
+            'Lista las próximas citas de ESTE cliente, con su código. Úsala en cuanto pida ' +
+            'cancelar, mover o consultar «su cita»: **nunca le pidas el código**, sácalo de aquí. ' +
+            'Si devuelve una sola, es ésa; si devuelve varias, pregúntale cuál nombrándole el día ' +
+            'y la hora, no el código. Si devuelve la lista vacía, no tiene citas próximas y hay ' +
+            'que decírselo en vez de pedirle datos.',
+        vertical: VERTICAL,
+        tipo: registry.TIPO.CONSULTA,
+        feature: FEATURE.ASISTENTE_IA,
+        parametros: {},
+
+        async ejecutar({ idNegocio, contexto }) {
+            return citasDelCliente(idNegocio, contexto);
         },
     });
 
@@ -849,7 +1030,7 @@ async function elegirProfesional(idNegocio, args) {
 async function buscarCitaPorCodigo(codigo, idNegocio, transaction = null, principal = null) {
     const cita = await Models.ReservaCita.findOne({
         where: { codigo_publico: codigo, id_negocio: idNegocio },
-        attributes: ['id_cita', 'estado', 'cliente_telefono'],
+        attributes: ['id_cita', 'estado', 'cliente_telefono', 'id_persona_negocio'],
         transaction,
     });
     if (!cita) {
@@ -862,18 +1043,7 @@ async function buscarCitaPorCodigo(codigo, idNegocio, transaction = null, princi
     // `principal` llega en null desde la CLI de capacidades y los arneses, que operan como el
     // negocio y no como un cliente. Ahí no hay dueño que comprobar.
     if (principal && principal.tipo === TIPO_CONTACTO) {
-        // ⚠️ Con el país del NEGOCIO, no con Colombia fija (2026-09-29).
-        //
-        // Hasta hoy esto usaba `normalizarE164Colombia`, así que en un negocio chileno los dos
-        // teléfonos salían `null` y la comparación fallaba siempre. El efecto no era un error
-        // visible: era que **ningún cliente de D'ALEX podía cancelar por WhatsApp**, porque esta
-        // función falla cerrada a propósito. Un fallo de seguridad correcto convertido en una
-        // puerta tapiada para un cliente entero.
-        const pais = await paisDeNegocio(idNegocio, { transaction });
-        const deQuienPide = normalizarE164(principal.telefono_verificado, pais);
-        const deLaCita = normalizarE164(cita.cliente_telefono, pais);
-
-        if (!deQuienPide || !deLaCita || deQuienPide !== deLaCita) {
+        if (!(await esDeQuienPide(cita, idNegocio, principal, transaction))) {
             const e = new Error(
                 'No puedo comprobar que esa cita sea tuya, así que no la voy a tocar. ' +
                     'Llama al negocio y te la gestionan enseguida.'
@@ -927,6 +1097,12 @@ const TIPOS_NEGOCIO = ['RESERVA', 'BARBERIA', 'SALON DE BELLEZA'];
 
 function registrarFlujo({ flujos }) {
     const { manejarDeterminista } = require('./flujoCita');
+    // El horario de atención, para el prefijo del prompt. Va aquí porque `reserva_horario` es
+    // nuestro esquema y el núcleo no lo toca (ADR-005); el núcleo solo pone la costura.
+    require('./contexto').registrar({
+        contextoNegocio: require('../../core/contextoNegocio'),
+        tipos: TIPOS_NEGOCIO,
+    });
     // `abreConversacion`: el primer mensaje siempre saluda y enseña los servicios (o sus tipos)
     // como menú, diga lo que diga el cliente. Ver `flujos.abreLaConversacion`.
     flujos.registrar({

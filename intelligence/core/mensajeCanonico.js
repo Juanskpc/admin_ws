@@ -134,10 +134,18 @@ function normalizarSalida(respuesta) {
         // canal decida: la lista de WhatsApp pinta el detalle debajo, el chip del WebChat al lado,
         // y la voz lo leería después. El núcleo sigue sin saber cómo se pinta ninguno.
         const detalle = opcion?.detalle;
+        // `atajo` es la segunda evolución aditiva, y por el mismo motivo: un catálogo que no cabe
+        // en una lista sale como texto, y entonces hace falta **con qué** elegir. El número lo
+        // pone el núcleo, no el canal: es el asa con la que vuelve la respuesta, y si cada canal
+        // numerara a su manera «3» significaría una cosa en WhatsApp y otra en el WebChat. Un
+        // canal que sí puede pintar filas pulsables lo ignora, que es la degradación de ADR-017
+        // al revés: el canal usa lo que le sirve.
+        const atajo = opcion?.atajo;
         return {
             id: String(id),
             etiqueta,
             ...(typeof detalle === 'string' && detalle.length > 0 ? { detalle } : {}),
+            ...(atajo != null && String(atajo).length > 0 ? { atajo: String(atajo) } : {}),
         };
     });
 

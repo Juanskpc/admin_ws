@@ -78,7 +78,19 @@ const CONFIG = {
      * porque este turno es «consulta el dominio y contesta en dos frases», no razonamiento duro.
      */
     esfuerzo: process.env.LLM_ESFUERZO || 'low',
-    mensajesDeHistorial: Number(process.env.LLM_HISTORIAL) || 20,
+    /**
+     * Cuántos mensajes previos se le dan al modelo.
+     *
+     * Era 20, y 20 mensajes van **después del corte de caché** (ADR-019): se pagan enteros en cada
+     * turno que sube al Nivel 4, no al 0.1× del prefijo. El trabajo de este peldaño es «contesta en
+     * dos frases consultando el dominio», y para eso cinco intercambios son contexto de sobra: lo
+     * que decidió la conversación —el servicio elegido, la hora apartada— no vive en el historial,
+     * vive en la tarea, que la lleva el Nivel 1.
+     *
+     * Si alguna vez un turno necesita más, se sube con `LLM_HISTORIAL` y se mide con el arnés; lo
+     * que no tiene sentido es pagar por veinte mensajes «por si acaso» en cada pregunta suelta.
+     */
+    mensajesDeHistorial: Number(process.env.LLM_HISTORIAL) || 10,
     /**
      * Ejecutar en seco. Lo usa el arnés de evaluación: las capacidades se ejecutan de verdad y
      * la transacción se deshace, así que una tanda de 40 conversaciones no deja rastro en el

@@ -97,6 +97,37 @@ function bloqueDeNegocio(negocio) {
     const lineas = ['# El negocio para el que trabajas', ''];
     lineas.push(`Nombre: ${negocio?.nombre || 'sin nombre registrado'}`);
     lineas.push(`Así te refieres a él al hablar: ${negocio?.tratamiento || 'el negocio'}`);
+
+    // ── Lo que más le preguntan a un negocio, y lo que el asistente no sabía ─────────────
+    //
+    // «¿Dónde quedan?», «¿a qué hora abren?», «¿abren el domingo?». Hasta el 2026-10-02 nada de
+    // esto llegaba al prompt: la pregunta subía al modelo —que cuesta— y el modelo contestaba que
+    // no lo sabía. Se paga y se falla a la vez, que es el peor de los dos mundos.
+    //
+    // Va en este bloque y no en la ranura de conocimiento porque es **configuración**: pequeña,
+    // escrita a mano, estable por inquilino (ADR-020). Por eso se cachea con el prefijo y, en la
+    // práctica, contestar «¿dónde quedan?» pasa a costar casi nada.
+    if (negocio?.rubro) lineas.push(`A qué se dedica: ${negocio.rubro}`);
+    if (negocio?.direccion) lineas.push(`Dirección: ${negocio.direccion}`);
+    if (negocio?.telefono) lineas.push(`Teléfono: ${negocio.telefono}`);
+
+    const horario = (negocio?.horario || []).filter((d) => d && d.nombre);
+    if (horario.length) {
+        lineas.push('', '## Horario de atención', '');
+        for (const dia of horario) {
+            const franjas = (dia.franjas || []).map((f) => `${f.desde} a ${f.hasta}`).join(' y ');
+            lineas.push(`- ${dia.nombre}: ${dia.abierto && franjas ? franjas : 'cerrado'}`);
+        }
+        // Sin esta línea el modelo rellena el hueco: «creo que abrimos a las 9» sobre un día que
+        // la tabla dice cerrado. Lo que no está aquí no se sabe, y decirlo es la respuesta buena.
+        lineas.push(
+            '',
+            'Ése es el horario completo y es el único que conoces. Un día que diga «cerrado» está ' +
+                'cerrado; para un festivo o un cambio puntual, di que lo confirmas con el negocio ' +
+                'en vez de suponer.'
+        );
+    }
+
     return lineas.join('\n');
 }
 

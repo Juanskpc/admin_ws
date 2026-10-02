@@ -207,12 +207,27 @@ function interpretarWebhook(cuerpo, { config = configReal } = {}) {
                     // El número de la persona es su identidad en este canal. Es también el que
                     // permitirá reconocerla como `persona` el día que reserva adopte identidad.
                     idExterno: deQuien,
+                    // ── El nombre que la persona ya puso en su propio perfil ──────────────
+                    //
+                    // Viene en **cada** webhook y hasta hoy se tiraba, así que el asistente
+                    // preguntaba «¿a nombre de quién agendo?» a alguien cuyo nombre tenía
+                    // delante: un mensaje de más por cada cliente nuevo, y una cosa más que
+                    // teclear en el móvil.
+                    //
+                    // Es una **pista, no un hecho**: lo escribe el cliente en su teléfono y
+                    // puede ser «Mamá» o un emoji. Por eso viaja en `crudo` —que es el sobre de
+                    // lo que dijo el canal, no un dato del núcleo— y el flujo lo usa como valor
+                    // por defecto, enseñándolo en el resumen con un «otro nombre» al lado.
                     texto: textoDeMensaje(mensaje),
                     // El `wamid` es lo que hace deduplicable un reintento de Meta.
                     idExternoMensaje: mensaje.id || null,
                     enviadoEn: mensaje.timestamp ? new Date(Number(mensaje.timestamp) * 1000) : null,
                     antiguo: esAntiguo(mensaje.timestamp),
-                    crudo: { tipo: mensaje.type, soportado: TIPOS_CON_TEXTO.has(mensaje.type) },
+                    crudo: {
+                        tipo: mensaje.type,
+                        soportado: TIPOS_CON_TEXTO.has(mensaje.type),
+                        perfil_nombre: valor.contacts?.[0]?.profile?.name || null,
+                    },
                 });
             }
 
@@ -674,8 +689,15 @@ function renderizar({ texto, opciones = [], plantilla = null }) {
         };
     }
 
+    // Más de 10: no hay lista que las aguante y salen como texto. Si el núcleo las numeró
+    // (`atajo`), **ese** es el número que se pinta: es el asa con la que vuelve la respuesta, y
+    // numerarlas aquí por nuestra cuenta haría que «3» significara una cosa en WhatsApp y otra en
+    // el WebChat. Sin numeración se mantiene la viñeta de siempre.
     const enumeradas = lista
-        .map((o) => `• ${o.etiqueta ?? o.id}${o.detalle ? ` — ${o.detalle}` : ''}`)
+        .map((o) => {
+            const cabeza = o.atajo ? `*${o.atajo}.*` : '•';
+            return `${cabeza} ${o.etiqueta ?? o.id}${o.detalle ? ` — ${o.detalle}` : ''}`;
+        })
         .join('\n');
     return {
         type: 'text',

@@ -348,6 +348,9 @@ app.use(errorHandler);
                         // El orden respecto a la línea siguiente da igual (el relay lee sus
                         // consumidores en cada sondeo), pero va antes porque es antes en el tiempo:
                         // un escalado ocurre durante un turno, no dentro de una semana.
+                        // Desde 2026-10-02 también vigila la **cuota de WhatsApp**: Meta cobra
+                        // los mensajes de servicio pasada la asignación mensual de cada número, y
+                        // sin esta revisión diaria la primera noticia sería la factura.
                         intelligence.arrancarAvisos();
 
                         // Recordatorios proactivos (F8-B). **Sin esta línea F8-B es código
