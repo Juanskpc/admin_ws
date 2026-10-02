@@ -415,3 +415,76 @@ describe('avisarListo', () => {
         }
     });
 });
+
+// ── Texto libre cuando la ventana está abierta (2026-10-01) ─────────────────────────────────
+//
+// Zona Burger se conectó con su propia cuenta de WhatsApp, que no tenía NINGUNA plantilla (son
+// por cuenta), y los avisos morían con `(#132001) Template name does not exist` aunque el
+// cliente acababa de escribir. Con la ventana abierta no hace falta plantilla.
+
+/** Un mensaje del cliente, `horas` atrás. */
+async function clienteEscribio(idConversacion, horas) {
+    await sequelize.query(
+        `INSERT INTO intelligence.mensaje
+            (id_conversacion, id_negocio, direccion, canal, contenido, creado_en, enviado_en)
+         VALUES (:idConversacion, :idNegocio, 'entrante', 'whatsapp', 'Perfecto',
+                 now() - (:horas * interval '1 hour'), now() - (:horas * interval '1 hour'));`,
+        { replacements: { idConversacion, idNegocio, horas }, logging: false }
+    );
+}
+
+describe('puedeSalirComoTexto', () => {
+    const ahora = new Date('2026-10-01T22:00:00Z');
+    const expira = (min) => ({ abierta: true, expiraEn: new Date(ahora.getTime() + min * 60000) });
+
+    test('con la ventana abierta y margen, sí', () => {
+        expect(avisoPedido.puedeSalirComoTexto(expira(600), ahora)).toBe(true);
+    });
+    test('a punto de cerrarse (menos de 5 min), no: la plantilla no depende de la ventana', () => {
+        expect(avisoPedido.puedeSalirComoTexto(expira(2), ahora)).toBe(false);
+    });
+    test('cerrada, o sin datos, no', () => {
+        expect(avisoPedido.puedeSalirComoTexto({ abierta: false, expiraEn: null }, ahora)).toBe(false);
+        expect(avisoPedido.puedeSalirComoTexto(null, ahora)).toBe(false);
+    });
+});
+
+describe('avisarListo con la ventana de 24 h abierta', () => {
+    test('EL CASO: el cliente acaba de escribir → sale como TEXTO LIBRE, sin plantilla', async () => {
+        const conv = await crearConversacion({ idExterno: idExternoDe(60) });
+        await clienteEscribio(conv.id_conversacion, 0.1);
+        const orden = await crearOrden({ telefono: tel(60), tipo: 'DOMICILIO' });
+
+        await avisar(orden);
+
+        const [saliente] = await salientesDe(conv.id_conversacion);
+        expect(saliente.plantilla).toBeNull();
+        expect(saliente.estado_entrega).toBe('pendiente');
+        // El mismo texto que habría llevado la plantilla.
+        expect(saliente.contenido).toContain(orden.numero_orden);
+        expect(saliente.contenido).toContain('va en camino');
+        expect((await marcaDe(orden)).aviso_listo_en).toBeTruthy();
+    });
+
+    test('ventana cerrada (escribió hace 30 h) → sigue saliendo con plantilla', async () => {
+        const conv = await crearConversacion({ idExterno: idExternoDe(61) });
+        await clienteEscribio(conv.id_conversacion, 30);
+        const orden = await crearOrden({ telefono: tel(61) });
+
+        await avisar(orden);
+
+        const [saliente] = await salientesDe(conv.id_conversacion);
+        expect(saliente.plantilla.nombre).toBe('pedido_listo');
+    });
+
+    test('el candado sigue valiendo con texto libre: dos veces, un mensaje', async () => {
+        const conv = await crearConversacion({ idExterno: idExternoDe(62) });
+        await clienteEscribio(conv.id_conversacion, 0.1);
+        const orden = await crearOrden({ telefono: tel(62) });
+
+        await avisar(orden);
+        await expect(avisar(orden)).rejects.toMatchObject({ code: 'PEDIDO_YA_AVISADO' });
+
+        expect(await salientesDe(conv.id_conversacion)).toHaveLength(1);
+    });
+});

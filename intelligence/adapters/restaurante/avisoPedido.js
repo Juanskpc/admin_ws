@@ -44,6 +44,33 @@ const contextoNegocio = require('../../core/contextoNegocio');
 const features = require('../../core/features');
 const { normalizarE164Colombia } = require('../../../app_core/helpers/telefono');
 const { fijarActor } = require('../../../app_core/helpers/auditActor');
+const ventanaWhatsapp = require('../../channels/whatsapp/ventana');
+
+/**
+ * Cuánta ventana tiene que quedar para fiarse de ella. El mensaje nace aquí y sale unos segundos
+ * después por el entregador: con la ventana a punto de cerrarse, el texto libre podría llegar ya
+ * rechazado, y la plantilla —que no depende de la ventana— es la opción segura.
+ */
+const MARGEN_VENTANA_MS = 5 * 60 * 1000;
+
+/**
+ * ¿Puede este aviso salir como TEXTO LIBRE en vez de plantilla?
+ *
+ * Sí cuando el cliente escribió hace menos de 24 h (con margen): el texto libre no necesita que
+ * Meta haya aprobado nada ni cuesta una plantilla. Es lo normal aquí, porque quien pidió por chat
+ * acaba de escribir. La plantilla queda para cuando la ventana se cerró (pedidos de horas).
+ *
+ * Producción, 2026-10-01: Zona Burger se conectó con su propia cuenta de WhatsApp, que no tenía
+ * ninguna plantilla (son por cuenta, no globales), y los avisos morían con `(#132001) Template
+ * name does not exist` aunque la ventana estaba abierta.
+ */
+function puedeSalirComoTexto(estadoVentana, ahora = new Date()) {
+    return Boolean(
+        estadoVentana?.abierta &&
+            estadoVentana.expiraEn &&
+            estadoVentana.expiraEn.getTime() - ahora.getTime() > MARGEN_VENTANA_MS
+    );
+}
 
 const PLANTILLA = 'pedido_listo';
 const PLANTILLA_DOMICILIO = 'pedido_en_camino';
@@ -251,6 +278,12 @@ async function avisarListo({ idNegocio, idOrden, idUsuario = null }, { transacti
         const definicion = plantillas.obtener(nombrePlantilla);
         const contenido = plantillas.renderizarTexto(nombrePlantilla, parametros);
 
+        // Ventana abierta → el mismo texto, como texto libre (sin `plantilla`). El canal ya sabe
+        // entregar un saliente sin plantilla y vuelve a comprobar la ventana al enviar.
+        const comoTexto = puedeSalirComoTexto(
+            await ventanaWhatsapp.estado(conversacion.id_conversacion, { transaction: t })
+        );
+
         const fila = await repositorio.insertarMensajeSaliente(
             {
                 idConversacion: conversacion.id_conversacion,
@@ -260,11 +293,13 @@ async function avisarListo({ idNegocio, idOrden, idUsuario = null }, { transacti
                 idTurno: null,
                 canal: CANAL,
                 contenido,
-                plantilla: {
-                    nombre: definicion.nombre,
-                    idioma: definicion.idioma,
-                    parametros,
-                },
+                plantilla: comoTexto
+                    ? null
+                    : {
+                          nombre: definicion.nombre,
+                          idioma: definicion.idioma,
+                          parametros,
+                      },
             },
             { transaction: t }
         );
@@ -295,6 +330,7 @@ module.exports = {
     TIPO_RECOGER,
     TIPO_DOMICILIO,
     plantillaParaTipo,
+    puedeSalirComoTexto,
     avisarListo,
     estadoDelAviso,
     comoLoEscribeElCanal,
