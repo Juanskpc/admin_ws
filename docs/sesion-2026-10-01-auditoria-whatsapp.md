@@ -111,3 +111,16 @@ Lo demás se configura en la **App del restaurante**: Horarios, Menú (carta), C
    `e2e_agendar` (espera «10:00», el flujo ahora usa franjas), `reportes` («controlador is not a
    function»), `reinicio_por_inactividad`, `whatsapp_embedded_signup` (falta `pin_cifrado` en la
    local). En el admin, `admin-dashboard.component.spec.ts › error state`.
+
+## Adenda 2026-10-02 (tarde) — el domicilio pasa a ser un RANGO
+
+Cargar el precio barrio por barrio era tedioso. Desde el commit `1463f91` (backend) y `649c914`
+(admin) el negocio escribe en la Bandeja **«Domicilio $ … a $ …» + una nota corta**
+(`gener_negocio.domicilio_valor_min/max/nota`, `npm run migrate:negocio-domicilio-rango`). El
+asistente contesta «¿cuánto vale el domicilio?» sin modelo, lo da en `consultar_info_negocio` y lo
+nombra en el aviso del total al confirmar — **sin sumarlo**, porque no hay un valor exacto. Los
+barrios con precio siguen funcionando y, si el cliente elige uno, su valor manda.
+
+Desplegado el 2026-10-02 13:11 (respaldo `db_2026-10-02_1310.dump`). Zona Burger cargado:
+$7.000–$9.000, nota «Fuera de Pasto, desde $10.000.»; su revisión de preparación queda con
+`domicilio: ok`. **Falta migrar la base compartida (5433)**: el túnel estaba cerrado.
