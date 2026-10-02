@@ -300,6 +300,7 @@ async function getProductosAdmin(idNegocio, idCategoria) {
         attributes: [
             'id_producto', 'id_categoria', 'nombre', 'descripcion',
             'precio', 'imagen_url', 'icono', 'es_popular', 'disponible', 'visible',
+            'id_producto_empaque', 'cantidad_empaque',
         ],
         include: [{
             model: Models.CartaProductoIngred,
@@ -317,10 +318,43 @@ async function getProductosAdmin(idNegocio, idCategoria) {
     });
 }
 
+/**
+ * El empaque ligado a un producto tiene que ser OTRO producto activo del MISMO negocio: el id llega
+ * del navegador y un producto de otro inquilino ahí sería una fuga. Devuelve `{ id, cantidad }`
+ * normalizados (sin empaque = `{ id: null, cantidad: 1 }`).
+ */
+async function validarEmpaque({ idNegocio, idProducto = null, idEmpaque, cantidad }, transaction) {
+    if (idEmpaque === null || idEmpaque === '' || idEmpaque === 0) return { id: null, cantidad: 1 };
+    const id = Number(idEmpaque);
+    const cant = cantidad === undefined || cantidad === null || cantidad === '' ? 1 : Number(cantidad);
+    const invalido = (mensaje) => {
+        const e = new Error(mensaje);
+        e.code = 'EMPAQUE_INVALIDO';
+        e.statusCode = 400;
+        return e;
+    };
+    if (!Number.isInteger(id) || id < 1) throw invalido('El empaque elegido no es válido.');
+    if (idProducto && id === Number(idProducto)) throw invalido('Un producto no puede ser su propio empaque.');
+    if (!Number.isInteger(cant) || cant < 1 || cant > 20) {
+        throw invalido('La cantidad de empaques debe ser un número entre 1 y 20.');
+    }
+    const existe = await Models.CartaProducto.findOne({
+        where: { id_producto: id, id_negocio: idNegocio, estado: 'A' },
+        attributes: ['id_producto'],
+        transaction,
+    });
+    if (!existe) throw invalido('El empaque elegido no existe en este negocio.');
+    return { id, cantidad: cant };
+}
+
 /** Crea un producto con sus ingredientes. */
-async function crearProducto({ id_negocio, id_categoria, nombre, descripcion, precio, icono, imagen_url, es_popular, disponible, visible, ingredientes }) {
+async function crearProducto({ id_negocio, id_categoria, nombre, descripcion, precio, icono, imagen_url, es_popular, disponible, visible, ingredientes, id_producto_empaque, cantidad_empaque }) {
     const t = await Models.sequelize.transaction();
     try {
+        const empaque = await validarEmpaque(
+            { idNegocio: id_negocio, idEmpaque: id_producto_empaque ?? null, cantidad: cantidad_empaque },
+            t
+        );
         const prod = await Models.CartaProducto.create({
             id_negocio,
             id_categoria,
@@ -332,6 +366,8 @@ async function crearProducto({ id_negocio, id_categoria, nombre, descripcion, pr
             es_popular: es_popular || false,
             disponible: disponible !== undefined ? disponible : true,
             visible: visible !== undefined ? visible : true,
+            id_producto_empaque: empaque.id,
+            cantidad_empaque: empaque.cantidad,
         }, { transaction: t });
 
         if (Array.isArray(ingredientes) && ingredientes.length > 0) {
@@ -348,11 +384,26 @@ async function crearProducto({ id_negocio, id_categoria, nombre, descripcion, pr
 }
 
 /** Edita un producto y sincroniza su lista de ingredientes. */
-async function editarProducto(idProducto, { id_categoria, nombre, descripcion, precio, icono, imagen_url, es_popular, disponible, visible, ingredientes }) {
+async function editarProducto(idProducto, { id_categoria, nombre, descripcion, precio, icono, imagen_url, es_popular, disponible, visible, ingredientes, id_producto_empaque, cantidad_empaque }) {
     const t = await Models.sequelize.transaction();
     try {
         const prod = await Models.CartaProducto.findByPk(idProducto);
         if (!prod) throw new Error('Producto no encontrado');
+
+        // `undefined` = no tocar el empaque (las ediciones que no lo mandan, como la de la imagen,
+        // no deben borrarlo); `null` = quitarlo.
+        let empaque = { id: prod.id_producto_empaque, cantidad: prod.cantidad_empaque };
+        if (id_producto_empaque !== undefined || cantidad_empaque !== undefined) {
+            empaque = await validarEmpaque(
+                {
+                    idNegocio: prod.id_negocio,
+                    idProducto,
+                    idEmpaque: id_producto_empaque !== undefined ? id_producto_empaque : prod.id_producto_empaque,
+                    cantidad: cantidad_empaque !== undefined ? cantidad_empaque : prod.cantidad_empaque,
+                },
+                t
+            );
+        }
 
         await prod.update({
             id_categoria: id_categoria ?? prod.id_categoria,
@@ -364,6 +415,8 @@ async function editarProducto(idProducto, { id_categoria, nombre, descripcion, p
             es_popular:   es_popular   !== undefined ? es_popular   : prod.es_popular,
             disponible:   disponible   !== undefined ? disponible   : prod.disponible,
             visible:      visible      !== undefined ? visible      : prod.visible,
+            id_producto_empaque: empaque.id,
+            cantidad_empaque:    empaque.cantidad,
         }, { transaction: t });
 
         // Sync ingredientes: actualiza existentes, reactiva eliminados lógicos,
@@ -398,6 +451,7 @@ module.exports = {
     editarCategoria,
     eliminarCategoria,
     getProductosAdmin,
+    validarEmpaque,
     crearProducto,
     editarProducto,
     eliminarProducto,

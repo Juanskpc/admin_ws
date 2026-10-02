@@ -236,6 +236,8 @@ async function getProductosAdmin(req, res) {
             es_popular:   p.es_popular,
             disponible:   p.disponible,
             visible:      p.visible !== false,
+            id_producto_empaque: p.id_producto_empaque ?? null,
+            cantidad_empaque:    p.cantidad_empaque ?? 1,
             ingredientes: (p.ingredientes || [])
                 .map(pi => {
                     const idIngrediente = pi.ingrediente?.id_ingrediente ?? pi.id_ingrediente;
@@ -262,7 +264,7 @@ async function getProductosAdmin(req, res) {
 /** POST /restaurante/carta/admin/productos */
 async function crearProducto(req, res) {
     try {
-        const { id_negocio, id_categoria, nombre, descripcion, precio, icono, imagen_url, es_popular, disponible, visible, ingredientes } = req.body;
+        const { id_negocio, id_categoria, nombre, descripcion, precio, icono, imagen_url, es_popular, disponible, visible, ingredientes, id_producto_empaque, cantidad_empaque } = req.body;
         if (!id_negocio || !id_categoria || !nombre?.trim() || precio === undefined) {
             return Respuesta.error(res, 'id_negocio, id_categoria, nombre y precio son requeridos', 400);
         }
@@ -270,10 +272,12 @@ async function crearProducto(req, res) {
         const prod = await CartaAdminService.crearProducto({
             id_negocio, id_categoria, nombre: nombre.trim(), descripcion,
             precio, icono, imagen_url, es_popular, disponible, visible, ingredientes,
+            id_producto_empaque, cantidad_empaque,
         });
         return Respuesta.success(res, 'Producto creado', { id_producto: prod.id_producto }, 201);
     } catch (err) {
         console.error('[CartaAdmin] Error crearProducto:', err.message);
+        if (err.code === 'EMPAQUE_INVALIDO') return Respuesta.error(res, err.message, 400);
         return Respuesta.error(res, 'Error al crear producto.');
     }
 }
@@ -288,6 +292,7 @@ async function editarProducto(req, res) {
         return Respuesta.success(res, 'Producto actualizado');
     } catch (err) {
         console.error('[CartaAdmin] Error editarProducto:', err.message);
+        if (err.code === 'EMPAQUE_INVALIDO') return Respuesta.error(res, err.message, 400);
         return Respuesta.error(res, err.message || 'Error al editar producto.');
     }
 }

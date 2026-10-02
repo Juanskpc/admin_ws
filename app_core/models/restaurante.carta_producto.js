@@ -12,6 +12,9 @@ module.exports = (sequelize, DataTypes) => {
         disponible:     { type: DataTypes.BOOLEAN, defaultValue: true },
         visible:        { type: DataTypes.BOOLEAN, defaultValue: true },
         estado:         { type: DataTypes.CHAR(1), defaultValue: 'A' },
+        // Empaque que el asistente suma en pedidos para llevar / domicilio (ver empaqueService).
+        id_producto_empaque: { type: DataTypes.INTEGER, allowNull: true },
+        cantidad_empaque:    { type: DataTypes.SMALLINT, allowNull: false, defaultValue: 1 },
         fecha_creacion: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
     }, {
         tableName: 'carta_producto',
