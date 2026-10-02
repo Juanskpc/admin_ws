@@ -629,7 +629,8 @@ async function leerConfiguracion(req, res) {
             return Respuesta.error(res, 'Negocio no encontrado', 404);
         }
         const [fila] = await Models.sequelize.query(
-            `SELECT id_negocio, nombre, reactivar_asistente_min
+            `SELECT id_negocio, nombre, reactivar_asistente_min,
+                    tiempo_estimado_min, tiempo_estimado_max
                FROM general.gener_negocio WHERE id_negocio = :idNegocio;`,
             { replacements: { idNegocio }, ...SELECT }
         );
@@ -638,6 +639,9 @@ async function leerConfiguracion(req, res) {
         return Respuesta.success(res, 'Configuración', {
             id_negocio: fila.id_negocio,
             reactivar_asistente_min: fila.reactivar_asistente_min,
+            // Lo que el asistente contesta a «¿cuánto se demora?». null = sin configurar.
+            tiempo_estimado_min: fila.tiempo_estimado_min,
+            tiempo_estimado_max: fila.tiempo_estimado_max,
             puede_editar: await esAdministradorDelNegocio(req.usuario.id_usuario, idNegocio),
         });
     } catch (err) {
@@ -647,7 +651,10 @@ async function leerConfiguracion(req, res) {
 }
 
 /**
- * PUT /admin/intelligence/bandeja/configuracion   { id_negocio, reactivar_asistente_min }
+ * PUT /admin/intelligence/bandeja/configuracion
+ *   { id_negocio, reactivar_asistente_min?, tiempo_estimado_min?, tiempo_estimado_max? }
+ *   (cada ajuste es independiente; el tiempo estimado es lo que el asistente contesta a
+ *   «¿cuánto se demora?», y null lo borra)
  *
  * Es la decisión EXPLÍCITA del negocio de la Enmienda 2: el asistente vuelve solo a una
  * conversación que atendió una persona, pasados N minutos desde su última intervención. 0 = nunca
@@ -658,7 +665,15 @@ async function guardarConfiguracion(req, res) {
     try {
         if (!revisar(req, res)) return;
         const idNegocio = Number(req.body.id_negocio);
-        const minutos = Number(req.body.reactivar_asistente_min);
+
+        // Cada ajuste es independiente: el cuerpo trae uno, otro o los dos. Distinguir «no vino» de
+        // «vino vacío» es lo que permite borrar el tiempo estimado (null) sin tocar la reactivación.
+        const traeReactivacion = req.body.reactivar_asistente_min !== undefined;
+        const traeTiempo =
+            req.body.tiempo_estimado_min !== undefined || req.body.tiempo_estimado_max !== undefined;
+        if (!traeReactivacion && !traeTiempo) {
+            return Respuesta.error(res, 'No hay nada que guardar', 400);
+        }
 
         // Quien no es administrador de ESE negocio recibe 403, sea de otro negocio o del mismo con
         // un rol menor: que el id de un negocio exista no es un secreto, y un mensaje único para
@@ -666,40 +681,88 @@ async function guardarConfiguracion(req, res) {
         if (!(await esAdministradorDelNegocio(req.usuario.id_usuario, idNegocio))) {
             return Respuesta.error(
                 res,
-                'Solo un administrador de este negocio puede cambiar cuándo vuelve el asistente.',
+                'Solo un administrador de este negocio puede cambiar la configuración del asistente.',
                 403
             );
         }
 
         const [antes] = await Models.sequelize.query(
-            `SELECT reactivar_asistente_min FROM general.gener_negocio WHERE id_negocio = :idNegocio;`,
+            `SELECT reactivar_asistente_min, tiempo_estimado_min, tiempo_estimado_max
+               FROM general.gener_negocio WHERE id_negocio = :idNegocio;`,
             { replacements: { idNegocio }, ...SELECT }
         );
         if (!antes) return Respuesta.error(res, 'Negocio no encontrado', 404);
 
+        const nulo = (v) => (v === null || v === '' || v === undefined ? null : Number(v));
+        const cambios = [];
+        const replacements = { idNegocio };
+        let minutos = antes.reactivar_asistente_min;
+        let tiempoMin = antes.tiempo_estimado_min;
+        let tiempoMax = antes.tiempo_estimado_max;
+
+        if (traeReactivacion) {
+            minutos = Number(req.body.reactivar_asistente_min);
+            cambios.push('reactivar_asistente_min = :minutos');
+            replacements.minutos = minutos;
+        }
+
+        if (traeTiempo) {
+            // Sin mínimo no hay máximo: «hasta 60 minutos» sin un «desde» no es un estimado que el
+            // asistente pueda decir bien. Vaciar el mínimo vacía también el máximo.
+            tiempoMin = nulo(req.body.tiempo_estimado_min);
+            tiempoMax = tiempoMin === null ? null : nulo(req.body.tiempo_estimado_max);
+            if (tiempoMax !== null && tiempoMax < tiempoMin) {
+                return Respuesta.error(res, 'El tiempo máximo no puede ser menor que el mínimo', 400);
+            }
+            cambios.push('tiempo_estimado_min = :tiempoMin', 'tiempo_estimado_max = :tiempoMax');
+            replacements.tiempoMin = tiempoMin;
+            replacements.tiempoMax = tiempoMax;
+        }
+
         await Models.sequelize.query(
-            `UPDATE general.gener_negocio SET reactivar_asistente_min = :minutos
-              WHERE id_negocio = :idNegocio;`,
-            { replacements: { idNegocio, minutos } }
+            `UPDATE general.gener_negocio SET ${cambios.join(', ')} WHERE id_negocio = :idNegocio;`,
+            { replacements }
         );
 
-        await Audit.registrarEvento({
-            modulo: 'intelligence',
-            accion: 'reactivacion_asistente_configurada',
-            idUsuario: req.usuario.id_usuario,
-            idNegocio,
-            detalle: {
-                minutos_antes: antes.reactivar_asistente_min,
-                minutos_despues: minutos,
-                adr: 'ADR-023 Enmienda 2',
-            },
-        });
+        if (traeReactivacion) {
+            await Audit.registrarEvento({
+                modulo: 'intelligence',
+                accion: 'reactivacion_asistente_configurada',
+                idUsuario: req.usuario.id_usuario,
+                idNegocio,
+                detalle: {
+                    minutos_antes: antes.reactivar_asistente_min,
+                    minutos_despues: minutos,
+                    adr: 'ADR-023 Enmienda 2',
+                },
+            });
+        }
+        if (traeTiempo) {
+            await Audit.registrarEvento({
+                modulo: 'intelligence',
+                accion: 'tiempo_estimado_configurado',
+                idUsuario: req.usuario.id_usuario,
+                idNegocio,
+                detalle: {
+                    antes: { min: antes.tiempo_estimado_min, max: antes.tiempo_estimado_max },
+                    despues: { min: tiempoMin, max: tiempoMax },
+                },
+            });
+        }
 
-        return Respuesta.success(res, minutos === 0
-            ? 'El asistente no volverá solo a las conversaciones que atienda una persona'
-            : `El asistente volverá solo a los ${minutos} minutos de la última respuesta de una persona`, {
+        const mensaje = traeTiempo && !traeReactivacion
+            ? (tiempoMin === null
+                ? 'El asistente ya no dará un tiempo estimado de entrega'
+                : 'Tiempo estimado de entrega guardado')
+            : (minutos === 0
+                ? 'El asistente no volverá solo a las conversaciones que atienda una persona'
+                : `El asistente volverá solo a los ${minutos} minutos de la última respuesta de una persona`);
+
+        return Respuesta.success(res, mensaje, {
             id_negocio: idNegocio,
             reactivar_asistente_min: minutos,
+            tiempo_estimado_min: tiempoMin,
+            tiempo_estimado_max: tiempoMax,
         });
     } catch (err) {
         console.error('Error en bandeja.guardarConfiguracion:', err);

@@ -1369,7 +1369,50 @@ async function cartaDe(idNegocio) {
  * hasta que se le olvidó el carrito a mitad de conversación.
  */
 function reclama(texto) {
-    return Boolean(codigoPedido.leer(texto));
+    return Boolean(codigoPedido.leer(texto)) || esPreguntaDeTiempo(texto);
+}
+
+/**
+ * ¿Pregunta cuánto tarda su pedido? («¿cuánto se demora?», «¿cuánto tiempo tarda?», «¿en cuánto
+ * llega?»).
+ *
+ * Observado en producción (2026-10-01, Zona Burger): es de las preguntas más repetidas, y el bot
+ * contestaba «no tengo el tiempo estimado, confírmalo con el negocio» porque nadie le había dicho
+ * cuál era. Ahora lo dice el propio negocio (Bandeja → configuración) y esto solo reconoce la
+ * pregunta, sin gastar un modelo.
+ *
+ * Es deliberadamente estricto: frases cortas y con la forma de la pregunta. Un mensaje largo que
+ * contiene «demora» por otra razón («si se demora mucho cancelo, pero quiero dos salchipapas…») es
+ * un pedido o una queja, no esta pregunta, y no se le contesta con un tiempo.
+ */
+const PREGUNTA_TIEMPO = [
+    /\bcuanto (tiempo )?(se |me |les |lo )?(demora|demoran|demoraria|tarda|tardan|tardaria|toma|tomaria|falta|faltan)\b/,
+    /\bque tanto (se |me )?(demora|demoran|tarda|tardan)\b/,
+    /\bcuanto (de )?(demora|espera|tiempo de espera|tiempo de entrega)\b/,
+    /\b(tiempo|demora) (estimado )?de (entrega|espera|preparacion)\b/,
+    /\ben cuanto (tiempo )?(llega|llegaria|esta|estaria|lo tienen|me lo traen|me lo entregan|me llega)\b/,
+];
+const MAX_PALABRAS_PREGUNTA = 14;
+
+function esPreguntaDeTiempo(texto) {
+    const t = normalizar(ultimaLinea(texto)).replace(/[¿?¡!.,]/g, ' ').replace(/\s+/g, ' ').trim();
+    if (!t || t.split(' ').length > MAX_PALABRAS_PREGUNTA) return false;
+    return PREGUNTA_TIEMPO.some((patron) => patron.test(t));
+}
+
+/**
+ * La respuesta con el tiempo que declaró el negocio, o `null` si no lo ha configurado (entonces
+ * no se inventa ninguno). Primero el dato, y después la promesa amable: si sale antes, se avisa.
+ */
+function fraseDeTiempo(tiempo) {
+    const min = Number(tiempo?.min);
+    if (!Number.isInteger(min) || min < 1) return null;
+    const max = Number(tiempo?.max);
+    const cuanto =
+        Number.isInteger(max) && max > min
+            ? `de *${min} a ${max} minutos*`
+            : `de unos *${min} minutos*`;
+    return `El tiempo estimado de tu pedido es ${cuanto} ⏱️. Si está listo antes, te avisaremos 😊`;
 }
 
 /**
@@ -1473,6 +1516,42 @@ function crearFlujoRestaurante({
             });
         }
 
+        // «¿Cuánto se demora?» — se contesta con el tiempo que declaró el negocio. Va ANTES del
+        // pedido a medias: ahí cualquier texto se leería como la respuesta al paso pendiente
+        // («¿a nombre de quién?» → «cuánto se demora»), y apuntar una pregunta como nombre o
+        // dirección es justo lo que ese flujo se esfuerza en no hacer.
+        if (esPreguntaDeTiempo(texto)) {
+            const frase = fraseDeTiempo(negocio.tiempoEstimado);
+            if (frase && conversacion.tarea_actual === TAREA_PEDIDO) {
+                // Se contesta Y se retoma lo que faltaba, sin tocar la tarea ni el contador de
+                // repreguntas: el cliente preguntó algo razonable, no se equivocó.
+                await conIdentidad(ctx);
+                await conCatalogo(ctx);
+                const datos = datosDelPedido(conversacion);
+                const q = pregunta(datos.paso, datos, ctx);
+                return {
+                    pasos: [paso('tiempo_estimado_respondido', { paso: datos.paso ?? null })],
+                    respuestas: [{ ...q, texto: `${frase}\n\n${q.texto}` }],
+                    variables: conMemoria(conversacion),
+                    tarea: tareaPedido(datos),
+                    resultado: 'resuelto',
+                    nivel: 'determinista',
+                };
+            }
+            if (frase) {
+                return {
+                    pasos: [paso('tiempo_estimado_respondido')],
+                    respuestas: [frase],
+                    variables: conMemoria(conversacion),
+                    tarea: null,
+                    resultado: 'resuelto',
+                    nivel: 'determinista',
+                };
+            }
+            // Sin tiempo configurado no se inventa uno: lo atiende el modelo, como hasta hoy.
+            if (conversacion.tarea_actual !== TAREA_PEDIDO) return delegar(ctx);
+        }
+
         // Un pedido a medias: falta el nombre, el teléfono, la dirección o cómo paga. Mientras
         // la tarea esté abierta, la política de enrutado devuelve aquí cada mensaje, así que el
         // modelo no puede llevarse la conversación a mitad de camino ni olvidarse de lo que ya
@@ -1523,6 +1602,8 @@ module.exports = {
     TAREA_PEDIDO,
     PASO_PEDIDO,
     reclama,
+    esPreguntaDeTiempo,
+    fraseDeTiempo,
     huecosDelCliente,
     interpretarDatos,
     leerTelefono,

@@ -69,6 +69,7 @@
     "migrate:intelligence-bandeja": "node migrations/migrate_intelligence_bandeja.js",
     "migrate:intelligence-bloqueada-por": "node migrations/migrate_intelligence_bloqueada_por.js",
     "migrate:intelligence-reactivacion": "node migrations/migrate_intelligence_reactivacion.js",
+    "migrate:restaurante-tiempo-estimado": "node migrations/migrate_restaurante_tiempo_estimado.js",
     "migrate:planes-codigo": "node migrations/migrate_planes_codigo.js",    "migrate:platform-numeros-canal": "node migrations/migrate_platform_numeros_canal.js",
     "migrate:embedded-signup": "node migrations/migrate_embedded_signup.js",
     "migrate:embedded-signup-coexistencia": "node migrations/migrate_embedded_signup_coexistencia.js",

@@ -863,8 +863,14 @@ router.get('/intelligence/bandeja/configuracion', [
 ], IntelligenceBandejaController.leerConfiguracion);
 router.put('/intelligence/bandeja/configuracion', [
     body('id_negocio').isInt({ min: 1 }).withMessage('ID de negocio inválido'),
-    body('reactivar_asistente_min').isInt({ min: 0, max: 10080 })
+    // Cada ajuste es opcional e independiente; el controlador exige que venga al menos uno.
+    body('reactivar_asistente_min').optional().isInt({ min: 0, max: 10080 })
         .withMessage('Los minutos deben estar entre 0 (nunca) y 10080'),
+    // Tiempo estimado de entrega (lo que el asistente contesta a «¿cuánto se demora?»). null lo borra.
+    body('tiempo_estimado_min').optional({ values: 'null' }).isInt({ min: 1, max: 600 })
+        .withMessage('El tiempo estimado debe estar entre 1 y 600 minutos'),
+    body('tiempo_estimado_max').optional({ values: 'null' }).isInt({ min: 1, max: 600 })
+        .withMessage('El tiempo máximo debe estar entre 1 y 600 minutos'),
 ], IntelligenceBandejaController.guardarConfiguracion);
 
 module.exports = router;

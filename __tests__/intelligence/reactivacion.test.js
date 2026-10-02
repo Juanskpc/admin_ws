@@ -421,6 +421,107 @@ describe('la configuración es del negocio, y solo su administrador la cambia', 
     });
 });
 
+describe('el tiempo estimado de entrega comparte la configuración, sin pisar la reactivación', () => {
+    const tiempoDe = (id) =>
+        unaFila(
+            `SELECT tiempo_estimado_min AS min, tiempo_estimado_max AS max, reactivar_asistente_min AS m
+               FROM general.gener_negocio WHERE id_negocio = :id;`,
+            { id }
+        );
+
+    test('el administrador guarda «de 40 a 60», queda auditado, y la reactivación NO cambia', async () => {
+        await fijarMinutos(negocioA, 15);
+
+        const r = await llamar(Bandeja.guardarConfiguracion, {
+            idUsuario: adminA,
+            body: { id_negocio: negocioA, tiempo_estimado_min: 40, tiempo_estimado_max: 60 },
+        });
+
+        expect(r.statusCode).toBe(200);
+        expect(await tiempoDe(negocioA)).toEqual({ min: 40, max: 60, m: 15 });
+
+        const evento = await unaFila(
+            `SELECT detalle FROM auditoria.audit_evento
+              WHERE modulo = 'intelligence' AND accion = 'tiempo_estimado_configurado'
+                AND id_negocio = :id ORDER BY fecha DESC LIMIT 1;`,
+            { id: negocioA }
+        );
+        expect(evento.detalle.despues).toEqual({ min: 40, max: 60 });
+    });
+
+    test('guardar la reactivación NO borra el tiempo estimado', async () => {
+        await llamar(Bandeja.guardarConfiguracion, {
+            idUsuario: adminA,
+            body: { id_negocio: negocioA, tiempo_estimado_min: 30, tiempo_estimado_max: null },
+        });
+        await llamar(Bandeja.guardarConfiguracion, {
+            idUsuario: adminA,
+            body: { id_negocio: negocioA, reactivar_asistente_min: 20 },
+        });
+        expect(await tiempoDe(negocioA)).toEqual({ min: 30, max: null, m: 20 });
+    });
+
+    test('null borra el tiempo (y sin mínimo no queda un máximo huérfano)', async () => {
+        await llamar(Bandeja.guardarConfiguracion, {
+            idUsuario: adminA,
+            body: { id_negocio: negocioA, tiempo_estimado_min: 40, tiempo_estimado_max: 60 },
+        });
+        const r = await llamar(Bandeja.guardarConfiguracion, {
+            idUsuario: adminA,
+            body: { id_negocio: negocioA, tiempo_estimado_min: null, tiempo_estimado_max: 60 },
+        });
+        expect(r.statusCode).toBe(200);
+        expect(await tiempoDe(negocioA)).toMatchObject({ min: null, max: null });
+    });
+
+    test('un máximo menor que el mínimo se rechaza y no cambia nada', async () => {
+        await llamar(Bandeja.guardarConfiguracion, {
+            idUsuario: adminA,
+            body: { id_negocio: negocioA, tiempo_estimado_min: 40, tiempo_estimado_max: 60 },
+        });
+        const r = await llamar(Bandeja.guardarConfiguracion, {
+            idUsuario: adminA,
+            body: { id_negocio: negocioA, tiempo_estimado_min: 50, tiempo_estimado_max: 20 },
+        });
+        expect(r.statusCode).toBe(400);
+        expect(await tiempoDe(negocioA)).toMatchObject({ min: 40, max: 60 });
+    });
+
+    test('un cuerpo sin nada que guardar se rechaza', async () => {
+        const r = await llamar(Bandeja.guardarConfiguracion, {
+            idUsuario: adminA,
+            body: { id_negocio: negocioA },
+        });
+        expect(r.statusCode).toBe(400);
+    });
+
+    test('el administrador de OTRO negocio recibe 403 y no cambia nada', async () => {
+        await llamar(Bandeja.guardarConfiguracion, {
+            idUsuario: adminA,
+            body: { id_negocio: negocioA, tiempo_estimado_min: null },
+        });
+        const r = await llamar(Bandeja.guardarConfiguracion, {
+            idUsuario: adminB,
+            body: { id_negocio: negocioA, tiempo_estimado_min: 10 },
+        });
+        expect(r.statusCode).toBe(403);
+        expect(await tiempoDe(negocioA)).toMatchObject({ min: null, max: null });
+    });
+
+    test('la lectura devuelve el tiempo configurado', async () => {
+        await llamar(Bandeja.guardarConfiguracion, {
+            idUsuario: adminA,
+            body: { id_negocio: negocioA, tiempo_estimado_min: 25, tiempo_estimado_max: 35 },
+        });
+        const r = await llamar(Bandeja.leerConfiguracion, {
+            idUsuario: adminA,
+            query: { id_negocio: String(negocioA) },
+        });
+        expect(r.cuerpo.data.tiempo_estimado_min).toBe(25);
+        expect(r.cuerpo.data.tiempo_estimado_max).toBe(35);
+    });
+});
+
 describe('el hilo cuenta que el asistente retomó', () => {
     test('el detalle incluye la reactivación automática, con su origen', async () => {
         await fijarMinutos(negocioA, 30);

@@ -32,7 +32,7 @@ const Models = require('../../app_core/models/conection');
 /** Lo que se enseña cuando el negocio no se puede leer. Neutro y sin mentir. */
 const GENERICO = {
     id: null, nombre: null, tratamiento: 'el negocio', atencion: null,
-    tipoNegocio: null, rubro: null, perfilReserva: null,
+    tipoNegocio: null, rubro: null, perfilReserva: null, tiempoEstimado: null,
 };
 
 /**
@@ -120,7 +120,40 @@ async function obtener(idNegocio) {
         // enrutar por él devolvería la lista blanca que la columna `tipoNegocio` acaba de quitar.
         rubro: String(fila.rubro || '').trim() || null,
         perfilReserva: String(fila.perfil_reserva || '').trim().toUpperCase() || null,
+        // Cuánto tarda un pedido, según el propio negocio (`null` = no lo ha dicho).
+        tiempoEstimado: await leerTiempoEstimado(id),
     };
+}
+
+/**
+ * El tiempo estimado que el negocio declaró para sus pedidos: `{ min, max }` (`max` puede ser
+ * `null`) o `null` si no lo ha configurado.
+ *
+ * En una consulta APARTE y con la falla contenida, a propósito: `obtener` corre en cada turno de
+ * cada conversación, y si la columna todavía no existe (un entorno sin migrar, un despliegue que
+ * llegó antes que su migración) no puede tumbar al asistente entero por un dato opcional. Sin
+ * columna, el bot simplemente no promete ningún tiempo —que es lo que hacía hasta hoy—.
+ */
+let avisoTiempoEmitido = false;
+async function leerTiempoEstimado(id) {
+    try {
+        const [fila] = await Models.sequelize.query(
+            `SELECT tiempo_estimado_min AS min, tiempo_estimado_max AS max
+               FROM general.gener_negocio WHERE id_negocio = :id`,
+            { replacements: { id }, type: Models.sequelize.QueryTypes.SELECT }
+        );
+        const min = Number(fila?.min);
+        if (!Number.isInteger(min) || min < 1) return null;
+        const max = Number(fila?.max);
+        return { min, max: Number.isInteger(max) && max >= min ? max : null };
+    } catch (error) {
+        // Una sola vez: esto corre en cada turno y el log no necesita el mismo aviso mil veces.
+        if (!avisoTiempoEmitido) {
+            avisoTiempoEmitido = true;
+            console.warn(`[contextoNegocio] no se pudo leer el tiempo estimado: ${error.message}`);
+        }
+        return null;
+    }
 }
 
 /**
