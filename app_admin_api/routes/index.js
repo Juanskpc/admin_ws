@@ -878,6 +878,13 @@ router.put('/intelligence/bandeja/configuracion', [
     // Notas libres para el asistente (número de Nequi, valor del domicilio…). null o '' las borra.
     body('info_asistente').optional({ values: 'null' }).isString().isLength({ max: 1500 })
         .withMessage('La información para el asistente admite hasta 1500 caracteres'),
+    // Valor del domicilio como rango, en pesos («entre $7.000 y $9.000»). null lo borra.
+    body('domicilio_valor_min').optional({ values: 'null' }).isInt({ min: 0, max: 10000000 })
+        .withMessage('El valor mínimo del domicilio debe ser un número de pesos válido'),
+    body('domicilio_valor_max').optional({ values: 'null' }).isInt({ min: 0, max: 10000000 })
+        .withMessage('El valor máximo del domicilio debe ser un número de pesos válido'),
+    body('domicilio_nota').optional({ values: 'null' }).isString().isLength({ max: 200 })
+        .withMessage('La nota del domicilio admite hasta 200 caracteres'),
 ], IntelligenceBandejaController.guardarConfiguracion);
 
 module.exports = router;

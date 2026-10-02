@@ -73,7 +73,7 @@ function comunes() {
         },
         {
             clave: 'info_asistente',
-            titulo: 'Información para el asistente (pagos, Nequi, domicilio…)',
+            titulo: 'Información para el asistente (pagos, Nequi…)',
             donde: `${BANDEJA} → «Info para el asistente»`,
             async revisar({ negocio }) {
                 return String(negocio.info_asistente || '').trim()
@@ -81,8 +81,8 @@ function comunes() {
                     : {
                           estado: 'recomendado',
                           por_que:
-                              'Los clientes preguntan el número de Nequi, si reciben efectivo y cuánto vale ' +
-                              'el domicilio. Sin esto el asistente contesta «no tengo esa información».',
+                              'Los clientes preguntan el número de Nequi o si reciben efectivo o transferencia. ' +
+                              'Sin esto el asistente contesta «no tengo esa información».',
                       };
             },
         },
@@ -179,8 +179,15 @@ function deRestaurante() {
         {
             clave: 'domicilio',
             titulo: 'Valor del domicilio',
-            donde: `${APP_RESTAURANTE} → Configuración → Barrios, o en «Info para el asistente»`,
+            donde: `${BANDEJA} → «Domicilio entre $ … y $ …»`,
             async revisar({ idNegocio, negocio }) {
+                // Desde 2026-10-02 lo normal es un RANGO («entre $7.000 y $9.000»): cargar el
+                // precio barrio por barrio era tedioso. Los barrios siguen contando para quien
+                // los tenga, y la nota sola («fuera de la ciudad, desde $10.000») también.
+                const conRango =
+                    negocio.domicilio_valor_min !== null && negocio.domicilio_valor_min !== undefined;
+                const conNota = Boolean(String(negocio.domicilio_nota || '').trim());
+                if (conRango || conNota) return { estado: 'ok' };
                 const f = await uno(
                     `SELECT count(*)::int AS n FROM restaurante.rest_barrio_domicilio
                       WHERE id_negocio = :idNegocio AND estado = 'A';`,
@@ -192,8 +199,8 @@ function deRestaurante() {
                     : {
                           estado: 'recomendado',
                           por_que:
-                              'Sin el valor del domicilio, el total que confirma el cliente no lo incluye y ' +
-                              'el asistente no sabe cuánto cobrar por llevarlo.',
+                              'Los clientes preguntan cuánto vale el domicilio. Basta un rango (por ' +
+                              'ejemplo, entre $7.000 y $9.000): sin él, el asistente contesta que no lo sabe.',
                       };
             },
         },
@@ -255,9 +262,17 @@ function deReserva() {
 async function revisar(idNegocio) {
     const negocio =
         (await uno(
-            `SELECT id_negocio, reactivar_asistente_min, tiempo_estimado_min, info_asistente
+            `SELECT id_negocio, reactivar_asistente_min, tiempo_estimado_min, info_asistente,
+                    domicilio_valor_min, domicilio_nota
                FROM general.gener_negocio WHERE id_negocio = :idNegocio;`,
             { idNegocio }
+        ).catch(() =>
+            // Sin la migración del rango de domicilio (2026-10-02), la consulta de antes.
+            uno(
+                `SELECT id_negocio, reactivar_asistente_min, tiempo_estimado_min, info_asistente
+                   FROM general.gener_negocio WHERE id_negocio = :idNegocio;`,
+                { idNegocio }
+            )
         ).catch(() =>
             uno(
                 `SELECT id_negocio, reactivar_asistente_min FROM general.gener_negocio

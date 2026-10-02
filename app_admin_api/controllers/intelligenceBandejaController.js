@@ -631,7 +631,8 @@ async function leerConfiguracion(req, res) {
         }
         const [fila] = await Models.sequelize.query(
             `SELECT id_negocio, nombre, reactivar_asistente_min,
-                    tiempo_estimado_min, tiempo_estimado_max, info_asistente
+                    tiempo_estimado_min, tiempo_estimado_max, info_asistente,
+                    domicilio_valor_min, domicilio_valor_max, domicilio_nota
                FROM general.gener_negocio WHERE id_negocio = :idNegocio;`,
             { replacements: { idNegocio }, ...SELECT }
         );
@@ -645,6 +646,10 @@ async function leerConfiguracion(req, res) {
             tiempo_estimado_max: fila.tiempo_estimado_max,
             // Lo que el asistente le dice al cliente sobre pagos, domicilio, etc. null = nada.
             info_asistente: fila.info_asistente ?? null,
+            // Cuánto vale el domicilio, como rango («entre $7.000 y $9.000») + una nota corta.
+            domicilio_valor_min: fila.domicilio_valor_min ?? null,
+            domicilio_valor_max: fila.domicilio_valor_max ?? null,
+            domicilio_nota: fila.domicilio_nota ?? null,
             puede_editar: await esAdministradorDelNegocio(req.usuario.id_usuario, idNegocio),
         });
     } catch (err) {
@@ -655,7 +660,8 @@ async function leerConfiguracion(req, res) {
 
 /**
  * PUT /admin/intelligence/bandeja/configuracion
- *   { id_negocio, reactivar_asistente_min?, tiempo_estimado_min?, tiempo_estimado_max? }
+ *   { id_negocio, reactivar_asistente_min?, tiempo_estimado_min?, tiempo_estimado_max?,
+ *     info_asistente?, domicilio_valor_min?, domicilio_valor_max?, domicilio_nota? }
  *   (cada ajuste es independiente; el tiempo estimado es lo que el asistente contesta a
  *   «¿cuánto se demora?», y null lo borra)
  *
@@ -676,7 +682,12 @@ async function guardarConfiguracion(req, res) {
             req.body.tiempo_estimado_min !== undefined || req.body.tiempo_estimado_max !== undefined;
         // Notas libres para el asistente (Nequi, valor del domicilio…). '' o null las borra.
         const traeInfo = req.body.info_asistente !== undefined;
-        if (!traeReactivacion && !traeTiempo && !traeInfo) {
+        // Valor del domicilio como rango (2026-10-02): reemplaza cargar el precio barrio por barrio.
+        const traeDomicilio =
+            req.body.domicilio_valor_min !== undefined ||
+            req.body.domicilio_valor_max !== undefined ||
+            req.body.domicilio_nota !== undefined;
+        if (!traeReactivacion && !traeTiempo && !traeInfo && !traeDomicilio) {
             return Respuesta.error(res, 'No hay nada que guardar', 400);
         }
 
@@ -692,7 +703,8 @@ async function guardarConfiguracion(req, res) {
         }
 
         const [antes] = await Models.sequelize.query(
-            `SELECT reactivar_asistente_min, tiempo_estimado_min, tiempo_estimado_max, info_asistente
+            `SELECT reactivar_asistente_min, tiempo_estimado_min, tiempo_estimado_max, info_asistente,
+                    domicilio_valor_min, domicilio_valor_max, domicilio_nota
                FROM general.gener_negocio WHERE id_negocio = :idNegocio;`,
             { replacements: { idNegocio }, ...SELECT }
         );
@@ -729,6 +741,31 @@ async function guardarConfiguracion(req, res) {
             info = String(req.body.info_asistente ?? '').trim().slice(0, 1500) || null;
             cambios.push('info_asistente = :info');
             replacements.info = info;
+        }
+
+        let domicilioMin = antes.domicilio_valor_min ?? null;
+        let domicilioMax = antes.domicilio_valor_max ?? null;
+        let domicilioNota = antes.domicilio_nota ?? null;
+        if (traeDomicilio) {
+            // Igual que el tiempo: sin mínimo no hay máximo, y vaciar el mínimo vacía el máximo.
+            // Viene el trío entero desde la Bandeja; lo que no venga se queda como estaba.
+            if (req.body.domicilio_valor_min !== undefined || req.body.domicilio_valor_max !== undefined) {
+                domicilioMin = nulo(req.body.domicilio_valor_min);
+                domicilioMax = domicilioMin === null ? null : nulo(req.body.domicilio_valor_max);
+                if (domicilioMax !== null && domicilioMax < domicilioMin) {
+                    return Respuesta.error(res, 'El valor máximo del domicilio no puede ser menor que el mínimo', 400);
+                }
+                if (domicilioMax !== null && domicilioMax === domicilioMin) domicilioMax = null;
+            }
+            if (req.body.domicilio_nota !== undefined) {
+                domicilioNota = String(req.body.domicilio_nota ?? '').trim().slice(0, 200) || null;
+            }
+            cambios.push(
+                'domicilio_valor_min = :domicilioMin',
+                'domicilio_valor_max = :domicilioMax',
+                'domicilio_nota = :domicilioNota'
+            );
+            Object.assign(replacements, { domicilioMin, domicilioMax, domicilioNota });
         }
 
         await Models.sequelize.query(
@@ -772,7 +809,28 @@ async function guardarConfiguracion(req, res) {
             });
         }
 
-        const mensaje = traeInfo && !traeTiempo && !traeReactivacion
+        if (traeDomicilio) {
+            await Audit.registrarEvento({
+                modulo: 'intelligence',
+                accion: 'domicilio_rango_configurado',
+                idUsuario: req.usuario.id_usuario,
+                idNegocio,
+                detalle: {
+                    antes: {
+                        min: antes.domicilio_valor_min ?? null,
+                        max: antes.domicilio_valor_max ?? null,
+                        nota: antes.domicilio_nota ?? null,
+                    },
+                    despues: { min: domicilioMin, max: domicilioMax, nota: domicilioNota },
+                },
+            });
+        }
+
+        const mensaje = traeDomicilio && !traeInfo && !traeTiempo && !traeReactivacion
+            ? (domicilioMin === null && !domicilioNota
+                ? 'El asistente ya no dirá el valor del domicilio'
+                : 'Valor del domicilio guardado')
+            : traeInfo && !traeTiempo && !traeReactivacion
             ? 'Información para el asistente guardada'
             : traeTiempo && !traeReactivacion
             ? (tiempoMin === null
@@ -788,6 +846,9 @@ async function guardarConfiguracion(req, res) {
             tiempo_estimado_min: tiempoMin,
             tiempo_estimado_max: tiempoMax,
             info_asistente: info,
+            domicilio_valor_min: domicilioMin,
+            domicilio_valor_max: domicilioMax,
+            domicilio_nota: domicilioNota,
         });
     } catch (err) {
         console.error('Error en bandeja.guardarConfiguracion:', err);

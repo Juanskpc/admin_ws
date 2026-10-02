@@ -522,6 +522,74 @@ describe('el tiempo estimado de entrega comparte la configuración, sin pisar la
     });
 });
 
+describe('el valor del domicilio como rango (2026-10-02), sin pisar lo demás', () => {
+    const domicilioDe = (id) =>
+        unaFila(
+            `SELECT domicilio_valor_min AS min, domicilio_valor_max AS max, domicilio_nota AS nota,
+                    tiempo_estimado_min AS t
+               FROM general.gener_negocio WHERE id_negocio = :id;`,
+            { id }
+        );
+
+    test('EL CASO Zona Burger: «entre $7.000 y $9.000» + nota, auditado, y el tiempo NO cambia', async () => {
+        await llamar(Bandeja.guardarConfiguracion, {
+            idUsuario: adminA,
+            body: { id_negocio: negocioA, tiempo_estimado_min: 40, tiempo_estimado_max: 60 },
+        });
+        const r = await llamar(Bandeja.guardarConfiguracion, {
+            idUsuario: adminA,
+            body: {
+                id_negocio: negocioA,
+                domicilio_valor_min: 7000,
+                domicilio_valor_max: 9000,
+                domicilio_nota: 'Fuera de la ciudad, desde $10.000',
+            },
+        });
+
+        expect(r.statusCode).toBe(200);
+        expect(await domicilioDe(negocioA)).toEqual({
+            min: 7000, max: 9000, nota: 'Fuera de la ciudad, desde $10.000', t: 40,
+        });
+        const evento = await unaFila(
+            `SELECT detalle FROM auditoria.audit_evento
+              WHERE modulo = 'intelligence' AND accion = 'domicilio_rango_configurado'
+                AND id_negocio = :id ORDER BY fecha DESC LIMIT 1;`,
+            { id: negocioA }
+        );
+        expect(evento.detalle.despues).toEqual({
+            min: 7000, max: 9000, nota: 'Fuera de la ciudad, desde $10.000',
+        });
+
+        const leido = await llamar(Bandeja.leerConfiguracion, {
+            idUsuario: adminA,
+            query: { id_negocio: String(negocioA) },
+        });
+        expect(leido.cuerpo.data).toMatchObject({ domicilio_valor_min: 7000, domicilio_valor_max: 9000 });
+    });
+
+    test('un máximo menor que el mínimo se rechaza; null lo borra todo', async () => {
+        const mal = await llamar(Bandeja.guardarConfiguracion, {
+            idUsuario: adminA,
+            body: { id_negocio: negocioA, domicilio_valor_min: 9000, domicilio_valor_max: 7000 },
+        });
+        expect(mal.statusCode).toBe(400);
+
+        await llamar(Bandeja.guardarConfiguracion, {
+            idUsuario: adminA,
+            body: { id_negocio: negocioA, domicilio_valor_min: null, domicilio_valor_max: 9000, domicilio_nota: '' },
+        });
+        expect(await domicilioDe(negocioA)).toMatchObject({ min: null, max: null, nota: null });
+    });
+
+    test('el administrador de OTRO negocio recibe 403', async () => {
+        const r = await llamar(Bandeja.guardarConfiguracion, {
+            idUsuario: adminB,
+            body: { id_negocio: negocioA, domicilio_valor_min: 1000 },
+        });
+        expect(r.statusCode).toBe(403);
+    });
+});
+
 describe('el hilo cuenta que el asistente retomó', () => {
     test('el detalle incluye la reactivación automática, con su origen', async () => {
         await fijarMinutos(negocioA, 30);

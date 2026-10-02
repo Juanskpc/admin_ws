@@ -63,7 +63,8 @@ const exclusiones = require('./exclusiones');
 const mesaPublicaService = require('../../../app_restaurante_api/services/mesaPublicaService');
 const usuarioAsistenteDao = require('../../../app_core/dao/usuarioAsistenteDao');
 const Models = require('../../../app_core/models/conection');
-const { enPesos, enlaceDelMenu } = require('./flujo');
+const { enPesos, enlaceDelMenu, rangoEnPalabras } = require('./flujo');
+const contextoNegocio = require('../../core/contextoNegocio');
 
 const VERTICAL = 'restaurante';
 
@@ -259,10 +260,29 @@ async function leerFichaDelNegocio(idNegocio, transaction) {
             tiempo_estimado_min: fila?.tiempo_estimado_min ?? null,
             tiempo_estimado_max: fila?.tiempo_estimado_max ?? null,
             info_asistente: String(fila?.info_asistente || '').trim() || null,
+            domicilio_rango: await leerDomicilioRango(idNegocio, transaction),
         };
     } catch (error) {
         console.warn(`[restaurante] no se pudo leer la ficha del negocio ${idNegocio}: ${error.message}`);
-        return { tiempo_estimado_min: null, tiempo_estimado_max: null, info_asistente: null };
+        return { tiempo_estimado_min: null, tiempo_estimado_max: null, info_asistente: null, domicilio_rango: null };
+    }
+}
+
+/**
+ * El valor del domicilio como rango (`{ min, max, nota }` o `null`), desde 2026-10-02. Aparte y
+ * con la falla contenida, como la ficha: un entorno sin la migración responde sin el rango.
+ */
+async function leerDomicilioRango(idNegocio, transaction) {
+    try {
+        const [fila] = await Models.sequelize.query(
+            `SELECT domicilio_valor_min AS min, domicilio_valor_max AS max, domicilio_nota AS nota
+               FROM general.gener_negocio WHERE id_negocio = :idNegocio;`,
+            { replacements: { idNegocio }, type: Models.sequelize.QueryTypes.SELECT, transaction }
+        );
+        return contextoNegocio.normalizarDomicilioRango(fila);
+    } catch (error) {
+        console.warn(`[restaurante] no se pudo leer el rango del domicilio ${idNegocio}: ${error.message}`);
+        return null;
     }
 }
 
@@ -486,7 +506,9 @@ function registrarCapacidades() {
         descripcion:
             'Los datos prácticos del restaurante: si está abierto AHORA y su horario de hoy, ' +
             'con qué se puede pagar (y el número de Nequi u otra cuenta si el negocio lo dio), ' +
-            'cuánto vale el domicilio (por barrio si lo tiene), cuánto suele tardar un pedido y ' +
+            'cuánto vale el domicilio (un rango de precios, o por barrio si lo tiene; con rango, ' +
+            'di el rango tal cual y que el valor exacto lo confirma el restaurante — nunca elijas ' +
+            'tú un valor dentro del rango), cuánto suele tardar un pedido y ' +
             'notas que el negocio dejó para ti. Úsala SIEMPRE antes de decir «no tengo esa ' +
             'información» cuando pregunten por pagos, Nequi, efectivo, transferencia, valor del ' +
             'domicilio, horario, si siguen atendiendo o cuánto se demoran. Ojo: en Colombia ' +
@@ -541,6 +563,14 @@ function registrarCapacidades() {
                         ? null
                         : `${proxima.dias_adelante === 0 ? 'hoy' : DIAS[proxima.dia_semana]} a las ${proxima.hora}`,
                 metodos_de_pago: metodos.map((m) => m.nombre),
+                // El rango que declaró el negocio (2026-10-02): «entre $7.000 y $9.000» + su nota.
+                // Si además hay barrios con precio, el del barrio es el exacto.
+                domicilio_rango: negocio.domicilio_rango
+                    ? {
+                          valor: rangoEnPalabras(negocio.domicilio_rango),
+                          nota: negocio.domicilio_rango.nota,
+                      }
+                    : null,
                 domicilio_por_barrio: barrios.slice(0, 40).map((b) => ({
                     barrio: b.nombre,
                     valor: precio(b.valor),
@@ -711,10 +741,20 @@ function registrarCapacidades() {
                  * El domicilio solo se nombra cuando lo hay: avisar de un recargo imposible a
                  * quien va a pasar por el local es ruido que resta credibilidad al resto.
                  */
+                // Sin barrio con precio exacto, el rango que declaró el negocio (2026-10-02): no se
+                // suma —no hay un valor que sumar—, pero el cliente sabe cuánto más le espera.
+                let rango = null;
+                if (!recoge && !enMesa && !domicilio) {
+                    rango = rangoEnPalabras(await leerDomicilioRango(idNegocio));
+                }
                 const aviso =
                     recoge || enMesa || domicilio
                         ? '_El total es aproximado: puede variar por el empaque._'
-                        : '_El total es aproximado: no incluye el domicilio y puede variar por el empaque._';
+                        : rango === 'gratis'
+                          ? '_El total es aproximado: puede variar por el empaque. El domicilio es gratis._'
+                          : rango
+                            ? `_El total es aproximado: no incluye el domicilio (${rango}, te lo confirma el restaurante) y puede variar por el empaque._`
+                            : '_El total es aproximado: no incluye el domicilio y puede variar por el empaque._';
 
                 /**
                  * La lista de productos, con su precio y el total.

@@ -1369,7 +1369,7 @@ async function cartaDe(idNegocio) {
  * hasta que se le olvidó el carrito a mitad de conversación.
  */
 function reclama(texto) {
-    return Boolean(codigoPedido.leer(texto)) || esPreguntaDeTiempo(texto);
+    return Boolean(codigoPedido.leer(texto)) || esPreguntaDeTiempo(texto) || esPreguntaDeDomicilio(texto);
 }
 
 /**
@@ -1417,6 +1417,62 @@ function fraseDeTiempo(tiempo) {
             ? `de *${min} a ${max} minutos*`
             : `de unos *${min} minutos*`;
     return `El tiempo estimado de tu pedido es ${cuanto} ⏱️. Si está listo antes, te avisaremos 😊`;
+}
+
+/**
+ * «¿Cuánto vale el domicilio?» — se contesta con el RANGO que declaró el negocio.
+ *
+ * Desde 2026-10-02: cargar el precio barrio por barrio era tedioso y el negocio prefirió decir un
+ * rango («en Pasto entre $7.000 y $9.000; fuera de la ciudad, desde $10.000»). Igual de estricto
+ * que `PREGUNTA_TIEMPO`: frase corta y con forma de pregunta; un pedido largo que menciona el
+ * domicilio no es esta pregunta.
+ */
+const PREGUNTA_DOMICILIO = [
+    /\bcuanto (vale|valen|cuesta|cuestan|sale|es|seria|valdria|costaria|cobran|cobrarian|me cobran)( el| los)? (domicilio|domicilios|domi|envio|envios)\b/,
+    /\b(valor|precio|costo|tarifa)s? (del |de los |de )?(domicilio|domicilios|domi|envio)\b/,
+    /\bcuanto (me )?(cobran|cobrarian|vale|cuesta|sale) (por )?(el |la )?(domicilio|envio|llevarlo|traerlo|traermelo|llevarmelo|traida|llevada)\b/,
+    /\b(domicilio|envio|domi) (cuanto|que valor|que precio|en cuanto|que costo)\b/,
+    /\b(tiene|tienen|cobran) (costo|valor|recargo) (el |los )?(domicilio|domicilios|envio)\b/,
+];
+
+function esPreguntaDeDomicilio(texto) {
+    const t = normalizar(ultimaLinea(texto)).replace(/[¿?¡!.,]/g, ' ').replace(/\s+/g, ' ').trim();
+    if (!t || t.split(' ').length > MAX_PALABRAS_PREGUNTA) return false;
+    return PREGUNTA_DOMICILIO.some((patron) => patron.test(t));
+}
+
+/**
+ * Cuánto vale el domicilio, en pocas palabras: «entre $7.000 y $9.000», «desde $7.000» o
+ * «gratis». `null` si el negocio no dio un valor (puede haber dado solo la nota).
+ */
+function rangoEnPalabras(rango) {
+    const min = rango?.min;
+    if (!Number.isInteger(min) || min < 0) return null;
+    const max = rango?.max;
+    if (Number.isInteger(max) && max > min) return `entre ${enPesos(min)} y ${enPesos(max)}`;
+    if (min === 0) return 'gratis';
+    return `desde ${enPesos(min)}`;
+}
+
+/**
+ * La respuesta con el rango que declaró el negocio, o `null` si no lo ha configurado (entonces no
+ * se inventa ninguno y lo atiende el modelo, que mira barrios y notas).
+ */
+function fraseDeDomicilio(rango) {
+    const cuanto = rangoEnPalabras(rango);
+    const nota = String(rango?.nota || '').trim();
+    if (!cuanto && !nota) return null;
+    const lineas = [];
+    if (cuanto) {
+        lineas.push(
+            cuanto === 'gratis'
+                ? 'El domicilio es *gratis* 🛵'
+                : `El domicilio vale *${cuanto}*, según dónde estés 🛵`
+        );
+    }
+    if (nota) lineas.push(nota);
+    lineas.push('El valor exacto te lo confirma el restaurante al despachar tu pedido 😊');
+    return lineas.join('\n');
 }
 
 /**
@@ -1556,6 +1612,37 @@ function crearFlujoRestaurante({
             if (conversacion.tarea_actual !== TAREA_PEDIDO) return delegar(ctx);
         }
 
+        // «¿Cuánto vale el domicilio?» — mismo trato que el tiempo, y antes del pedido a medias
+        // por la misma razón: la pregunta no es la respuesta al paso pendiente.
+        if (esPreguntaDeDomicilio(texto)) {
+            const frase = fraseDeDomicilio(negocio.domicilioRango);
+            if (frase && conversacion.tarea_actual === TAREA_PEDIDO) {
+                await conIdentidad(ctx);
+                await conCatalogo(ctx);
+                const datos = datosDelPedido(conversacion);
+                const q = pregunta(datos.paso, datos, ctx);
+                return {
+                    pasos: [paso('valor_domicilio_respondido', { paso: datos.paso ?? null })],
+                    respuestas: [{ ...q, texto: `${frase}\n\n${q.texto}` }],
+                    variables: conMemoria(conversacion),
+                    tarea: tareaPedido(datos),
+                    resultado: 'resuelto',
+                    nivel: 'determinista',
+                };
+            }
+            if (frase) {
+                return {
+                    pasos: [paso('valor_domicilio_respondido')],
+                    respuestas: [frase],
+                    variables: conMemoria(conversacion),
+                    tarea: null,
+                    resultado: 'resuelto',
+                    nivel: 'determinista',
+                };
+            }
+            if (conversacion.tarea_actual !== TAREA_PEDIDO) return delegar(ctx);
+        }
+
         // Un pedido a medias: falta el nombre, el teléfono, la dirección o cómo paga. Mientras
         // la tarea esté abierta, la política de enrutado devuelve aquí cada mensaje, así que el
         // modelo no puede llevarse la conversación a mitad de camino ni olvidarse de lo que ya
@@ -1608,6 +1695,9 @@ module.exports = {
     reclama,
     esPreguntaDeTiempo,
     fraseDeTiempo,
+    esPreguntaDeDomicilio,
+    fraseDeDomicilio,
+    rangoEnPalabras,
     huecosDelCliente,
     interpretarDatos,
     leerTelefono,

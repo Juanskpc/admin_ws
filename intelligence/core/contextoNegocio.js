@@ -32,7 +32,7 @@ const Models = require('../../app_core/models/conection');
 /** Lo que se enseña cuando el negocio no se puede leer. Neutro y sin mentir. */
 const GENERICO = {
     id: null, nombre: null, tratamiento: 'el negocio', atencion: null,
-    tipoNegocio: null, rubro: null, perfilReserva: null, tiempoEstimado: null,
+    tipoNegocio: null, rubro: null, perfilReserva: null, tiempoEstimado: null, domicilioRango: null,
 };
 
 /**
@@ -122,6 +122,8 @@ async function obtener(idNegocio) {
         perfilReserva: String(fila.perfil_reserva || '').trim().toUpperCase() || null,
         // Cuánto tarda un pedido, según el propio negocio (`null` = no lo ha dicho).
         tiempoEstimado: await leerTiempoEstimado(id),
+        // Cuánto vale el domicilio, como rango (`null` = no lo ha dicho).
+        domicilioRango: await leerDomicilioRango(id),
     };
 }
 
@@ -157,6 +159,47 @@ async function leerTiempoEstimado(id) {
 }
 
 /**
+ * El valor del domicilio que declaró el negocio, como rango: `{ min, max, nota }` (`max` y `nota`
+ * pueden ser `null`) o `null` si no ha dicho ni un valor ni una nota.
+ *
+ * Existe desde 2026-10-02 porque cargar el precio barrio por barrio era tedioso: el negocio dice
+ * «entre $7.000 y $9.000; fuera de la ciudad, desde $10.000» y eso contesta el asistente. Misma
+ * falla contenida que `leerTiempoEstimado`, y por la misma razón.
+ */
+let avisoDomicilioEmitido = false;
+async function leerDomicilioRango(id) {
+    try {
+        const [fila] = await Models.sequelize.query(
+            `SELECT domicilio_valor_min AS min, domicilio_valor_max AS max, domicilio_nota AS nota
+               FROM general.gener_negocio WHERE id_negocio = :id`,
+            { replacements: { id }, type: Models.sequelize.QueryTypes.SELECT }
+        );
+        return normalizarDomicilioRango(fila);
+    } catch (error) {
+        if (!avisoDomicilioEmitido) {
+            avisoDomicilioEmitido = true;
+            console.warn(`[contextoNegocio] no se pudo leer el rango del domicilio: ${error.message}`);
+        }
+        return null;
+    }
+}
+
+/** `{ min, max, nota }` de una fila con esas columnas, o `null` si no dice nada utilizable. */
+function normalizarDomicilioRango(fila) {
+    const crudoMin = fila?.min;
+    const min = crudoMin === null || crudoMin === undefined ? NaN : Number(crudoMin);
+    const valido = Number.isInteger(min) && min >= 0;
+    const max = Number(fila?.max);
+    const nota = String(fila?.nota || '').trim() || null;
+    if (!valido && !nota) return null;
+    return {
+        min: valido ? min : null,
+        max: valido && Number.isInteger(max) && max > min ? max : null,
+        nota,
+    };
+}
+
+/**
  * El tipo por el que se elige el flujo de conversación.
  *
  * Es el módulo, salvo en un caso: un alojamiento usa el módulo de reserva pero **no agenda
@@ -169,4 +212,4 @@ function tipoParaEnrutar(fila) {
     return modulo;
 }
 
-module.exports = { obtener, GENERICO };
+module.exports = { obtener, GENERICO, normalizarDomicilioRango };
