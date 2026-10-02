@@ -858,6 +858,10 @@ router.post('/intelligence/bandeja/conversaciones/:id/desbloquear', [
 
 // Reactivación del asistente (ADR-023, Enmienda 2): cuántos minutos después de la última
 // intervención humana vuelve solo (0 = nunca). Guardar exige ser ADMINISTRADOR de ESE negocio.
+// Lo que le falta al negocio para que el asistente atienda bien (horario, carta, pagos…).
+router.get('/intelligence/bandeja/preparacion', [
+    query('id_negocio').isInt({ min: 1 }).withMessage('ID de negocio inválido'),
+], IntelligenceBandejaController.leerPreparacion);
 router.get('/intelligence/bandeja/configuracion', [
     query('id_negocio').isInt({ min: 1 }).withMessage('ID de negocio inválido'),
 ], IntelligenceBandejaController.leerConfiguracion);
@@ -871,6 +875,9 @@ router.put('/intelligence/bandeja/configuracion', [
         .withMessage('El tiempo estimado debe estar entre 1 y 600 minutos'),
     body('tiempo_estimado_max').optional({ values: 'null' }).isInt({ min: 1, max: 600 })
         .withMessage('El tiempo máximo debe estar entre 1 y 600 minutos'),
+    // Notas libres para el asistente (número de Nequi, valor del domicilio…). null o '' las borra.
+    body('info_asistente').optional({ values: 'null' }).isString().isLength({ max: 1500 })
+        .withMessage('La información para el asistente admite hasta 1500 caracteres'),
 ], IntelligenceBandejaController.guardarConfiguracion);
 
 module.exports = router;

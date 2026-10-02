@@ -80,6 +80,30 @@ function esComando(texto, lista) {
     return lista.some((palabra) => t === normalizar(palabra).replace(ADORNOS, ''));
 }
 
+/**
+ * Palabras que acompañan a un «sí» sin cambiarlo: vocativos y cortesías.
+ *
+ * Producción, 2026-10-01 (Zona Burger): «Si Veci» no se leyó como sí y el bot repreguntó. En
+ * Colombia el «sí» casi nunca va solo: «sí veci», «sí porfa», «sí señor, gracias», «siii».
+ */
+const PALABRA_DE_SI = /^(s+i+|si+p+|confirmo|confirmado|dale|ok+|okey|vale|listo|claro|perfecto|correcto|exacto|eso|de|una|asi|es)$/;
+const CORTESIA = /^(veci|vecin[oa]|vecinit[oa]|porfa|porfis|por|favor|senor|senora|seno|sr|sra|mi|amor|reina|rey|amig[oa]|gracias|muchas|mil|please|pls|y|todo|bien|ya)$/;
+
+/**
+ * ¿Es un «sí», aunque venga adornado? La primera palabra tiene que ser de afirmar y TODAS las
+ * demás, de afirmar o de cortesía: «sí, pero sin cebolla» NO es un sí limpio — trae un cambio.
+ */
+function esAfirmacion(texto) {
+    if (esComando(texto, COMANDO.SI)) return true;
+    const palabras = normalizar(ultimaLinea(texto))
+        .replace(/[^a-zñ\s]/g, ' ')
+        .split(/\s+/)
+        .filter(Boolean);
+    if (palabras.length === 0 || palabras.length > 6) return false;
+    if (!PALABRA_DE_SI.test(palabras[0])) return false;
+    return palabras.every((p) => PALABRA_DE_SI.test(p) || CORTESIA.test(p));
+}
+
 /** ¿Es alguno de los comandos conocidos, cualquiera que sea? */
 function esAlgunComando(texto) {
     return Object.values(COMANDO).some((lista) => esComando(texto, lista));
@@ -155,6 +179,7 @@ module.exports = {
     ultimaLinea,
     esComando,
     esAlgunComando,
+    esAfirmacion,
     esSaludo,
     saludoPorLaHora,
 };

@@ -494,17 +494,27 @@ async function guardarEstado(
 // ── Mensajes ────────────────────────────────────────────────────────────────────────────
 
 async function insertarMensajeEntrante(
-    { idMensaje, idConversacion, idNegocio, canal, idExternoMensaje, contenido, crudo, enviadoEn },
+    {
+        idMensaje,
+        idConversacion,
+        idNegocio,
+        canal,
+        idExternoMensaje,
+        contenido,
+        crudo,
+        enviadoEn,
+        sinTurnoMotivo = null,
+    },
     { transaction }
 ) {
     return unaFila(
         `
         INSERT INTO intelligence.mensaje
             (id_mensaje, id_conversacion, id_negocio, direccion, canal, id_externo, contenido,
-             crudo, enviado_en)
+             crudo, enviado_en, sin_turno_motivo)
         VALUES
             (:idMensaje, :idConversacion, :idNegocio, 'entrante', :canal, :idExterno,
-             :contenido, CAST(:crudo AS jsonb), :enviadoEn)
+             :contenido, CAST(:crudo AS jsonb), :enviadoEn, :sinTurnoMotivo)
         RETURNING id_mensaje, creado_en;
         `,
         {
@@ -518,6 +528,9 @@ async function insertarMensajeEntrante(
             // Nulo si el canal no lo trae o si venía fuera de una ventana creíble: lo sanea
             // `core/mensajeCanonico.js`, porque este valor **ordena la conversación**.
             enviadoEn: enviadoEn ?? null,
+            // Con valor, el mensaje se guarda pero ningún turno lo recogerá nunca: llegó con una
+            // persona atendiendo, o con horas de retraso. Ver `migrate_intelligence_sin_turno.js`.
+            sinTurnoMotivo,
         },
         transaction
     );
@@ -544,11 +557,17 @@ async function mensajesPendientes(idConversacion, { ventanaDias, transaction }) 
     return sequelize.query(
         `
         SELECT id_mensaje, creado_en, contenido, id_externo, enviado_en
-          FROM intelligence.mensaje
+          FROM intelligence.mensaje m
          WHERE id_conversacion = :idConversacion
            AND direccion = 'entrante'
            AND id_turno IS NULL
+           AND sin_turno_motivo IS NULL
            AND creado_en > now() - (:ventanaDias || ' days')::interval
+           -- Lo que llegó antes de que una persona interviniera ya lo vio esa persona: si la
+           -- conversación vuelve al asistente, no lo contesta otra vez (Zona Burger, 2026-10-01).
+           AND creado_en > COALESCE(
+                   (SELECT humano_ultimo_en FROM intelligence.conversacion
+                     WHERE id_conversacion = :idConversacion), '-infinity'::timestamptz)
          ORDER BY COALESCE(enviado_en, creado_en), creado_en, id_mensaje;
         `,
         { replacements: { idConversacion, ventanaDias: String(ventanaDias) }, transaction, ...SELECT }
@@ -1278,7 +1297,9 @@ async function conversacionesConPendientes({ ventanaDias, transaction = null }) 
           JOIN intelligence.conversacion c ON c.id_conversacion = m.id_conversacion
          WHERE m.direccion = 'entrante'
            AND m.id_turno IS NULL
+           AND m.sin_turno_motivo IS NULL
            AND m.creado_en > now() - (:ventanaDias || ' days')::interval
+           AND m.creado_en > COALESCE(c.humano_ultimo_en, '-infinity'::timestamptz)
            AND c.estado IN (:procesables);
         `,
         {

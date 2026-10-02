@@ -147,6 +147,17 @@ function renderizarEsquema(parametros = {}) {
                 prop.type = 'string';
                 prop.description = 'Fecha en formato YYYY-MM-DD (hora local del negocio).';
                 break;
+            case 'lista': {
+                // ⚠️ Sin este caso caía en `default` y el modelo veía `items` como TEXTO: en
+                // producción (Zona Burger, 2026-10-01) los 7 pedidos que tomó el modelo fallaron
+                // el primer intento con «1 x Agua (id_producto: 78)» y costaron una vuelta más.
+                const elemento = renderizarEsquema(decl.elemento || {});
+                prop.type = 'array';
+                prop.items = elemento;
+                if (decl.min_items) prop.minItems = decl.min_items;
+                if (decl.max_items) prop.maxItems = decl.max_items;
+                break;
+            }
             case 'string':
             default:
                 prop.type = 'string';

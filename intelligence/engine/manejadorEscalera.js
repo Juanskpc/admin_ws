@@ -38,6 +38,8 @@ const confirmacion = require('./confirmacion');
 // La baja (STOP/BAJA) va por encima de la tabla de enrutado: no es una decisión de costo, es una
 // obligación legal, y ninguna otra regla puede ganarle. Ver la cabecera de `optout.js`.
 const optout = require('./optout');
+const cortesia = require('./cortesia');
+const repositorio = require('./repositorio');
 // Para cuando ningún peldaño tiene nada que decir. Un turno sin respuesta es el fallo caro de
 // este sistema; decir «te contestan luego» siempre es mejor que callarse.
 const handoff = require('./handoff');
@@ -137,6 +139,24 @@ function crearManejadorEscalera({
         if (optout.pedida(ctx.texto)) {
             return optout.decision(ctx.conversacion);
         }
+
+        // «Gracias» → «¡Con gusto!» → «Gracias»: la segunda no se contesta, y la primera sale
+        // gratis, sin modelo. Ver `cortesia.js` para lo que NO se toca (una respuesta a una
+        // pregunta del asistente, una tarea a medias, el primer mensaje).
+        const cierre = await cortesia.decidir(ctx, {
+            hayTarea:
+                Boolean(ctx.conversacion?.tarea_actual) ||
+                Boolean(confirmacion.pendiente(ctx.conversacion)),
+            ultimoDelAsistente: async () => {
+                const historial = await repositorio.historialReciente(
+                    ctx.conversacion.id_conversacion,
+                    { idTurno: ctx.turno?.id_turno ?? null, limite: 6 }
+                );
+                const ultimo = [...historial].reverse().find((m) => m.rol === 'asistente');
+                return ultimo ? ultimo.texto : null;
+            },
+        });
+        if (cierre) return cierre;
 
         // ⚠️ El flujo de la vertical se resuelve ANTES de enrutar, no después.
         //

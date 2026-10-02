@@ -222,6 +222,50 @@ function producto(p) {
     };
 }
 
+/**
+ * En qué va un pedido, dicho como lo entiende el cliente.
+ *
+ * El modelo recibía `estado`, `estado_cocina` y `estado_pago` en crudo y los interpretaba —mal—.
+ * Aquí se decide una sola frase con lo que el negocio sabe: cancelado, entregado, avisado
+ * (listo para recoger / en camino), listo, en cocina o recibido.
+ */
+function estadoParaElCliente(orden) {
+    const domicilio = orden.tipo_pedido === 'DOMICILIO';
+    if (orden.estado === 'CANCELADA') return 'cancelado';
+    if (orden.estado === 'CERRADA') return domicilio ? 'entregado' : 'entregado / recogido';
+    if (orden.aviso_listo_en) {
+        return domicilio ? 'listo y en camino con el domiciliario' : 'listo para recoger en el local';
+    }
+    if (orden.estado_cocina === 'LISTO') {
+        return domicilio ? 'listo en cocina, a punto de salir' : 'listo para recoger en el local';
+    }
+    if (orden.estado_cocina === 'EN_PREPARACION') return 'en preparación en la cocina';
+    return 'recibido por el restaurante, en turno para la cocina';
+}
+
+/**
+ * Tiempo estimado y notas libres del negocio (`gener_negocio`). Con la falla contenida: si las
+ * columnas aún no existen en un entorno sin migrar, la capacidad responde sin ellas en vez de
+ * fallar entera.
+ */
+async function leerFichaDelNegocio(idNegocio, transaction) {
+    try {
+        const [fila] = await Models.sequelize.query(
+            `SELECT tiempo_estimado_min, tiempo_estimado_max, info_asistente
+               FROM general.gener_negocio WHERE id_negocio = :idNegocio;`,
+            { replacements: { idNegocio }, type: Models.sequelize.QueryTypes.SELECT, transaction }
+        );
+        return {
+            tiempo_estimado_min: fila?.tiempo_estimado_min ?? null,
+            tiempo_estimado_max: fila?.tiempo_estimado_max ?? null,
+            info_asistente: String(fila?.info_asistente || '').trim() || null,
+        };
+    } catch (error) {
+        console.warn(`[restaurante] no se pudo leer la ficha del negocio ${idNegocio}: ${error.message}`);
+        return { tiempo_estimado_min: null, tiempo_estimado_max: null, info_asistente: null };
+    }
+}
+
 function registrarCapacidades() {
     registry.registrar({
         nombre: 'consultar_carta',
@@ -327,7 +371,11 @@ function registrarCapacidades() {
             'cuando el cliente pregunte por algo ' +
             'concreto ("¿tienen hamburguesa doble?", "¿cuánto vale la limonada?") en vez de ' +
             'pedir la carta entera. Si no encuentra nada, dilo y ofrece enseñar las categorías; ' +
-            'no inventes productos ni precios: lo único que existe es lo que devuelve esto.',
+            'no inventes productos ni precios: lo único que existe es lo que devuelve esto. ' +
+            'Si salen varias presentaciones del mismo plato (personal/pequeña, mediana, grande, ' +
+            'familiar, sencilla, doble) y el cliente NO dijo el tamaño, pregúntale cuál quiere ' +
+            'con sus precios; nunca elijas tú el tamaño. Si con el término completo no aparece ' +
+            'nada, vuelve a buscar con la palabra principal sola (p. ej. «house», «criolla»).',
         vertical: VERTICAL,
         tipo: registry.TIPO.CONSULTA,
         feature: FEATURE.ASISTENTE_IA,
@@ -353,9 +401,12 @@ function registrarCapacidades() {
     registry.registrar({
         nombre: 'consultar_estado_pedido',
         descripcion:
-            'Dice en qué va un pedido a domicilio, por su número. Úsala cuando el cliente ' +
-            'pregunte si ya salió, cuánto falta o dónde está su pedido. Necesitas el número ' +
-            'de orden; si no lo tiene, pídeselo.',
+            'Dice en qué va un pedido, por su número (sirve «ORD-7541» o solo «7541»). Úsala ' +
+            'cuando el cliente pregunte si ya salió, si ya está listo o dónde está su pedido. ' +
+            'Si en la conversación ya salió el número de su pedido, úsalo sin pedírselo otra ' +
+            'vez; si no lo tiene, pídeselo. Contesta con `estado_para_el_cliente`, que ya está ' +
+            'en palabras del cliente. El pago casi siempre es al recibir o al recoger: NUNCA le ' +
+            'digas que el pedido espera el pago para prepararse o salir.',
         vertical: VERTICAL,
         tipo: registry.TIPO.CONSULTA,
         feature: FEATURE.ASISTENTE_IA,
@@ -364,14 +415,30 @@ function registrarCapacidades() {
         },
 
         async ejecutar({ idNegocio, args, contexto }) {
-            const orden = await Models.PedidOrden.findOne({
-                where: { id_negocio: idNegocio, numero_orden: String(args.numero_orden).trim() },
-                attributes: [
-                    'id_orden', 'numero_orden', 'estado', 'estado_cocina', 'estado_pago',
-                    'tipo_pedido', 'contacto_telefono', 'total', 'fecha_creacion',
-                ],
+            const atributos = [
+                'id_orden', 'numero_orden', 'estado', 'estado_cocina', 'estado_pago',
+                'tipo_pedido', 'contacto_telefono', 'total', 'fecha_creacion', 'aviso_listo_en',
+            ];
+            const pedido = String(args.numero_orden).trim();
+            let orden = await Models.PedidOrden.findOne({
+                where: { id_negocio: idNegocio, numero_orden: pedido },
+                attributes: atributos,
                 transaction: contexto.transaction,
             });
+            // El cliente escribe «7541», no «ORD-7541» (Zona Burger, 2026-10-01: «No encuentro
+            // el pedido con el número 7541»). Con solo dígitos se prueba el número con su prefijo.
+            const digitos = pedido.replace(/^#/, '').match(/^\d{1,9}$/)?.[0];
+            if (!orden && digitos) {
+                orden = await Models.PedidOrden.findOne({
+                    where: {
+                        id_negocio: idNegocio,
+                        numero_orden: { [Models.Sequelize.Op.like]: `%-${digitos}` },
+                    },
+                    attributes: atributos,
+                    order: [['fecha_creacion', 'DESC']],
+                    transaction: contexto.transaction,
+                });
+            }
 
             if (!orden) {
                 const e = new Error('No encuentro ese pedido.');
@@ -401,13 +468,86 @@ function registrarCapacidades() {
                 }
             }
 
+            // ⚠️ `estado_pago` ya NO sale crudo. Con «pendiente_pago» delante, el modelo le dijo
+            // cinco veces a una clienta que su pedido no entraba a cocina «porque está pendiente
+            // de pago», cuando iba a pagar en efectivo al recibirlo (Zona Burger, 2026-10-01).
             return {
                 numero_orden: orden.numero_orden,
-                estado: orden.estado,
-                estado_cocina: orden.estado_cocina || null,
-                estado_pago: orden.estado_pago || null,
+                estado_para_el_cliente: estadoParaElCliente(orden),
                 tipo_pedido: orden.tipo_pedido,
                 total: precio(orden.total),
+                ya_pagado: orden.estado_pago === 'pagado' || orden.estado === 'CERRADA',
+            };
+        },
+    });
+
+    registry.registrar({
+        nombre: 'consultar_info_negocio',
+        descripcion:
+            'Los datos prácticos del restaurante: si está abierto AHORA y su horario de hoy, ' +
+            'con qué se puede pagar (y el número de Nequi u otra cuenta si el negocio lo dio), ' +
+            'cuánto vale el domicilio (por barrio si lo tiene), cuánto suele tardar un pedido y ' +
+            'notas que el negocio dejó para ti. Úsala SIEMPRE antes de decir «no tengo esa ' +
+            'información» cuando pregunten por pagos, Nequi, efectivo, transferencia, valor del ' +
+            'domicilio, horario, si siguen atendiendo o cuánto se demoran. Ojo: en Colombia ' +
+            '«cancelar» también es PAGAR («¿cuánto le cancelo?», «cancelo por Nequi», «le ' +
+            'cancelo al domiciliario»): eso es una pregunta de pago, no una anulación. Lo que ' +
+            'no venga aquí, no lo inventes: di que lo confirma el restaurante.',
+        vertical: VERTICAL,
+        tipo: registry.TIPO.CONSULTA,
+        feature: FEATURE.ASISTENTE_IA,
+        parametros: {},
+
+        async ejecutar({ idNegocio, contexto }) {
+            const ahora = new Date();
+            const [{ estado }, proxima, bloques, metodos, domicilio, negocio] = await Promise.all([
+                horarioService.estadoDeAtencion({ idNegocio, ahora }),
+                horarioService.proximaApertura({ idNegocio, ahora }),
+                Models.RestHorario.findAll({
+                    where: { id_negocio: idNegocio, id_usuario: null },
+                    attributes: ['dia_semana', 'hora_inicio', 'hora_fin'],
+                    order: [['hora_inicio', 'ASC']],
+                    transaction: contexto.transaction,
+                }),
+                Models.RestMetodoPago.findAll({
+                    where: { id_negocio: idNegocio, estado: 'A', es_cuenta: false },
+                    attributes: ['nombre'],
+                    order: [['nombre', 'ASC']],
+                    transaction: contexto.transaction,
+                }),
+                barrioService.listarPublico(idNegocio).catch(() => ({ habilitado: false, barrios: [] })),
+                leerFichaDelNegocio(idNegocio, contexto.transaction),
+            ]);
+
+            const ESTADOS = {
+                abierto: 'abierto, tomando pedidos',
+                fuera_de_horario: 'cerrado: fuera del horario de atención',
+                aun_no_abre: 'todavía no ha abierto hoy (es su horario, pero aún no abren)',
+                cerrado_sin_horario: 'cerrado ahora mismo',
+            };
+            // Bogotá, igual que `horarioService`: 0=Dom..6=Sáb.
+            const hoy = new Date(ahora.getTime() - 5 * 3600 * 1000).getUTCDay();
+            const DIAS = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
+            const franjasHoy = bloques
+                .filter((b) => Number(b.dia_semana) === hoy)
+                .map((b) => `${String(b.hora_inicio).slice(0, 5)} a ${String(b.hora_fin).slice(0, 5)}`);
+
+            const barrios = domicilio.habilitado ? domicilio.barrios : [];
+            return {
+                atencion_ahora: ESTADOS[estado] || estado,
+                horario_hoy: bloques.length === 0 ? null : franjasHoy.length ? franjasHoy : 'hoy no abre',
+                proxima_apertura:
+                    estado === 'abierto' || !proxima
+                        ? null
+                        : `${proxima.dias_adelante === 0 ? 'hoy' : DIAS[proxima.dia_semana]} a las ${proxima.hora}`,
+                metodos_de_pago: metodos.map((m) => m.nombre),
+                domicilio_por_barrio: barrios.slice(0, 40).map((b) => ({
+                    barrio: b.nombre,
+                    valor: precio(b.valor),
+                })),
+                tiempo_estimado_min: negocio.tiempo_estimado_min,
+                tiempo_estimado_max: negocio.tiempo_estimado_max,
+                notas_del_negocio: negocio.info_asistente,
             };
         },
     });
@@ -650,12 +790,16 @@ function registrarCapacidades() {
                         : [];
                     if (domicilio) total += domicilio.valor;
 
+                    // La nota se enseña antes del «sí»: si el cliente añadió algo mientras se le
+                    // preguntaba («Alameda 2, entrada al barrio»), tiene que ver que quedó.
+                    const nota = String(args.nota || '').trim();
                     return [
                         cabecera,
                         '',
                         ...lineas,
                         ...lineaDomicilio,
                         ...avisoQuitar,
+                        ...(nota ? [`📝 _Nota: ${nota}_`] : []),
                         '',
                         `*Total: ${enPesos(total)}*`,
                         aviso,
@@ -669,6 +813,15 @@ function registrarCapacidades() {
                         `a nombre de ${args.cliente_nombre}, ${donde}?`
                     );
                 }
+            },
+            // Lo que el cliente escribe mientras se le pregunta («Alameda 2, entrada al barrio
+            // común», «Hit de lulo si tiene») va a la nota del pedido, que es lo que lee la
+            // cocina y el domiciliario. Antes se perdía (Zona Burger, 2026-10-01). Ver
+            // `engine/confirmacion.js#lineasParaAnotar`. Tope de 500, el de `nota`.
+            anotar: ({ args, texto }) => {
+                const previa = String(args?.nota || '').trim();
+                const nota = (previa ? `${previa}. ${texto}` : texto).slice(0, 500);
+                return { ...args, nota };
             },
             hecho: ({ resultado }) =>
                 resultado.suma_a_cuenta
@@ -1093,7 +1246,12 @@ function registrarCapacidades() {
             'que se equivocó. Solo funciona si la cocina todavía no lo ha empezado a preparar: ' +
             'si ya está en preparación o ya se cobró, se rechaza y hay que decirle que llame ' +
             'al restaurante. Al pedirla, el negocio le enseña al cliente una pregunta de ' +
-            'confirmación y no se ejecuta hasta que diga sí: no le digas que ya está cancelado.',
+            'confirmación y no se ejecuta hasta que diga sí: no le digas que ya está cancelado. ' +
+            '⚠️ En Colombia «cancelar» casi siempre significa PAGAR: «cancelo por Nequi», ' +
+            '«¿cuánto le cancelo?», «cancelo al domiciliario», «para cancelar en efectivo». Si ' +
+            'menciona dinero, un valor o un medio de pago, NO es una anulación: contesta sobre el ' +
+            'pago con consultar_info_negocio. Usa esta capacidad solo si pide ANULAR el pedido ' +
+            '(«ya no lo quiero», «anúlalo», «me equivoqué»).',
         vertical: VERTICAL,
         tipo: registry.TIPO.MUTACION,
         // Cancelar dos veces el mismo pedido no lo cancela dos veces: la segunda vez
@@ -1344,4 +1502,4 @@ function registrarFlujo({ flujos }) {
     });
 }
 
-module.exports = { VERTICAL, registrarCapacidades, registrarFlujo };
+module.exports = { VERTICAL, registrarCapacidades, registrarFlujo, estadoParaElCliente };

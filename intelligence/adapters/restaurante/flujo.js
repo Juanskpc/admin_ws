@@ -1391,6 +1391,10 @@ const PREGUNTA_TIEMPO = [
     /\bcuanto (de )?(demora|espera|tiempo de espera|tiempo de entrega)\b/,
     /\b(tiempo|demora) (estimado )?de (entrega|espera|preparacion)\b/,
     /\ben cuanto (tiempo )?(llega|llegaria|esta|estaria|lo tienen|me lo traen|me lo entregan|me llega)\b/,
+    // Quien recoge pregunta por SU llegada, no por la del pedido (Zona Burger, 2026-10-01: «en
+    // cuánto puedo pasar», «en cuánto tiempo puede recoger», «en cuánto tiempo recojo el pedido»).
+    /\ben cuanto (tiempo )?(puedo|podria|puede|paso|pasar|recojo|recoger|lo recojo|vengo|voy|queda|quedaria|estara)\b/,
+    /\ba que hora (llega|llegaria|esta|estaria|estara|paso|puedo pasar|recojo|lo recojo|me llega|queda)\b/,
 ];
 const MAX_PALABRAS_PREGUNTA = 14;
 

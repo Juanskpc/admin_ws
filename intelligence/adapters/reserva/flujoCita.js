@@ -62,7 +62,7 @@ const contextoNegocioReal = require('../../core/contextoNegocio');
 // Leer «sí», «cancelar» y la última línea de una ráfaga vive en `texto.js` desde F7: la
 // confirmación de una mutación necesita exactamente la misma lectura, y dos lecturas distintas
 // de «sí» sería un bot que confirma en un sitio y repregunta en el otro.
-const { COMANDO, normalizar, ultimaLinea, esComando, saludoPorLaHora } = require('../../engine/texto');
+const { COMANDO, normalizar, ultimaLinea, esComando, esAfirmacion, saludoPorLaHora } = require('../../engine/texto');
 const confirmacion = require('../../engine/confirmacion');
 // El estado que apaga el bot, pone la conversación en la bandeja y avisa al negocio (campanita y
 // correo, `avisos/escalado.js`). `resultado: 'handoff'` a secas solo cuenta en el Ledger: un
@@ -1937,7 +1937,7 @@ function crearManejadorDeterminista({
             return volverA(ctx, PASO.HORA, { ...datos, paso: PASO.CONFIRMAR });
         }
 
-        if (!esComando(ctx.texto, COMANDO.SI)) {
+        if (!esAfirmacion(ctx.texto)) {
             return reintentar(ctx, datos, `¿Confirmo la ${terminos(datos).cita}? Respóndeme sí o no.`);
         }
 

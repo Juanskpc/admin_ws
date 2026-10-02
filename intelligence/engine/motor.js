@@ -244,7 +244,9 @@ function obtenerCola() {
  * @param {boolean} [entrada.despertar=true] — false deja el mensaje guardado sin procesarlo.
  */
 async function recibir(entrada) {
-    const { despertar = true } = entrada || {};
+    // `antiguo`: el canal sabe que el mensaje se envió hace mucho (Meta entrega de golpe lo que
+    // había en la app al conectar un número por coexistencia). Se guarda, pero no se contesta.
+    const { despertar = true, antiguo = false } = entrada || {};
     const { canal, idNegocio, idExterno, texto, idExternoMensaje, enviadoEn, crudo } =
         mensajeCanonico.normalizarEntrada(entrada);
     const contenido = texto;
@@ -281,6 +283,16 @@ async function recibir(entrada) {
                 duplicado: true,
             };
         } else {
+            // Un mensaje que el asistente no debe contestar NUNCA se marca al guardarlo, no al
+            // procesarlo: si llega con una persona atendiendo (handoff, bloqueada…), esa persona
+            // lo ve y lo contesta, y cuando la conversación vuelva al asistente no puede quedar
+            // como «pendiente». Sin esta marca, el 2026-10-01 el bot contestó de golpe mensajes de
+            // una hora antes que Zona Burger ya había atendido a mano.
+            const sinTurnoMotivo = antiguo
+                ? 'antiguo'
+                : repositorio.ESTADOS_PROCESABLES.includes(conversacion.estado)
+                  ? null
+                  : conversacion.estado;
             await repositorio.insertarMensajeEntrante(
                 {
                     idMensaje,
@@ -291,6 +303,7 @@ async function recibir(entrada) {
                     contenido,
                     crudo,
                     enviadoEn,
+                    sinTurnoMotivo,
                 },
                 { transaction: t }
             );
@@ -299,6 +312,7 @@ async function recibir(entrada) {
                 id_conversacion: conversacion.id_conversacion,
                 duplicado: false,
                 estado: conversacion.estado,
+                sin_turno_motivo: sinTurnoMotivo,
             };
         }
 
@@ -308,7 +322,7 @@ async function recibir(entrada) {
         throw error;
     }
 
-    if (despertar && !resultado.duplicado) {
+    if (despertar && !resultado.duplicado && !resultado.sin_turno_motivo) {
         obtenerCola().despertar(resultado.id_conversacion);
     }
     return resultado;

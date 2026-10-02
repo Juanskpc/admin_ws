@@ -38,7 +38,7 @@
 'use strict';
 
 const registryReal = require('../core/registry');
-const { COMANDO, esComando } = require('./texto');
+const { COMANDO, esComando, esAfirmacion, normalizar } = require('./texto');
 
 /** Nombre de la tarea. Vive en el mismo espacio que `agendar_cita`, no en uno nuevo. */
 const TAREA = 'confirmar_mutacion';
@@ -48,6 +48,32 @@ const VIDA_MS = Number(process.env.CONFIRMACION_VIDA_MS) || 10 * 60 * 1000;
 
 /** Cuántas veces se repregunta antes de soltar el tema. Una. */
 const MAX_REPREGUNTAS = 1;
+
+/** Cuántas veces se acepta un añadido al pedido pendiente antes de dejar de anotar. */
+const MAX_ANOTACIONES = 3;
+
+/** Empieza como pregunta: eso no se anota, se contesta (y lo atiende el repreguntado). */
+const EMPIEZA_PREGUNTA = /^(cuanto|cuantos|cuanta|que|cual|cuales|como|donde|cuando|tienen|tiene|hay|me pueden|puedo|podria|se puede|a que)\b/;
+
+/**
+ * Las líneas del mensaje que son un AÑADIDO al pedido: ni el «sí», ni un «no», ni una pregunta,
+ * ni una palabra suelta («espera», «ok»). Con el «sí» al final de la ráfaga, lo anterior a él.
+ */
+function lineasParaAnotar(texto, { afirma }) {
+    const lineas = String(texto || '')
+        .split('\n')
+        .map((l) => l.trim())
+        .filter(Boolean);
+    if (afirma) lineas.pop();
+    return lineas.filter((l) => {
+        const t = normalizar(l).replace(/[¡¿!.,;:]/g, ' ').replace(/\s+/g, ' ').trim();
+        const palabras = t.split(' ').filter(Boolean);
+        if (palabras.length < 2 || palabras.length > 40) return false;
+        if (l.includes('?') || EMPIEZA_PREGUNTA.test(t)) return false;
+        if (esAfirmacion(l) || esComando(l, COMANDO.NO) || esComando(l, COMANDO.CANCELAR)) return false;
+        return true;
+    });
+}
 
 function paso(decision, motivo = {}) {
     return { tipo: 'regla', decision, motivo };
@@ -190,7 +216,40 @@ async function resolver(ctx, { gate, registry = registryReal, ahora = () => new 
         });
     }
 
-    if (!esComando(ctx.texto, COMANDO.SI)) {
+    // Lo que el cliente añade mientras se le pregunta («Alameda 2, entrada al barrio común»,
+    // «Hit de lulo si tiene») es parte de SU pedido. Hasta el 2026-10-01 se repreguntaba igual y
+    // ese detalle se perdía, o —si llegaba en la misma ráfaga que el «sí»— ni se leía. Si la
+    // capacidad declara `anotar`, se le pasa; ella decide dónde va (en un pedido, la nota).
+    const declaradaAnotar = registry.obtener(datos.capacidad)?.confirmacion?.anotar;
+    const afirma = esAfirmacion(ctx.texto);
+    const anotable = typeof declaradaAnotar === 'function'
+        ? lineasParaAnotar(ctx.texto, { afirma })
+        : [];
+    const anotaciones = Number(datos.anotaciones || 0);
+    if (anotable.length > 0 && anotaciones < MAX_ANOTACIONES) {
+        datos.args = declaradaAnotar({ args: datos.args, texto: anotable.join('. ') }) || datos.args;
+        datos.anotaciones = anotaciones + 1;
+        if (!afirma) {
+            return {
+                pasos: [paso('confirmacion_anotada', { capacidad: datos.capacidad })],
+                respuestas: [
+                    {
+                        texto: `Anotado ✍️\n\n${await textoDePregunta(datos.capacidad, datos.args, {
+                            registry,
+                            idNegocio: ctx.conversacion?.id_negocio ?? null,
+                        })}`,
+                        opciones: opcionesSiNo(),
+                    },
+                ],
+                variables,
+                tarea: { nombre: TAREA, datos },
+                resultado: 'resuelto',
+                nivel: 'determinista',
+            };
+        }
+    }
+
+    if (!afirma) {
         const repreguntas = Number(datos.repreguntas || 0);
         if (repreguntas >= MAX_REPREGUNTAS) {
             // Dos veces hablando de otra cosa: el cliente está en otro tema. Se suelta el
@@ -309,4 +368,5 @@ module.exports = {
     solicitar,
     resolver,
     textoDePregunta,
+    lineasParaAnotar,
 };

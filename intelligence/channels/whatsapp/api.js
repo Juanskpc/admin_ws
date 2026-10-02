@@ -204,24 +204,34 @@ async function enviarMensaje({
  */
 async function enviarIndicadorEscritura({
     wamid,
+    idNegocio = null,
     fetchImpl = globalThis.fetch,
     config = configReal,
 }) {
     if (!wamid) return false;
 
     const c = config.leer();
-    if (!c.token || !c.phoneNumberId) return false;
+    // Mismo criterio que `enviarMensaje`: el número y el token del NEGOCIO dueño del mensaje.
+    // Con los globales, cada indicador a un cliente de Embedded Signup (Zona Burger, 2026-10-01)
+    // salía por otro número y Meta contestaba 400 en todos los mensajes.
+    let phoneNumberId = c.phoneNumberId;
+    let token = c.token;
+    if (idNegocio) {
+        phoneNumberId = config.numeroDeNegocio ? config.numeroDeNegocio(idNegocio) : null;
+        token = (config.tokenDeNegocio ? config.tokenDeNegocio(idNegocio) : null) ?? c.token;
+    }
+    if (!token || !phoneNumberId) return false;
 
     const control = new AbortController();
     const reloj = setTimeout(() => control.abort(), TIMEOUT_MS);
 
     try {
         const respuesta = await fetchImpl(
-            `${c.baseUrl}/${c.versionApi}/${c.phoneNumberId}/messages`,
+            `${c.baseUrl}/${c.versionApi}/${phoneNumberId}/messages`,
             {
                 method: 'POST',
                 headers: {
-                    Authorization: `Bearer ${c.token}`,
+                    Authorization: `Bearer ${token}`,
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({

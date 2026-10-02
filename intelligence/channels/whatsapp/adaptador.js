@@ -101,6 +101,28 @@ function textoDeMensaje(mensaje) {
 }
 
 /**
+ * A partir de cuántos minutos de retraso un mensaje ya no se contesta.
+ *
+ * Producción, 2026-10-01: al conectar Zona Burger por coexistencia, Meta entregó por `messages`
+ * (no por `history`) ~110 mensajes que esperaban en la app —stickers, fotos, audios de días
+ * atrás— y el bot les contestó a ~55 chats; 45 respuestas rebotaron con 131047 (más de 24 h) y
+ * el resto les llegó a desconocidos. Los mensajes reales de esa noche llegaron con 0 minutos de
+ * retraso; los de la ráfaga, con más de una hora. 30 minutos deja holgura de sobra a una
+ * reentrega legítima de Meta.
+ */
+const ANTIGUEDAD_MAX_MIN = (() => {
+    const n = Number(process.env.WHATSAPP_ANTIGUEDAD_MAX_MIN);
+    return Number.isFinite(n) && n > 0 ? n : 30;
+})();
+
+/** ¿El `timestamp` (segundos Unix, como lo manda Meta) es de hace más de `ANTIGUEDAD_MAX_MIN`? */
+function esAntiguo(timestamp, ahora = Date.now()) {
+    const segundos = Number(timestamp);
+    if (!timestamp || !Number.isFinite(segundos)) return false;
+    return ahora - segundos * 1000 > ANTIGUEDAD_MAX_MIN * 60 * 1000;
+}
+
+/**
  * Traduce un webhook completo. **Función pura**: no toca la base ni la red.
  *
  * Está separada de `recibirWebhook` para poder probarla con cargas reales de Meta sin levantar
@@ -189,6 +211,7 @@ function interpretarWebhook(cuerpo, { config = configReal } = {}) {
                     // El `wamid` es lo que hace deduplicable un reintento de Meta.
                     idExternoMensaje: mensaje.id || null,
                     enviadoEn: mensaje.timestamp ? new Date(Number(mensaje.timestamp) * 1000) : null,
+                    antiguo: esAntiguo(mensaje.timestamp),
                     crudo: { tipo: mensaje.type, soportado: TIPOS_CON_TEXTO.has(mensaje.type) },
                 });
             }
@@ -772,8 +795,8 @@ async function entregar({
  * donde no existan. El WebChat no declara este método y no le pasa nada; el núcleo no sabe qué
  * es un indicador de escritura, solo que el turno se está alargando.
  */
-async function mostrarActividad({ idExternoMensaje, api = apiReal, config = configReal }) {
-    return api.enviarIndicadorEscritura({ wamid: idExternoMensaje, config });
+async function mostrarActividad({ idExternoMensaje, idNegocio, api = apiReal, config = configReal }) {
+    return api.enviarIndicadorEscritura({ wamid: idExternoMensaje, idNegocio, config });
 }
 
 async function auditar(accion, idNegocio, detalle) {
@@ -809,6 +832,7 @@ module.exports = {
     mostrarActividad,
     recibirWebhook,
     interpretarWebhook,
+    esAntiguo,
     renderizar,
     renderizarPlantilla,
     textoDeMensaje,

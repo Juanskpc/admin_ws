@@ -4,6 +4,7 @@ const Respuesta = require('../../app_core/helpers/respuesta');
 const Models = require('../../app_core/models/conection');
 const Audit = require('../../app_core/helpers/auditHelper');
 const { alcanceDeNegocios } = require('../../app_core/middleware/auth');
+const PreparacionAsistente = require('../services/preparacionAsistenteService');
 
 /**
  * Bandeja del inquilino — el dueño del negocio ve sus conversaciones y **responde**.
@@ -630,7 +631,7 @@ async function leerConfiguracion(req, res) {
         }
         const [fila] = await Models.sequelize.query(
             `SELECT id_negocio, nombre, reactivar_asistente_min,
-                    tiempo_estimado_min, tiempo_estimado_max
+                    tiempo_estimado_min, tiempo_estimado_max, info_asistente
                FROM general.gener_negocio WHERE id_negocio = :idNegocio;`,
             { replacements: { idNegocio }, ...SELECT }
         );
@@ -642,6 +643,8 @@ async function leerConfiguracion(req, res) {
             // Lo que el asistente contesta a «¿cuánto se demora?». null = sin configurar.
             tiempo_estimado_min: fila.tiempo_estimado_min,
             tiempo_estimado_max: fila.tiempo_estimado_max,
+            // Lo que el asistente le dice al cliente sobre pagos, domicilio, etc. null = nada.
+            info_asistente: fila.info_asistente ?? null,
             puede_editar: await esAdministradorDelNegocio(req.usuario.id_usuario, idNegocio),
         });
     } catch (err) {
@@ -671,7 +674,9 @@ async function guardarConfiguracion(req, res) {
         const traeReactivacion = req.body.reactivar_asistente_min !== undefined;
         const traeTiempo =
             req.body.tiempo_estimado_min !== undefined || req.body.tiempo_estimado_max !== undefined;
-        if (!traeReactivacion && !traeTiempo) {
+        // Notas libres para el asistente (Nequi, valor del domicilio…). '' o null las borra.
+        const traeInfo = req.body.info_asistente !== undefined;
+        if (!traeReactivacion && !traeTiempo && !traeInfo) {
             return Respuesta.error(res, 'No hay nada que guardar', 400);
         }
 
@@ -687,7 +692,7 @@ async function guardarConfiguracion(req, res) {
         }
 
         const [antes] = await Models.sequelize.query(
-            `SELECT reactivar_asistente_min, tiempo_estimado_min, tiempo_estimado_max
+            `SELECT reactivar_asistente_min, tiempo_estimado_min, tiempo_estimado_max, info_asistente
                FROM general.gener_negocio WHERE id_negocio = :idNegocio;`,
             { replacements: { idNegocio }, ...SELECT }
         );
@@ -717,6 +722,13 @@ async function guardarConfiguracion(req, res) {
             cambios.push('tiempo_estimado_min = :tiempoMin', 'tiempo_estimado_max = :tiempoMax');
             replacements.tiempoMin = tiempoMin;
             replacements.tiempoMax = tiempoMax;
+        }
+
+        let info = antes.info_asistente ?? null;
+        if (traeInfo) {
+            info = String(req.body.info_asistente ?? '').trim().slice(0, 1500) || null;
+            cambios.push('info_asistente = :info');
+            replacements.info = info;
         }
 
         await Models.sequelize.query(
@@ -750,7 +762,19 @@ async function guardarConfiguracion(req, res) {
             });
         }
 
-        const mensaje = traeTiempo && !traeReactivacion
+        if (traeInfo) {
+            await Audit.registrarEvento({
+                modulo: 'intelligence',
+                accion: 'info_asistente_configurada',
+                idUsuario: req.usuario.id_usuario,
+                idNegocio,
+                detalle: { antes: antes.info_asistente ?? null, despues: info },
+            });
+        }
+
+        const mensaje = traeInfo && !traeTiempo && !traeReactivacion
+            ? 'Información para el asistente guardada'
+            : traeTiempo && !traeReactivacion
             ? (tiempoMin === null
                 ? 'El asistente ya no dará un tiempo estimado de entrega'
                 : 'Tiempo estimado de entrega guardado')
@@ -763,6 +787,7 @@ async function guardarConfiguracion(req, res) {
             reactivar_asistente_min: minutos,
             tiempo_estimado_min: tiempoMin,
             tiempo_estimado_max: tiempoMax,
+            info_asistente: info,
         });
     } catch (err) {
         console.error('Error en bandeja.guardarConfiguracion:', err);
@@ -893,7 +918,31 @@ async function desbloquear(req, res) {
     }
 }
 
+/**
+ * GET /admin/intelligence/bandeja/preparacion?id_negocio=
+ *
+ * Lo que le falta al negocio para que su asistente de WhatsApp atienda bien: horario, carta,
+ * tiempo de entrega, info de pagos… con por qué importa y dónde se arregla. La Bandeja lo enseña
+ * apenas se conecta el número (2026-10-02, tras la primera noche de Zona Burger).
+ */
+async function leerPreparacion(req, res) {
+    try {
+        if (!revisar(req, res)) return;
+        const idNegocio = Number(req.query.id_negocio);
+        if (!(await negocioVisible(req.usuario.id_usuario, idNegocio))) {
+            return Respuesta.error(res, 'Negocio no encontrado', 404);
+        }
+        const resultado = await PreparacionAsistente.revisar(idNegocio);
+        if (!resultado) return Respuesta.error(res, 'Negocio no encontrado', 404);
+        return Respuesta.success(res, 'Preparación del asistente', resultado);
+    } catch (err) {
+        console.error('Error en bandeja.leerPreparacion:', err);
+        return Respuesta.error(res, 'No se pudo revisar la preparación del asistente', 500);
+    }
+}
+
 module.exports = {
+    leerPreparacion,
     listarConversaciones,
     detalleConversacion,
     responder,
