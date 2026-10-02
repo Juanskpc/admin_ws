@@ -1,5 +1,14 @@
 # EscalApp Intelligence — estado y cómo continuar
 
+> **🟢 2026-10-02 — PRIMER CLIENTE REAL EN WHATSAPP (Zona Burger, negocio 6) Y AUDITORÍA DESPLEGADA.**
+> Zona Burger conectó su propio número por coexistencia el 2026-10-01. La auditoría de esa noche
+> encontró 12 problemas (el bot contestaba tarde lo que el negocio ya había atendido, respondía a
+> mensajes viejos al conectar, no sabía pagos/Nequi/domicilio, «cancelar» = pagar…). Todo
+> corregido y **desplegado** (admin_ws `1f0c7cf`, admin `df97079`), más dos cosas nuevas: el bot ya
+> no gasta créditos contestando cortesías repetidas, y la Bandeja le dice al negocio **qué datos le
+> faltan** al asistente apenas conecta su número. **Para retomar:**
+> [`sesion-2026-10-01-auditoria-whatsapp.md`](sesion-2026-10-01-auditoria-whatsapp.md) → «Cómo seguir».
+
 > **⚠️ 2026-09-24 — HAY UN DESPLIEGUE A MEDIAS: léelo antes de subir nada.** Planes de la landing
 > (8 nuevos por paquete, código estable de plan, precio por aplicativo), límite de usuarios que ya
 > se hace cumplir, reactivación automática del bot (ADR-023 Enmienda 2) y otro barrido del panel:

@@ -2,7 +2,14 @@
 
 Zona Burger (`id_negocio` 6) conectó su número por coexistencia a las 19:33. Se auditaron las 81
 conversaciones de esa noche (11 pedidos reales, 253 mensajes salientes, 50 no entregados) y se
-corrigió lo siguiente. Todo sin desplegar al cerrar este documento: ver «Despliegue».
+corrigió lo siguiente.
+
+> **✅ DESPLEGADO el 2026-10-02 a las 00:18** — backend `admin_ws` **1f0c7cf**, admin
+> `admin_app-v21` **df97079**, ambos en GitHub. Respaldo previo: `~/backups/db_2026-10-02_0018.dump`
+> en el VPS. Las 3 migraciones corrieron (el backfill marcó los 15 mensajes que esperaban en
+> conversaciones con una persona atendiendo) y el reinicio **no reencoló nada viejo**.
+>
+> **Para retomar, ir directo a «Cómo seguir» al final.**
 
 ## Lo que se corrigió
 
@@ -28,7 +35,7 @@ Pruebas: `__tests__/intelligence/auditoria_2026_10_01.test.js` (33). Suite compl
 1644/1674; las 30 que fallan ya fallaban antes (pruebas desactualizadas de `reportes`,
 `e2e_agendar`, `reinicio_por_inactividad` y `pin_cifrado` ausente en `whatsapp_embedded_signup`).
 
-## Despliegue (orden)
+## Despliegue (orden) — ya hecho, queda como referencia
 
 ```bash
 ssh escalapp@45.63.105.95
@@ -47,10 +54,60 @@ noche quedaron pendientes en conversaciones con una persona atendiendo (15 al au
 
 Luego el admin (`admin_app-v21`, campo «Info para el asistente» en la Bandeja).
 
-## Pendiente (no es código)
+Si hubiera que revertir: `git checkout f7f9db4` en `/var/www/admin_ws` + reinicio. Las dos
+columnas nuevas (`mensaje.sin_turno_motivo`, `gener_negocio.info_asistente`) son nullable y el
+código viejo las ignora, así que no hace falta deshacer las migraciones.
 
-- Que Zona Burger llene en la Bandeja su **tiempo de entrega** y la **info para el asistente**
-  (Nequi, domicilio $8.000, efectivo). Sin eso el bot sigue sin saberlo.
-- Avisos de «pedido listo» que fallaron esa noche: ORD-7533, 7539, 7540, 7543 (ya entregados).
-- Sin hacer: protección contra dos bots nuestros hablándose (un número de EscalApp escribiéndole
-  a otro); respuesta fija sin modelo a imágenes/audios.
+## Dónde configura el negocio cada cosa (para explicárselo al cliente)
+
+Admin (`escalapp.cloud/admin`) → **WhatsApp** → «Ver conversaciones» → elegir el negocio. En la
+barra superior de la Bandeja:
+
+- **«Asistente vuelve tras … min»** — reactivación tras una respuesta humana.
+- **«Entrega en … a … min»** — lo que contesta a «¿cuánto se demora?». El botón *Guardar* aparece
+  solo después de escribir.
+- **«Info para el asistente»** — texto libre: Nequi, valor del domicilio, formas de pago.
+- **«Al asistente le faltan datos (N)» / «Asistente listo»** — la revisión de preparación.
+
+⚠️ Esos campos **solo los edita un ADMINISTRADOR de ese negocio** (`puede_editar`). Entrando como
+superadministrador salen deshabilitados: hay que usar «entrar como» con el admin del negocio. Es
+la razón más probable de que el 2026-10-01 el tiempo de entrega de Zona Burger «se configurara» y
+no quedara guardado (en la base seguía NULL y no había evento de auditoría).
+
+Lo demás se configura en la **App del restaurante**: Horarios, Menú (carta), Configuración
+(métodos de pago y barrios con valor de domicilio). En reserva: Servicios, Equipo, Horarios.
+
+## Estado de los negocios al cerrar (revisión de preparación, 2026-10-02 00:20)
+
+| Negocio | Necesario | Recomendado pendiente |
+|---|---|---|
+| 6 Zona Burger | — (horario y carta ✓) | info para el asistente, tiempo de entrega, valor del domicilio |
+| 12 Pregonchos | — | info, reactivación, tiempo de entrega, domicilio |
+| 10 D'Alex Barbería | — | info, reactivación |
+
+## Cómo seguir (próxima sesión)
+
+1. **Revisar la primera noche con los arreglos.** Repetir la auditoría sobre los mensajes de la
+   noche del 2026-10-02 (mismo método: script de solo lectura por `scp` + `node` en el VPS, nunca
+   `psql` con la clave). Qué mirar:
+   - turnos con `regla:cortesia_contestada` / `cortesia_sin_respuesta` — que no calle algo útil;
+   - que no haya respuestas a mensajes de más de 30 min, ni a mensajes llegados en handoff
+     (`sin_turno_motivo` con valor y `id_turno` NULL es lo correcto);
+   - invocaciones de `consultar_info_negocio` y si `tomar_pedido` ya entra al primer intento
+     (antes: 7 de 7 con `ARGUMENTOS_INVALIDOS`);
+   - pasos `confirmacion_anotada` (lo añadido al confirmar → nota del pedido);
+   - `journalctl`: ya no debería salir «el indicador de escritura no se encendió (400)».
+2. **Que Zona Burger complete lo recomendado** (tiempo de entrega, info con Nequi y domicilio
+   $8.000). El panel de preparación se lo pide solo al entrar.
+3. **Sin hacer, por orden de valor:**
+   - Respuesta fija, sin modelo, a imágenes y audios sueltos (hoy van al modelo y contesta
+     «no puedo ver imágenes»). Ojo: una imagen tras un pedido suele ser el comprobante de Nequi.
+   - Freno a bots nuestros hablándose: si el `id_externo` es un número de `platform.numero_canal`,
+     no contestar. El 2026-10-01 se probó desde el número de D'Alex hacia Zona Burger.
+   - Tolerancia a erratas en `buscar_producto` («pap house» no encontró «papa»).
+   - Plantilla `pedido_listo` en la WABA de Zona Burger: el aviso ya sale como texto libre dentro de
+     las 24 h; la plantilla solo hace falta para pedidos de más de un día.
+4. **Pruebas que ya fallaban y nadie arregló** (no son de esto): en la base local
+   `e2e_agendar` (espera «10:00», el flujo ahora usa franjas), `reportes` («controlador is not a
+   function»), `reinicio_por_inactividad`, `whatsapp_embedded_signup` (falta `pin_cifrado` en la
+   local). En el admin, `admin-dashboard.component.spec.ts › error state`.
