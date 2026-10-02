@@ -207,7 +207,32 @@ describe('interpretar el webhook', () => {
         const r = interpretarWebhook(webhook(eco, { field: 'smb_message_echoes' }), { config });
 
         expect(r.mensajes).toHaveLength(0);
-        expect(r.ecos).toEqual([{ idNegocio: NEGOCIO, idExterno: '573001234567', wamid: 'wamid.E', tipo: 'text' }]);
+        expect(r.ecos).toEqual([
+            {
+                idNegocio: NEGOCIO,
+                idExterno: '573001234567',
+                wamid: 'wamid.E',
+                tipo: 'text',
+                contenido: '',
+                enviadoEn: new Date(1700000000 * 1000),
+            },
+        ]);
+    });
+
+    test('el eco conserva el texto que escribió el negocio, para mostrarlo en la Bandeja', () => {
+        const eco = {
+            message_echoes: [
+                { from: '573001112233', to: '573001234567', id: 'wamid.T', timestamp: '1700000000',
+                  type: 'text', text: { body: 'Ya te lo enviamos, vecino' } },
+                { from: '573001112233', to: '573001234567', id: 'wamid.I', timestamp: '1700000001', type: 'image' },
+            ],
+        };
+        const r = interpretarWebhook(webhook(eco, { field: 'smb_message_echoes' }), { config });
+
+        expect(r.mensajes).toHaveLength(0);
+        expect(r.ecos[0].contenido).toBe('Ya te lo enviamos, vecino');
+        // Un adjunto queda marcado por su tipo: no se inventa contenido.
+        expect(r.ecos[1].contenido).toBe('[image]');
     });
 
     test('el corte de los ~14 días llega como aviso de cuenta y se puede ver', () => {
@@ -251,6 +276,63 @@ describe('interpretar el webhook', () => {
 });
 
 // ── Salida: renderizar al formato del canal ─────────────────────────────────────────────
+
+describe('silenciarPorHumano: guarda lo que escribió el negocio', () => {
+    const repositorio = require('../../intelligence/engine/repositorio');
+    const { silenciarPorHumano } = require('../../intelligence/channels/whatsapp/adaptador');
+    let espias;
+
+    beforeEach(() => {
+        espias = {
+            guardar: jest.spyOn(repositorio, 'registrarMensajeDelNegocio').mockResolvedValue({ guardado: true }),
+            buscar: jest.spyOn(repositorio, 'buscarConversacion').mockResolvedValue({ id_conversacion: 'c1', estado: 'activa' }),
+            estado: jest.spyOn(repositorio, 'cambiarEstadoConversacion').mockResolvedValue(),
+            humano: jest.spyOn(repositorio, 'marcarIntervencionHumana').mockResolvedValue(),
+        };
+    });
+    afterEach(() => jest.restoreAllMocks());
+
+    test('guarda el mensaje Y silencia al asistente', async () => {
+        const r = await silenciarPorHumano({
+            idNegocio: 6, idExterno: '573001', wamid: 'wamid.X', contenido: 'Hola, ya casi', tipo: 'text',
+            enviadoEn: new Date(),
+        });
+
+        expect(espias.guardar).toHaveBeenCalledWith(
+            expect.objectContaining({ idNegocio: 6, idExterno: '573001', idExternoMensaje: 'wamid.X', contenido: 'Hola, ya casi' })
+        );
+        expect(espias.estado).toHaveBeenCalledWith('c1', 'handoff_humano');
+        expect(r.silenciada).toBe(true);
+    });
+
+    test('si guardar falla, el asistente se calla igual', async () => {
+        espias.guardar.mockRejectedValue(new Error('base caída'));
+        jest.spyOn(console, 'error').mockImplementation(() => {});
+
+        const r = await silenciarPorHumano({ idNegocio: 6, idExterno: '573001', wamid: 'wamid.Y', contenido: 'x', tipo: 'text' });
+
+        expect(espias.estado).toHaveBeenCalledWith('c1', 'handoff_humano');
+        expect(r.silenciada).toBe(true);
+    });
+
+    test('un eco sin destinatario no revienta ni toca la base', async () => {
+        jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+        const r = await silenciarPorHumano({ idNegocio: 6, idExterno: undefined, wamid: 'wamid.Z', contenido: 'x', tipo: 'text' });
+
+        expect(r).toEqual({ silenciada: false, motivo: 'eco_sin_destinatario' });
+        expect(espias.guardar).not.toHaveBeenCalled();
+        expect(espias.buscar).not.toHaveBeenCalled();
+    });
+
+    test('una fecha imposible no se guarda como hora del mensaje', async () => {
+        await silenciarPorHumano({
+            idNegocio: 6, idExterno: '573001', wamid: 'wamid.F', contenido: 'x', tipo: 'text',
+            enviadoEn: new Date('2001-01-01'),
+        });
+        expect(espias.guardar).toHaveBeenCalledWith(expect.objectContaining({ enviadoEn: null }));
+    });
+});
 
 describe('renderizar la respuesta', () => {
     test('sin opciones, un texto plano y sin previsualizar enlaces', () => {

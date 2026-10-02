@@ -215,6 +215,10 @@ function interpretarWebhook(cuerpo, { config = configReal } = {}) {
                     idExterno: eco.to,
                     wamid: eco.id,
                     tipo: eco.type,
+                    // Lo que el negocio escribió, para que la Bandeja lo muestre. Un adjunto queda
+                    // como `[image]`, igual que en los entrantes: no se inventa contenido.
+                    contenido: eco.type ? textoDeMensaje(eco) : '',
+                    enviadoEn: eco.timestamp ? new Date(Number(eco.timestamp) * 1000) : null,
                 });
             }
 
@@ -389,7 +393,38 @@ async function recibirWebhook(cuerpo, { config = configReal } = {}) {
  * atendiendo, no hables encima»— y que el motor ya trata como no procesable desde F5-B. No hace
  * falta un estado nuevo ni una migración: la decisión de §6.13 («el bot no vuelve») se cumple sola.
  */
-async function silenciarPorHumano({ idNegocio, idExterno, wamid }) {
+async function silenciarPorHumano({ idNegocio, idExterno, wamid, contenido, tipo, enviadoEn }) {
+    // Un eco sin destinatario no dice a quién se escribió: no hay conversación que silenciar ni
+    // hilo donde mostrarlo. Antes llegaba `undefined` a la consulta y reventaba con «Named
+    // replacement ":idExterno" has no entry» (2026-10-01), sin silenciar a nadie.
+    if (!idExterno) {
+        console.warn(`[whatsapp] un eco del negocio ${idNegocio} llegó sin destinatario (${wamid}).`);
+        return { silenciada: false, motivo: 'eco_sin_destinatario' };
+    }
+
+    // Se guarda ANTES de silenciar: que se vea en la Bandeja no depende de que el estado cambie.
+    // Si falla, no impide silenciar —callar al bot es lo que protege al cliente—, solo se avisa.
+    if (contenido) {
+        try {
+            const fechaCreible =
+                enviadoEn instanceof Date &&
+                !Number.isNaN(enviadoEn.getTime()) &&
+                Date.now() - enviadoEn.getTime() < 7 * 24 * 3600 * 1000 &&
+                enviadoEn.getTime() - Date.now() < 5 * 60 * 1000;
+            await repositorio.registrarMensajeDelNegocio({
+                idNegocio,
+                canal: NOMBRE,
+                idExterno,
+                idExternoMensaje: wamid || null,
+                contenido,
+                tipo,
+                enviadoEn: fechaCreible ? enviadoEn : null,
+            });
+        } catch (error) {
+            console.error(`[whatsapp] no se pudo guardar el mensaje del negocio (${wamid}): ${error.message}`);
+        }
+    }
+
     const conversacion = await repositorio.buscarConversacion({
         idNegocio,
         canal: NOMBRE,

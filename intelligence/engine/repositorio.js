@@ -671,6 +671,85 @@ async function insertarMensajeSaliente(
 }
 
 /**
+ * Deja constancia de un mensaje que el NEGOCIO escribió desde su propio teléfono (coexistencia).
+ *
+ * Meta lo cuenta por `smb_message_echoes`. Hasta ahora solo servía para silenciar al bot y el
+ * contenido se descartaba, así que la Bandeja no mostraba la mitad de la conversación. Aquí se
+ * guarda como un saliente más, con tres diferencias que importan:
+ *
+ *   - Nace `entregado`, NUNCA `pendiente`: ya salió por la app del negocio. Como `pendiente`
+ *     lo recogería el entregador y se lo reenviaría al cliente por segunda vez.
+ *   - No tiene turno (`id_turno` nulo): no lo produjo el asistente ni costó nada.
+ *   - Se deduplica por el `wamid` (`ingesta_recibida`, la misma tabla que el entrante) y, además,
+ *     contra salientes del propio asistente con ese id, por si algún día Meta eco-ara los suyos.
+ *
+ * Si la conversación no existe se crea (el negocio escribió primero). No toca `ultimo_mensaje_en`,
+ * `atendida_en` ni el estado de una existente: eso lo deciden los mensajes del cliente (ADR-023).
+ *
+ * @returns {Promise<{guardado: boolean, motivo?: string, idConversacion?: string}>}
+ */
+async function registrarMensajeDelNegocio({
+    idNegocio,
+    canal,
+    idExterno,
+    idExternoMensaje,
+    contenido,
+    tipo = null,
+    enviadoEn = null,
+}) {
+    return sequelize.transaction(async (transaction) => {
+        const { idMensaje, duplicado } = await reservarIngesta(
+            { idNegocio, canal, idExternoMensaje },
+            { transaction }
+        );
+        if (duplicado) return { guardado: false, motivo: 'duplicado' };
+
+        const conv = await unaFila(
+            `
+            INSERT INTO intelligence.conversacion (id_negocio, canal, id_externo)
+            VALUES (:idNegocio, :canal, :idExterno)
+            ON CONFLICT (id_negocio, canal, id_externo) DO UPDATE
+               SET id_negocio = conversacion.id_negocio
+            RETURNING id_conversacion;
+            `,
+            { idNegocio, canal, idExterno },
+            transaction
+        );
+
+        const fila = await unaFila(
+            `
+            INSERT INTO intelligence.mensaje
+                (id_mensaje, id_conversacion, id_negocio, direccion, canal, id_externo, contenido,
+                 crudo, estado_entrega, enviado_en, entregado_en)
+            SELECT :idMensaje, :idConversacion, :idNegocio, 'saliente', :canal, :idExternoMensaje,
+                   :contenido, CAST(:crudo AS jsonb), 'entregado', :enviadoEn, :enviadoEn
+             WHERE CAST(:idExternoMensaje AS text) IS NULL
+                OR NOT EXISTS (
+                    SELECT 1 FROM intelligence.mensaje
+                     WHERE id_negocio = :idNegocio AND id_externo = :idExternoMensaje
+                       AND creado_en > now() - interval '3 days')
+            RETURNING id_mensaje;
+            `,
+            {
+                idMensaje,
+                idConversacion: conv.id_conversacion,
+                idNegocio,
+                canal,
+                idExternoMensaje: idExternoMensaje ?? null,
+                contenido,
+                crudo: JSON.stringify({ origen: 'app_negocio', tipo }),
+                enviadoEn,
+            },
+            transaction
+        );
+
+        return fila
+            ? { guardado: true, idConversacion: conv.id_conversacion }
+            : { guardado: false, motivo: 'ya_existia', idConversacion: conv.id_conversacion };
+    });
+}
+
+/**
  * Reclama mensajes salientes pendientes para entregarlos.
  *
  * `FOR UPDATE SKIP LOCKED` es lo que permite que haya más de un entregador sin que dos
@@ -1321,6 +1400,7 @@ module.exports = {
     ESTADOS_CONVERSACION,
     esErrorDeLock,
     reservarIngesta,
+    registrarMensajeDelNegocio,
     asegurarConversacion,
     reiniciarSiInactivaMucho,
     INACTIVIDAD_RESET_MIN,
