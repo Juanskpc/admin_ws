@@ -1348,6 +1348,68 @@ describe('el atajo: usar lo que el cliente ya escribió', () => {
         expect(d.respuestas[0].opciones.map((o) => o.etiqueta)).toContain('10:00 AM');
     });
 
+    test('la frase entera vale TAMBIÉN contestando al menú (producción, 2026-10-02)', async () => {
+        // Lo que se vio en el WhatsApp de D'ALEX: el cliente saludó dos veces —así que ya había
+        // tarea abierta— y en el tercer mensaje escribió la frase completa. El flujo reconocía el
+        // servicio y acto seguido le preguntaba el día que acababa de decir.
+        const gate = gateAtajo();
+        const manejar_ = manejar(gate);
+
+        let d = await manejar_(entrada('Hola buenas tardes', conversacion()));
+        expect(d.tarea.datos.paso).toBe(PASO.SERVICIO);
+
+        d = await manejar_(entrada('Hola', conversacion({ tarea: TAREA_AGENDAR, datos: d.tarea.datos })));
+        d = await manejar_(entrada(
+            'Quiero un corte de cabello para mañana a las 10 am',
+            conversacion({ tarea: TAREA_AGENDAR, datos: d.tarea.datos }),
+        ));
+
+        // Ni una pregunta por el día: ya lo había dicho.
+        expect(d.tarea.datos).toMatchObject({ id_servicio: 1, fecha: '2026-08-20', hora: '10:00' });
+        expect(gate.llamadas.find((l) => l.capacidad === 'proponer_turno').args.inicio)
+            .toBe('2026-08-20T10:00:00');
+    });
+
+    test('pulsar una fila sigue preguntando el día: un id suelto no es una fecha', async () => {
+        // El seguro del caso de arriba. Un toque manda «1», y leerlo como «el día 1» agendaría
+        // un mes equivocado sin que nadie lo note hasta el resumen.
+        const gate = gateAtajo();
+        const manejar_ = manejar(gate);
+        const d0 = await manejar_(entrada('hola', conversacion()));
+        const d = await manejar_(entrada('1', conversacion({ tarea: TAREA_AGENDAR, datos: d0.tarea.datos })));
+
+        expect(d.tarea.datos).toMatchObject({ paso: PASO.FECHA, id_servicio: 1 });
+        expect(d.tarea.datos.fecha).toBeUndefined();
+    });
+
+    test('desde el menú de TIPOS, nombrar un servicio también se entiende', async () => {
+        // Antes contestaba «elige uno de los tipos de la lista», que es castigar al cliente por
+        // adelantarse. Solo se llega aquí con un catálogo tan grande que haya tipos.
+        const muchos = Array.from({ length: 30 }, (_, i) => ({
+            id_servicio: 500 + i, nombre: `Relleno ${i + 1}`, duracion_min: 30, precio: 10000,
+            categoria: { id_categoria: 9, nombre: 'Otros', orden: 1 },
+        }));
+        const gate = gateFalso({
+            consultar_servicios: { servicios: [...CATALOGO_BARBERIA.servicios.map((s) => ({
+                ...s, categoria: { id_categoria: 1, nombre: 'Cortes', orden: 0 },
+            })), ...muchos] },
+            consultar_dias_con_horas: { dias: [{ fecha: '2026-08-20', primera_hora: '09:00' }] },
+            consultar_disponibilidad: DISPONIBILIDAD,
+            consultar_profesionales: UN_SOLO_PROFESIONAL,
+            proponer_turno: HOLD,
+        });
+        const manejar_ = manejar(gate);
+
+        const d0 = await manejar_(entrada('hola', conversacion()));
+        expect(d0.tarea.datos.paso).toBe(PASO.CATEGORIA);
+
+        const d = await manejar_(entrada(
+            'quiero un tinte',
+            conversacion({ tarea: TAREA_AGENDAR, datos: d0.tarea.datos }),
+        ));
+        expect(d.tarea.datos.id_servicio).toBe(4);
+    });
+
     test('un nombre de servicio con signos no revienta el atajo', async () => {
         // `new RegExp('\\b+')` no es un regex que no encuentre nada: es un SyntaxError que se
         // llevaría por delante el primer mensaje de cualquier negocio con un «+» en el catálogo.

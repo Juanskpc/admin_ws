@@ -1176,6 +1176,12 @@ function crearManejadorDeterminista({
         }
         const elegida = resolverOpcion(texto, datos.categorias_ofrecidas);
         if (!elegida) {
+            // No nombró un tipo… pero puede haber nombrado un servicio, y entonces el tipo sobra.
+            // «Quiero un corte de cabello para mañana a las 3» no es una respuesta inválida: es
+            // una respuesta mejor que la que se pedía, y contestarle «elige uno de los tipos de la
+            // lista» —que es lo que hacía hasta hoy— es castigarle por adelantarse.
+            const { decision } = await intentarAtajo(ctx, [paso('atajo_desde_categoria')], { saludar: false });
+            if (decision) return decision;
             return reintentar(ctx, datos, 'Elige uno de los tipos de la lista, por favor.');
         }
         return ofrecerServicios(ctx, [paso('categoria_elegida', { categoria: elegida.id })], {
@@ -1435,30 +1441,13 @@ function crearManejadorDeterminista({
         const encabezado = `${saludar ? `${saludo(ctx)} ` : ''}Anoto *${servicio.nombre}*.`;
         const conEncabezado = (decision) => anteponer(decision, encabezado);
 
-        // Lo que impide saltar directo a las horas, y por qué:
-        //
-        //   · **Sin día** no hay nada que consultar.
-        //   · **Con variantes** la duración todavía no se sabe, y la duración decide qué horas
-        //     caben: ofrecerlas antes sería retirar después una hora ya ofrecida.
-        //   · **Con mascotas** la vertical rechaza la cita sin ella (`MASCOTA_REQUERIDA`).
-        //
-        // En los tres casos se sigue por el paso de siempre, que ya pregunta lo que falta en el
-        // orden correcto. El atajo ya ahorró el menú de servicios, que era el mensaje caro.
-        const fecha = interpretarFecha(ctx.texto, ahora(), { diaSueltoVale: false });
-        const variantes = datos.ofrecidos.find((x) => x.id === datos.id_servicio)?.variantes || [];
-        const faltaAlgo = !fecha
-            || tiene(datos, 'mascotas')
-            || (tiene(datos, 'variantes') && variantes.length > 0);
-
-        if (faltaAlgo) {
-            return { ...sinAtajo, decision: conEncabezado(await despuesDelServicio(ctx, datos, pasos)) };
-        }
-
-        const conDia = [...pasos, paso('atajo_fecha', { fecha })];
+        // Y de aquí en adelante, el camino de siempre con `consumirTexto`: `despuesDelServicio`
+        // pregunta la mascota y la variante si hacen falta —sin ellas no se puede medir una hora—
+        // y, si no hacen falta y el mensaje traía día, salta directo a las horas de ese día.
         return {
             ...sinAtajo,
             decision: conEncabezado(
-                await mostrarHoras(ctx, datos, fecha, conDia, { consumirHora: true })
+                await despuesDelServicio(ctx, datos, pasos, { consumirTexto: true })
             ),
         };
     }
@@ -1498,7 +1487,15 @@ function crearManejadorDeterminista({
             return cederAlNegocio(ctx, elegido, servicio);
         }
 
-        return despuesDelServicio(ctx, elegido, [paso('servicio_elegido', { id_servicio: idServicio })]);
+        // `consumirTexto`: el mismo mensaje que eligió el servicio puede traer el día y la hora.
+        // Un toque en una fila manda el id a secas —«1»— y ahí no hay nada que leer, porque
+        // `interpretarFecha` no acepta números sueltos; una frase sí, y es lo que escribe la gente.
+        return despuesDelServicio(
+            ctx,
+            elegido,
+            [paso('servicio_elegido', { id_servicio: idServicio })],
+            { consumirTexto: true },
+        );
     }
 
     /**
@@ -1509,7 +1506,7 @@ function crearManejadorDeterminista({
      * ya está resuelto, así que en una barbería —todo apagado— se cae directo al día. El
      * profesional va después de la hora (`ofrecerProfesionales`).
      */
-    async function despuesDelServicio(ctx, datos, pasosPrevios) {
+    async function despuesDelServicio(ctx, datos, pasosPrevios, { consumirTexto = false } = {}) {
         const servicio = (datos.ofrecidos || []).find((x) => Number(x.id) === Number(datos.id_servicio));
 
         // 1. La mascota, si el negocio las atiende y aún no se sabe cuál.
@@ -1531,12 +1528,32 @@ function crearManejadorDeterminista({
                     [...pasosPrevios, paso('variante_por_tamano', {
                         id_variante: porTamano.id_variante, tamano: datos.mascota_tamano,
                     })],
+                    { consumirTexto },
                 );
             }
             return ofrecerVariantes(ctx, datos, variantes, pasosPrevios);
         }
 
-        // 3. El día. El profesional se pregunta después de la hora, entre quienes la tienen libre.
+        // ── 3. El día — y si ya lo dijo, no se le vuelve a preguntar ─────────────────────
+        //
+        // `consumirTexto` lo pasa quien sabe que el mensaje traía más que el servicio: el atajo
+        // del primer mensaje y **también el paso de servicio**, porque «quiero un corte de cabello
+        // para mañana a las 3 pm» puede llegar igual de bien como respuesta al menú. Eso fue lo
+        // que se vio en producción el 2026-10-02: el cliente escribió la frase entera contestando
+        // al menú, el flujo reconoció el servicio y le preguntó el día que acababa de decir.
+        //
+        // Va aquí y no en cada sitio que lo necesita porque es el único punto por el que pasan
+        // todos los caminos hacia la fecha. En dos sitios, el que nadie probara se olvidaría.
+        if (consumirTexto) {
+            const fecha = interpretarFecha(ctx.texto, ahora(), { diaSueltoVale: false });
+            if (fecha) {
+                return mostrarHoras(ctx, datos, fecha, [...pasosPrevios, paso('atajo_fecha', { fecha })], {
+                    consumirHora: true,
+                });
+            }
+        }
+
+        // El profesional se pregunta después de la hora, entre quienes la tienen libre.
         return pedirFecha(ctx, datos, pasosPrevios);
     }
 
