@@ -73,6 +73,7 @@
     "migrate:negocio-info-asistente": "node migrations/migrate_negocio_info_asistente.js",
     "migrate:restaurante-tiempo-estimado": "node migrations/migrate_restaurante_tiempo_estimado.js",
     "migrate:negocio-domicilio-rango": "node migrations/migrate_negocio_domicilio_rango.js",
+    "migrate:restaurante-empaque-producto": "node migrations/migrate_restaurante_empaque_producto.js",
     "migrate:planes-codigo": "node migrations/migrate_planes_codigo.js",    "migrate:platform-numeros-canal": "node migrations/migrate_platform_numeros_canal.js",
     "migrate:embedded-signup": "node migrations/migrate_embedded_signup.js",
     "migrate:embedded-signup-coexistencia": "node migrations/migrate_embedded_signup_coexistencia.js",

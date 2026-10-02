@@ -108,6 +108,33 @@ function enPesos(valor) {
     return valor == null ? '' : `$${Number(valor).toLocaleString('es-CO')}`;
 }
 
+const DIAS_SEMANA = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
+
+/** «5:00 PM» a partir de «17:00». */
+function horaAmPm(hhmm) {
+    const [h, m] = String(hhmm).split(':').map(Number);
+    const h12 = h % 12 === 0 ? 12 : h % 12;
+    return `${h12}:${String(m || 0).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`;
+}
+
+/**
+ * «Hoy abrimos a las 5:00 PM» / «Abrimos mañana a las…» / «Abrimos el martes a las…».
+ *
+ * Recibe lo que devuelve `horarioService.proximaApertura`. Sin él (negocio sin horario, o la
+ * consulta falló) devuelve `null` y quien llama cae a la frase genérica: no se inventa una hora.
+ */
+function fraseDeApertura(abre) {
+    if (!abre || !abre.hora) return null;
+    const hora = horaAmPm(abre.hora);
+    if (abre.dias_adelante === 0) return `Hoy abrimos a las ${hora}.`;
+    if (abre.dias_adelante === 1) return `Abrimos mañana a las ${hora}.`;
+    const dia = DIAS_SEMANA[abre.dia_semana];
+    if (!dia) return null;
+    return abre.dias_adelante >= 7
+        ? `Abrimos el próximo ${dia} a las ${hora}.`
+        : `Abrimos el ${dia} a las ${hora}.`;
+}
+
 /** Memoria mínima. Se conserva lo que ya hubiera: `variables` reemplaza, no fusiona. */
 function conMemoria(conversacion, extra = {}) {
     const previas = conversacion.variables || {};
@@ -149,17 +176,39 @@ function conMemoria(conversacion, extra = {}) {
  * (`horarioService.estadoDeAtencion`), para que la respuesta no contradiga lo que pasaría si el
  * cliente insistiera en pedir.
  */
-async function bienvenida(ctx, pasosPrevios = [], { estadoAtencion = horarioService.estadoDeAtencion } = {}) {
+async function bienvenida(
+    ctx,
+    pasosPrevios = [],
+    {
+        estadoAtencion = horarioService.estadoDeAtencion,
+        proximaApertura = horarioService.proximaApertura,
+    } = {}
+) {
     const enlace = enlaceDelMenu(ctx.idNegocio);
     const encabezado = `👋 ${saludoPorLaHora(ctx.ahora())} Te saluda *${ctx.negocio.tratamiento}*.`;
     const { estado } = await estadoAtencion({ idNegocio: ctx.idNegocio, ahora: ctx.ahora() });
+
+    // Solo cuando el cierre es por horario hay una hora que decir. Si la consulta falla se cae a
+    // la frase genérica: es peor, pero el saludo no se cae por eso.
+    let cuandoAbre = null;
+    if (estado === 'fuera_de_horario') {
+        try {
+            cuandoAbre = fraseDeApertura(
+                await proximaApertura({ idNegocio: ctx.idNegocio, ahora: ctx.ahora() })
+            );
+        } catch (_) {
+            cuandoAbre = null;
+        }
+    }
 
     const textosPorEstado = {
         fuera_de_horario: [
             encabezado,
             '',
-            'Ahora mismo estamos fuera de nuestro horario de atención. Te atendemos apenas ' +
-                'sea posible 🙏',
+            cuandoAbre
+                ? `Ahora mismo estamos fuera de nuestro horario de atención. ${cuandoAbre} 🙏`
+                : 'Ahora mismo estamos fuera de nuestro horario de atención. Te atendemos apenas ' +
+                  'sea posible 🙏',
             '',
             'Si quieres, mientras tanto puedes ir mirando la carta, con fotos y precios 👇',
             enlace,
@@ -1493,6 +1542,8 @@ function crearFlujoRestaurante({
     // y sin poder sustituirlo un test del saludo necesitaría Postgres para algo que no es su
     // dominio (ver `bienvenida`).
     estadoAtencion = horarioService.estadoDeAtencion,
+    // Cuándo abre, para decirlo en el saludo fuera de horario. Misma razón: inyectable.
+    proximaApertura = horarioService.proximaApertura,
     // Barrios con precio y mesas del negocio: lo que hace falta para leer lo que el cliente
     // eligió en la carta. Se inyecta por lo mismo que lo demás. Si leer falla, se sigue como si
     // el negocio no tuviera ni barrios ni mesas: pedir no se rompe por un extra.
@@ -1679,7 +1730,7 @@ function crearFlujoRestaurante({
         // `esSaludo`, que tolera signos, vocales repetidas y faltas —«Buenas!», «holaa»,
         // «buens»—, que era por donde se escapaba al modelo.
         if (esSaludo(texto) || esComando(texto, COMANDO.MENU) || !conversacion.variables?.turnos) {
-            return bienvenida(ctx, [paso('inicio_conversacion')], { estadoAtencion });
+            return bienvenida(ctx, [paso('inicio_conversacion')], { estadoAtencion, proximaApertura });
         }
         return delegar(ctx);
     };
@@ -1711,6 +1762,7 @@ module.exports = {
     // Lo usa también la pregunta de confirmación (`index.js`). Va desde aquí y no copiado allá
     // porque «cómo se le escribe un precio a un cliente» es una decisión, y dos copias divergen.
     enPesos,
+    fraseDeApertura,
     crearFlujoRestaurante,
     manejarRestaurante: crearFlujoRestaurante(),
     enlaceDelMenu,

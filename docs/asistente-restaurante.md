@@ -1709,3 +1709,26 @@ distintos para probar que confirmar y avisar quedan a nombre de personas distint
 carta (`scripts/fixtures/dev_carta_restaurante.sql` sin aplicar), lo que tumba
 `seguimiento_pedidos.test.js`, `despacho_cancelados.test.js`, `auditoria_actor_restaurante.test.js`
 y varias más por «Falta la carta» — no es una regresión de este cambio, ya fallaban así antes.
+
+### Empaque automático y hora de apertura (2026-10-02)
+
+- **Empaque por producto.** `restaurante.carta_producto` gana `id_producto_empaque` (otro producto
+  del negocio, normalmente de la categoría oculta «EMPAQUES») y `cantidad_empaque` (por unidad,
+  1 por defecto; `promo` lleva 3 medianos). `empaqueService.calcular` devuelve las líneas de
+  empaque de un pedido **LLEVAR o DOMICILIO** (mesa nunca), con precio releído de la base y
+  cantidades sumadas por tipo. NULL = sin empaque: un negocio sin asignaciones no cambia en nada.
+- **Solo el asistente lo aplica** (`tomar_pedido` y `agregar_items_pedido`, según el tipo del pedido).
+  El POS sigue siendo manual a propósito: el personal ya agrega el empaque ahí y calcularlo también
+  arriba cobraría doble. La confirmación del bot muestra «• Empaque pequeño × 2 — $1.000» y el total
+  real; el aviso de «puede variar por el empaque» desaparece cuando ya está sumado.
+- **Carga inicial de Zona Burger:** `node scripts/asignarEmpaquesZonaBurger.js [--aplicar]`
+  (simulación por defecto). Sale de los pedidos reales de 180 días. Decisiones de la propuesta,
+  tomadas por defecto: familiar = 1 mediano, promo = 3 medianos, PANCETA = pequeño, bebidas y
+  concurso sin empaque.
+- **Fuera de horario, el bot dice cuándo abre**: «Hoy abrimos a las 5:00 PM.» / «Abrimos mañana…» /
+  «Abrimos el martes…» (`fraseDeApertura`, sobre `horarioService.proximaApertura`), en el saludo y en
+  el rechazo de `tomar_pedido`. Sin horario cargado o con la consulta caída, cae a «te atendemos apenas
+  sea posible».
+
+Migración: `npm run migrate:restaurante-empaque-producto` (antes del deploy del backend).
+Tests: `__tests__/intelligence/empaque_y_apertura.test.js`.

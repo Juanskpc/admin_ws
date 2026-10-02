@@ -55,6 +55,7 @@ const { normalizarE164Colombia } = require('../../../app_core/helpers/telefono')
 
 const cartaService = require('../../../app_restaurante_api/services/cartaService');
 const pedidoService = require('../../../app_restaurante_api/services/pedidoService');
+const empaqueService = require('../../../app_restaurante_api/services/empaqueService');
 const cajaService = require('../../../app_restaurante_api/services/cajaService');
 const cuentaService = require('../../../app_restaurante_api/services/cuentaService');
 const horarioService = require('../../../app_restaurante_api/services/horarioService');
@@ -63,7 +64,7 @@ const exclusiones = require('./exclusiones');
 const mesaPublicaService = require('../../../app_restaurante_api/services/mesaPublicaService');
 const usuarioAsistenteDao = require('../../../app_core/dao/usuarioAsistenteDao');
 const Models = require('../../../app_core/models/conection');
-const { enPesos, enlaceDelMenu, rangoEnPalabras } = require('./flujo');
+const { enPesos, enlaceDelMenu, rangoEnPalabras, fraseDeApertura } = require('./flujo');
 const contextoNegocio = require('../../core/contextoNegocio');
 
 const VERTICAL = 'restaurante';
@@ -833,16 +834,33 @@ function registrarCapacidades() {
                     // La nota se enseña antes del «sí»: si el cliente añadió algo mientras se le
                     // preguntaba («Alameda 2, entrada al barrio»), tiene que ver que quedó.
                     const nota = String(args.nota || '').trim();
+
+                    // El empaque va como línea propia, igual que el domicilio: es lo que se le va a
+                    // cobrar. Si ya está sumado, el aviso de «puede variar por el empaque» sobra.
+                    const empaques = await empaqueService.calcular({
+                        idNegocio,
+                        tipoPedido: args.tipo_entrega,
+                        items,
+                    });
+                    const lineasEmpaque = empaques.map((e) => {
+                        total += e.precio_unitario * e.cantidad;
+                        return `• Empaque ${e.nombre} × ${e.cantidad} — ${enPesos(e.precio_unitario * e.cantidad)}`;
+                    });
+                    const avisoFinal = empaques.length
+                        ? aviso.replace('puede variar por el empaque', 'puede variar si cambias algo')
+                        : aviso;
+
                     return [
                         cabecera,
                         '',
                         ...lineas,
+                        ...lineasEmpaque,
                         ...lineaDomicilio,
                         ...avisoQuitar,
                         ...(nota ? [`📝 _Nota: ${nota}_`] : []),
                         '',
                         `*Total: ${enPesos(total)}*`,
-                        aviso,
+                        avisoFinal,
                     ].join('\n');
                 } catch (error) {
                     console.warn(
@@ -949,9 +967,18 @@ function registrarCapacidades() {
                 transaction: contexto.transaction,
             });
             if (horario.configurado && !horario.abierto) {
+                let cuandoAbre = null;
+                try {
+                    cuandoAbre = fraseDeApertura(
+                        await horarioService.proximaApertura({ idNegocio })
+                    );
+                } catch (_) {
+                    cuandoAbre = null;
+                }
                 const e = new Error(
-                    'Ahora mismo estamos fuera de nuestro horario de atención. Te atendemos ' +
-                        'apenas sea posible. Si quieres, puedes ir mirando la carta mientras tanto.'
+                    'Ahora mismo estamos fuera de nuestro horario de atención. ' +
+                        (cuandoAbre || 'Te atendemos apenas sea posible.') +
+                        ' Si quieres, puedes ir mirando la carta mientras tanto.'
                 );
                 e.code = 'FUERA_DE_HORARIO_ATENCION';
                 e.statusCode = 409;
@@ -1053,6 +1080,25 @@ function registrarCapacidades() {
                     ? { exclusiones: quitadasOrden[k].validas.map((v) => v.id_ingrediente) }
                     : {}),
             }));
+
+            // ── 2-ter. El empaque, calculado por el servidor ─────────────────────────────
+            //
+            // Solo para llevar y domicilio, y solo de los productos que tienen empaque ligado.
+            // Hasta hoy el bot cotizaba sin él y el negocio lo cobraba después a mano: el cliente
+            // pagaba más de lo que se le dijo, o el negocio cobraba menos de lo que debía.
+            const empaquesOrden = await empaqueService.calcular({
+                idNegocio,
+                tipoPedido: args.tipo_entrega,
+                items: itemsParaOrden,
+                transaction: contexto.transaction,
+            });
+            itemsParaOrden.push(
+                ...empaquesOrden.map((e) => ({
+                    id_producto: e.id_producto,
+                    cantidad: e.cantidad,
+                    precio_unitario: e.precio_unitario,
+                }))
+            );
 
             // ── 3. El autor de la orden ───────────────────────────────────────────────────
             //
@@ -1423,7 +1469,29 @@ function registrarCapacidades() {
                         return `• ${cantidad} × ${p.nombre} — ${enPesos(subtotal)}`;
                     });
 
-                    return [cabecera, '', ...lineas, '', `*Se suma: ${enPesos(total)}*`].join('\n');
+                    // El empaque depende de cómo se entrega ESE pedido, que está en la orden.
+                    const ord = await Models.PedidOrden.findOne({
+                        where: { id_negocio: idNegocio, numero_orden: String(args.numero_orden).trim() },
+                        attributes: ['tipo_pedido'],
+                    });
+                    const empaques = await empaqueService.calcular({
+                        idNegocio,
+                        tipoPedido: ord?.tipo_pedido,
+                        items,
+                    });
+                    const lineasEmpaque = empaques.map((e) => {
+                        total += e.precio_unitario * e.cantidad;
+                        return `• Empaque ${e.nombre} × ${e.cantidad} — ${enPesos(e.precio_unitario * e.cantidad)}`;
+                    });
+
+                    return [
+                        cabecera,
+                        '',
+                        ...lineas,
+                        ...lineasEmpaque,
+                        '',
+                        `*Se suma: ${enPesos(total)}*`,
+                    ].join('\n');
                 } catch (error) {
                     console.warn(
                         `[agregar_items_pedido] no se pudo detallar en la confirmación: ${error.message}`
@@ -1433,7 +1501,7 @@ function registrarCapacidades() {
             },
             hecho: ({ resultado }) =>
                 `¡Listo! Se lo agregué a tu pedido ${resultado.numero_orden}. ` +
-                `Nuevo total: ${enPesos(resultado.total)} (el precio puede variar por empaques y domicilio).`,
+                `Nuevo total: ${enPesos(resultado.total)}.`,
         },
         feature: FEATURE.ASISTENTE_IA,
         parametros: {
@@ -1455,7 +1523,7 @@ function registrarCapacidades() {
             // `consultar_estado_pedido`: el número de orden es corto y adivinable.
             const orden = await Models.PedidOrden.findOne({
                 where: { id_negocio: idNegocio, numero_orden: String(args.numero_orden).trim() },
-                attributes: ['id_orden', 'contacto_telefono'],
+                attributes: ['id_orden', 'contacto_telefono', 'tipo_pedido'],
                 transaction: contexto.transaction,
             });
             if (!orden) {
@@ -1503,13 +1571,28 @@ function registrarCapacidades() {
                 throw e;
             }
 
+            const itemsNuevos = args.items.map((i) => ({
+                id_producto: Number(i.id_producto),
+                cantidad: Number(i.cantidad) || 1,
+                precio_unitario: Number(porId.get(Number(i.id_producto)).precio),
+            }));
+            const empaquesNuevos = await empaqueService.calcular({
+                idNegocio,
+                tipoPedido: orden.tipo_pedido,
+                items: itemsNuevos,
+                transaction: contexto.transaction,
+            });
+            itemsNuevos.push(
+                ...empaquesNuevos.map((e) => ({
+                    id_producto: e.id_producto,
+                    cantidad: e.cantidad,
+                    precio_unitario: e.precio_unitario,
+                }))
+            );
+
             const actualizada = await pedidoService.agregarItemsPorCliente(orden.id_orden, {
                 idNegocio,
-                items: args.items.map((i) => ({
-                    id_producto: Number(i.id_producto),
-                    cantidad: Number(i.cantidad) || 1,
-                    precio_unitario: Number(porId.get(Number(i.id_producto)).precio),
-                })),
+                items: itemsNuevos,
                 transaction: contexto.transaction,
             });
 
