@@ -1,5 +1,11 @@
 # El asistente en un restaurante, y el pedido desde el menú digital
 
+> **Actualización 2026-10-02:** con el primer cliente real (Zona Burger) cambiaron varios
+> comportamientos de este documento: domicilio por **rango** (no solo por barrio), pedidos
+> **«para servir»** sin mesa (se asigna una libre), `pasar_a_persona`, `agotados_ahora`, preguntas
+> durante la confirmación y estado del pedido cuando el negocio no usa Cocina. Resumen y commits en
+> [`relevo-2026-10-02-whatsapp-zona-burger.md`](relevo-2026-10-02-whatsapp-zona-burger.md) §2–3.
+
 **Estado al 2026-08-27:** en producción, atendiendo `Restaurante pregonchos` (`id_negocio` 12) en
 el número `+57 315 281 2484`. Cuatro capacidades, flujo propio y el pedido armado desde la carta.
 

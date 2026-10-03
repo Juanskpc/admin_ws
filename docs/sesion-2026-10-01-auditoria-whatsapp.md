@@ -165,3 +165,18 @@ respaldo `db_2026-10-02_1941.dump`):
 Nota de despliegue: los nombres de los archivos de `restaurante` no coinciden entre máquinas
 (otro entorno de compilación); se comprobó con `comparar_textos` que las frases de la interfaz
 eran idénticas antes de reemplazar.
+
+## Adenda 2026-10-02 (20:00–20:30) — tres arreglos más
+
+- `cac5a03` — **un número nunca es «cortesía»**: el filtro quitaba lo que no son letras y los
+  teléfonos de Alejandra Benavidez quedaban vacíos → «cortesía» → el bot se calló con un pedido a
+  medias. También: si el último mensaje del bot PIDE algo sin «?», lo que llega es respuesta.
+- `f079ccb` — **«Avisar que está listo»** con clientes sin número visible (BSUID): busca el chat
+  donde el asistente dio ese número de pedido (ORD-7570 fallaba con 409 tres veces).
+- `48ac038` — búsqueda («salchipapa criollita» solo traía la familiar: las pasadas 2 y 3 ahora se
+  juntan), preguntas de domicilio/tiempo durante la confirmación, estado del pedido sin etapa
+  inventada (Zona Burger no usa Cocina) y «te paso con alguien» sin herramienta → handoff real.
+
+## ➡️ Relevo
+
+Todo el día, consolidado para quien sigue: [`relevo-2026-10-02-whatsapp-zona-burger.md`](relevo-2026-10-02-whatsapp-zona-burger.md).
