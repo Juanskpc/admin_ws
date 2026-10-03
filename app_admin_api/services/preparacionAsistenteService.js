@@ -37,6 +37,8 @@ async function uno(sql, replacements) {
 const APP_RESTAURANTE = 'App del restaurante';
 const APP_RESERVA = 'App de reservas';
 const BANDEJA = 'Aquí, en WhatsApp';
+// Desde 2026-10-02 los ajustes del asistente viven en su propia ventana, no en la cabecera.
+const CONFIG_ASISTENTE = `${BANDEJA} → Configuración del asistente`;
 
 /** Comprobaciones comunes a cualquier vertical. */
 function comunes() {
@@ -74,7 +76,7 @@ function comunes() {
         {
             clave: 'info_asistente',
             titulo: 'Información para el asistente (pagos, Nequi…)',
-            donde: `${BANDEJA} → «Info para el asistente»`,
+            donde: `${CONFIG_ASISTENTE} → Información para el asistente`,
             async revisar({ negocio }) {
                 return String(negocio.info_asistente || '').trim()
                     ? { estado: 'ok' }
@@ -89,7 +91,7 @@ function comunes() {
         {
             clave: 'reactivacion',
             titulo: 'Que el asistente vuelva solo después de que alguien conteste',
-            donde: `${BANDEJA} → «Asistente vuelve tras … min»`,
+            donde: `${CONFIG_ASISTENTE} → Cuándo vuelve el asistente`,
             async revisar({ negocio }) {
                 return Number(negocio.reactivar_asistente_min) > 0
                     ? { estado: 'ok' }
@@ -146,7 +148,7 @@ function deRestaurante() {
         {
             clave: 'tiempo_entrega',
             titulo: 'Tiempo de entrega',
-            donde: `${BANDEJA} → «Entrega en … a … min»`,
+            donde: `${CONFIG_ASISTENTE} → Tiempo de entrega`,
             async revisar({ negocio }) {
                 return Number(negocio.tiempo_estimado_min) > 0
                     ? { estado: 'ok' }
@@ -179,7 +181,7 @@ function deRestaurante() {
         {
             clave: 'domicilio',
             titulo: 'Valor del domicilio',
-            donde: `${BANDEJA} → «Domicilio entre $ … y $ …»`,
+            donde: `${CONFIG_ASISTENTE} → Valor del domicilio`,
             async revisar({ idNegocio, negocio }) {
                 // Desde 2026-10-02 lo normal es un RANGO («entre $7.000 y $9.000»): cargar el
                 // precio barrio por barrio era tedioso. Los barrios siguen contando para quien
