@@ -143,3 +143,25 @@ Desplegado el 2026-10-02 19:18 (`c5427a2`, admin `888ec77`):
 - **Bandeja**: `CO.1084…` ya no se muestra como teléfono.
 
 Pendiente, decidido para después: **comprobantes de pago** (fotos) y **domicilio por comuna**.
+
+## Adenda 2026-10-02 (19:41) — «para servir» y doble confirmación
+
+Caso: «Dos salchilimón para servir, veci, ya vamos». El bot (aún con v7) intentó MESA, el sistema
+exigía id_mesa (`MESA_REQUERIDA`), preguntó «¿en qué mesa están?», con «ya estoy en camino» lo
+pasó a «para recoger», y además preguntó «¿te lo anoto?» antes de la confirmación del sistema: la
+clienta dijo sí a esa y no a la segunda, y el pedido no se creó. Oscar lo hizo a mano (ORD-7567,
+mesa 75).
+
+Desplegado (`21dc898`, restaurante `be93da5`, migración `migrate:restaurante-para-servir`,
+respaldo `db_2026-10-02_1941.dump`):
+- MESA sin id_mesa = «para servir»: primera mesa libre (DISPONIBLE y sin cuenta abierta, SKIP
+  LOCKED), `pedid_orden.para_servir`, nombre del cliente, mesa OCUPADA. Sin libres:
+  `SIN_MESA_LIBRE`.
+- Mesas y Cocina muestran «🍽️ Para servir · <nombre>».
+- Flujo sin modelo: entiende «para servir / para comer aquí» y ofrece el botón si hay mesas.
+- Prompt `sistema.v9`: sin pregunta de confirmación propia; «para servir» = en el local.
+- `[revoke]` (mensaje borrado) se guarda sin turno (`sin_contenido`).
+
+Nota de despliegue: los nombres de los archivos de `restaurante` no coinciden entre máquinas
+(otro entorno de compilación); se comprobó con `comparar_textos` que las frases de la interfaz
+eran idénticas antes de reemplazar.
