@@ -99,6 +99,42 @@ const guardarrail = require('./guardarrailPromesas');
 const confirmacion = require('./confirmacion');
 
 /**
+ * `pasar_a_persona` — la única herramienta que no es una capacidad de negocio.
+ *
+ * No pasa por el Registry ni por el Gate porque no lee ni cambia ningún dato del negocio: cambia
+ * el ESTADO de la conversación, que es asunto del motor. Por eso se ofrece aquí, junto a las que
+ * devuelve el Gate, y se atiende antes de `ejecutarSolicitud`.
+ *
+ * Existe desde 2026-10-02: sin el dato (el Nequi, el valor exacto del domicilio) el asistente le
+ * decía al cliente «confírmalo con ZONA BURGER» — mientras hablaba con Zona Burger. Ahora pasa la
+ * conversación de verdad (ver `handoff.decisionAPersona`). Ojo con el coste de usarla de más: el
+ * bot se calla en ese chat hasta que una persona conteste (ADR-023: no vuelve solo).
+ */
+const PASAR_A_PERSONA = Object.freeze({
+    nombre: 'pasar_a_persona',
+    descripcion:
+        'Pasa esta conversación a una persona del negocio, que le contesta al cliente por este ' +
+        'mismo chat. Úsala SOLO cuando el cliente necesita un dato que ninguna otra herramienta ' +
+        'te da (un número de cuenta o de Nequi que no aparece, el valor exacto de algo, una ' +
+        'petición especial que tú no puedes resolver) o cuando pide hablar con una persona. NO ' +
+        'la uses para lo que sí puedes resolver (buscar un producto, tomar un pedido, decir un ' +
+        'precio de la carta). Después de usarla no escribas nada más: el cliente recibe solo el ' +
+        'aviso de que le contesta una persona, y tú dejas de atender este chat.',
+    vertical: 'nucleo',
+    tipo: 'consulta',
+    idempotente: true,
+    requiere_confirmacion: false,
+    parametros: {
+        motivo: {
+            tipo: 'string',
+            requerido: true,
+            max_longitud: 200,
+            descripcion: 'Qué necesita el cliente, en pocas palabras, para quien lo atienda.',
+        },
+    },
+});
+
+/**
  * Convierte el resultado de una capacidad en el texto que vuelve al modelo.
  *
  * Va como JSON y no como prosa: es un dato, y el modelo lo lee mejor estructurado. Lo que sí se
@@ -188,7 +224,9 @@ function crearManejadorLlm({
 
         const peticionBase = {
             negocio,
-            capacidades: ofrecidas,
+            // `pasar_a_persona` va al final: así el prefijo que ya estaba cacheado (las
+            // capacidades de siempre) no cambia de orden, solo crece.
+            capacidades: [...ofrecidas, PASAR_A_PERSONA],
             historial,
             mensaje: texto,
             ahora: ahora(),
@@ -292,6 +330,33 @@ function crearManejadorLlm({
             }
 
             // ── Ejecutar lo que pidió ────────────────────────────────────────────────────
+            // El modelo pide una persona: el turno termina aquí, pida lo que pida además. Seguir
+            // ejecutando otras herramientas y luego callarse sería hacer cosas que nadie va a
+            // contarle al cliente.
+            const aPersona = respuesta.invocacionesSolicitadas.find(
+                (s) => s.capacidad === PASAR_A_PERSONA.nombre
+            );
+            if (aPersona) {
+                const motivo = String(aPersona.argumentos?.motivo ?? '').trim().slice(0, 200);
+                invocaciones.push({
+                    capacidad: PASAR_A_PERSONA.nombre,
+                    vertical: PASAR_A_PERSONA.vertical,
+                    argumentos: { motivo },
+                    resultado: 'ok',
+                    latenciaMs: 0,
+                });
+                pasos.push({ tipo: 'handoff', decision: 'modelo_pide_persona', motivo: { motivo } });
+                return handoff.decisionAPersona(
+                    {
+                        pasos,
+                        invocaciones,
+                        variables: conversacion.variables || {},
+                        nivel: 'llm',
+                    },
+                    negocio
+                );
+            }
+
             const resultados = [];
             for (const solicitada of respuesta.invocacionesSolicitadas) {
                 const salida = await ejecutarSolicitud({

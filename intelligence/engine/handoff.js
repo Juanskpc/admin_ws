@@ -86,4 +86,39 @@ function decision(base, negocio) {
     };
 }
 
-module.exports = { decision, mensaje, ESTADO_HANDOFF, CUANDO_SIN_HORARIO };
+/**
+ * Cuando es el MODELO quien pide pasar la conversación (`pasar_a_persona`, 2026-10-02).
+ *
+ * Nace de la auditoría de Zona Burger: sin el dato (el Nequi, el valor exacto del domicilio), el
+ * asistente le decía al cliente «confírmalo directamente con ZONA BURGER» — mientras hablaba con
+ * Zona Burger. Ahora pasa la conversación de verdad: queda en `handoff_humano`, el motor la
+ * anuncia (`conversacion.escalada.v1` → campanita y correo) y sale en «Esperan respuesta».
+ *
+ * La frase es otra que la de `mensaje()` a propósito: aquella se dice cuando algo FALLÓ y no se
+ * sabe si hay alguien; ésta, cuando falta un dato que el negocio sí tiene. No promete un tiempo
+ * («en un momento») porque no lo sabemos, y no dice «no hay nadie» porque tampoco lo sabemos.
+ */
+function mensajeAPersona(negocio) {
+    const quien = String(negocio?.tratamiento || '').trim();
+    const equipo = quien && quien !== 'el negocio' ? `alguien del equipo de ${quien}` : 'alguien del equipo';
+    return `Eso te lo confirma ${equipo} por este mismo chat 🙌 Ya le dejé tu mensaje.`;
+}
+
+/** Lo mismo que `decision`, con la frase de cuando el modelo lo pide. */
+function decisionAPersona(base, negocio) {
+    return {
+        ...base,
+        respuestas: [mensajeAPersona(negocio)],
+        estado: ESTADO_HANDOFF,
+        resultado: 'handoff',
+    };
+}
+
+module.exports = {
+    decision,
+    decisionAPersona,
+    mensaje,
+    mensajeAPersona,
+    ESTADO_HANDOFF,
+    CUANDO_SIN_HORARIO,
+};

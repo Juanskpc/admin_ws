@@ -52,6 +52,16 @@ const MAX_REPREGUNTAS = 1;
 /** Cuántas veces se acepta un añadido al pedido pendiente antes de dejar de anotar. */
 const MAX_ANOTACIONES = 3;
 
+/**
+ * Habla de lo que cuesta algo: «siempre me cobran 23 al Pilar», «el total es 30». No es un añadido
+ * al pedido sino una pregunta o un reclamo sobre el precio, y anotarlo en la nota de cocina (como
+ * pasó con Zona Burger el 2026-10-02) no le contesta nada a nadie.
+ */
+const HABLA_DE_PRECIO = /\b(cobran|cobra|cobro|cobraron|cobrar|cobrarian|vale|valen|cuesta|cuestan|precio|valor|total|pago|pagar)\b/;
+
+/** Un mensaje que no es texto: el canal lo trae como `[image]`, `[audio]`, `[sticker]`… */
+const ES_MEDIA = /^\[(image|audio|video|sticker|document|location|contacts|unsupported)\]$/;
+
 /** Empieza como pregunta: eso no se anota, se contesta (y lo atiende el repreguntado). */
 const EMPIEZA_PREGUNTA = /^(cuanto|cuantos|cuanta|que|cual|cuales|como|donde|cuando|tienen|tiene|hay|me pueden|puedo|podria|se puede|a que)\b/;
 
@@ -70,6 +80,7 @@ function lineasParaAnotar(texto, { afirma }) {
         const palabras = t.split(' ').filter(Boolean);
         if (palabras.length < 2 || palabras.length > 40) return false;
         if (l.includes('?') || EMPIEZA_PREGUNTA.test(t)) return false;
+        if (HABLA_DE_PRECIO.test(t)) return false;
         if (esAfirmacion(l) || esComando(l, COMANDO.NO) || esComando(l, COMANDO.CANCELAR)) return false;
         return true;
     });
@@ -251,6 +262,26 @@ async function resolver(ctx, { gate, registry = registryReal, ahora = () => new 
 
     if (!afirma) {
         const repreguntas = Number(datos.repreguntas || 0);
+        // Un pedido a medio confirmar que el cliente no confirma tras dos desvíos no se suelta:
+        // pasa a una persona, que lo termina por el mismo chat. Soltarlo («Dejo eso en pausa»)
+        // es perder una venta que el cliente cree hecha; repetir la pregunta por tercera vez es
+        // lo que hizo que en Zona Burger (2026-10-02) entrara una persona a decir «confirme el
+        // pedido». Solo para las capacidades que declaran `anotar` (los pedidos): una cita
+        // pendiente de cancelar sí se puede soltar sin perder nada.
+        if (repreguntas >= MAX_REPREGUNTAS && typeof declaradaAnotar === 'function') {
+            return {
+                pasos: [paso('confirmacion_a_persona', { capacidad: datos.capacidad, repreguntas })],
+                respuestas: [
+                    'Todavía no he enviado tu pedido. Le paso tu conversación a alguien del ' +
+                        'equipo para que lo termine contigo por este mismo chat 🙌',
+                ],
+                variables,
+                tarea: null,
+                estado: 'handoff_humano',
+                resultado: 'handoff',
+                nivel: 'determinista',
+            };
+        }
         if (repreguntas >= MAX_REPREGUNTAS) {
             // Dos veces hablando de otra cosa: el cliente está en otro tema. Se suelta el
             // pendiente para que el turno siguiente lo atienda quien sepa, en vez de tener al
@@ -261,14 +292,21 @@ async function resolver(ctx, { gate, registry = registryReal, ahora = () => new 
                 variables,
             });
         }
+        // Una foto o un audio no se contestan con el resumen entero otra vez: el resumen está
+        // justo arriba, y repetirlo tres veces es lo que se lee como un bot atascado. Se dice que
+        // no se puede ver y se pide el sí o el no.
+        const esMedia = ES_MEDIA.test(String(ctx.texto || '').trim());
         return {
-            pasos: [paso('confirmacion_repreguntada', { capacidad: datos.capacidad })],
+            pasos: [paso('confirmacion_repreguntada', { capacidad: datos.capacidad, media: esMedia })],
             respuestas: [
                 {
-                    texto: `${await textoDePregunta(datos.capacidad, datos.args, {
-                        registry,
-                        idNegocio: ctx.conversacion?.id_negocio ?? null,
-                    })} Respóndeme sí o no.`,
+                    texto: esMedia
+                        ? 'No puedo ver fotos ni audios por aquí 🙏 Todavía no he enviado nada: ' +
+                          '¿confirmo lo de arriba? Respóndeme sí o no.'
+                        : `${await textoDePregunta(datos.capacidad, datos.args, {
+                              registry,
+                              idNegocio: ctx.conversacion?.id_negocio ?? null,
+                          })} Respóndeme sí o no.`,
                     opciones: opcionesSiNo(),
                 },
             ],

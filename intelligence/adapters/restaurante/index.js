@@ -137,6 +137,59 @@ async function buscarEnLaCarta(idNegocio, termino) {
     return buscarPorCategoriaYNombre(idNegocio, termino);
 }
 
+/**
+ * Los productos que coinciden con el término pero hoy NO se pueden vender: marcados como no
+ * disponibles, o sin insumos si el negocio controla inventario. Solo nombres —nada de precio—:
+ * sirven para decir «se acabó», no para venderlos.
+ *
+ * Se busca igual que `buscarEnLaCarta` en sus dos primeras pasadas (término completo y palabra
+ * más larga), pero con `includeDisabled`, que es la vista que no filtra ni disponibilidad ni
+ * stock. Lo oculto (`visible = false`) sigue sin salir: eso el negocio no lo quiere enseñar.
+ * Un fallo aquí no tumba la búsqueda: sin la lista, se contesta como antes.
+ */
+async function agotadosQueCoinciden(idNegocio, termino) {
+    try {
+        // El término entero y, si no da nada, cada palabra que dice QUÉ es (hasta 4): con
+        // «hamburguesa discordia», «hamburguesa» trae las que se venden y «discordia» la agotada.
+        const palabras = normalizarTexto(termino)
+            .split(/\s+/)
+            .filter((w) => w.length >= 3 && !RELLENO.has(w))
+            .slice(0, 4);
+        const agotados = new Map();
+        for (const t of [termino, ...palabras]) {
+            const [todos, vendibles] = await Promise.all([
+                cartaService.buscarProductos(idNegocio, t, { includeDisabled: true }),
+                cartaService.buscarProductos(idNegocio, t),
+            ]);
+            // Agotado = está en la vista completa y NO en la que se puede vender ahora.
+            const seVende = new Set(vendibles.map((p) => p.id_producto));
+            for (const p of todos) {
+                if (p.visible !== false && !seVende.has(p.id_producto)) agotados.set(p.id_producto, p.nombre);
+            }
+            if (t === termino && agotados.size > 0) break;
+        }
+        return [...agotados.values()].slice(0, MAX_PRODUCTOS);
+    } catch (error) {
+        console.warn(`[buscar_producto] no se pudieron leer los agotados: ${error.message}`);
+        return [];
+    }
+}
+
+/**
+ * ¿La búsqueda no trajo lo que se pidió? Vacía, o con otros productos que no llevan la palabra
+ * principal del término («hamburguesa discordia» → salen las otras hamburguesas, no la Discordia).
+ * Solo entonces vale la pena mirar si lo pedido está agotado.
+ */
+function noTraeLoPedido(productos, termino) {
+    if (productos.length === 0) return true;
+    const ancla = normalizarTexto(termino)
+        .split(/\s+/)
+        .filter((w) => w.length >= 3 && !RELLENO.has(w))
+        .sort((a, b) => b.length - a.length)[0];
+    if (!ancla) return false;
+    return !productos.some((p) => normalizarTexto(p.nombre).includes(ancla));
+}
+
 /** Palabras de relleno: no dicen QUÉ producto es, así que no se le exigen a la carta. */
 const RELLENO = new Set([
     'una', 'uno', 'unos', 'unas', 'del', 'los', 'las', 'por', 'favor', 'porfa', 'porfis',
@@ -393,6 +446,8 @@ function registrarCapacidades() {
             'concreto ("¿tienen hamburguesa doble?", "¿cuánto vale la limonada?") en vez de ' +
             'pedir la carta entera. Si no encuentra nada, dilo y ofrece enseñar las categorías; ' +
             'no inventes productos ni precios: lo único que existe es lo que devuelve esto. ' +
+            'Si el producto viene en `agotados_ahora`, SÍ está en la carta pero hoy se acabó: ' +
+            'dilo así y ofrece otra cosa; nunca digas que no existe. ' +
             'Si salen varias presentaciones del mismo plato (personal/pequeña, mediana, grande, ' +
             'familiar, sencilla, doble) y el cliente NO dijo el tamaño, pregúntale cuál quiere ' +
             'con sus precios; nunca elijas tú el tamaño. Si con el término completo no aparece ' +
@@ -415,6 +470,16 @@ function registrarCapacidades() {
             return {
                 termino: args.termino,
                 productos: productos.slice(0, MAX_PRODUCTOS).map(producto),
+                // Solo cuando no hay nada que vender: así «no tenemos» y «se acabó» dejan de ser
+                // la misma respuesta (Zona Burger, 2026-10-02: la Discordia, agotada por un
+                // stock en −321, se le dijo a una clienta que «no está en la carta»).
+                ...(noTraeLoPedido(productos, args.termino)
+                    ? {
+                          agotados_ahora: (await agotadosQueCoinciden(idNegocio, args.termino)).filter(
+                              (nombre) => !productos.some((p) => p.nombre === nombre)
+                          ),
+                      }
+                    : {}),
             };
         },
     });

@@ -49,6 +49,7 @@ const barrioService = require('../../../app_restaurante_api/services/barrioServi
 const exclusiones = require('./exclusiones');
 const mesaPublicaService = require('../../../app_restaurante_api/services/mesaPublicaService');
 const datosCliente = require('./datosCliente');
+const Models = require('../../../app_core/models/conection');
 
 const VERTICAL = 'restaurante';
 
@@ -1457,15 +1458,23 @@ function esPreguntaDeTiempo(texto) {
  * La respuesta con el tiempo que declaró el negocio, o `null` si no lo ha configurado (entonces
  * no se inventa ninguno). Primero el dato, y después la promesa amable: si sale antes, se avisa.
  */
-function fraseDeTiempo(tiempo) {
+function fraseDeTiempo(tiempo, { hayPedido = true, ofrecerTomarlo = false } = {}) {
     const min = Number(tiempo?.min);
     if (!Number.isInteger(min) || min < 1) return null;
     const max = Number(tiempo?.max);
-    const cuanto =
-        Number.isInteger(max) && max > min
-            ? `de *${min} a ${max} minutos*`
-            : `de unos *${min} minutos*`;
-    return `El tiempo estimado de tu pedido es ${cuanto} ⏱️. Si está listo antes, te avisaremos 😊`;
+    const rango = Number.isInteger(max) && max > min;
+    if (hayPedido) {
+        const cuanto = rango ? `de *${min} a ${max} minutos*` : `de unos *${min} minutos*`;
+        return `El tiempo estimado de tu pedido es ${cuanto} ⏱️. Si está listo antes, te avisaremos 😊`;
+    }
+    // Sin pedido confirmado, «tu pedido» es mentira. Zona Burger, 2026-10-02: una clienta
+    // preguntó «¿en cuánto está?», le contestamos «el tiempo estimado de TU pedido es de 40 a 60
+    // minutos», y se fue a pagar un pedido que nadie había tomado.
+    const cuanto = rango ? `*${min} a ${max} minutos*` : `unos *${min} minutos*`;
+    const frase = `Los pedidos están saliendo en ${cuanto} ⏱️, contados desde que se confirman.`;
+    return ofrecerTomarlo
+        ? `${frase}\nTodavía no tengo ningún pedido tuyo: si quieres, te lo tomo por aquí 😊`
+        : frase;
 }
 
 /**
@@ -1524,6 +1533,38 @@ function fraseDeDomicilio(rango) {
     return lineas.join('\n');
 }
 
+/** Cuánto vale como «reciente» un pedido para decirle al cliente «tu pedido». */
+const HORAS_PEDIDO_RECIENTE = 6;
+
+/**
+ * ¿El asistente tomó un pedido en esta conversación en las últimas horas? Lo dice el Ledger:
+ * `tomar_pedido` con resultado `ok` es un pedido que se creó (la petición que queda esperando
+ * el «sí» no se registra como `ok`). Un pedido que alguien del local creó a mano desde la caja
+ * no sale aquí: eso lo sabrá el día que la caja ligue el pedido a la conversación.
+ *
+ * Ante cualquier fallo, `false`: lo peor que pasa es decir «desde que se confirma» a quien ya
+ * pidió, que es inexacto pero no engaña a nadie. Lo contrario sí engañó (Zona Burger, 2026-10-02).
+ */
+async function pedidoRecienteEnLaConversacion(conversacion) {
+    try {
+        const [fila] = await Models.sequelize.query(
+            `SELECT 1 AS hay FROM intelligence.invocacion_capacidad
+              WHERE id_conversacion = :c AND capacidad = 'tomar_pedido'
+                AND resultado = 'ok' AND NOT dry_run
+                AND creado_en >= now() - (:horas * interval '1 hour')
+              LIMIT 1;`,
+            {
+                replacements: { c: conversacion.id_conversacion, horas: HORAS_PEDIDO_RECIENTE },
+                type: Models.sequelize.QueryTypes.SELECT,
+            }
+        );
+        return Boolean(fila);
+    } catch (error) {
+        console.warn(`[restaurante] no se pudo saber si hay un pedido reciente: ${error.message}`);
+        return false;
+    }
+}
+
 /**
  * Crea el manejador. La inyección existe para los tests, igual que en el flujo de `reserva`.
  * `ahora` también se inyecta: el saludo depende de la hora y una prueba no puede esperar a que
@@ -1547,6 +1588,9 @@ function crearFlujoRestaurante({
     // Barrios con precio y mesas del negocio: lo que hace falta para leer lo que el cliente
     // eligió en la carta. Se inyecta por lo mismo que lo demás. Si leer falla, se sigue como si
     // el negocio no tuviera ni barrios ni mesas: pedir no se rompe por un extra.
+    // ¿Este chat tiene un pedido de verdad, reciente? Decide si el tiempo se dice como «tu
+    // pedido» o como «desde que se confirma». Se inyecta para que los tests no necesiten Postgres.
+    tienePedidoReciente = pedidoRecienteEnLaConversacion,
     catalogo = {
         barrios: (idNegocio) => barrioService.listarPublico(idNegocio),
         mesas: (idNegocio) => mesaPublicaService.listarPublicas(idNegocio),
@@ -1632,8 +1676,16 @@ function crearFlujoRestaurante({
         // («¿a nombre de quién?» → «cuánto se demora»), y apuntar una pregunta como nombre o
         // dirección es justo lo que ese flujo se esfuerza en no hacer.
         if (esPreguntaDeTiempo(texto)) {
-            const frase = fraseDeTiempo(negocio.tiempoEstimado);
-            if (frase && conversacion.tarea_actual === TAREA_PEDIDO) {
+            // A mitad de un pedido todavía no hay pedido: el tiempo se dice «desde que se
+            // confirma». Fuera de un pedido, solo se dice «tu pedido» si este chat tiene uno de
+            // verdad; si no, se avisa de que aún no hay ninguno y se ofrece tomarlo.
+            const armando = conversacion.tarea_actual === TAREA_PEDIDO;
+            const hayPedido = !armando && (await tienePedidoReciente(conversacion));
+            const frase = fraseDeTiempo(negocio.tiempoEstimado, {
+                hayPedido,
+                ofrecerTomarlo: !armando && !hayPedido,
+            });
+            if (frase && armando) {
                 // Se contesta Y se retoma lo que faltaba, sin tocar la tarea ni el contador de
                 // repreguntas: el cliente preguntó algo razonable, no se equivocó.
                 await conIdentidad(ctx);
@@ -1651,7 +1703,7 @@ function crearFlujoRestaurante({
             }
             if (frase) {
                 return {
-                    pasos: [paso('tiempo_estimado_respondido')],
+                    pasos: [paso('tiempo_estimado_respondido', { hay_pedido: hayPedido })],
                     respuestas: [frase],
                     variables: conMemoria(conversacion),
                     tarea: null,
