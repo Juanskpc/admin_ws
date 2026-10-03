@@ -343,15 +343,21 @@ async function asegurarConversacionSinReglas({ idNegocio, canal, idExterno }, { 
  * reactivación (ADR-023, Enmienda 2). Lo llaman quienes ya saben que hubo intervención: contestar
  * desde la Bandeja, marcarla atendida, o el dueño escribiendo desde su propio WhatsApp.
  */
-async function marcarIntervencionHumana(idConversacion, { transaction = null } = {}) {
+async function marcarIntervencionHumana(idConversacion, { transaction = null, atendida = false } = {}) {
+    // `atendida`: la persona le ESCRIBIÓ al cliente, así que ya no está esperando respuesta. Lo pasa
+    // el eco del celular del negocio (2026-10-02): contestar desde el teléfono dejaba la
+    // conversación «esperando respuesta» para siempre —Zona Burger tenía 24— porque solo la
+    // Bandeja ponía `atendida_en`. Si el cliente vuelve a escribir, `asegurarConversacion` la
+    // devuelve a NULL y vuelve a esperar, como siempre.
     return unaFila(
         `
         UPDATE intelligence.conversacion
-           SET humano_ultimo_en = now()
+           SET humano_ultimo_en = now(),
+               atendida_en = CASE WHEN :atendida THEN now() ELSE atendida_en END
          WHERE id_conversacion = :idConversacion
         RETURNING id_conversacion, humano_ultimo_en;
         `,
-        { idConversacion },
+        { idConversacion, atendida: Boolean(atendida) },
         transaction
     );
 }
@@ -707,6 +713,46 @@ async function insertarMensajeSaliente(
  *
  * @returns {Promise<{guardado: boolean, motivo?: string, idConversacion?: string}>}
  */
+/**
+ * Una edición o un borrado de WhatsApp sobre un mensaje que ya está guardado (del cliente o del
+ * negocio), buscado por su `wamid` (`id_externo`). Devuelve `{ id_mensaje }` o `null` si no está.
+ *
+ *   - `edit`: el texto nuevo reemplaza al viejo, y el viejo queda en `crudo.contenido_anterior`
+ *     (que caduca con `crudo`, a los 30 días). La Bandeja lo marca como «editado».
+ *   - `revoke`: se **borra el contenido** —quien borra un mensaje no quiere que se siga leyendo—
+ *     y la referencia a su archivo, y queda `crudo.eliminado`. La Bandeja dice «Mensaje eliminado».
+ *
+ * No despierta al asistente: el bot ya contestó al original, y re-contestar por una corrección de
+ * una letra sería ruido. Ventana de 30 días (lo que dura `crudo`); WhatsApp solo deja editar o
+ * borrar mensajes recientes.
+ */
+async function aplicarCambioDeMensaje({ idNegocio, tipo, wamidOriginal, contenido = '' }) {
+    if (!wamidOriginal || !['edit', 'revoke'].includes(tipo)) return null;
+    const edit = tipo === 'edit';
+    return unaFila(
+        `
+        UPDATE intelligence.mensaje
+           SET contenido = :contenido,
+               crudo = (COALESCE(crudo, '{}'::jsonb) - CASE WHEN :edit THEN '' ELSE 'media' END)
+                       || CASE WHEN :edit
+                               THEN jsonb_build_object('editado', true, 'editado_en', now(),
+                                                       'contenido_anterior', contenido)
+                               ELSE jsonb_build_object('eliminado', true, 'eliminado_en', now())
+                          END
+         WHERE id_negocio = :idNegocio AND id_externo = :wamid
+           AND creado_en > now() - interval '30 days'
+        RETURNING id_mensaje;
+        `,
+        {
+            idNegocio,
+            wamid: wamidOriginal,
+            edit,
+            contenido: edit ? String(contenido || '').slice(0, 4096) : '',
+        },
+        null
+    );
+}
+
 async function registrarMensajeDelNegocio({
     idNegocio,
     canal,
@@ -1422,6 +1468,7 @@ module.exports = {
     esErrorDeLock,
     reservarIngesta,
     registrarMensajeDelNegocio,
+    aplicarCambioDeMensaje,
     asegurarConversacion,
     reiniciarSiInactivaMucho,
     INACTIVIDAD_RESET_MIN,

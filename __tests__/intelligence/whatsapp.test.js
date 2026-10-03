@@ -227,6 +227,8 @@ describe('interpretar el webhook', () => {
                 tipo: 'text',
                 contenido: '',
                 enviadoEn: new Date(1700000000 * 1000),
+                // La forma del eco (nunca el contenido), para diagnosticar uno sin destinatario.
+                claves: ['from', 'id', 'timestamp', 'to', 'type'],
             },
         ]);
     });
@@ -766,5 +768,64 @@ describe('quien escribe sin enseñar su número (BSUID)', () => {
                 ? identidad._normalizarTelefono(BSUID)
                 : null
         ).toBeNull();
+    });
+});
+
+// ── Ecos a clientes sin número, y ediciones/borrados (Zona Burger, 2026-10-02 21:43) ────────
+// El personal contestó seis veces desde el celular a una clienta con BSUID: los ecos llegaban sin
+// `to` y se descartaban «sin destinatario». Y un mensaje editado se veía como «[edit]».
+describe('ecos a un cliente sin número visible', () => {
+    const config = configFalsa();
+    // Un wamid REAL de esa noche: lleva dentro a CO.873018762471820.
+    const WAMID = 'wamid.HBgSQ08uODczMDE4NzYyNDcxODIwFRQAERgWM0VCMEM4OUUzQUIyNDdGQjIzNTk3RgA=';
+
+    test('EL CASO: sin `to`, el destinatario sale del wamid', () => {
+        const r = interpretarWebhook(
+            webhook(
+                { message_echoes: [{ from: '573001112233', id: WAMID, timestamp: '1700000000', type: 'text', text: { body: '8 mil' } }] },
+                { field: 'smb_message_echoes' }
+            ),
+            { config }
+        );
+        expect(r.ecos[0]).toMatchObject({ idExterno: 'CO.873018762471820', contenido: '8 mil' });
+    });
+
+    test('con `to` se sigue usando `to`', () => {
+        const r = interpretarWebhook(
+            webhook({ message_echoes: [{ to: '573001234567', id: WAMID, type: 'text', text: { body: 'x' } }] }, { field: 'smb_message_echoes' }),
+            { config }
+        );
+        expect(r.ecos[0].idExterno).toBe('573001234567');
+    });
+});
+
+describe('ediciones y borrados no son mensajes nuevos', () => {
+    const config = configFalsa();
+    test('el cliente edita → un cambio, NO un mensaje para el bot', () => {
+        const r = interpretarWebhook(
+            webhook({
+                messages: [{
+                    from: '573001234567', id: 'wamid.EDIT', timestamp: '1700000000', type: 'edit',
+                    edit: { original_message_id: 'wamid.ORIG', message: { type: 'text', text: { body: 'Si perfecto' } } },
+                }],
+            }),
+            { config }
+        );
+        expect(r.mensajes).toHaveLength(0);
+        expect(r.cambios).toEqual([
+            { idNegocio: expect.anything(), origen: 'cliente', tipo: 'edit', wamidOriginal: 'wamid.ORIG', contenido: 'Si perfecto' },
+        ]);
+    });
+
+    test('el negocio borra desde su celular → un cambio, NO un eco', () => {
+        const r = interpretarWebhook(
+            webhook(
+                { message_echoes: [{ to: '573001234567', id: 'wamid.REV', type: 'revoke', revoke: { original_message_id: 'wamid.ORIG2' } }] },
+                { field: 'smb_message_echoes' }
+            ),
+            { config }
+        );
+        expect(r.ecos).toHaveLength(0);
+        expect(r.cambios[0]).toMatchObject({ origen: 'negocio', tipo: 'revoke', wamidOriginal: 'wamid.ORIG2' });
     });
 });

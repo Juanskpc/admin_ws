@@ -65,6 +65,60 @@ const LIMITES = {
 /** Tipos que sabemos leer hoy. El resto entra marcado, no se ignora en silencio. */
 const TIPOS_CON_TEXTO = new Set(['text', 'interactive', 'button']);
 
+/**
+ * A quién le escribió el negocio en un eco (`smb_message_echoes`).
+ *
+ * La documentación de Meta solo describe `to` con un teléfono. Con un cliente que escribe sin
+ * enseñar su número (BSUID, `CO.873…`) `to` no viene, y el eco se descartaba como «sin
+ * destinatario» (2026-10-02: seis mensajes del personal perdidos en un solo chat). Se prueban, en
+ * orden, `to` y los nombres simétricos de los que sí trae un mensaje entrante (`from_user_id` →
+ * `to_user_id`…); y como último recurso el propio `wamid`, que lleva dentro al destinatario
+ * (`wamid.HBgS…` en base64 contiene `CO.873018762471820` o el teléfono). Lo último no está
+ * documentado: por eso va al final y `silenciarPorHumano` anota qué claves traía el eco.
+ */
+function destinatarioDeEco(eco) {
+    const directo =
+        eco?.to || eco?.to_user_id || eco?.recipient_user_id || eco?.recipient_id || eco?.recipient || null;
+    if (directo) return String(directo);
+    return destinatarioDelWamid(eco?.id);
+}
+
+/** El BSUID o el teléfono que viaja dentro de un `wamid`, o `null`. */
+function destinatarioDelWamid(wamid) {
+    const crudo = String(wamid || '').replace(/^wamid\./, '');
+    if (!crudo) return null;
+    let texto;
+    try {
+        texto = Buffer.from(crudo, 'base64').toString('latin1');
+    } catch (_) {
+        return null;
+    }
+    const bsuid = texto.match(/[A-Z]{2}\.[A-Za-z0-9]{8,}/);
+    if (bsuid) return bsuid[0];
+    const telefono = texto.match(/\d{10,15}/);
+    return telefono ? telefono[0] : null;
+}
+
+/**
+ * Si el mensaje EDITA o BORRA otro, el cambio; si no, `null`. Vale para lo que manda el cliente y
+ * para los ecos del negocio: Meta usa la misma forma (`edit.original_message_id` + `edit.message`;
+ * `revoke.original_message_id`).
+ */
+function cambioDeMensaje(mensaje) {
+    if (mensaje?.type === 'edit' && mensaje.edit?.original_message_id) {
+        const nuevo = mensaje.edit.message || {};
+        return {
+            tipo: 'edit',
+            wamidOriginal: String(mensaje.edit.original_message_id),
+            contenido: nuevo.type ? textoDeMensaje(nuevo) : '',
+        };
+    }
+    if (mensaje?.type === 'revoke' && mensaje.revoke?.original_message_id) {
+        return { tipo: 'revoke', wamidOriginal: String(mensaje.revoke.original_message_id) };
+    }
+    return null;
+}
+
 /** Los tipos de WhatsApp que traen un archivo descargable. */
 const TIPOS_CON_ARCHIVO = new Set(['image', 'sticker', 'audio', 'video', 'document']);
 
@@ -159,6 +213,8 @@ function interpretarWebhook(cuerpo, { config = configReal } = {}) {
         mensajes: [],
         estados: [],
         ecos: [],
+        // Ediciones y borrados (del cliente o del negocio): cambian un mensaje que ya existe.
+        cambios: [],
         avisos: [],
         sincronizaciones: [],
         ajenos: 0,
@@ -188,6 +244,14 @@ function interpretarWebhook(cuerpo, { config = configReal } = {}) {
 
             // ── Mensajes del cliente ────────────────────────────────────────────────────
             for (const mensaje of valor.messages || []) {
+                // El cliente EDITÓ o BORRÓ un mensaje: no es un mensaje nuevo, es un cambio sobre
+                // uno que ya está guardado. Antes entraba como «[edit]» / «[revoke]» y se veía así
+                // en la Bandeja (2026-10-02).
+                const cambioDelCliente = cambioDeMensaje(mensaje);
+                if (cambioDelCliente) {
+                    salida.cambios.push({ idNegocio, origen: 'cliente', ...cambioDelCliente });
+                    continue;
+                }
                 // ⚠️ Quién habla: el teléfono si lo hay, y si no, el BSUID.
                 //
                 // El 2026-08-26 un webhook llegó con un mensaje **sin `from`** y el núcleo lo
@@ -273,10 +337,19 @@ function interpretarWebhook(cuerpo, { config = configReal } = {}) {
             // API, envía algo desde la app de WhatsApp Business. Tratarlo como un mensaje del
             // cliente sería meterle al motor las palabras del negocio como si fueran del cliente.
             for (const eco of valor.message_echoes || []) {
+                const cambioDelNegocio = cambioDeMensaje(eco);
+                if (cambioDelNegocio) {
+                    salida.cambios.push({ idNegocio, origen: 'negocio', ...cambioDelNegocio });
+                    continue;
+                }
                 salida.ecos.push({
                     idNegocio,
                     // En un eco, `to` es el cliente: es la conversación que hay que silenciar.
-                    idExterno: eco.to,
+                    // Con un cliente sin número visible (BSUID) `to` no viene: ver
+                    // `destinatarioDeEco` — el 2026-10-02 se perdieron así seis respuestas del
+                    // personal de Zona Burger a una misma clienta.
+                    idExterno: destinatarioDeEco(eco),
+                    claves: Object.keys(eco).sort(),
                     wamid: eco.id,
                     tipo: eco.type,
                     // Lo que el negocio escribió, para que la Bandeja lo muestre. Un adjunto queda
@@ -393,6 +466,16 @@ async function recibirWebhook(cuerpo, { config = configReal } = {}) {
         await aparte('un eco del negocio', eco.wamid || 'sin wamid', () => silenciarPorHumano(eco));
     }
 
+    for (const cambio of leido.cambios) {
+        await aparte(`un ${cambio.tipo === 'edit' ? 'mensaje editado' : 'mensaje borrado'}`, cambio.wamidOriginal, async () => {
+            const r = await repositorio.aplicarCambioDeMensaje(cambio);
+            if (!r) {
+                // El original no está: más viejo que la ventana, o un eco que se perdió antes.
+                console.warn(`[whatsapp] ${cambio.tipo} de un mensaje que no está guardado (${cambio.wamidOriginal}).`);
+            }
+        });
+    }
+
     for (const aviso of leido.avisos) {
         await aparte('un aviso de la cuenta', aviso.evento || 'sin evento', () =>
             registrarAviso(aviso)
@@ -457,12 +540,14 @@ async function recibirWebhook(cuerpo, { config = configReal } = {}) {
  * atendiendo, no hables encima»— y que el motor ya trata como no procesable desde F5-B. No hace
  * falta un estado nuevo ni una migración: la decisión de §6.13 («el bot no vuelve») se cumple sola.
  */
-async function silenciarPorHumano({ idNegocio, idExterno, wamid, contenido, tipo, enviadoEn }) {
+async function silenciarPorHumano({ idNegocio, idExterno, wamid, contenido, tipo, enviadoEn, claves = [] }) {
     // Un eco sin destinatario no dice a quién se escribió: no hay conversación que silenciar ni
     // hilo donde mostrarlo. Antes llegaba `undefined` a la consulta y reventaba con «Named
     // replacement ":idExterno" has no entry» (2026-10-01), sin silenciar a nadie.
     if (!idExterno) {
-        console.warn(`[whatsapp] un eco del negocio ${idNegocio} llegó sin destinatario (${wamid}).`);
+        console.warn(
+            `[whatsapp] un eco del negocio ${idNegocio} llegó sin destinatario (${wamid}). Claves: ${claves.join(',')}`
+        );
         return { silenciada: false, motivo: 'eco_sin_destinatario' };
     }
 
@@ -497,13 +582,14 @@ async function silenciarPorHumano({ idNegocio, idExterno, wamid, contenido, tipo
     if (!conversacion) return { silenciada: false, motivo: 'sin_conversacion' };
     // Cada vez que el dueño escribe desde su teléfono cuenta como intervención humana y reinicia
     // el reloj de la reactivación (ADR-023, Enmienda 2), esté ya la conversación en handoff o no.
+    // `atendida: true`: el negocio le escribió al cliente, así que ya no está esperando respuesta.
     if (conversacion.estado === 'handoff_humano') {
-        await repositorio.marcarIntervencionHumana(conversacion.id_conversacion);
+        await repositorio.marcarIntervencionHumana(conversacion.id_conversacion, { atendida: true });
         return { silenciada: true, motivo: 'ya_estaba' };
     }
 
     await repositorio.cambiarEstadoConversacion(conversacion.id_conversacion, 'handoff_humano');
-    await repositorio.marcarIntervencionHumana(conversacion.id_conversacion);
+    await repositorio.marcarIntervencionHumana(conversacion.id_conversacion, { atendida: true });
     await auditar('humano_tomo_la_conversacion', idNegocio, {
         id_conversacion: conversacion.id_conversacion,
         wamid,
@@ -882,6 +968,9 @@ module.exports = {
     interpretarWebhook,
     esAntiguo,
     archivoDeMensaje,
+    destinatarioDeEco,
+    destinatarioDelWamid,
+    cambioDeMensaje,
     renderizar,
     renderizarPlantilla,
     textoDeMensaje,

@@ -737,3 +737,72 @@ describe('archivos de los clientes (fotos, stickers…)', () => {
         expect(r.statusCode).toBe(404);
     });
 });
+
+// ── Esperan respuesta primero; mensajes editados y eliminados (2026-10-02) ──────────────────
+describe('orden de la lista y cambios de mensajes', () => {
+    test('las conversaciones que esperan respuesta van PRIMERO, aunque sean más viejas', async () => {
+        const vieja = await nuevaConversacion({ idNegocio: negocioA, haceHoras: 5 });
+        await sequelize.query(
+            `UPDATE intelligence.conversacion SET estado = 'handoff_humano', atendida_en = NULL,
+                    ultimo_mensaje_en = now() - interval '5 hours' WHERE id_conversacion = :c;`,
+            { replacements: { c: vieja.id_conversacion } }
+        );
+        await nuevaConversacion({ idNegocio: negocioA, haceHoras: 0 }); // más reciente, sin esperar
+
+        const r = await llamar(Bandeja.listarConversaciones, { idUsuario: usuarioA });
+        const lista = r.cuerpo.data.conversaciones;
+        const primeraNoEscalada = lista.findIndex((c) => !c.escalada);
+        const ultimaEscalada = lista.map((c) => c.escalada).lastIndexOf(true);
+        expect(ultimaEscalada).toBeLessThan(primeraNoEscalada === -1 ? Infinity : primeraNoEscalada);
+        expect(lista.some((c) => c.id_conversacion === vieja.id_conversacion)).toBe(true);
+    });
+
+    test('editar cambia el texto y lo marca; borrar quita el texto y lo marca', async () => {
+        const c = await nuevaConversacion({ idNegocio: negocioA });
+        const wamid = `wamid.TEST_EDIT_${CORRIDA}`;
+        const wamid2 = `wamid.TEST_REV_${CORRIDA}`;
+        await sequelize.query(
+            `INSERT INTO intelligence.mensaje (id_conversacion, id_negocio, direccion, canal, contenido, id_externo)
+             VALUES (:c, :n, 'entrante', 'whatsapp', 'Si perfeto', :w1),
+                    (:c, :n, 'entrante', 'whatsapp', 'mi clave es 1234', :w2);`,
+            { replacements: { c: c.id_conversacion, n: negocioA, w1: wamid, w2: wamid2 } }
+        );
+
+        expect(await repositorio.aplicarCambioDeMensaje({ idNegocio: negocioA, tipo: 'edit', wamidOriginal: wamid, contenido: 'Si perfecto' })).toBeTruthy();
+        expect(await repositorio.aplicarCambioDeMensaje({ idNegocio: negocioA, tipo: 'revoke', wamidOriginal: wamid2 })).toBeTruthy();
+        // De otro negocio no toca nada.
+        expect(await repositorio.aplicarCambioDeMensaje({ idNegocio: negocioB, tipo: 'revoke', wamidOriginal: wamid })).toBeNull();
+
+        const r = await llamar(Bandeja.detalleConversacion, { idUsuario: usuarioA, params: { id: c.id_conversacion } });
+        const editado = r.cuerpo.data.mensajes.find((m) => m.contenido === 'Si perfecto');
+        expect(editado).toMatchObject({ editado: true, eliminado: false });
+        const borrado = r.cuerpo.data.mensajes.find((m) => m.eliminado);
+        expect(borrado.contenido).toBe('');
+        expect(JSON.stringify(r.cuerpo.data.mensajes)).not.toContain('1234');
+    });
+});
+
+describe('contestar desde el celular saca la conversación de «esperando respuesta»', () => {
+    test('el eco marca atendida; un nuevo mensaje del cliente la devuelve a esperar', async () => {
+        const c = await nuevaConversacion({ idNegocio: negocioA });
+        await sequelize.query(
+            `UPDATE intelligence.conversacion SET estado = 'handoff_humano', atendida_en = NULL WHERE id_conversacion = :c;`,
+            { replacements: { c: c.id_conversacion } }
+        );
+        const esperando = async () =>
+            (await unaFila(
+                `SELECT (estado = 'handoff_humano' AND atendida_en IS NULL) AS e FROM intelligence.conversacion WHERE id_conversacion = :c;`,
+                { c: c.id_conversacion }
+            )).e;
+
+        expect(await esperando()).toBe(true);
+        await repositorio.marcarIntervencionHumana(c.id_conversacion, { atendida: true });
+        expect(await esperando()).toBe(false);
+
+        // El cliente vuelve a escribir: vuelve a esperar (y el bot sigue fuera: estado intacto).
+        const t = await sequelize.transaction();
+        await repositorio.asegurarConversacion({ idNegocio: negocioA, canal: CANAL, idExterno: c.id_externo }, { transaction: t });
+        await t.commit();
+        expect(await esperando()).toBe(true);
+    });
+});
