@@ -739,24 +739,7 @@ describe('archivos de los clientes (fotos, stickers…)', () => {
 });
 
 // ── Esperan respuesta primero; mensajes editados y eliminados (2026-10-02) ──────────────────
-describe('orden de la lista y cambios de mensajes', () => {
-    test('las conversaciones que esperan respuesta van PRIMERO, aunque sean más viejas', async () => {
-        const vieja = await nuevaConversacion({ idNegocio: negocioA, haceHoras: 5 });
-        await sequelize.query(
-            `UPDATE intelligence.conversacion SET estado = 'handoff_humano', atendida_en = NULL,
-                    ultimo_mensaje_en = now() - interval '5 hours' WHERE id_conversacion = :c;`,
-            { replacements: { c: vieja.id_conversacion } }
-        );
-        await nuevaConversacion({ idNegocio: negocioA, haceHoras: 0 }); // más reciente, sin esperar
-
-        const r = await llamar(Bandeja.listarConversaciones, { idUsuario: usuarioA });
-        const lista = r.cuerpo.data.conversaciones;
-        const primeraNoEscalada = lista.findIndex((c) => !c.escalada);
-        const ultimaEscalada = lista.map((c) => c.escalada).lastIndexOf(true);
-        expect(ultimaEscalada).toBeLessThan(primeraNoEscalada === -1 ? Infinity : primeraNoEscalada);
-        expect(lista.some((c) => c.id_conversacion === vieja.id_conversacion)).toBe(true);
-    });
-
+describe('cambios de mensajes (editados y eliminados)', () => {
     test('editar cambia el texto y lo marca; borrar quita el texto y lo marca', async () => {
         const c = await nuevaConversacion({ idNegocio: negocioA });
         const wamid = `wamid.TEST_EDIT_${CORRIDA}`;

@@ -186,16 +186,6 @@ async function listarConversaciones(req, res) {
         const limite = Math.min(Number(req.query.limite) || LIMITE_POR_DEFECTO, LIMITE_MAXIMO);
         const soloEscaladas = String(req.query.solo_escaladas || '') === 'true';
 
-        // Las que esperan respuesta van arriba y TODAS (hasta el máximo): se suman al límite en
-        // vez de comérselo. Sin esto, 24 escaladas viejas dejaban fuera de «Todos» a las
-        // conversaciones recientes que no esperan nada.
-        const [{ n: escaladas }] = await Models.sequelize.query(
-            `SELECT count(*)::int AS n FROM intelligence.conversacion c
-              WHERE ${filtro.sql} AND c.estado = :handoff AND c.atendida_en IS NULL;`,
-            { replacements: { ...filtro.repl, handoff: ESTADO_HANDOFF }, ...SELECT }
-        );
-        const limiteTotal = limite + Math.min(escaladas, LIMITE_MAXIMO);
-
         const conversaciones = await Models.sequelize.query(
             `
             SELECT c.id_conversacion, c.id_negocio, c.estado, c.canal, c.id_externo,
@@ -214,15 +204,13 @@ async function listarConversaciones(req, res) {
               LEFT JOIN platform.persona_negocio pn  ON pn.id_persona_negocio = c.id_persona_negocio
              WHERE ${filtro.sql}
                ${soloEscaladas ? 'AND c.estado = :handoff AND c.atendida_en IS NULL' : ''}
-             -- Las que esperan respuesta, PRIMERO (pedido del dueño, 2026-10-02): son las que
-             -- alguien tiene que mirar ya. Va en la consulta y no solo en la pantalla porque hay
-             -- LÍMITE: ordenadas solo por fecha, una escalada vieja podía quedar fuera de la lista.
-             ORDER BY (c.estado = :handoff AND c.atendida_en IS NULL) DESC,
-                      COALESCE(c.ultimo_mensaje_en, c.creado_en) DESC
+             -- Por fecha. Anclar arriba las que esperan respuesta se probó y se retiró el mismo día
+             -- (2026-10-02): muchas solo «esperaban» un «gracias». Están en el filtro «Esperan respuesta».
+             ORDER BY COALESCE(c.ultimo_mensaje_en, c.creado_en) DESC
              LIMIT :limite;
             `,
             {
-                replacements: { ...filtro.repl, handoff: ESTADO_HANDOFF, limite: limiteTotal },
+                replacements: { ...filtro.repl, handoff: ESTADO_HANDOFF, limite },
                 ...SELECT,
             }
         );
