@@ -196,7 +196,7 @@ function crearManejadorEscalera({
             ctx.conversacion.tarea_datos = {};
         }
 
-        const ruta = enrutar({
+        let ruta = enrutar({
             texto: ctx.texto,
             // Cualquier tarea abierta, no solo la de agendar.
             //
@@ -221,6 +221,17 @@ function crearManejadorEscalera({
                     || ctx.conversacion?.variables?._sesion_nueva === true)
                 && !ctx.conversacion?.tarea_actual,
         });
+
+        // El turno iba al modelo, pero el flujo puede decir «este lo contesto yo» por el estado
+        // del negocio (en restaurante: fuera de servicio). Solo se pregunta cuando la ruta ya era
+        // el modelo — cuesta una consulta, y en los demás casos el flujo ya tiene el turno.
+        if (ruta.nivel === NIVEL.LLM && (await flujos.atiendeSinModelo(flujo, ctx))) {
+            ruta = {
+                nivel: NIVEL.DETERMINISTA,
+                regla: 'flujo_sin_modelo',
+                motivo: `el flujo lo contesta sin el modelo (antes: ${ruta.regla})`,
+            };
+        }
 
         const pasoDeRuta = {
             tipo: 'regla',

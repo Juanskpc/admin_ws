@@ -44,13 +44,25 @@ const porTipo = new Map();
  * @param {boolean}  [registro.abreConversacion] — el PRIMER mensaje de una conversación lo
  *                   atiende este flujo, diga lo que diga (saludo + qué se puede reservar), en vez
  *                   de dejar que el modelo converse sin ofrecer nada. Ver `abreLaConversacion`.
+ * @param {Function} [registro.atiendeSinModelo] — `async (ctx) => boolean`: «este turno, aunque
+ *                   la tabla lo mande al modelo, lo contesto yo». Ver `atiendeSinModelo`.
  */
-function registrar({ vertical, tipos, manejar, reclama = null, abreConversacion = false }) {
+function registrar({
+    vertical,
+    tipos,
+    manejar,
+    reclama = null,
+    abreConversacion = false,
+    atiendeSinModelo = null,
+}) {
     if (!vertical || !Array.isArray(tipos) || typeof manejar !== 'function') {
         throw new Error('Un flujo necesita { vertical, tipos: [], manejar() }.');
     }
     if (reclama !== null && typeof reclama !== 'function') {
         throw new Error(`El "reclama" de la vertical "${vertical}" tiene que ser una función.`);
+    }
+    if (atiendeSinModelo !== null && typeof atiendeSinModelo !== 'function') {
+        throw new Error(`El "atiendeSinModelo" de la vertical "${vertical}" tiene que ser una función.`);
     }
     for (const tipo of tipos) {
         const clave = String(tipo).trim().toUpperCase();
@@ -62,7 +74,13 @@ function registrar({ vertical, tipos, manejar, reclama = null, abreConversacion 
                     `"${porTipo.get(clave).vertical}"; "${vertical}" no puede reclamarlo también.`
             );
         }
-        porTipo.set(clave, { vertical, manejar, reclama, abreConversacion: Boolean(abreConversacion) });
+        porTipo.set(clave, {
+            vertical,
+            manejar,
+            reclama,
+            abreConversacion: Boolean(abreConversacion),
+            atiendeSinModelo,
+        });
     }
 }
 
@@ -108,6 +126,27 @@ function abreLaConversacion(flujo) {
     return Boolean(flujo?.abreConversacion);
 }
 
+/**
+ * ¿Contesta el flujo este turno aunque la tabla de enrutado lo mande al modelo?
+ *
+ * A diferencia de `reclama`, que lee solo el texto, esto mira el estado del negocio —y por eso
+ * es asíncrono—. El caso que lo pidió (Zona Burger, 2026-10-02): con el local cerrado el modelo
+ * ofreció domicilio a las 23:02. Cerrado, lo que hay que decir es el horario y la carta, y eso lo
+ * dice el flujo sin gastar el modelo. El núcleo no sabe qué es «cerrado» (ADR-009): le pregunta
+ * al adaptador.
+ *
+ * Un `atiendeSinModelo` que revienta se comporta como un «no»: el turno sigue como siempre.
+ */
+async function atiendeSinModelo(flujo, ctx) {
+    if (!flujo || typeof flujo.atiendeSinModelo !== 'function') return false;
+    try {
+        return Boolean(await flujo.atiendeSinModelo(ctx));
+    } catch (error) {
+        console.warn(`[intelligence] El "atiendeSinModelo" de "${flujo.vertical}" falló: ${error.message}`);
+        return false;
+    }
+}
+
 /** El flujo de esta clase de negocio, o `null` si nadie la declaró. */
 function para(tipoNegocio) {
     if (!tipoNegocio) return null;
@@ -124,4 +163,4 @@ function _limpiar() {
     porTipo.clear();
 }
 
-module.exports = { registrar, para, reclamaEl, abreLaConversacion, listar, _limpiar };
+module.exports = { registrar, para, reclamaEl, abreLaConversacion, atiendeSinModelo, listar, _limpiar };

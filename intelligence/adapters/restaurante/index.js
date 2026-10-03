@@ -1748,6 +1748,9 @@ function registrarFlujo({ flujos }) {
         // enrutado lo mandaba al modelo por el comodín y el flujo no lo veía nunca — que es lo
         // que rompió el pedido del 2026-08-26. Ver `engine/flujos.js`.
         reclama: flujo.reclama,
+        // Fuera de servicio el turno no sube al modelo: lo contesta el flujo (Zona Burger,
+        // 2026-10-02: el modelo ofreció domicilio con el local cerrado).
+        atiendeSinModelo: async ({ conversacion }) => Boolean(await flujo.fueraDeServicio(conversacion)),
     });
 }
 

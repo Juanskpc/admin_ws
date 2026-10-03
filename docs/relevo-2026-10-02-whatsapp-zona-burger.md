@@ -158,6 +158,36 @@ repetidas, así que «ya bajo» o «qué pena» tampoco despiertan al bot tras u
 se quiere). Si un cliente usa una de esas palabras para PEDIR algo, va en una frase con más
 palabras y el filtro no la toma por cortesía.
 
+## 4-sexies. Con el local cerrado contesta el flujo, no el modelo (2026-10-03)
+
+**El caso:** Zona Burger cierra a las 22:50; a las 23:02 «Buenas noches, ¿realizas domicilios?» lo
+contestó el modelo («Sí, hacemos domicilios. ¿Qué te gustaría pedir?») sin mirar el horario.
+Decisión del dueño: **fuera de servicio contesta el flujo automático**, que dice el horario y deja
+la carta — y así no se gasta el modelo.
+
+**Cómo:** el flujo de restaurante declara `atiendeSinModelo` al registrarse
+(`engine/flujos.js`). Cuando la tabla de enrutado manda un turno al modelo, la escalera
+(`manejadorEscalera.js`) le pregunta antes al flujo; si dice que sí, el turno queda en el flujo con
+la regla `flujo_sin_modelo`. Dentro del flujo, `fueraDeServicio()` decide y
+`avisoFueraDeServicio()` contesta (paso `fuera_de_servicio` en el rastro).
+
+- **Cuenta como cerrado** cualquier estado en que `tomar_pedido` rechazaría el pedido:
+  `fuera_de_horario`, `aun_no_abre` (en horario pero sin caja abierta) y `cerrado_sin_horario`.
+  ⚠️ Si el personal olvida abrir caja, el bot dirá «todavía no estamos atendiendo» aunque sea hora.
+- **No cuenta** si hay un pedido a medias, una confirmación esperando el «sí», o un pedido tomado
+  en este chat en las últimas 6 h (quien pidió a las 22:40 y pregunta «¿ya salió?» sigue
+  recibiendo respuesta de su pedido).
+- **Qué dice:** primer mensaje → la bienvenida de siempre en su versión «cerrado»; a mitad de
+  conversación → el estado y la carta sin volver a saludar; si ya se le avisó hace menos de 30 min →
+  una sola línea («Seguimos fuera de nuestro horario de atención. Abrimos mañana a las 4:30 PM.
+  Apenas abramos te atendemos 🙏»), sin repetir el enlace.
+- **Lo que se pierde a sabiendas:** con el local cerrado ya nadie contesta preguntas sueltas
+  («¿dónde quedan?», «¿tienen parqueadero?»). Si eso molesta, la salida es pasar esas preguntas al
+  modelo con el horario en el prompt — eso sí toca `sistema.v10`, de Juan David.
+- **Si leer el horario falla**, se atiende como antes (al modelo).
+
+Pruebas: `__tests__/intelligence/fuera_de_servicio.test.js` (16).
+
 ## 5. Pendiente (decidido dejarlo para después)
 
 1. **Comprobantes de pago**: ya se VEN en la Bandeja (§4-bis), pero el bot todavía no avisa a
@@ -172,15 +202,7 @@ palabras y el filtro no la toma por cortesía.
    del bot; los pedidos creados a mano sin teléfono no tienen chat).
 4. **Mensaje de la carta sin el código `#P…`**: el de Alejandra llegó sin código y lo atendió el
    modelo en vez del flujo. Sin investigar (¿lo borró al pegar?).
-5. **🔴 El modelo ofrece domicilio con el local cerrado** (diagnosticado, SIN arreglar). Zona
-   Burger cierra a las **22:50**; a las 23:02 «Buenas noches, ¿realizas domicilios?» lo contestó el
-   modelo («Sí, hacemos domicilios. ¿Qué te gustaría pedir?») sin consultar el horario, aunque
-   `horarioService.estadoDeAtencion` daba `fuera_de_horario`. El saludo determinista sí mira el
-   horario, pero esa frase no es un saludo puro y se fue al modelo. `tomar_pedido` rechazaría el
-   pedido, pero la promesa ya está hecha. **Arreglo propuesto:** darle al modelo, en la parte
-   volátil del prompt de cada turno, el estado de atención («ahora cerrado, abre mañana 16:30: no
-   ofrezcas pedidos») — o que el flujo conteste solo cualquier mensaje fuera de horario. Ojo: el
-   prompt actual es `sistema.v10` (de Juan David); coordinarlo con él.
+5. ~~El modelo ofrece domicilio con el local cerrado~~ — **arreglado el 2026-10-03** (ver §4-sexies).
 6. **Ubicaciones** (`[location]`): hoy no se guardan las coordenadas. Propuesta: guardarlas en
    `crudo` y mostrar en la Bandeja un enlace a Google Maps (justo el único chat que esperaba
    respuesta era una ubicación).

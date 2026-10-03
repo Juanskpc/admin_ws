@@ -190,63 +190,7 @@ async function bienvenida(
     const enlace = enlaceDelMenu(ctx.idNegocio);
     const encabezado = `👋 ${saludoPorLaHora(ctx.ahora())} Te saluda *${ctx.negocio.tratamiento}*.`;
     const { estado } = await estadoAtencion({ idNegocio: ctx.idNegocio, ahora: ctx.ahora() });
-
-    // Solo cuando el cierre es por horario hay una hora que decir. Si la consulta falla se cae a
-    // la frase genérica: es peor, pero el saludo no se cae por eso.
-    let cuandoAbre = null;
-    if (estado === 'fuera_de_horario') {
-        try {
-            cuandoAbre = fraseDeApertura(
-                await proximaApertura({ idNegocio: ctx.idNegocio, ahora: ctx.ahora() })
-            );
-        } catch (_) {
-            cuandoAbre = null;
-        }
-    }
-
-    const textosPorEstado = {
-        fuera_de_horario: [
-            encabezado,
-            '',
-            cuandoAbre
-                ? `Ahora mismo estamos fuera de nuestro horario de atención. ${cuandoAbre} 🙏`
-                : 'Ahora mismo estamos fuera de nuestro horario de atención. Te atendemos apenas ' +
-                  'sea posible 🙏',
-            '',
-            'Si quieres, mientras tanto puedes ir mirando la carta, con fotos y precios 👇',
-            enlace,
-        ],
-        aun_no_abre: [
-            encabezado,
-            '',
-            'Ya estamos en nuestro horario de atención, pero el restaurante todavía no ha ' +
-                'abierto. Danos un momento y vuelve a escribir 🙏',
-            '',
-            'Mientras tanto puedes ir mirando la carta, con fotos y precios 👇',
-            enlace,
-        ],
-        cerrado_sin_horario: [
-            encabezado,
-            '',
-            'El restaurante está cerrado ahora mismo. Vuelve a escribirme más tarde 🙏',
-            '',
-            'Mientras tanto puedes ir mirando la carta, con fotos y precios 👇',
-            enlace,
-        ],
-        // El texto de siempre: en horario y con caja abierta (o sin horario configurado y con
-        // caja abierta — un negocio que nunca cargó horario no queda restringido por eso).
-        abierto: [
-            encabezado,
-            '',
-            'Aquí tienes la carta completa, con fotos y precios 👇',
-            enlace,
-            '',
-            'Armas tu pedido ahí y vuelves a este chat con todo listo 🛵',
-            '',
-            'O si prefieres, dime por aquí qué se te antoja y yo te lo anoto. ' +
-                'También te digo precios o en qué va un pedido que ya hiciste.',
-        ],
-    };
+    const cuandoAbre = await cuandoAbreDe(ctx, estado, proximaApertura);
 
     return {
         pasos: [...pasosPrevios, paso('menu_entrada_restaurante', { estado })],
@@ -263,12 +207,165 @@ async function bienvenida(
                 // enlace y "dime por aquí qué se te antoja"— y un botón «Pedir por aquí» sobraba
                 // al lado de esa misma frase. El camino de texto libre sigue abierto igual:
                 // `pedir por aquí` / `por chat` se reconocen más abajo como palabras sueltas.
-                texto: textosPorEstado[estado].join('\n'),
+                texto: [encabezado, '', ...cuerpoPorEstado(estado, cuandoAbre, enlace)].join('\n'),
             },
         ],
         variables: conMemoria(ctx.conversacion, { enlace_menu: enlace }),
         // Sin tarea: quien no elija ninguna de las dos y escriba una pregunta suelta debe poder
         // ser atendido por el modelo, no quedarse atrapado repitiendo este menú.
+        tarea: null,
+        resultado: 'resuelto',
+        nivel: 'determinista',
+    };
+}
+
+/**
+ * «Abrimos mañana a las 4:30 PM.» — solo cuando el cierre es por horario hay una hora que decir.
+ * Si la consulta falla se cae a la frase genérica: es peor, pero el mensaje no se cae por eso.
+ */
+async function cuandoAbreDe(ctx, estado, proximaApertura) {
+    if (estado !== 'fuera_de_horario') return null;
+    try {
+        return fraseDeApertura(await proximaApertura({ idNegocio: ctx.idNegocio, ahora: ctx.ahora() }));
+    } catch (_) {
+        return null;
+    }
+}
+
+/** Lo que se dice en cada estado de atención, sin el saludo de cabecera. */
+function cuerpoPorEstado(estado, cuandoAbre, enlace) {
+    const textosPorEstado = {
+        fuera_de_horario: [
+            cuandoAbre
+                ? `Ahora mismo estamos fuera de nuestro horario de atención. ${cuandoAbre} 🙏`
+                : 'Ahora mismo estamos fuera de nuestro horario de atención. Te atendemos apenas ' +
+                  'sea posible 🙏',
+            '',
+            'Si quieres, mientras tanto puedes ir mirando la carta, con fotos y precios 👇',
+            enlace,
+        ],
+        aun_no_abre: [
+            'Ya estamos en nuestro horario de atención, pero el restaurante todavía no ha ' +
+                'abierto. Danos un momento y vuelve a escribir 🙏',
+            '',
+            'Mientras tanto puedes ir mirando la carta, con fotos y precios 👇',
+            enlace,
+        ],
+        cerrado_sin_horario: [
+            'El restaurante está cerrado ahora mismo. Vuelve a escribirme más tarde 🙏',
+            '',
+            'Mientras tanto puedes ir mirando la carta, con fotos y precios 👇',
+            enlace,
+        ],
+        // El texto de siempre: en horario y con caja abierta (o sin horario configurado y con
+        // caja abierta — un negocio que nunca cargó horario no queda restringido por eso).
+        abierto: [
+            'Aquí tienes la carta completa, con fotos y precios 👇',
+            enlace,
+            '',
+            'Armas tu pedido ahí y vuelves a este chat con todo listo 🛵',
+            '',
+            'O si prefieres, dime por aquí qué se te antoja y yo te lo anoto. ' +
+                'También te digo precios o en qué va un pedido que ya hiciste.',
+        ],
+    };
+    return textosPorEstado[estado] || textosPorEstado.abierto;
+}
+
+/**
+ * Estados en los que el negocio no está atendiendo: `tomar_pedido` rechazaría un pedido en
+ * cualquiera de los tres, así que ahí no hay nada que el modelo pueda ofrecer sin mentir.
+ */
+const ESTADOS_SIN_SERVICIO = new Set(['fuera_de_horario', 'aun_no_abre', 'cerrado_sin_horario']);
+
+/** Si ya se avisó de que está cerrado hace menos que esto, el siguiente aviso va corto. */
+const AVISO_CERRADO_MS = 30 * 60 * 1000;
+
+/**
+ * ¿Está el negocio fuera de servicio para ESTE mensaje? Devuelve el estado, o `null` si no.
+ *
+ * ## Por qué existe (Zona Burger, 2026-10-02, 23:02)
+ *
+ * El local cierra a las 22:50. A las 23:02 llegó «Buenas noches, ¿realizas domicilios?» y lo
+ * contestó el modelo: «Sí, hacemos domicilios. ¿Qué te gustaría pedir?». No miró el horario —no
+ * es un saludo puro, así que no pasó por la bienvenida— y `tomar_pedido` habría rechazado el
+ * pedido después, con la promesa ya hecha. Decisión del dueño: con el local cerrado contesta el
+ * flujo, que dice el horario y deja la carta, y además no se gasta el modelo.
+ *
+ * ## Cuándo NO
+ *
+ * - Un pedido a medias o una confirmación esperando el sí: ese hilo es del flujo, y si el local
+ *   cerró entre medio, `tomar_pedido` lo dirá al confirmar.
+ * - Un chat con un pedido tomado en las últimas horas: quien pidió a las 22:40 y pregunta a las
+ *   23:00 «¿ya salió?» tiene que recibir respuesta de su pedido, no «estamos cerrados».
+ *
+ * Ante cualquier fallo, `null`: se atiende como antes. Saber si está cerrado es una mejora; que
+ * esa consulta tumbe una conversación no lo sería.
+ */
+async function fueraDeServicio(
+    conversacion,
+    {
+        ahora = new Date(),
+        estadoAtencion = horarioService.estadoDeAtencion,
+        tienePedidoReciente = pedidoRecienteEnLaConversacion,
+    } = {}
+) {
+    if (!conversacion?.id_negocio) return null;
+    if (conversacion.tarea_actual === TAREA_PEDIDO) return null;
+    if (confirmacion.pendiente(conversacion)) return null;
+    let estado;
+    try {
+        ({ estado } = await estadoAtencion({ idNegocio: Number(conversacion.id_negocio), ahora }));
+    } catch (error) {
+        console.warn(`[restaurante] no se pudo leer el estado de atención: ${error.message}`);
+        return null;
+    }
+    if (!ESTADOS_SIN_SERVICIO.has(estado)) return null;
+    if (await tienePedidoReciente(conversacion)) return null;
+    return estado;
+}
+
+/**
+ * Lo que contesta el flujo con el negocio fuera de servicio, sin el modelo.
+ *
+ * - Primer mensaje (o vuelve tras un rato): la bienvenida entera, que ya dice el estado.
+ * - Ya se le avisó hace poco: una línea, sin repetirle el enlace — tres mensajes seguidos de un
+ *   cliente con hambre no merecen tres veces la carta.
+ * - Si no: el estado y la carta, sin volver a saludar.
+ */
+async function avisoFueraDeServicio(ctx, estado, { proximaApertura = horarioService.proximaApertura } = {}) {
+    const previas = ctx.conversacion.variables || {};
+    const sello = { aviso_cerrado_en: ctx.ahora().toISOString() };
+    const pasoCerrado = paso('fuera_de_servicio', { estado });
+
+    if (!Number(previas.turnos || 0) || previas._sesion_nueva === true) {
+        const decision = await bienvenida(ctx, [pasoCerrado], {
+            estadoAtencion: async () => ({ estado }),
+            proximaApertura,
+        });
+        return { ...decision, variables: { ...decision.variables, ...sello } };
+    }
+
+    const cuandoAbre = await cuandoAbreDe(ctx, estado, proximaApertura);
+    const avisadoEn = Date.parse(previas.aviso_cerrado_en || '');
+    const reciente = Number.isFinite(avisadoEn) && ctx.ahora().getTime() - avisadoEn < AVISO_CERRADO_MS;
+    const texto = reciente
+        ? [
+              estado === 'fuera_de_horario'
+                  ? `Seguimos fuera de nuestro horario de atención.${cuandoAbre ? ` ${cuandoAbre}` : ''}`
+                  : 'Todavía no estamos atendiendo.',
+              'Apenas abramos te atendemos 🙏',
+          ].join(' ')
+        : cuerpoPorEstado(estado, cuandoAbre, enlaceDelMenu(ctx.idNegocio)).join('\n');
+
+    return {
+        pasos: [pasoCerrado],
+        respuestas: [texto],
+        variables: conMemoria(ctx.conversacion, {
+            enlace_menu: previas.enlace_menu ?? null,
+            // El sello solo se renueva con el aviso largo: así cada media hora vuelve a ir la carta.
+            aviso_cerrado_en: reciente ? previas.aviso_cerrado_en : sello.aviso_cerrado_en,
+        }),
         tarea: null,
         resultado: 'resuelto',
         nivel: 'determinista',
@@ -1758,6 +1855,17 @@ function crearFlujoRestaurante({
             });
         }
 
+        // Con el negocio fuera de servicio contesta el flujo, no el modelo: dice el horario y
+        // deja la carta (ver `fueraDeServicio`). Va después del carrito —un pedido de la carta
+        // tiene su propio camino y su propio rechazo— y antes del tiempo y del domicilio:
+        // «¿cuánto vale el domicilio?» a las 11 de la noche se contesta con «estamos cerrados».
+        const cerrado = await fueraDeServicio(conversacion, {
+            ahora: ahora(),
+            estadoAtencion,
+            tienePedidoReciente,
+        });
+        if (cerrado) return avisoFueraDeServicio(ctx, cerrado, { proximaApertura });
+
         // «¿Cuánto se demora?» — se contesta con el tiempo que declaró el negocio. Va ANTES del
         // pedido a medias: ahí cualquier texto se leería como la respuesta al paso pendiente
         // («¿a nombre de quién?» → «cuánto se demora»), y apuntar una pregunta como nombre o
@@ -1883,6 +1991,8 @@ module.exports = {
     TAREA_PEDIDO,
     PASO_PEDIDO,
     reclama,
+    fueraDeServicio,
+    avisoFueraDeServicio,
     esPreguntaDeTiempo,
     fraseDeTiempo,
     esPreguntaDeDomicilio,
