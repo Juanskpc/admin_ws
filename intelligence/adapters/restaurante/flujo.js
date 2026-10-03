@@ -880,7 +880,11 @@ async function recibirPedidoDelMenu(ctx, pedido, { solicitarConfirmacion }) {
     const cuantos = unidades(pedido.items);
     const datos = {
         items: pedido.items,
-        ...(previas.nombre ? { nombre: previas.nombre } : {}),
+        // Lo dicho en la conversación, la ficha del cliente o el perfil de WhatsApp: el primero que
+        // haya. Se enseña en la confirmación, donde el cliente puede corregirlo («a nombre de…»).
+        ...(ctx.identidad?.nombre || previas.nombre
+            ? { nombre: ctx.identidad?.nombre || previas.nombre }
+            : {}),
     };
 
     // Lo que escribió en el paso «tus datos» de la carta: nombre, teléfono, dirección, nota.
@@ -1674,7 +1678,11 @@ function crearFlujoRestaurante({
      * aparece el paso del teléfono.
      */
     async function conIdentidad(ctx) {
-        ctx.identidad = await identidad.resolver(ctx.conversacion);
+        // El nombre del perfil de WhatsApp entra como última opción (después de lo que dijo y de la
+        // ficha del cliente): así no se le pregunta lo que el canal ya trajo.
+        ctx.identidad = await identidad.resolver(ctx.conversacion, {
+            nombrePerfil: identidadReal.nombreDelPerfil(ctx.mensajes),
+        });
         ctx.principal = ctx.identidad.principal;
         ctx.telefonoProbado = ctx.principal?.telefono_verificado || null;
         return ctx;

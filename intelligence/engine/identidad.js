@@ -277,8 +277,21 @@ function nombreLegible(valor) {
     return /\p{L}{2}/u.test(limpio) ? limpio : null;
 }
 
+/**
+ * El nombre de perfil que trajo el mensaje más reciente del turno (WhatsApp: `contacts[].profile.name`,
+ * que el adaptador deja en `crudo.perfil_nombre`). Los canales que no lo traen dan `null`.
+ */
+function nombreDelPerfil(mensajes) {
+    for (let i = (mensajes || []).length - 1; i >= 0; i--) {
+        const nombre = mensajes[i]?.crudo?.perfil_nombre;
+        if (nombre) return nombre;
+    }
+    return null;
+}
+
 module.exports = {
     resolver,
+    nombreDelPerfil,
     principalDeContacto,
     registrarCanalConIdentidad,
     limpiarCanalesConIdentidad,

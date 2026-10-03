@@ -185,7 +185,7 @@ function crearManejadorLlm({
         );
     }
 
-    return async function manejarLlm({ conversacion, turno, texto, consumo }) {
+    return async function manejarLlm({ conversacion, mensajes, turno, texto, consumo }) {
         const idNegocio = Number(conversacion.id_negocio);
         const pasos = [];
         const invocaciones = [];
@@ -215,7 +215,9 @@ function crearManejadorLlm({
         // El mismo Principal que usa la FSM. Se resuelve aquí y no se hereda de la
         // conversación porque el Gate impone el negocio a partir de él (ADR-010): un Principal
         // improvisado sería la puerta que F2 cerró.
-        const quien = await identidad.resolver(conversacion);
+        const quien = await identidad.resolver(conversacion, {
+            nombrePerfil: identidadReal.nombreDelPerfil(mensajes),
+        });
         const negocio = await contextoNegocio.obtener(idNegocio);
         const historial = await repositorio.historialReciente(conversacion.id_conversacion, {
             idTurno: turno?.id_turno ?? null,
@@ -254,6 +256,8 @@ function crearManejadorLlm({
             maxTokens: config.maxTokensRespuesta,
             esfuerzo: config.esfuerzo,
             idNegocio,
+            // Lo que ya se sabe de quien escribe, para que no se lo vuelva a preguntar.
+            cliente: { nombre: quien.nombre, esPista: quien.nombreEsPista },
         };
 
         // El historial del bucle: arranca con lo que construyó el Prompt Builder y crece con

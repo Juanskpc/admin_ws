@@ -38,7 +38,7 @@
 'use strict';
 
 const registryReal = require('../core/registry');
-const { COMANDO, esComando, esAfirmacion, normalizar } = require('./texto');
+const { COMANDO, esComando, esAfirmacion, esAfirmacionConEntrega, normalizar } = require('./texto');
 
 /** Nombre de la tarea. Vive en el mismo espacio que `agendar_cita`, no en uno nuevo. */
 const TAREA = 'confirmar_mutacion';
@@ -84,6 +84,18 @@ function lineasParaAnotar(texto, { afirma }) {
         if (esAfirmacion(l) || esComando(l, COMANDO.NO) || esComando(l, COMANDO.CANCELAR)) return false;
         return true;
     });
+}
+
+/**
+ * El nombre que el cliente dicta al corregirlo: «a nombre de Pedro», «mi nombre es Pedro», «me
+ * llamo Pedro». Solo la última línea, y solo si trae letras de verdad (no un emoji).
+ */
+const DICE_SU_NOMBRE = /(?:a\s+nombre\s+de|mi\s+nombre\s+es|me\s+llamo)\s+([^\n.,;!?]{2,60})\s*$/i;
+function nombreDicho(texto) {
+    const linea = String(texto || '').split('\n').map((l) => l.trim()).filter(Boolean).pop() || '';
+    const m = linea.match(DICE_SU_NOMBRE);
+    const nombre = m ? m[1].trim().replace(/\s+/g, ' ') : '';
+    return /\p{L}{2}/u.test(nombre) ? nombre : null;
 }
 
 function paso(decision, motivo = {}) {
@@ -232,7 +244,37 @@ async function resolver(ctx, { gate, registry = registryReal, ahora = () => new 
     // ese detalle se perdía, o —si llegaba en la misma ráfaga que el «sí»— ni se leía. Si la
     // capacidad declara `anotar`, se le pasa; ella decide dónde va (en un pedido, la nota).
     const declaradaAnotar = registry.obtener(datos.capacidad)?.confirmacion?.anotar;
-    const afirma = esAfirmacion(ctx.texto);
+
+    // «A nombre de Pedro»: el nombre ya no siempre lo dijo el cliente (puede salir de su perfil de
+    // WhatsApp), así que tiene que poder corregirlo aquí sin que acabe como una nota de cocina.
+    const nuevoNombre =
+        typeof declaradaAnotar === 'function' && datos.args && 'cliente_nombre' in datos.args
+            ? nombreDicho(ctx.texto)
+            : null;
+    if (nuevoNombre) {
+        datos.args = { ...datos.args, cliente_nombre: nuevoNombre };
+        return {
+            pasos: [paso('confirmacion_nombre_corregido', { capacidad: datos.capacidad })],
+            respuestas: [
+                {
+                    texto: `Listo, a nombre de ${nuevoNombre} ✍️\n\n${await textoDePregunta(
+                        datos.capacidad,
+                        datos.args,
+                        { registry, idNegocio: ctx.conversacion?.id_negocio ?? null }
+                    )}`,
+                    opciones: opcionesSiNo(),
+                },
+            ],
+            variables,
+            tarea: { nombre: TAREA, datos },
+            resultado: 'resuelto',
+            nivel: 'determinista',
+        };
+    }
+
+    // «Sí para recoger» es un sí: repite lo que el resumen ya dice. Si dijera OTRA entrega (un
+    // cambio), no lo es y sigue el camino de los añadidos.
+    const afirma = esAfirmacionConEntrega(ctx.texto, datos.args?.tipo_entrega);
     const anotable = typeof declaradaAnotar === 'function'
         ? lineasParaAnotar(ctx.texto, { afirma })
         : [];

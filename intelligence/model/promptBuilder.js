@@ -79,7 +79,7 @@ const puerto = require('./puerto');
  *     del negocio, y el pedido de Karen Díaz se quedó esperando un segundo sí que nunca llegó.
  *   - «para servir» es comer en el local; sin mesa, se pide igual y el negocio le guarda una.
  */
-const PROMPT_SISTEMA = 'sistema.v9';
+const PROMPT_SISTEMA = 'sistema.v10';
 
 /**
  * Los prompts se leen una vez y se quedan en memoria.
@@ -193,6 +193,26 @@ function comoDatoNoConfiable(texto) {
 }
 
 /**
+ * Lo que ya se sabe de quien escribe, en una línea después de la hora. Hoy, solo su nombre.
+ *
+ * Va en la parte volátil (no se cachea) y NO en el prompt del sistema: cambia con cada cliente.
+ * El nombre del perfil de WhatsApp lo escribe el propio cliente, así que se limpia (solo letras,
+ * números y signos de nombre, sin saltos) y se entrecomilla: es un dato, no una instrucción.
+ */
+function textoDelCliente(cliente) {
+    const nombre = String(cliente?.nombre ?? '')
+        .replace(/[^\p{L}\p{N} '.-]/gu, '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 60);
+    if (!nombre) return '';
+    return cliente.esPista
+        ? `\n\nNombre del cliente (de su perfil de WhatsApp): «${nombre}». Úsalo en cliente_nombre ` +
+              'sin preguntárselo; la confirmación se lo enseña y ahí puede corregirlo.'
+        : `\n\nNombre del cliente: «${nombre}». Ya lo sabes: úsalo en cliente_nombre y no lo preguntes.`;
+}
+
+/**
  * Construye la petición canónica de un turno.
  *
  * @param {Object}   opciones
@@ -215,6 +235,7 @@ function construir({
     esfuerzo = 'low',
     idNegocio = null,
     zona = 'America/Bogota',
+    cliente = null,
 }) {
     const instrucciones = [
         { texto: cargarPrompt(PROMPT_SISTEMA), cacheable: false },
@@ -240,7 +261,7 @@ function construir({
 
     turnos.push({
         rol: puerto.ROL.CLIENTE,
-        texto: `${comoDatoNoConfiable(mensaje)}\n\n${textoDeAhora(ahora, zona)}`,
+        texto: `${comoDatoNoConfiable(mensaje)}\n\n${textoDeAhora(ahora, zona)}${textoDelCliente(cliente)}`,
     });
 
     return puerto.normalizarPeticion({

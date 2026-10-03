@@ -1738,3 +1738,25 @@ y varias más por «Falta la carta» — no es una regresión de este cambio, ya
 
 Migración: `npm run migrate:restaurante-empaque-producto` (antes del deploy del backend).
 Tests: `__tests__/intelligence/empaque_y_apertura.test.js`.
+
+### «Sí para recoger» y el nombre del perfil de WhatsApp (2026-10-02, noche)
+
+- **«Sí para recoger» es un sí.** Con una confirmación pendiente, `esAfirmacionConEntrega`
+  (`engine/texto.js`) acepta un sí que repite cómo se entrega el pedido («sí para recoger», «dale, a
+  mi casa», «sí para servir aquí»). Va por tipo: «sí para domicilio» sobre un pedido para RECOGER
+  es un cambio y sigue yendo a la nota, igual que «sí, pero sin cebolla». Antes eso se anotaba
+  («Nota: Si para recoger») y se repetía la pregunta (Zona Burger, 21:01).
+- **El nombre ya no se pregunta si se sabe.** `identidad.resolver` ya combinaba, de más a menos
+  fiable: lo dicho en la conversación → la ficha del cliente (`persona_negocio`, por teléfono) →
+  el perfil de WhatsApp (`crudo.perfil_nombre`). Solo lo usaba reserva. Ahora lo usan también el
+  flujo de restaurante (`recibirPedidoDelMenu` siembra `datos.nombre`) y la ruta del modelo
+  (`manejadorLlm` → `promptBuilder.textoDelCliente`: una línea volátil «Nombre del cliente: …», sin
+  tocar el prefijo cacheado). Prompt **`sistema.v10`** (le dice que no pregunte lo que ya sabe).
+  El nombre del perfil lo escribe el cliente: se limpia (letras, números, `'.-`) y va entrecomillado.
+- **Corregirlo es fácil**: la confirmación siempre muestra «a nombre de X»; si el cliente escribe
+  «a nombre de Pedro», «mi nombre es Pedro» o «me llamo Pedro», se cambia el nombre del pedido y se
+  vuelve a pedir el sí (`confirmacion_nombre_corregido`), sin anotarlo como nota de cocina.
+- Un perfil sin letras («🔥», «.») o de más de 80 caracteres cuenta como «sin nombre» y se pregunta
+  como siempre. Los clientes anteriores ya salían de la ficha; ahora además se ahorran el paso.
+
+Tests: `__tests__/intelligence/confirmacion_nombre_y_entrega.test.js` (21).

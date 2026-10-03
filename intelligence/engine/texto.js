@@ -104,6 +104,48 @@ function esAfirmacion(texto) {
     return palabras.every((p) => PALABRA_DE_SI.test(p) || CORTESIA.test(p));
 }
 
+/**
+ * Palabras con las que se REPITE cómo se entrega el pedido que se está confirmando: «sí para
+ * recoger», «dale, a mi casa», «sí, para servir aquí». No cambian nada —el resumen ya lo dice—,
+ * solo lo reafirman.
+ *
+ * Producción, 2026-10-02 (Zona Burger): «Si para recoger» se leyó como un añadido, se anotó en la
+ * nota del pedido («Nota: Si para recoger») y se volvió a preguntar lo mismo. Cada pregunta de
+ * más es un mensaje que se paga y un cliente que duda de que el bot lo haya entendido.
+ *
+ * Van por tipo de entrega a propósito: «sí para domicilio» sobre un pedido para RECOGER es un
+ * cambio, no una confirmación, y tiene que seguir yendo a la nota.
+ */
+const NEUTRAS_DE_ENTREGA = /^(para|a|en|el|la|lo|mi|pedido|esta|estan|bien|asi|ahi|ya|mismo|todo|ese|eso|que|es)$/;
+const ENTREGA_DE_PEDIDO = {
+    LLEVAR: /^(local|recoger|recojo|recogerlo|recogerla|recoge|llevar|llevo|llevarlo|paso|pasar|pasarlo|pasare|buscar|buscarlo|busco|voy|alla)$/,
+    DOMICILIO: /^(domicilio|casa|envien|enviar|enviarlo|envio|mandar|mandarlo|manden|traer|traigan|trae|traelo|direccion)$/,
+    MESA: /^(servir|servirlo|aqui|comer|mesa|local|consumir|sentado|sentada|voy|camino|alla)$/,
+};
+
+/**
+ * ¿Es un «sí» a un pedido, aunque repita cómo se entrega? Igual que `esAfirmacion`, y además
+ * acepta «sí para recoger» cuando eso es justo lo que el resumen dice (`tipoEntrega`). Sin saber
+ * el tipo (una capacidad que no lo trae) vale cualquiera de los tres.
+ */
+function esAfirmacionConEntrega(texto, tipoEntrega) {
+    if (esAfirmacion(texto)) return true;
+    const palabras = normalizar(ultimaLinea(texto))
+        .replace(/[^a-zñ\s]/g, ' ')
+        .split(/\s+/)
+        .filter(Boolean);
+    if (palabras.length < 2 || palabras.length > 8) return false;
+    if (!PALABRA_DE_SI.test(palabras[0])) return false;
+    const propias = ENTREGA_DE_PEDIDO[tipoEntrega];
+    return palabras.every(
+        (p) =>
+            PALABRA_DE_SI.test(p) ||
+            CORTESIA.test(p) ||
+            NEUTRAS_DE_ENTREGA.test(p) ||
+            (propias ? propias.test(p) : Object.values(ENTREGA_DE_PEDIDO).some((r) => r.test(p)))
+    );
+}
+
 /** ¿Es alguno de los comandos conocidos, cualquiera que sea? */
 function esAlgunComando(texto) {
     return Object.values(COMANDO).some((lista) => esComando(texto, lista));
@@ -180,6 +222,7 @@ module.exports = {
     esComando,
     esAlgunComando,
     esAfirmacion,
+    esAfirmacionConEntrega,
     esSaludo,
     saludoPorLaHora,
 };
