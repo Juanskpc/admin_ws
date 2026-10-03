@@ -109,6 +109,22 @@ producción que la ruta exige sesión (401) y que Meta acepta el token de Zona B
 inventado → `ARCHIVO_NO_DISPONIBLE`). Con la primera foto que llegue, abrir ese chat en la
 Bandeja; si falla, el error queda en `journalctl -u escalapp-api` como `bandeja.archivoDeMensaje`.
 
+## 4-ter. Respuestas desde el celular, ediciones y orden de la Bandeja (desplegado ~22:00, `033fc3a` / admin `54623e3`)
+
+- **Se perdían las respuestas del personal a clientes sin número visible (BSUID)**: el eco llegaba
+  sin `to` y se descartaba («un eco del negocio llegó sin destinatario» en el log). Ahora el
+  destinatario sale de `to`, de los campos simétricos (`to_user_id`…) o, como último recurso, del
+  propio `wamid`, que lo lleva dentro. **Si vuelve a salir ese aviso**, ahora dice qué claves traía
+  el eco: con eso se ve el campo real que usa Meta (la documentación no lo dice).
+- **Ediciones y borrados** (del cliente o del personal) ya no aparecen como `[edit]`/`[revoke]`:
+  actualizan el mensaje original. La Bandeja dice «Editado» o «Mensaje eliminado» (sin el texto).
+  No despiertan al bot.
+- **Contestar desde el celular marca la conversación como atendida** (antes solo la Bandeja). Se
+  corrigieron 15 conversaciones viejas de Zona Burger que ya estaban contestadas (auditoría:
+  `bandeja_atendidas_por_celular_retroactivo`).
+- **Bandeja**: en «Todos», las que esperan respuesta van primero y con recuadro; se muestran TODAS
+  además de las 30 más recientes (antes el límite podía esconderlas).
+
 ## 5. Pendiente (decidido dejarlo para después)
 
 1. **Comprobantes de pago**: ya se VEN en la Bandeja (§4-bis), pero el bot todavía no avisa a
