@@ -125,6 +125,16 @@ Bandeja; si falla, el error queda en `journalctl -u escalapp-api` como `bandeja.
 - **Bandeja**: en «Todos», las que esperan respuesta van primero y con recuadro; se muestran TODAS
   además de las 30 más recientes (antes el límite podía esconderlas).
 
+## 4-quater. Ajustes del asistente en su propia ventana (~22:17)
+
+Cuándo vuelve el asistente, tiempo de entrega, valor del domicilio e información para el asistente
+ya no están en la cabecera de la Bandeja: botón **«Configuración del asistente»**. El recuadro de
+«espera respuesta» se quita al **abrir** la conversación (por navegador) y es índigo. El aviso de
+impersonación flota bajo la cabecera y la X lo reduce a una pastilla.
+
+**Fotos: todavía sin probar con una real** — desde el despliegue de las 21:39 ningún cliente mandó
+foto, sticker ni audio (hoy llegaron varias, todas antes).
+
 ## 5. Pendiente (decidido dejarlo para después)
 
 1. **Comprobantes de pago**: ya se VEN en la Bandeja (§4-bis), pero el bot todavía no avisa a
