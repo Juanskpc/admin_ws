@@ -280,3 +280,131 @@ describe('un número nunca es una cortesía', () => {
         expect(d.pasos[0].decision).toBe('cortesia_sin_respuesta');
     });
 });
+
+// ── «salchipapa criollita» solo traía la familiar (2026-10-02 20:23) ────────────────────────
+// La segunda pasada exige las dos palabras en nombre o descripción: solo la «familiar» escribe
+// «salchipapas». Las criollitas pequeña, mediana y grande lo dicen en la CATEGORÍA, que es lo que
+// mira la tercera… que no corría porque la segunda ya había encontrado algo.
+describe('buscar_producto junta las pasadas en vez de quedarse con la primera', () => {
+    const SALCHIPAPAS = [
+        { id_producto: 30, nombre: 'criollita', descripcion: 'Tamaño pequeño. Papa a la francesa, carne desmechada', precio: 15500, visible: true },
+        { id_producto: 61, nombre: 'criolla mediana', descripcion: 'Tamaño mediano. Papa a la francesa, carne desmechada', precio: 28000, visible: true },
+        { id_producto: 63, nombre: 'criollita GRANDE', descripcion: 'Tamaño grande. Papa a la francesa, carne desmechada', precio: 39000, visible: true },
+        { id_producto: 70, nombre: 'familiar', descripcion: 'Tamaño familiar de nuestras salchipapas, en sabor La Criollita', precio: 60000, visible: true },
+    ];
+    const sinTildes = (t) => String(t || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+    let cartaService;
+    let originales;
+    beforeAll(() => {
+        cartaService = require('../../app_restaurante_api/services/cartaService');
+        originales = [cartaService.buscarProductos, cartaService.getCartaPublicaCompleta];
+        // La misma semántica que el servicio: la frase entera contra nombre o descripción.
+        cartaService.buscarProductos = async (idNegocio, termino) =>
+            SALCHIPAPAS.filter((p) => sinTildes(p.nombre).includes(sinTildes(termino)) || sinTildes(p.descripcion).includes(sinTildes(termino)));
+        cartaService.getCartaPublicaCompleta = async () => [{ nombre: 'SALCHIPAPAS', productos: SALCHIPAPAS }];
+        adaptador.registrarCapacidades();
+    });
+    afterAll(() => {
+        [cartaService.buscarProductos, cartaService.getCartaPublicaCompleta] = originales;
+        registry._limpiar();
+    });
+
+    test('EL CASO: «salchipapa criollita» trae todas las presentaciones, no solo la familiar', async () => {
+        const r = await registry.obtener('buscar_producto').ejecutar({ idNegocio: 6, args: { termino: 'salchipapa criollita' } });
+        const nombres = r.productos.map((p) => p.nombre);
+        expect(nombres).toEqual(expect.arrayContaining(['criollita', 'criolla mediana', 'criollita GRANDE', 'familiar']));
+    });
+});
+
+// ── Tercera auditoría de la noche (20:00) ───────────────────────────────────────────────────
+describe('pregunta del domicilio con un número dentro', () => {
+    const { esPreguntaDeDomicilio } = require('../../intelligence/adapters/restaurante/flujo');
+    test.each([
+        'Pero es cerca vale 7.000 el domicilio?',
+        '¿me cobran 8 mil el domi?',
+        'el domicilio es de 7000?',
+        'Cuánto vale el domicilio?',
+    ])('%j es pregunta del domicilio', (t) => {
+        expect(esPreguntaDeDomicilio(t)).toBe(true);
+    });
+    test.each(['quiero 2 criollitas a domicilio', 'Calle 7 # 10-20, el domicilio a nombre de Ana'])(
+        '%j NO lo es',
+        (t) => {
+            expect(esPreguntaDeDomicilio(t)).toBe(false);
+        }
+    );
+});
+
+describe('preguntas durante la confirmación se contestan y se vuelve a pedir el sí', () => {
+    const flujo = require('../../intelligence/adapters/restaurante/flujo');
+    const confirmacion = require('../../intelligence/engine/confirmacion');
+    const RANGO = { min: 7000, max: 9000, nota: 'Fuera de Pasto, desde $10.000.' };
+    const crear = () =>
+        flujo.crearFlujoRestaurante({
+            contextoNegocio: {
+                obtener: async () => ({
+                    id: 6, nombre: 'ZONA BURGER', tratamiento: 'ZONA BURGER', atencion: null,
+                    tipoNegocio: 'RESTAURANTE', tiempoEstimado: { min: 40, max: 60 }, domicilioRango: RANGO,
+                }),
+            },
+            identidad: { resolver: async () => ({ principal: null }) },
+            gate: { ejecutar: async () => { throw new Error('no se debía ejecutar'); } },
+            tienePedidoReciente: async () => false,
+            catalogo: {
+                barrios: async () => ({ habilitado: false, barrios: [] }),
+                mesas: async () => [],
+                resolverBarrio: async () => null,
+                resolverMesa: async () => null,
+                resolverExclusiones: async () => ({ validas: [], descartadas: [] }),
+            },
+        });
+    const pendiente = () => ({
+        id_conversacion: 'conv-ale', id_negocio: 6, canal: 'whatsapp', id_externo: 'CO.978929221155791',
+        variables: { turnos: 6 }, tarea_actual: confirmacion.TAREA,
+        tarea_datos: {
+            capacidad: 'tomar_pedido', args: { items: [{ id_producto: 63, cantidad: 1 }] },
+            preguntado_en: new Date().toISOString(), repreguntas: 0,
+        },
+    });
+    const decir = (texto) =>
+        crear()({ conversacion: pendiente(), mensajes: [{ contenido: texto }], texto, turno: { id_turno: 't1' } });
+
+    test('EL CASO: «¿vale 7.000 el domicilio?» → el rango, y otra vez el sí', async () => {
+        const d = await decir('Pero es cerca vale 7.000 el domicilio?');
+        expect(d.pasos[0].decision).toBe('confirmacion_pregunta_contestada');
+        expect(d.respuestas[0].texto).toContain('entre $7.000 y $9.000');
+        expect(d.respuestas[0].texto).toMatch(/confirmo tu pedido/);
+        // El pendiente sigue intacto: no gasta la repregunta.
+        expect(d.tarea.nombre).toBe(confirmacion.TAREA);
+        expect(d.tarea.datos.repreguntas).toBe(0);
+    });
+
+    test('«¿cuánto se demora?» → «desde que se confirman», no «tu pedido»', async () => {
+        const d = await decir('cuanto se demora?');
+        expect(d.respuestas[0].texto).toContain('desde que se confirman');
+        expect(d.respuestas[0].texto).not.toContain('tu pedido es');
+    });
+});
+
+describe('el estado del pedido no inventa una etapa de cocina', () => {
+    const { estadoParaElCliente, tiempoDelPedido } = require('../../intelligence/adapters/restaurante/index');
+    const base = { estado: 'ABIERTA', tipo_pedido: 'DOMICILIO', estado_cocina: null, aviso_listo_en: null };
+
+    test('sin etapa (el negocio no usa Cocina): «recibido», sin «en turno para la cocina»', () => {
+        const t = estadoParaElCliente(base);
+        expect(t).toMatch(/recibido/);
+        expect(t).not.toMatch(/turno para la cocina/);
+    });
+
+    test('con la pantalla de Cocina, PENDIENTE sí dice «en turno»', () => {
+        expect(estadoParaElCliente({ ...base, estado_cocina: 'PENDIENTE' })).toMatch(/en turno para la cocina/);
+    });
+
+    test('EL CASO Manuel: 1 h 20 min con estimado de 40–60 → pasado del tiempo', () => {
+        const ahora = new Date('2026-10-02T19:41:00-05:00');
+        const r = tiempoDelPedido({ fecha_creacion: '2026-10-02T18:21:00-05:00' }, { min: 40, max: 60 }, ahora);
+        expect(r).toEqual({ minutos_desde_que_se_pidio: 80, pasado_del_tiempo_estimado: true });
+        const a_tiempo = tiempoDelPedido({ fecha_creacion: '2026-10-02T19:11:00-05:00' }, { min: 40, max: 60 }, ahora);
+        expect(a_tiempo.pasado_del_tiempo_estimado).toBe(false);
+    });
+});

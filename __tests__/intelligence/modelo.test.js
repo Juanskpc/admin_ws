@@ -947,3 +947,30 @@ describe('pasar_a_persona', () => {
         expect(decision.resultado).toBe('handoff');
     });
 });
+
+// «Voy a pasarte con alguien del equipo» SIN llamar a pasar_a_persona (Zona Burger, 2026-10-02):
+// la frase sale, y la conversación pasa de verdad.
+describe('la promesa de pasar a una persona se cumple', () => {
+    it('EL CASO: el texto promete una persona → handoff real', async () => {
+        const frase = 'Lamento mucho la demora. Voy a pasarte con alguien del equipo para que revise qué pasó.';
+        const adaptador = adaptadorFalso([{ texto: frase, razonFin: puerto.FIN.TURNO }]);
+        const manejador = crearManejadorLlm({ ...DEPS_BASE, gate: gateFalso(), adaptador });
+        const { decision } = await correr(manejador, 'Las pedí hace hora y media');
+
+        expect(decision.respuestas).toEqual([frase]);
+        expect(decision.estado).toBe(handoff.ESTADO_HANDOFF);
+        expect(decision.resultado).toBe('handoff');
+        expect(decision.pasos.at(-1).decision).toBe('promesa_de_persona_cumplida');
+    });
+
+    it.each(['¿Te paso la carta?', 'Paso a recogerlo en 10 minutos', 'La criollita vale $15.500.'])(
+        'sin promesa no hay handoff: %j',
+        async (texto) => {
+            const adaptador = adaptadorFalso([{ texto, razonFin: puerto.FIN.TURNO }]);
+            const manejador = crearManejadorLlm({ ...DEPS_BASE, gate: gateFalso(), adaptador });
+            const { decision } = await correr(manejador);
+            expect(decision.resultado).toBe('resuelto');
+            expect(decision.estado).toBeUndefined();
+        }
+    );
+});

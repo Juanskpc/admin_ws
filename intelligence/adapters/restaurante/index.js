@@ -123,18 +123,25 @@ async function buscarEnLaCarta(idNegocio, termino) {
         .split(/\s+/)
         .filter((w) => w.length >= 3);
     // Con una sola palabra la segunda pasada sería idéntica a la primera: se salta a la tercera.
+    let segunda = [];
     if (palabras.length >= 2) {
         const ancla = palabras.slice().sort((a, b) => b.length - a.length)[0];
         const candidatos = await cartaService.buscarProductos(idNegocio, ancla);
 
-        const segunda = candidatos.filter((c) => {
+        segunda = candidatos.filter((c) => {
             const donde = normalizarTexto(`${c.nombre} ${c.descripcion || ''}`);
             return palabras.every((w) => donde.includes(w));
         });
-        if (segunda.length > 0) return segunda;
     }
 
-    return buscarPorCategoriaYNombre(idNegocio, termino);
+    // La segunda y la tercera se JUNTAN, no se elige la primera que encuentre algo. Zona Burger,
+    // 2026-10-02: «salchipapa criollita» → la segunda solo veía la «familiar» (la única que
+    // escribe «salchipapas» en su descripción) y se quedaba ahí; las criollitas pequeña, mediana
+    // y grande solo lo dicen en la CATEGORÍA, que es lo que mira la tercera. El bot ofreció la de
+    // $60.000 como si fuera la única.
+    const tercera = await buscarPorCategoriaYNombre(idNegocio, termino);
+    const vistos = new Set(tercera.map((p) => p.id_producto));
+    return [...tercera, ...segunda.filter((p) => !vistos.has(p.id_producto))];
 }
 
 /**
@@ -295,7 +302,26 @@ function estadoParaElCliente(orden) {
         return domicilio ? 'listo en cocina, a punto de salir' : 'listo para recoger en el local';
     }
     if (orden.estado_cocina === 'EN_PREPARACION') return 'en preparación en la cocina';
-    return 'recibido por el restaurante, en turno para la cocina';
+    if (orden.estado_cocina === 'PENDIENTE') return 'recibido por el restaurante, en turno para la cocina';
+    // Sin etapa de cocina: el negocio no usa la pantalla de Cocina (Zona Burger no la usa: los 36
+    // domicilios de un día con `estado_cocina` nulo). Decir «en turno para la cocina» de un pedido
+    // que ya iba en la moto fue mentirle a un cliente que reclamaba la demora (2026-10-02).
+    return 'recibido por el restaurante (no tengo el detalle de en qué etapa va)';
+}
+
+/**
+ * Cuánto lleva el pedido desde que se tomó, y si ya pasó el tiempo estimado que declaró el negocio.
+ * Es lo que deja contestar con honestidad cuando no hay etapa de cocina: el tiempo SÍ se sabe.
+ */
+function tiempoDelPedido(orden, tiempoEstimado, ahora = new Date()) {
+    const creado = new Date(orden.fecha_creacion).getTime();
+    if (!Number.isFinite(creado)) return { minutos_desde_que_se_pidio: null, pasado_del_tiempo_estimado: false };
+    const minutos = Math.max(0, Math.round((ahora.getTime() - creado) / 60000));
+    const tope = Number(tiempoEstimado?.max) || Number(tiempoEstimado?.min) || null;
+    return {
+        minutos_desde_que_se_pidio: minutos,
+        pasado_del_tiempo_estimado: Boolean(tope) && minutos > tope,
+    };
 }
 
 /**
@@ -491,8 +517,10 @@ function registrarCapacidades() {
             'cuando el cliente pregunte si ya salió, si ya está listo o dónde está su pedido. ' +
             'Si en la conversación ya salió el número de su pedido, úsalo sin pedírselo otra ' +
             'vez; si no lo tiene, pídeselo. Contesta con `estado_para_el_cliente`, que ya está ' +
-            'en palabras del cliente. El pago casi siempre es al recibir o al recoger: NUNCA le ' +
-            'digas que el pedido espera el pago para prepararse o salir.',
+            'en palabras del cliente; no le añadas etapas que no dice. El pago casi siempre es al ' +
+            'recibir o al recoger: NUNCA le digas que el pedido espera el pago para prepararse o ' +
+            'salir. Si `pasado_del_tiempo_estimado` es true y el pedido sigue abierto, discúlpate ' +
+            'por la demora y usa pasar_a_persona para que alguien del equipo le diga dónde va.',
         vertical: VERTICAL,
         tipo: registry.TIPO.CONSULTA,
         feature: FEATURE.ASISTENTE_IA,
@@ -557,12 +585,20 @@ function registrarCapacidades() {
             // ⚠️ `estado_pago` ya NO sale crudo. Con «pendiente_pago» delante, el modelo le dijo
             // cinco veces a una clienta que su pedido no entraba a cocina «porque está pendiente
             // de pago», cuando iba a pagar en efectivo al recibirlo (Zona Burger, 2026-10-01).
+            const abierta = orden.estado === 'ABIERTA';
+            const ficha = abierta ? await leerFichaDelNegocio(idNegocio, contexto.transaction) : null;
             return {
                 numero_orden: orden.numero_orden,
                 estado_para_el_cliente: estadoParaElCliente(orden),
                 tipo_pedido: orden.tipo_pedido,
                 total: precio(orden.total),
                 ya_pagado: orden.estado_pago === 'pagado' || orden.estado === 'CERRADA',
+                ...(abierta
+                    ? tiempoDelPedido(orden, {
+                          min: ficha?.tiempo_estimado_min,
+                          max: ficha?.tiempo_estimado_max,
+                      })
+                    : {}),
             };
         },
     });
@@ -1715,4 +1751,4 @@ function registrarFlujo({ flujos }) {
     });
 }
 
-module.exports = { VERTICAL, registrarCapacidades, registrarFlujo, estadoParaElCliente };
+module.exports = { VERTICAL, registrarCapacidades, registrarFlujo, estadoParaElCliente, tiempoDelPedido };

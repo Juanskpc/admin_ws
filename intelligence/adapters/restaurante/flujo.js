@@ -1535,6 +1535,11 @@ const PREGUNTA_DOMICILIO = [
     /\bcuanto (me )?(cobran|cobrarian|vale|cuesta|sale) (por )?(el |la )?(domicilio|envio|llevarlo|traerlo|traermelo|llevarmelo|traida|llevada)\b/,
     /\b(domicilio|envio|domi) (cuanto|que valor|que precio|en cuanto|que costo)\b/,
     /\b(tiene|tienen|cobran) (costo|valor|recargo) (el |los )?(domicilio|domicilios|envio)\b/,
+    // «¿Vale 7.000 el domicilio?», «¿me cobran 8 mil el domi?», «¿el domicilio es de 7 mil?»
+    // (Zona Burger, 2026-10-02: «Pero es cerca, ¿vale 7.000 el domicilio?» no se reconocía).
+    // Ojo: al normalizar se quitan puntos y comas, así que «7.000» llega como «7 000».
+    /\b(vale|valdria|cuesta|costaria|sale|saldria|cobran|cobrarian|seria|es) (de )?(unos? )?\$? ?\d[\d ]*?( mil| pesos)? (el |los )?(domicilio|domicilios|domi|envio)\b/,
+    /\b(domicilio|domi|envio) (vale|cuesta|sale|seria|es de|queda en) (unos? )?\$? ?\d/,
 ];
 
 function esPreguntaDeDomicilio(texto) {
@@ -1697,6 +1702,36 @@ function crearFlujoRestaurante({
         // `delegar`: turno sin respuesta, silencio, y un pedido que nunca se creó. Nadie lo vio
         // porque hasta hoy ninguna confirmación de restaurante llegó a abrirse.
         if (confirmacion.pendiente(conversacion)) {
+            // «¿Vale 7.000 el domicilio?» o «¿cuánto se demora?» mientras se le pide el sí: son
+            // preguntas razonables ANTES de confirmar. Se contestan y se vuelve a pedir el sí, sin
+            // gastar la repregunta (el cliente no se desvió: está decidiendo). Antes se le repetía
+            // el resumen entero sin contestarle (Zona Burger, 2026-10-02).
+            const respuestaPrevia = esPreguntaDeDomicilio(texto)
+                ? fraseDeDomicilio(negocio.domicilioRango)
+                : esPreguntaDeTiempo(texto)
+                  ? fraseDeTiempo(negocio.tiempoEstimado, { hayPedido: false })
+                  : null;
+            if (respuestaPrevia) {
+                return {
+                    pasos: [paso('confirmacion_pregunta_contestada', {
+                        tema: esPreguntaDeDomicilio(texto) ? 'domicilio' : 'tiempo',
+                    })],
+                    respuestas: [
+                        {
+                            texto: `${respuestaPrevia}\n\n¿Entonces confirmo tu pedido? Respóndeme sí o no.`,
+                            opciones: [
+                                { id: 'si', etiqueta: 'Sí, confirmo' },
+                                { id: 'no', etiqueta: 'No' },
+                            ],
+                        },
+                    ],
+                    variables: conMemoria(conversacion),
+                    // El pendiente sigue igual: ni se toca su hora ni sus repreguntas.
+                    tarea: { nombre: confirmacion.TAREA, datos: conversacion.tarea_datos },
+                    resultado: 'resuelto',
+                    nivel: 'determinista',
+                };
+            }
             await conIdentidad(ctx);
             const decision = await confirmacion.resolver(ctx, { gate });
             return { ...decision, invocaciones: [...invocaciones, ...(decision.invocaciones || [])] };

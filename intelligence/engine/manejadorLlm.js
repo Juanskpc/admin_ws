@@ -90,6 +90,7 @@ const CONFIG = {
 // El texto del handoff y su decisión viven en `handoff.js`: son producto, no mecánica del Nivel 4,
 // y los usará también la FSM el día que escale. Aquí se importa, no se reimplementa.
 const handoff = require('./handoff');
+const { normalizar } = require('./texto');
 // El guardarrail de promesas (ADR-023) es una comprobacion POSTERIOR a la generacion: se le pasa
 // lo que el asistente va a decir y lo que las capacidades devolvieron, y dice si hay cifras que
 // nadie respalda. Arranca en observacion, como F2.
@@ -133,6 +134,13 @@ const PASAR_A_PERSONA = Object.freeze({
         },
     },
 });
+
+/**
+ * El asistente dice que le pasa la conversación a una persona («te paso con alguien del equipo»,
+ * «le aviso al equipo para que te escriba»). Sobre texto normalizado (sin tildes, minúsculas).
+ */
+const PROMETE_PERSONA =
+    /\b(te paso con|te voy a pasar|voy a pasarte|pasarte con|te comunico con|voy a comunicarte|comunicarte con|te conecto con|conectarte con|le paso tu (mensaje|pregunta|caso)|le aviso al equipo|aviso al equipo|le dejo tu (mensaje|pregunta)|alguien del equipo (te|le) (va a|escribe|contesta|responde|revisa|contacta|confirma))/;
 
 /**
  * Convierte el resultado de una capacidad en el texto que vuelve al modelo.
@@ -317,6 +325,24 @@ function crearManejadorLlm({
                 if (!revision.limpio) {
                     pasos.push(guardarrail.paso(revision));
                     if (guardarrail.bloquea()) return decisionDeHandoff(pasos, invocaciones);
+                }
+
+                // Dijo «te paso con alguien del equipo» sin llamar a `pasar_a_persona`: se cumple
+                // lo prometido. Zona Burger, 2026-10-02: «Voy a pasarte con alguien del equipo
+                // para que revise qué pasó» — y nadie se enteró; esa vez una persona ya estaba en
+                // el chat por casualidad. Su frase sale tal cual (ya le dijo lo correcto), pero la
+                // conversación pasa de verdad: Bandeja, campanita y correo.
+                if (PROMETE_PERSONA.test(normalizar(dicho))) {
+                    pasos.push({ tipo: 'handoff', decision: 'promesa_de_persona_cumplida', motivo: {} });
+                    return {
+                        pasos,
+                        invocaciones,
+                        respuestas: [dicho],
+                        variables: conversacion.variables || {},
+                        estado: handoff.ESTADO_HANDOFF,
+                        resultado: 'handoff',
+                        nivel: 'llm',
+                    };
                 }
 
                 return {
