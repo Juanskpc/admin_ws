@@ -122,8 +122,9 @@ Bandeja; si falla, el error queda en `journalctl -u escalapp-api` como `bandeja.
 - **Contestar desde el celular marca la conversación como atendida** (antes solo la Bandeja). Se
   corrigieron 15 conversaciones viejas de Zona Burger que ya estaban contestadas (auditoría:
   `bandeja_atendidas_por_celular_retroactivo`).
-- **Bandeja**: en «Todos», las que esperan respuesta van primero y con recuadro; se muestran TODAS
-  además de las 30 más recientes (antes el límite podía esconderlas).
+- ~~Bandeja: en «Todos», las que esperan respuesta van primero~~ — **revertido el mismo día**
+  (`afd11f5` / admin `3a237d2`): la lista vuelve a ir solo por fecha y el botón «Esperan
+  respuesta» vuelve debajo del buscador. Ver §4-quinquies.
 
 ## 4-quater. Ajustes del asistente en su propia ventana (~22:17)
 
@@ -134,6 +135,28 @@ impersonación flota bajo la cabecera y la X lo reduce a una pastilla.
 
 **Fotos: todavía sin probar con una real** — desde el despliegue de las 21:39 ningún cliente mandó
 foto, sticker ni audio (hoy llegaron varias, todas antes).
+
+## 4-quinquies. Qué cuenta como «Esperan respuesta» (cierre de la sesión, 2026-10-03 ~00:15)
+
+**Auditoría:** de 16 conversaciones «esperando respuesta», **solo 1 esperaba algo** (una clienta
+que mandó su ubicación cuando se la pidieron). Las otras 15 cerraban con «Gracias», «Listo», «Ya
+voy», «Otey», «perfecto, ya bajo»… porque **cualquier** mensaje del cliente ponía `atendida_en` en
+NULL, también un «gracias».
+
+**Regla nueva** (`b3a14dc`): un mensaje del cliente reabre la espera **solo si no es cortesía**
+(`cortesia.leer`: agradecimientos, «ok», «listo», «ya voy/bajo/salgo», «qué pena», reacciones,
+stickers). Una pregunta, una dirección, un teléfono, una foto o una ubicación **sí** reabren. Un
+recordatorio que enviamos nosotros tampoco reabre (antes sí, porque usaba la misma función).
+`asegurarConversacion(…, { reabrirEspera })` lo decide quien llama; el motor lo calcula.
+
+**Limpieza aplicada**: 15 marcadas como atendidas (auditoría `bandeja_espera_limpiada_por_auditoria`);
+dos de ellas a mano por la auditoría: `…b52bfd` (el personal sí contestó, pero los ecos se
+perdieron antes de `033fc3a`) y `…8d760b` (prueba interna de Salón Demo). Queda 1: `…e49fa8`.
+
+Ojo: el vocabulario de cortesía lo comparte el filtro que evita que el bot conteste cortesías
+repetidas, así que «ya bajo» o «qué pena» tampoco despiertan al bot tras un cierre (que es lo que
+se quiere). Si un cliente usa una de esas palabras para PEDIR algo, va en una frase con más
+palabras y el filtro no la toma por cortesía.
 
 ## 5. Pendiente (decidido dejarlo para después)
 
@@ -149,6 +172,19 @@ foto, sticker ni audio (hoy llegaron varias, todas antes).
    del bot; los pedidos creados a mano sin teléfono no tienen chat).
 4. **Mensaje de la carta sin el código `#P…`**: el de Alejandra llegó sin código y lo atendió el
    modelo en vez del flujo. Sin investigar (¿lo borró al pegar?).
+5. **🔴 El modelo ofrece domicilio con el local cerrado** (diagnosticado, SIN arreglar). Zona
+   Burger cierra a las **22:50**; a las 23:02 «Buenas noches, ¿realizas domicilios?» lo contestó el
+   modelo («Sí, hacemos domicilios. ¿Qué te gustaría pedir?») sin consultar el horario, aunque
+   `horarioService.estadoDeAtencion` daba `fuera_de_horario`. El saludo determinista sí mira el
+   horario, pero esa frase no es un saludo puro y se fue al modelo. `tomar_pedido` rechazaría el
+   pedido, pero la promesa ya está hecha. **Arreglo propuesto:** darle al modelo, en la parte
+   volátil del prompt de cada turno, el estado de atención («ahora cerrado, abre mañana 16:30: no
+   ofrezcas pedidos») — o que el flujo conteste solo cualquier mensaje fuera de horario. Ojo: el
+   prompt actual es `sistema.v10` (de Juan David); coordinarlo con él.
+6. **Ubicaciones** (`[location]`): hoy no se guardan las coordenadas. Propuesta: guardarlas en
+   `crudo` y mostrar en la Bandeja un enlace a Google Maps (justo el único chat que esperaba
+   respuesta era una ubicación).
+7. **Fotos en la Bandeja sin probar con una real** (§4-bis).
 
 ## 6. Tests que ya fallaban (no son de estos cambios)
 
