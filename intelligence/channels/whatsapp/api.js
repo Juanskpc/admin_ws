@@ -260,6 +260,92 @@ async function enviarIndicadorEscritura({
     }
 }
 
+/** Lo más grande que se deja pasar por el servidor (1 vCPU / 1 GB). Audio y video de Meta: 16 MB. */
+const MAX_BYTES_ARCHIVO = Number(process.env.WHATSAPP_MAX_BYTES_ARCHIVO) || 16 * 1024 * 1024;
+
+/**
+ * Un archivo que mandó un cliente (foto, sticker, audio…), pedido a Meta en el momento.
+ *
+ * **No se guarda nada** (decisión del dueño, 2026-10-02): se devuelve la respuesta de Meta para
+ * que quien llama la pase tal cual al navegador. Son dos llamadas, las dos con el token —según la
+ * documentación de la Cloud API, la URL que devuelve la primera caduca a los 5 minutos y la
+ * descarga también exige el token—. Meta conserva lo recibido por webhook **7 días**; después el
+ * id ya no sirve y esto lanza `ARCHIVO_NO_DISPONIBLE`.
+ *
+ * El token sale del negocio, igual que al enviar: con Embedded Signup el global no tiene permiso
+ * sobre la WABA del cliente.
+ *
+ * @returns {Promise<{respuesta: Response, mime: string|null, bytes: number|null}>}
+ */
+async function obtenerArchivo({ idArchivo, idNegocio, fetchImpl = globalThis.fetch, config = configReal }) {
+    const c = config.leer();
+    const token = (config.tokenDeNegocio ? config.tokenDeNegocio(idNegocio) : null) ?? c.token;
+    const phoneNumberId = config.numeroDeNegocio ? config.numeroDeNegocio(idNegocio) : null;
+    if (!token) {
+        throw fallo('El canal de WhatsApp no está configurado (falta token).', {
+            code: 'WHATSAPP_SIN_CONFIGURAR',
+            reintentable: false,
+        });
+    }
+
+    const control = new AbortController();
+    const reloj = setTimeout(() => control.abort(), TIMEOUT_MS);
+    try {
+        // 1. El id → una URL temporal.
+        const consulta = new URLSearchParams(phoneNumberId ? { phone_number_id: phoneNumberId } : {});
+        const meta = await fetchImpl(
+            `${c.baseUrl}/${c.versionApi}/${encodeURIComponent(idArchivo)}${consulta.size ? `?${consulta}` : ''}`,
+            { headers: { Authorization: `Bearer ${token}` }, signal: control.signal }
+        );
+        if (!meta.ok) {
+            // 400/404: el id caducó (más de 7 días) o no es de esta cuenta. No se reintenta.
+            throw fallo('Meta ya no tiene este archivo (se conserva 7 días).', {
+                code: 'ARCHIVO_NO_DISPONIBLE',
+                statusCode: meta.status,
+                reintentable: meta.status >= 500,
+            });
+        }
+        const info = await meta.json();
+        if (!info?.url) {
+            throw fallo('Meta no devolvió la dirección del archivo.', {
+                code: 'ARCHIVO_NO_DISPONIBLE',
+                reintentable: false,
+            });
+        }
+        const bytes = Number(info.file_size) || null;
+        if (bytes && bytes > MAX_BYTES_ARCHIVO) {
+            throw fallo('El archivo es demasiado grande para mostrarlo aquí.', {
+                code: 'ARCHIVO_DEMASIADO_GRANDE',
+                statusCode: 413,
+                reintentable: false,
+            });
+        }
+
+        // 2. La descarga, también con el token. Se devuelve sin leer: quien llama la transmite.
+        const archivo = await fetchImpl(info.url, {
+            headers: { Authorization: `Bearer ${token}` },
+            signal: control.signal,
+        });
+        if (!archivo.ok || !archivo.body) {
+            throw fallo('No se pudo descargar el archivo de Meta.', {
+                code: 'ARCHIVO_NO_DISPONIBLE',
+                statusCode: archivo.status,
+                reintentable: archivo.status >= 500,
+            });
+        }
+        return { respuesta: archivo, mime: info.mime_type || archivo.headers.get('content-type'), bytes };
+    } catch (error) {
+        if (error.code) throw error;
+        throw fallo(`No se pudo llamar a la Cloud API: ${error.message}`, {
+            code: 'WHATSAPP_RED',
+            reintentable: true,
+        });
+    } finally {
+        // El reloj cubre la conexión y las cabeceras; la transmisión del cuerpo sigue su curso.
+        clearTimeout(reloj);
+    }
+}
+
 module.exports = {
-    esBsuid, enviarMensaje, enviarIndicadorEscritura, TIMEOUT_MS };
+    esBsuid, enviarMensaje, enviarIndicadorEscritura, obtenerArchivo, MAX_BYTES_ARCHIVO, TIMEOUT_MS };
 

@@ -5,6 +5,9 @@ const Models = require('../../app_core/models/conection');
 const Audit = require('../../app_core/helpers/auditHelper');
 const { alcanceDeNegocios } = require('../../app_core/middleware/auth');
 const PreparacionAsistente = require('../services/preparacionAsistenteService');
+const { Readable } = require('stream');
+// Solo para traer de Meta los archivos que mandan los clientes (fotos, stickers…) a la Bandeja.
+const WhatsappApi = require('../../intelligence/channels/whatsapp/api');
 
 /**
  * Bandeja del inquilino — el dueño del negocio ve sus conversaciones y **responde**.
@@ -289,7 +292,16 @@ async function detalleConversacion(req, res) {
         const mensajes = await Models.sequelize.query(
             `
             SELECT id_mensaje, direccion, canal, contenido, estado_entrega,
-                   enviado_en, entregado_en, creado_en
+                   enviado_en, entregado_en, creado_en,
+                   -- Si trae archivo (foto, sticker, audio…): qué es, para que la Bandeja lo pida
+                   -- a /archivo. El id de Meta no sale: no le sirve al navegador.
+                   CASE WHEN direccion = 'entrante' AND crudo -> 'media' ->> 'id' IS NOT NULL
+                        THEN jsonb_build_object(
+                                 'tipo', crudo ->> 'tipo',
+                                 'mime', crudo -> 'media' ->> 'mime',
+                                 'caption', crudo -> 'media' ->> 'caption',
+                                 'nombre', crudo -> 'media' ->> 'nombre')
+                   END AS media
               FROM intelligence.mensaje
              WHERE id_conversacion = :id
              ORDER BY creado_en ASC;
@@ -328,6 +340,69 @@ async function detalleConversacion(req, res) {
     } catch (err) {
         console.error('Error en bandeja.detalleConversacion:', err);
         return Respuesta.error(res, 'Error al leer la conversación');
+    }
+}
+
+/**
+ * GET /admin/intelligence/bandeja/conversaciones/:id/mensajes/:idMensaje/archivo
+ *
+ * La foto, sticker, audio o documento que mandó el cliente, pedido a Meta en el momento y pasado
+ * tal cual al navegador. **No se guarda copia** (decisión del dueño, 2026-10-02: muchos son
+ * comprobantes con datos personales). Meta lo conserva 7 días; después contesta 410.
+ *
+ * Mismos permisos que el detalle: la conversación se resuelve con `cargarConversacionPermitida`
+ * (ajena → 404) y el mensaje tiene que ser DE esa conversación.
+ */
+async function archivoDeMensaje(req, res) {
+    try {
+        if (!revisar(req, res)) return;
+        if (!(await hayEsquemaIntelligence())) return sinEsquema(res);
+
+        const conversacion = await cargarConversacionPermitida(req.params.id, req.usuario.id_usuario);
+        if (!conversacion) return Respuesta.error(res, 'Conversación no encontrada', 404);
+
+        const [fila] = await Models.sequelize.query(
+            `
+            SELECT crudo -> 'media' AS media
+              FROM intelligence.mensaje
+             WHERE id_conversacion = :id AND id_mensaje = :idMensaje AND direccion = 'entrante';
+            `,
+            { replacements: { id: req.params.id, idMensaje: req.params.idMensaje }, ...SELECT }
+        );
+        const idArchivo = fila?.media?.id;
+        if (!idArchivo) return Respuesta.error(res, 'Ese mensaje no trae un archivo', 404);
+
+        // El mapa número → token del negocio se carga perezoso; sin esto, un servidor recién
+        // arrancado usaría el token global y Meta rechazaría la WABA de un cliente con Embedded Signup.
+        await require('../../intelligence/channels/whatsapp/numeros').asegurarCargado();
+        let archivo;
+        try {
+            archivo = await WhatsappApi.obtenerArchivo({ idArchivo, idNegocio: Number(conversacion.id_negocio) });
+        } catch (err) {
+            if (err.code === 'ARCHIVO_NO_DISPONIBLE') {
+                return Respuesta.error(res, 'Este archivo ya no está disponible (WhatsApp lo guarda 7 días).', 410, { code: err.code });
+            }
+            if (err.code === 'ARCHIVO_DEMASIADO_GRANDE') {
+                return Respuesta.error(res, err.message, 413, { code: err.code });
+            }
+            throw err;
+        }
+
+        res.setHeader('Content-Type', archivo.mime || fila.media.mime || 'application/octet-stream');
+        if (archivo.bytes) res.setHeader('Content-Length', String(archivo.bytes));
+        // Privado y breve: que el navegador no lo vuelva a pedir mientras se mira el chat, pero
+        // que ningún intermediario lo guarde.
+        res.setHeader('Cache-Control', 'private, max-age=300');
+        res.setHeader('Content-Disposition', 'inline');
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+        Readable.fromWeb(archivo.respuesta.body).on('error', (e) => {
+            console.error('Error en bandeja.archivoDeMensaje (transmisión):', e.message);
+            res.destroy(e);
+        }).pipe(res);
+    } catch (err) {
+        console.error('Error en bandeja.archivoDeMensaje:', err.message);
+        if (res.headersSent) return res.destroy(err);
+        return Respuesta.error(res, 'No se pudo traer el archivo');
     }
 }
 
@@ -1006,6 +1081,7 @@ module.exports = {
     leerPreparacion,
     listarConversaciones,
     detalleConversacion,
+    archivoDeMensaje,
     responder,
     atender,
     devolverAlAsistente,

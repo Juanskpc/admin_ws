@@ -821,6 +821,12 @@ router.get('/intelligence/bandeja/conversaciones/:id', [
     param('id').isUUID().withMessage('ID de conversación inválido'),
 ], IntelligenceBandejaController.detalleConversacion);
 
+// La foto/sticker/audio que mandó el cliente, traída de Meta al vuelo (sin guardar copia).
+router.get('/intelligence/bandeja/conversaciones/:id/mensajes/:idMensaje/archivo', [
+    param('id').isUUID().withMessage('ID de conversación inválido'),
+    param('idMensaje').isUUID().withMessage('ID de mensaje inválido'),
+], IntelligenceBandejaController.archivoDeMensaje);
+
 // El texto se limita a 4096 porque es el máximo que acepta un mensaje de WhatsApp: cortarlo
 // aquí es decirlo a tiempo, en vez de que Meta lo rechace cuando ya nadie mira.
 router.post('/intelligence/bandeja/conversaciones/:id/responder', [

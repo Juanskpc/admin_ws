@@ -192,7 +192,9 @@ describe('interpretar el webhook', () => {
         const { mensajes } = interpretarWebhook(webhook(imagen), { config });
 
         expect(mensajes[0].texto).toBe('[image]');
-        expect(mensajes[0].crudo).toEqual({ tipo: 'image', soportado: false });
+        // Desde 2026-10-02 lleva también la REFERENCIA al archivo (no el archivo), para que la
+        // Bandeja pueda pedírselo a Meta y mostrarlo.
+        expect(mensajes[0].crudo).toEqual({ tipo: 'image', soportado: false, media: { id: 'x', mime: null } });
     });
 
     test('un eco del negocio NO es un mensaje del cliente', () => {
