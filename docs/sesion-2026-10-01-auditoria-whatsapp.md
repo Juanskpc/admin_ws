@@ -124,3 +124,22 @@ barrios con precio siguen funcionando y, si el cliente elige uno, su valor manda
 Desplegado el 2026-10-02 13:11 (respaldo `db_2026-10-02_1310.dump`). Zona Burger cargado:
 $7.000–$9.000, nota «Fuera de Pasto, desde $10.000.»; su revisión de preparación queda con
 `domicilio: ok`. **Falta migrar la base compartida (5433)**: el túnel estaba cerrado.
+
+## Adenda 2026-10-02 (noche) — auditoría de la tarde y sus arreglos
+
+Auditoría con `scripts/auditoria_banderas.js` y `scripts/auditoria_conversacion.js` (solo
+lectura). Lo grave: a una clienta se le dijo que la **Discordia no está en la carta** — estaba
+agotada porque `controla_inventario` estaba encendido con el pan brioche en −321 (el negocio ya lo
+apagó). El asistente además le contestó el tiempo «de tu pedido» sin pedido, le preguntó con qué
+pagaba, y dijo «ya queda enviado el comprobante». Oscar creó el pedido a mano (ORD-7562).
+
+Desplegado el 2026-10-02 19:18 (`c5427a2`, admin `888ec77`):
+- **`pasar_a_persona`** (motor, `manejadorLlm.js`): sin el dato, handoff real en vez de
+  «confírmalo con ZONA BURGER». Prompt **`sistema.v8`**.
+- **`agotados_ahora`** en `buscar_producto`: agotado ≠ no existe.
+- **Tiempo sin pedido**: «desde que se confirman» + «todavía no tengo ningún pedido tuyo».
+- **Confirmación**: no anota precios como nota, una foto no repite el resumen, y al 2.º desvío un
+  pedido pasa a una persona.
+- **Bandeja**: `CO.1084…` ya no se muestra como teléfono.
+
+Pendiente, decidido para después: **comprobantes de pago** (fotos) y **domicilio por comuna**.
