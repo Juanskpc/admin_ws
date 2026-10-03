@@ -95,9 +95,24 @@ con contenido (ya no debería pasar), y pedidos `por Asistente` vs `por OSCAR/AD
 
 ---
 
+## 4-bis. Fotos, stickers y audios en la Bandeja (desplegado 21:39, `cff0782` / admin `d1c0eec`)
+
+Lo que mandan los clientes ya se ve en el hilo de la Bandeja (foto y sticker en línea, audio y
+video con reproductor, documento al tocarlo). **No se guarda copia**: al recibir solo se guarda la
+referencia en `intelligence.mensaje.crudo.media`, y la ruta
+`GET /admin/intelligence/bandeja/conversaciones/:id/mensajes/:idMensaje/archivo` se lo pide a Meta
+en el momento y lo transmite. Meta lo conserva **7 días** (después, 410 y la Bandeja lo dice).
+Lo recibido **antes** del despliegue no tiene referencia y sigue saliendo como `[image]`.
+
+**Sin probar todavía con una foto real** (no llegó ninguna antes del relevo): sí se comprobó en
+producción que la ruta exige sesión (401) y que Meta acepta el token de Zona Burger (un id
+inventado → `ARCHIVO_NO_DISPONIBLE`). Con la primera foto que llegue, abrir ese chat en la
+Bandeja; si falla, el error queda en `journalctl -u escalapp-api` como `bandeja.archivoDeMensaje`.
+
 ## 5. Pendiente (decidido dejarlo para después)
 
-1. **Comprobantes de pago** (fotos): el bot no las ve; hoy un comprobante no avisa a nadie.
+1. **Comprobantes de pago**: ya se VEN en la Bandeja (§4-bis), pero el bot todavía no avisa a
+   nadie cuando llega uno.
 2. **Domicilio por comuna**: investigado y viable. Barrios de Pasto en OpenStreetMap (~360, con
    ubicación) + los 12 polígonos de comunas (servicio UNOSAT, capa 2) → cada barrio cae en su
    comuna automáticamente; el 60 % de las direcciones reales se reconocen con un emparejador
