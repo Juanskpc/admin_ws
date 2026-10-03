@@ -65,6 +65,8 @@ const sequelize = Models.sequelize;
  * `cita.creada.v1`, para que el productor no dependa de quien lo consume.
  */
 const EVENTO_ESCALADA = 'conversacion.escalada.v1';
+// Para decidir si un mensaje del cliente reabre «Esperan respuesta» (solo cortesía → no).
+const cortesia = require('./cortesia');
 
 /** Avisos del canal que no son un mensaje del cliente: hoy, que borró uno (`[revoke]`). */
 const SIN_CONTENIDO = /^\[revoke\]$/i;
@@ -274,7 +276,14 @@ async function recibir(entrada) {
         // esta opción, igual que no pasan `reactivarPorPlazo`.
         const conversacion = await repositorio.asegurarConversacion(
             { idNegocio, canal, idExterno },
-            { transaction: t, reactivarPorPlazo: !duplicado, reiniciarPorInactividad: !duplicado }
+            {
+                transaction: t,
+                reactivarPorPlazo: !duplicado,
+                reiniciarPorInactividad: !duplicado,
+                // Vuelve a «Esperan respuesta» solo si el cliente dijo algo que pide respuesta:
+                // un «Gracias», «Ya voy», «Ok» o una reacción no (2026-10-03, ver repositorio).
+                reabrirEspera: !duplicado && !cortesia.leer(contenido).cortesia,
+            }
         );
 
         if (duplicado) {

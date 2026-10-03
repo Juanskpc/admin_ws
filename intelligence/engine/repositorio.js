@@ -136,7 +136,7 @@ async function reservarIngesta({ idNegocio, canal, idExternoMensaje }, { transac
  */
 async function asegurarConversacion(
     { idNegocio, canal, idExterno },
-    { transaction, reactivarPorPlazo = false, reiniciarPorInactividad = false }
+    { transaction, reactivarPorPlazo = false, reiniciarPorInactividad = false, reabrirEspera = false }
 ) {
     const reactivada = reactivarPorPlazo
         ? await reactivarSiVencioElPlazo({ idNegocio, canal, idExterno }, { transaction })
@@ -152,7 +152,7 @@ async function asegurarConversacion(
     // reinicio): un recordatorio saliente no es el cliente volviendo a escribir.
     const conversacion = await asegurarConversacionSinReglas(
         { idNegocio, canal, idExterno },
-        { transaction, marcarSesionNueva: reiniciarPorInactividad }
+        { transaction, marcarSesionNueva: reiniciarPorInactividad, reabrirEspera }
     );
     if (reactivada) conversacion.reactivada_automaticamente = true;
     if (reiniciada) conversacion.reiniciada_por_inactividad = reiniciada;
@@ -308,7 +308,10 @@ async function reactivarSiVencioElPlazo({ idNegocio, canal, idExterno }, { trans
  * siguiente y escribe «¿qué más, cómo vamos?» también tiene que ver qué se puede agendar. La
  * marca la consume el turno (`manejadorEscalera` la quita de las variables que guarda).
  */
-async function asegurarConversacionSinReglas({ idNegocio, canal, idExterno }, { transaction, marcarSesionNueva = false }) {
+async function asegurarConversacionSinReglas(
+    { idNegocio, canal, idExterno },
+    { transaction, marcarSesionNueva = false, reabrirEspera = false }
+) {
     return unaFila(
         `
         INSERT INTO intelligence.conversacion (id_negocio, canal, id_externo, ultimo_mensaje_en)
@@ -324,16 +327,27 @@ async function asegurarConversacionSinReglas({ idNegocio, canal, idExterno }, { 
                              THEN 'activa' ELSE conversacion.estado END,
                cerrado_en = CASE WHEN conversacion.estado = 'cerrada'
                                  THEN NULL ELSE conversacion.cerrado_en END,
-               -- La persona volvió a escribir: si alguien la había dado por atendida, vuelve a
-               -- la bandeja. Sin esto, atenderla una vez la escondería para siempre y su
-               -- siguiente mensaje no lo vería nadie — el fallo silencioso de cualquier
-               -- bandeja. Nótese que NO se toca el estado: que el bot vuelva a hablar es otra
-               -- decisión, y ADR-023 dice que no vuelve.
-               atendida_en = NULL
+               -- El cliente escribió ALGO QUE PIDE RESPUESTA: si alguien la había dado por
+               -- atendida, vuelve a «Esperan respuesta». Sin esto, atenderla una vez la
+               -- escondería para siempre. NO se toca el estado: que el bot vuelva es otra
+               -- decisión (ADR-023).
+               --
+               -- reabrirEspera lo decide quien llama (2026-10-03): el motor lo pide para un
+               -- mensaje del cliente que NO es solo cortesía. Un «Gracias», «Ya voy» u «Ok» no
+               -- reabre — la auditoría encontró 15 de 16 «esperando» que solo esperaban eso —,
+               -- y un recordatorio que enviamos nosotros tampoco: no es el cliente escribiendo.
+               atendida_en = CASE WHEN :reabrirEspera THEN NULL ELSE conversacion.atendida_en END
         RETURNING id_conversacion, id_negocio, canal, id_externo, estado,
                   variables, tarea_actual, tarea_datos;
         `,
-        { idNegocio, canal, idExterno, marcarSesionNueva: Boolean(marcarSesionNueva), minutosSesion: INACTIVIDAD_RESET_MIN },
+        {
+            idNegocio,
+            canal,
+            idExterno,
+            marcarSesionNueva: Boolean(marcarSesionNueva),
+            reabrirEspera: Boolean(reabrirEspera),
+            minutosSesion: INACTIVIDAD_RESET_MIN,
+        },
         transaction
     );
 }

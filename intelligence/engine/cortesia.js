@@ -38,6 +38,10 @@ const PALABRA_CORTES = new Set([
     'vemos', 'hablamos', 'pendiente', 'estoy', 'quedo', 'atento', 'atenta', 'espero', 'esperando',
     'paso', 'voy', 'vamos', 'van', 'llego', 'ahi', 'alla', 'ahorita', 'pasan', 'por', 'el', 'ella',
     'recibido', 'recibi', 'llego', 'todo', 'y', 'aja', 'aa', 'ah', 'oh', 'listico', 'vale',
+    // Cierres reales que no estaban (Zona Burger, 2026-10-02): «Otey», «perfecto, ya bajo, vecino»,
+    // «Vale igual ya voy subiendo», «Vale veci que pena», «Ya pasó por ellas».
+    'otey', 'oki', 'okey', 'okay', 'bajo', 'bajando', 'subo', 'subiendo', 'salgo', 'saliendo',
+    'pena', 'igual', 'ellas', 'ellos', 'paso', 'listo', 'lista', 'ok',
 ]);
 
 /** Risas, alargamientos y signos: «jajaja», «okkk», «graciasss», «oooo». */

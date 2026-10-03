@@ -392,11 +392,12 @@ describe('marcar como atendida sin responder', () => {
         const c = await nuevaConversacion({ idNegocio: negocioA });
         await llamar(Bandeja.atender, { idUsuario: usuarioA, params: { id: c.id_conversacion } });
 
-        // La ingesta real: el mismo `asegurarConversacion` que corre al llegar un mensaje.
+        // La ingesta real: el mismo `asegurarConversacion` que corre al llegar un mensaje que pide
+        // respuesta (desde 2026-10-03 un «Gracias» no reabre: ver la prueba de cortesías).
         const t = await sequelize.transaction();
         await repositorio.asegurarConversacion(
             { idNegocio: negocioA, canal: CANAL, idExterno: c.id_externo },
-            { transaction: t }
+            { transaction: t, reabrirEspera: true }
         );
         await t.commit();
 
@@ -784,8 +785,22 @@ describe('contestar desde el celular saca la conversación de «esperando respue
 
         // El cliente vuelve a escribir: vuelve a esperar (y el bot sigue fuera: estado intacto).
         const t = await sequelize.transaction();
-        await repositorio.asegurarConversacion({ idNegocio: negocioA, canal: CANAL, idExterno: c.id_externo }, { transaction: t });
+        await repositorio.asegurarConversacion({ idNegocio: negocioA, canal: CANAL, idExterno: c.id_externo }, { transaction: t, reabrirEspera: true });
         await t.commit();
         expect(await esperando()).toBe(true);
+    });
+
+    // Regla del 2026-10-03: la auditoría encontró 15 de 16 «esperando» que solo esperaban un
+    // «Gracias» / «Ya voy». Un mensaje de cortesía (o un recordatorio nuestro) no reabre.
+    test('un «Gracias» después de atender NO la devuelve a esperar', async () => {
+        const c = await nuevaConversacion({ idNegocio: negocioA });
+        await sequelize.query(
+            `UPDATE intelligence.conversacion SET estado = 'handoff_humano', atendida_en = now() WHERE id_conversacion = :c;`,
+            { replacements: { c: c.id_conversacion } }
+        );
+        const t = await sequelize.transaction();
+        await repositorio.asegurarConversacion({ idNegocio: negocioA, canal: CANAL, idExterno: c.id_externo }, { transaction: t, reabrirEspera: false });
+        await t.commit();
+        expect(await unaFila(`SELECT atendida_en IS NOT NULL AS a FROM intelligence.conversacion WHERE id_conversacion = :c;`, { c: c.id_conversacion })).toEqual({ a: true });
     });
 });
