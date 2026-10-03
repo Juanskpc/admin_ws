@@ -22,6 +22,7 @@ const SsoController = require('../controllers/ssoController');
 const PaletaColorController = require('../controllers/paletaColorController');
 const NotificacionController = require('../controllers/notificacionController');
 const MetricasController = require('../controllers/metricasController');
+const EstadisticasController = require('../controllers/estadisticasController');
 const FichaPersonaController = require('../controllers/fichaPersonaController');
 const AuditoriaController = require('../controllers/auditoriaController');
 const DatosFiscalesController = require('../controllers/datosFiscalesController');
@@ -528,6 +529,18 @@ router.post('/negocios/registrar-cliente', requireSuperAdmin, [
 
 // --- Métricas (Super Admin) ---
 router.get('/metricas/resumen', requireSuperAdmin, MetricasController.getResumen);
+
+// --- Estadísticas de plataforma (Super Admin) ---
+//
+// El recorrido completo del sistema, cross-inquilino y acumulado: existe para ENSEÑARLO a un
+// interesado. Distinta de `/metricas/resumen`, que solo compara hoy contra ayer.
+//
+// Super admin de verdad, no solo el guard del frontend: aquí se ven juntas las cifras de TODOS
+// los inquilinos, y el dueño de un negocio no tiene por qué ver el volumen de los demás.
+router.get('/estadisticas/plataforma', requireSuperAdmin, [
+    query('desde').optional().isISO8601().withMessage('Fecha desde inválida (YYYY-MM-DD)'),
+    query('hasta').optional().isISO8601().withMessage('Fecha hasta inválida (YYYY-MM-DD)'),
+], EstadisticasController.getPlataforma);
 
 // --- Auditoría (Super Admin) ---
 const auditoriaFiltrosComunes = [
