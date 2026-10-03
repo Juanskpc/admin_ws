@@ -48,6 +48,10 @@ const MEDIO_COMO_CORTESIA = /^\[(sticker|reaction)\]$/i;
 
 const MAX_PALABRAS = 8;
 
+/** El último mensaje del asistente pide un dato aunque no lleve «?» («necesito tu número…»). */
+const PIDE_ALGO =
+    /\b(necesito|me falta|me faltan|falta|faltan|me (dices|das|compartes|regalas|confirmas|escribes|pasas|envias|mandas)|dime|escribeme|enviame|mandame|compartenos|compartime|compartirme|pasame|regalame)\b/;
+
 /**
  * ¿El mensaje (toda la ráfaga) es solo cortesía? Cada línea tiene que serlo.
  * @returns {{cortesia: boolean, agradece: boolean}}
@@ -63,6 +67,10 @@ function leer(texto) {
     for (const linea of lineas) {
         if (MEDIO_COMO_CORTESIA.test(linea)) continue;
         if (/^\[[a-z_]+\]$/i.test(linea)) return { cortesia: false, agradece: false };
+        // Un número es un DATO —un teléfono, el número de la casa, una cantidad—, nunca una
+        // cortesía. Zona Burger, 2026-10-02: «3218245714» quedaba sin palabras al quitarle lo que
+        // no son letras, contaba como cortesía, y el bot se calló con un pedido a medias.
+        if (/\d/.test(linea)) return { cortesia: false, agradece: false };
         const palabras = normalizar(linea)
             // Emojis, signos y números fuera: un «🙏🙏» o un «👍» es cortesía, y no son palabras.
             .replace(/[^a-zñ\s]/g, ' ')
@@ -120,6 +128,9 @@ async function decidir(ctx, { hayTarea, ultimoDelAsistente }) {
     // «¿La quieres para recoger?» → «ok»: eso es una respuesta, no una despedida. Cualquier
     // pregunta en el último mensaje cuenta, aunque detrás venga una nota («_El total es…_»).
     if (!ultimo || /[?¿]/.test(ultimo)) return null;
+    // Lo mismo cuando el asistente PIDIÓ algo sin signo de pregunta: «Para mandártelo necesito un
+    // número de contacto 📱». Lo que llega después es la respuesta, no una despedida.
+    if (PIDE_ALGO.test(normalizar(ultimo))) return null;
 
     if (variables[MARCA] || !agradece) {
         return {

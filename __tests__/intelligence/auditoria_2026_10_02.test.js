@@ -248,3 +248,35 @@ describe('«para servir» en el flujo sin modelo', () => {
         expect(ENTREGA.MESA).toBe('MESA');
     });
 });
+
+// ── Teléfonos tomados por cortesía (Alejandra Benavidez, 2026-10-02 19:47) ──────────────────
+// El bot pidió «Para mandártelo necesito un número de contacto 📱» (sin «?»), la clienta mandó
+// «3218245714» y «3174924363», y el filtro de cortesías los calló: al quitar lo que no son letras
+// no quedaba nada, y «nada» contaba como cortesía. El pedido nunca se creó.
+describe('un número nunca es una cortesía', () => {
+    const cortesia = require('../../intelligence/engine/cortesia');
+    const PIDIO = 'Para mandártelo necesito un número de contacto, para que el domiciliario te llame al llegar 📱';
+    const ctx = (texto) => ({ texto, conversacion: { variables: { turnos: 4, [cortesia.MARCA]: true } } });
+
+    test.each(['3218245714', '3218245714\n3174924363', 'Calle 10 # 4-32', '2'])('%j no es cortesía', (t) => {
+        expect(cortesia.leer(t).cortesia).toBe(false);
+    });
+
+    test('EL CASO: el teléfono tras «necesito un número» pasa al flujo', async () => {
+        const d = await cortesia.decidir(ctx('3218245714'), { hayTarea: false, ultimoDelAsistente: async () => PIDIO });
+        expect(d).toBeNull();
+    });
+
+    test('tras un mensaje que PIDE algo sin «?», ni un «ok» se calla', async () => {
+        const d = await cortesia.decidir(ctx('ok'), { hayTarea: false, ultimoDelAsistente: async () => PIDIO });
+        expect(d).toBeNull();
+    });
+
+    test('lo de antes sigue igual: «gracias» repetido tras un cierre se calla', async () => {
+        const d = await cortesia.decidir(ctx('gracias'), {
+            hayTarea: false,
+            ultimoDelAsistente: async () => '¡Listo! Tu pedido quedó tomado. El número es ORD-7550.',
+        });
+        expect(d.pasos[0].decision).toBe('cortesia_sin_respuesta');
+    });
+});
