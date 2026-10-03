@@ -492,6 +492,8 @@ async function crearOrden({
     // deduce aquí del autor para no pagar una consulta más en cada pedido del POS. Solo sirve
     // para avisar a las pantallas de que llegó uno que ninguna persona del negocio tomó.
     deAsistente = false,
+    // Mesa asignada por el asistente a quien viene en camino («para servir»). Solo con MESA.
+    paraServir = false,
 }, { transaction = null } = {}) {
     // Si el llamante trae su propia transacción, esta función NO la confirma ni la deshace:
     // solo trabaja dentro. Quien la abre, la cierra.
@@ -578,7 +580,10 @@ async function crearOrden({
         // Es el registro automático de clientes: ocurre aquí, cuando el pedido ya confirmado entra
         // al sistema, y no cuando alguien apenas escribe. La llave es (negocio, teléfono E.164):
         // si ya existe solo se refresca el nombre; si no, se crea.
-        const conCliente = tipoPedido === 'DOMICILIO' || tipoPedido === 'LLEVAR';
+        // «Para servir» también lleva nombre: el cliente todavía no está en la mesa, y el mesero
+        // tiene que saber a quién está esperando.
+        const servir = tipoPedido === 'MESA' && Boolean(paraServir);
+        const conCliente = tipoPedido === 'DOMICILIO' || tipoPedido === 'LLEVAR' || servir;
         const idPersonaNegocio =
             contactoTelefono
                 ? await personaNegocioDao.resolverOCrearBestEffort(
@@ -621,6 +626,7 @@ async function crearOrden({
             // también en LLEVAR — «sin cebolla» importa lo mismo se recoja o se lleve.
             nota_domicilio:      conCliente ? notaDomicilio    : null,
             id_domiciliario:     tipoPedido === 'DOMICILIO' ? (idDomiciliario || null) : null,
+            para_servir:         servir,
         }, { transaction: t });
 
         await crearDetallesOrden({

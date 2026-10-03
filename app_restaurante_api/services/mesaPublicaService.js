@@ -60,4 +60,35 @@ async function cuentaAbierta({ idNegocio, idMesa, transaction = null }) {
     });
 }
 
-module.exports = { listarPublicas, resolverMesa, cuentaAbierta };
+/**
+ * Una mesa LIBRE para un pedido «para servir» (2026-10-02): el cliente avisa por WhatsApp que va
+ * en camino y quiere comer en el local, así que no tiene número de mesa que dar. Se le guarda la
+ * primera libre por número —activa, en DISPONIBLE y sin cuenta abierta—, que es lo que el negocio
+ * ya hacía a mano («le pongo una cualquiera»).
+ *
+ * Con transacción la bloquea y SALTA las que otra transacción tenga bloqueadas: dos pedidos «para
+ * servir» al mismo tiempo no se quedan con la misma mesa. Devuelve `null` si no hay ninguna libre;
+ * quien llama decide qué decirle al cliente.
+ */
+async function mesaLibreParaServir({ idNegocio, transaction = null }) {
+    const fila = await Models.RestMesa.findOne({
+        where: {
+            id_negocio: idNegocio,
+            estado: 'A',
+            estado_servicio: 'DISPONIBLE',
+            [Models.Sequelize.Op.and]: [
+                Models.sequelize.literal(`NOT EXISTS (
+                    SELECT 1 FROM restaurante.pedid_orden o
+                     WHERE o.id_mesa = "RestMesa"."id_mesa" AND o.estado = 'ABIERTA')`),
+            ],
+        },
+        attributes: ['id_mesa', 'nombre', 'numero'],
+        order: [['numero', 'ASC'], ['id_mesa', 'ASC']],
+        transaction,
+        lock: transaction ? transaction.LOCK.UPDATE : undefined,
+        skipLocked: Boolean(transaction),
+    });
+    return fila ? { id_mesa: fila.id_mesa, nombre: fila.nombre, numero: fila.numero } : null;
+}
+
+module.exports = { listarPublicas, resolverMesa, cuentaAbierta, mesaLibreParaServir };

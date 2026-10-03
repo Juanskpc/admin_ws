@@ -171,3 +171,80 @@ describe('buscar_producto distingue «agotado» de «no existe»', () => {
         expect(r.agotados_ahora).toEqual([]);
     });
 });
+
+// ── «Para servir» (Karen Díaz, 2026-10-02 19:16) ────────────────────────────────────────────
+// «Para servir veci ya vamos»: en Pasto es comer en el local. El bot preguntó «¿en qué mesa
+// están?» y, con «ya estoy en camino», lo convirtió en «para recoger».
+describe('«para servir» en el flujo sin modelo', () => {
+    const flujo = require('../../intelligence/adapters/restaurante/flujo');
+    const { leerEntrega, crearFlujoRestaurante, TAREA_PEDIDO, ENTREGA, OPCION } = flujo;
+
+    test.each([
+        ['Para servir veci ya vamos', 'MESA'],
+        ['para comer aquí', 'MESA'],
+        ['para servir, ya voy', 'MESA'],
+        ['entrega_servir', 'MESA'],
+        ['paso a recogerlo', 'LLEVAR'],
+        ['a domicilio', 'DOMICILIO'],
+    ])('%j → %s', (texto, esperado) => {
+        expect(leerEntrega(texto)).toBe(esperado);
+    });
+
+    const crear = (mesas) =>
+        crearFlujoRestaurante({
+            contextoNegocio: {
+                obtener: async () => ({
+                    id: 6, nombre: 'ZONA BURGER', tratamiento: 'ZONA BURGER', atencion: null,
+                    tipoNegocio: 'RESTAURANTE', tiempoEstimado: null, domicilioRango: null,
+                }),
+            },
+            identidad: { resolver: async () => ({ principal: { telefono_verificado: '573000000000' } }) },
+            gate: {},
+            ahora: () => new Date('2026-10-02T19:16:00-05:00'),
+            tienePedidoReciente: async () => false,
+            catalogo: {
+                barrios: async () => ({ habilitado: false, barrios: [] }),
+                mesas: async () => mesas,
+                resolverBarrio: async () => null,
+                resolverMesa: async () => null,
+                resolverExclusiones: async () => ({ validas: [], descartadas: [] }),
+            },
+        });
+    const enEntrega = () => ({
+        id_conversacion: 'conv-servir', id_negocio: 6, canal: 'whatsapp', id_externo: 'CO.2368972810572497',
+        variables: { turnos: 4 }, tarea_actual: TAREA_PEDIDO,
+        tarea_datos: { items: [{ id_producto: 29, cantidad: 2 }], nombre: 'Karen Diaz', paso: 'entrega', repreguntas: 0 },
+    });
+    const decir = (manejar, conversacion, texto) =>
+        manejar({ conversacion, mensajes: [{ contenido: texto }], texto, turno: { id_turno: 't1' } });
+    const MESAS = [{ id_mesa: 75, nombre: 'Mesa 7', numero: 7 }];
+
+    test('EL CASO: con mesas, «para servir» va a confirmar SIN preguntar la mesa', async () => {
+        const d = await decir(crear(MESAS), enEntrega(), 'Para servir veci ya vamos');
+
+        const solicitada = d.pasos.find((p) => p.decision === 'confirmacion_solicitada');
+        expect(solicitada).toBeTruthy();
+        expect(solicitada.motivo.argumentos).toMatchObject({ tipo_entrega: 'MESA', cliente_nombre: 'Karen Diaz' });
+        expect(solicitada.motivo.argumentos.id_mesa).toBeUndefined();
+        const texto = JSON.stringify(d.respuestas);
+        expect(texto).not.toMatch(/en qué mesa/i);
+    });
+
+    test('la pregunta de entrega ofrece «Para servir aquí» solo si hay mesas', async () => {
+        const sinEntrega = () => ({ ...enEntrega(), tarea_datos: { ...enEntrega().tarea_datos } });
+
+        const con = await decir(crear(MESAS), sinEntrega(), 'no sé');
+        const opcionesCon = con.respuestas[0].opciones.map((o) => o.id);
+        expect(opcionesCon).toContain(OPCION.ENTREGA_SERVIR);
+
+        const sin = await decir(crear([]), sinEntrega(), 'no sé');
+        expect(sin.respuestas[0].opciones.map((o) => o.id)).not.toContain(OPCION.ENTREGA_SERVIR);
+    });
+
+    test('sin mesas, «para servir» no se toma: se dice y se vuelve a preguntar', async () => {
+        const d = await decir(crear([]), enEntrega(), 'para servir');
+        expect(d.pasos[0].decision).toBe('pedido_servir_sin_mesas');
+        expect(d.tarea.datos.entrega).toBeUndefined();
+        expect(ENTREGA.MESA).toBe('MESA');
+    });
+});

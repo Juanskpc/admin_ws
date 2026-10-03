@@ -787,7 +787,12 @@ function registrarCapacidades() {
                     }
                 }
 
-                const donde = enMesa
+                // Sin mesa = «para servir»: el cliente viene en camino y la mesa la pone el
+                // sistema al crear el pedido (ver `ejecutar`).
+                const paraServir = enMesa && !args.id_mesa;
+                const donde = paraServir
+                    ? 'para servirlo en el local (te guardamos una mesa)'
+                    : enMesa
                     ? sumaACuenta
                         ? `para sumarlo a la cuenta de tu mesa${nombreMesa ? ` (${nombreMesa})` : ''}`
                         : `para tu mesa${nombreMesa ? ` (${nombreMesa})` : ''}`
@@ -949,8 +954,11 @@ function registrarCapacidades() {
             hecho: ({ resultado }) =>
                 resultado.suma_a_cuenta
                     ? `¡Listo! Lo sumé a la cuenta de tu mesa (${resultado.mesa}).`
-                    : `¡Listo! Tu pedido quedó tomado. El número es ${resultado.numero_orden} — ` +
-                      'guárdalo para consultar cómo va.',
+                    : resultado.para_servir
+                      ? `¡Listo! Tu pedido quedó para servir en el local: te guardamos la *${resultado.mesa}*. ` +
+                        `El número es ${resultado.numero_orden} 🍽️`
+                      : `¡Listo! Tu pedido quedó tomado. El número es ${resultado.numero_orden} — ` +
+                        'guárdalo para consultar cómo va.',
         },
         feature: FEATURE.ASISTENTE_IA,
         parametros: {
@@ -993,8 +1001,10 @@ function registrarCapacidades() {
                 valores: ['DOMICILIO', 'LLEVAR', 'MESA'],
                 descripcion:
                     'DOMICILIO si se lo llevamos a su dirección, LLEVAR si el cliente pasa a ' +
-                    'recogerlo por el local, MESA si está sentado en el local (exige id_mesa). ' +
-                    'Pregúntaselo antes: no lo supongas.',
+                    'recogerlo por el local, MESA si va a comer EN el local. En Colombia «para ' +
+                    'servir», «para comer aquí» o «para consumir en el local» es MESA. Si viene en ' +
+                    'camino o no sabe su mesa, NO le preguntes la mesa: manda MESA sin id_mesa y el ' +
+                    'sistema le guarda una libre. Pregúntaselo antes: no lo supongas.',
             },
             // Ambos son SUGERENCIAS del cliente: `ejecutar` los relee de la base, comprueba que
             // sean de este negocio y calcula el valor del domicilio él mismo. Un precio que
@@ -1214,14 +1224,25 @@ function registrarCapacidades() {
             // dentro de la misma transacción que crea la orden. Sin dirección ni teléfono
             // obligatorios: quien está sentado no los necesita.
             const esMesa = args.tipo_entrega === 'MESA';
+            // «Para servir» (2026-10-02): MESA sin id_mesa. El cliente viene en camino; se le
+            // guarda la primera mesa libre, como el negocio ya hacía a mano. Hasta hoy esto era
+            // MESA_REQUERIDA y el bot se atascaba preguntando «¿en qué mesa están?».
+            const paraServir = esMesa && !args.id_mesa;
             let mesa = null;
-            if (esMesa) {
-                if (!args.id_mesa) {
-                    const e = new Error('Necesito saber en qué mesa estás.');
-                    e.code = 'MESA_REQUERIDA';
-                    e.statusCode = 400;
+            if (paraServir) {
+                mesa = await mesaPublicaService.mesaLibreParaServir({
+                    idNegocio,
+                    transaction: contexto.transaction,
+                });
+                if (!mesa) {
+                    const e = new Error(
+                        'Ahora mismo no tenemos mesas libres. Si quieres, te lo preparo para recoger.'
+                    );
+                    e.code = 'SIN_MESA_LIBRE';
+                    e.statusCode = 409;
                     throw e;
                 }
+            } else if (esMesa) {
                 mesa = await mesaPublicaService.resolverMesa({
                     idNegocio,
                     idMesa: args.id_mesa,
@@ -1292,7 +1313,7 @@ function registrarCapacidades() {
             // vía de servicio que usa el asistente para «agregar a mi pedido» —así también pasa por
             // el inventario, el recálculo del total y los avisos en vivo—. La mesa quedó bloqueada
             // arriba, así que dos pedidos simultáneos hacen fila.
-            if (mesa) {
+            if (mesa && !paraServir) {
                 const abierta = await mesaPublicaService.cuentaAbierta({
                     idNegocio,
                     idMesa: mesa.id_mesa,
@@ -1340,9 +1361,12 @@ function registrarCapacidades() {
                     valorDomicilio,
                     // En una mesa no hay «contacto»: se deja dicho quién pidió, para que la
                     // cocina no lea un pedido de mesa sin nombre.
+                    // En «para servir» la nota lo dice también: así se ve en cualquier pantalla
+                    // que pinte la nota, aunque todavía no pinte la marca de `para_servir`.
                     nota: esMesa
-                        ? `WhatsApp: ${args.cliente_nombre}${args.nota ? ` — ${args.nota}` : ''}`
+                        ? `${paraServir ? 'Para servir (viene en camino) — ' : ''}WhatsApp: ${args.cliente_nombre}${args.nota ? ` — ${args.nota}` : ''}`
                         : undefined,
+                    paraServir,
                     contactoNombre: args.cliente_nombre,
                     contactoTelefono: telefono,
                     // Nula en un pedido para recoger: no hay a dónde llevarlo.
@@ -1386,6 +1410,7 @@ function registrarCapacidades() {
                 estado: orden.estado,
                 total: precio(orden.total),
                 items: args.items.length,
+                ...(paraServir ? { para_servir: true, mesa: mesa.nombre } : {}),
             };
         },
     });

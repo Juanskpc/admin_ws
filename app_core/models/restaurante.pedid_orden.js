@@ -13,6 +13,10 @@ module.exports = (sequelize, DataTypes) => {
         // Valor cobrado al cliente por el domicilio. Va incluido en 'total' y al cobrar
         // la orden genera un EGRESO en caja (el pago al domiciliario). 0 = sin domicilio.
         valor_domicilio: { type: DataTypes.DECIMAL(12, 2), allowNull: false, defaultValue: 0 },
+        // Pedido de mesa que el asistente tomó «para servir»: el cliente va en camino y la mesa
+        // se la asignó el sistema. Mesas y Cocina lo muestran como «Para servir · <nombre>».
+        // `npm run migrate:restaurante-para-servir`.
+        para_servir: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
         // Rebaja concedida al cliente. Va RESTADA dentro de 'total' (igual que el domicilio
         // va sumado), así caja, multipago y reportes cuadran contra un único número.
         // Solo se acepta si el negocio tiene permite_descuento = true.

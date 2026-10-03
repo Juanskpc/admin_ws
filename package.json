@@ -118,7 +118,8 @@
     "migrate:cobranza-precio-aplicativo": "node migrations/migrate_cobranza_precio_aplicativo.js",
     "migrate:planes-landing": "node migrations/migrate_planes_landing.js",
     "migrate:usuario-eliminado": "node migrations/migrate_usuario_eliminado.js",
-    "migrate:restaurante-cajas": "node migrations/migrate_restaurante_cajas.js"
+    "migrate:restaurante-cajas": "node migrations/migrate_restaurante_cajas.js",
+    "migrate:restaurante-para-servir": "node migrations/migrate_restaurante_para_servir.js"
   },
   "keywords": [],
   "author": "",

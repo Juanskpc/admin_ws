@@ -73,6 +73,8 @@ const OPCION = {
      */
     ENTREGA_DOMICILIO: 'entrega_domicilio',
     ENTREGA_RECOGER: 'entrega_recoger',
+    /** «Para servir»: comer en el local. Solo se ofrece si el negocio tiene mesas. */
+    ENTREGA_SERVIR: 'entrega_servir',
 };
 
 /**
@@ -433,9 +435,10 @@ const ENTREGA = {
     DOMICILIO: 'DOMICILIO',
     RECOGER: 'LLEVAR',
     /**
-     * Sentado en el local. **Solo entra desde la carta virtual** (`~m=L` del código): el bot no
-     * lo ofrece al preguntar por chat, porque sin la carta no hay forma de saber que la persona
-     * está de verdad en el local.
+     * En el local. Entra de dos formas: desde la carta virtual (`~m=L` con su mesa) o, desde el
+     * 2026-10-02, por chat como «para servir»: el cliente viene en camino, no tiene mesa que decir,
+     * y el sistema le guarda una libre (`datos.para_servir`). Antes esto solo entraba por la carta
+     * y «para servir veci, ya vamos» terminaba convertido en «para recoger».
      */
     MESA: 'MESA',
 };
@@ -545,7 +548,7 @@ function loQueFalta(datos, ctx) {
     if (!datos.entrega) return PASO_PEDIDO.ENTREGA;
     // El barrio y la mesa, antes de nada más: de ellos depende lo que cuesta y adónde va.
     if (necesitaBarrio(datos, ctx)) return PASO_PEDIDO.BARRIO;
-    if (datos.entrega === ENTREGA.MESA && !datos.id_mesa) return PASO_PEDIDO.MESA;
+    if (datos.entrega === ENTREGA.MESA && !datos.id_mesa && !datos.para_servir) return PASO_PEDIDO.MESA;
     const faltan = huecosDelCliente(datos, ctx);
     if (faltan.length === 0) return null;
     // Uno solo se pregunta por su nombre; varios, todos juntos. Preguntar «necesito una cosita»
@@ -608,6 +611,19 @@ function pregunta(paso, datos, ctx) {
             // Las palabras siguen en el texto aunque haya botones, y no es redundancia: el botón
             // no viaja si alguien reenvía el mensaje o responde citándolo, y un canal sin
             // botones solo recibe texto. Decir las dos que valen deja abierto ese camino.
+            // «Para servir» solo si el negocio tiene mesas: sin mesas no hay dónde guardarle una.
+            if ((ctx?.mesas || []).length > 0) {
+                return {
+                    texto:
+                        '¿Te lo llevamos a domicilio, pasas a recogerlo o es para servir aquí? 🛵\n\n' +
+                        'Toca una opción, o escríbeme *domicilio*, *recoger* o *para servir*.',
+                    opciones: [
+                        { id: OPCION.ENTREGA_DOMICILIO, etiqueta: 'A domicilio 🛵' },
+                        { id: OPCION.ENTREGA_RECOGER, etiqueta: 'Paso a recogerlo 🛍️' },
+                        { id: OPCION.ENTREGA_SERVIR, etiqueta: 'Para servir aquí 🍽️' },
+                    ],
+                };
+            }
             return {
                 texto:
                     '¿Te lo llevamos a domicilio o pasas a recogerlo? 🛵\n\n' +
@@ -1037,9 +1053,29 @@ function seguirPedido(ctx, { solicitarConfirmacion }) {
                     nivel: 'determinista',
                 };
             }
+            // «Para servir» en un negocio sin mesas: no hay dónde guardarle una. Se dice y se
+            // vuelve a preguntar con las opciones que sí hay.
+            if (entrega === ENTREGA.MESA && (ctx.mesas || []).length === 0) {
+                const q = pregunta(PASO_PEDIDO.ENTREGA, datos, ctx);
+                return {
+                    pasos: [paso('pedido_servir_sin_mesas')],
+                    respuestas: [
+                        { ...q, texto: `Por aquí solo puedo tomarlo a domicilio o para recoger 🙏\n\n${q.texto}` },
+                    ],
+                    variables: conMemoria(ctx.conversacion),
+                    tarea: tareaPedido(datos),
+                    resultado: 'resuelto',
+                    nivel: 'determinista',
+                };
+            }
             conLoDicho.entrega = entrega;
+            if (entrega === ENTREGA.MESA) conLoDicho.para_servir = true;
             apertura =
-                entrega === ENTREGA.RECOGER ? '¡Listo, te lo dejamos preparado! ' : '¡De una! ';
+                entrega === ENTREGA.RECOGER
+                    ? '¡Listo, te lo dejamos preparado! '
+                    : entrega === ENTREGA.MESA
+                      ? '¡Listo, te guardamos una mesa! '
+                      : '¡De una! ';
             break;
         }
         case PASO_PEDIDO.BARRIO: {
@@ -1210,6 +1246,9 @@ function elegirMesa(texto, mesas) {
  * Cuando las dos familias de palabras aparecen —o ninguna— se devuelve `null` a propósito: en
  * este nivel no se adivina (ADR-018), se pregunta otra vez.
  */
+/** «Para servir», «para comer aquí», «consumir en el local»: comer en el local (Pasto, 2026-10-02). */
+const DICE_SERVIR =
+    /\b(para servir|servir(lo|la|los|las)? (aqui|aca)|comer(lo|la|los|las)? (aqui|aca|alla|en el local)|consumir(lo|la|los|las)? (aqui|aca|en el local)|para la mesa)\b/;
 const DICE_RECOGER = /\b(recoger|recogerlo|recogerla|recojo|recogemos|retiro|retirar|paso|pasar|voy)\b/;
 const DICE_DOMICILIO =
     /\b(domicilio|domis?|delivery|envio|enviar|envien|mandan|manden|mandar|mandalo|lleven|llevenlo|llevan)\b/;
@@ -1220,6 +1259,11 @@ function leerEntrega(texto) {
     // El botón, primero y sin ambigüedad posible: lo que llega es el id que mandamos nosotros.
     if (t === OPCION.ENTREGA_DOMICILIO) return ENTREGA.DOMICILIO;
     if (t === OPCION.ENTREGA_RECOGER) return ENTREGA.RECOGER;
+    if (t === OPCION.ENTREGA_SERVIR) return ENTREGA.MESA;
+
+    // «Para servir» gana a todo lo demás: «para servir, ya voy» lleva un «voy» que, solo, sería
+    // recoger; y quien dice que viene a comer aquí no está pidiendo que se lo lleven.
+    if (DICE_SERVIR.test(t)) return ENTREGA.MESA;
 
     if (/\bpara llevar\b/.test(t)) return ENTREGA.RECOGER;
 
