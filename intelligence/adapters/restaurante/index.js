@@ -123,18 +123,78 @@ async function buscarEnLaCarta(idNegocio, termino) {
         .split(/\s+/)
         .filter((w) => w.length >= 3);
     // Con una sola palabra la segunda pasada sería idéntica a la primera: se salta a la tercera.
+    let segunda = [];
     if (palabras.length >= 2) {
         const ancla = palabras.slice().sort((a, b) => b.length - a.length)[0];
         const candidatos = await cartaService.buscarProductos(idNegocio, ancla);
 
-        const segunda = candidatos.filter((c) => {
+        segunda = candidatos.filter((c) => {
             const donde = normalizarTexto(`${c.nombre} ${c.descripcion || ''}`);
             return palabras.every((w) => donde.includes(w));
         });
-        if (segunda.length > 0) return segunda;
     }
 
-    return buscarPorCategoriaYNombre(idNegocio, termino);
+    // La segunda y la tercera se JUNTAN, no se elige la primera que encuentre algo. Zona Burger,
+    // 2026-10-02: «salchipapa criollita» → la segunda solo veía la «familiar» (la única que
+    // escribe «salchipapas» en su descripción) y se quedaba ahí; las criollitas pequeña, mediana
+    // y grande solo lo dicen en la CATEGORÍA, que es lo que mira la tercera. El bot ofreció la de
+    // $60.000 como si fuera la única.
+    const tercera = await buscarPorCategoriaYNombre(idNegocio, termino);
+    const vistos = new Set(tercera.map((p) => p.id_producto));
+    return [...tercera, ...segunda.filter((p) => !vistos.has(p.id_producto))];
+}
+
+/**
+ * Los productos que coinciden con el término pero hoy NO se pueden vender: marcados como no
+ * disponibles, o sin insumos si el negocio controla inventario. Solo nombres —nada de precio—:
+ * sirven para decir «se acabó», no para venderlos.
+ *
+ * Se busca igual que `buscarEnLaCarta` en sus dos primeras pasadas (término completo y palabra
+ * más larga), pero con `includeDisabled`, que es la vista que no filtra ni disponibilidad ni
+ * stock. Lo oculto (`visible = false`) sigue sin salir: eso el negocio no lo quiere enseñar.
+ * Un fallo aquí no tumba la búsqueda: sin la lista, se contesta como antes.
+ */
+async function agotadosQueCoinciden(idNegocio, termino) {
+    try {
+        // El término entero y, si no da nada, cada palabra que dice QUÉ es (hasta 4): con
+        // «hamburguesa discordia», «hamburguesa» trae las que se venden y «discordia» la agotada.
+        const palabras = normalizarTexto(termino)
+            .split(/\s+/)
+            .filter((w) => w.length >= 3 && !RELLENO.has(w))
+            .slice(0, 4);
+        const agotados = new Map();
+        for (const t of [termino, ...palabras]) {
+            const [todos, vendibles] = await Promise.all([
+                cartaService.buscarProductos(idNegocio, t, { includeDisabled: true }),
+                cartaService.buscarProductos(idNegocio, t),
+            ]);
+            // Agotado = está en la vista completa y NO en la que se puede vender ahora.
+            const seVende = new Set(vendibles.map((p) => p.id_producto));
+            for (const p of todos) {
+                if (p.visible !== false && !seVende.has(p.id_producto)) agotados.set(p.id_producto, p.nombre);
+            }
+            if (t === termino && agotados.size > 0) break;
+        }
+        return [...agotados.values()].slice(0, MAX_PRODUCTOS);
+    } catch (error) {
+        console.warn(`[buscar_producto] no se pudieron leer los agotados: ${error.message}`);
+        return [];
+    }
+}
+
+/**
+ * ¿La búsqueda no trajo lo que se pidió? Vacía, o con otros productos que no llevan la palabra
+ * principal del término («hamburguesa discordia» → salen las otras hamburguesas, no la Discordia).
+ * Solo entonces vale la pena mirar si lo pedido está agotado.
+ */
+function noTraeLoPedido(productos, termino) {
+    if (productos.length === 0) return true;
+    const ancla = normalizarTexto(termino)
+        .split(/\s+/)
+        .filter((w) => w.length >= 3 && !RELLENO.has(w))
+        .sort((a, b) => b.length - a.length)[0];
+    if (!ancla) return false;
+    return !productos.some((p) => normalizarTexto(p.nombre).includes(ancla));
 }
 
 /** Palabras de relleno: no dicen QUÉ producto es, así que no se le exigen a la carta. */
@@ -242,7 +302,26 @@ function estadoParaElCliente(orden) {
         return domicilio ? 'listo en cocina, a punto de salir' : 'listo para recoger en el local';
     }
     if (orden.estado_cocina === 'EN_PREPARACION') return 'en preparación en la cocina';
-    return 'recibido por el restaurante, en turno para la cocina';
+    if (orden.estado_cocina === 'PENDIENTE') return 'recibido por el restaurante, en turno para la cocina';
+    // Sin etapa de cocina: el negocio no usa la pantalla de Cocina (Zona Burger no la usa: los 36
+    // domicilios de un día con `estado_cocina` nulo). Decir «en turno para la cocina» de un pedido
+    // que ya iba en la moto fue mentirle a un cliente que reclamaba la demora (2026-10-02).
+    return 'recibido por el restaurante (no tengo el detalle de en qué etapa va)';
+}
+
+/**
+ * Cuánto lleva el pedido desde que se tomó, y si ya pasó el tiempo estimado que declaró el negocio.
+ * Es lo que deja contestar con honestidad cuando no hay etapa de cocina: el tiempo SÍ se sabe.
+ */
+function tiempoDelPedido(orden, tiempoEstimado, ahora = new Date()) {
+    const creado = new Date(orden.fecha_creacion).getTime();
+    if (!Number.isFinite(creado)) return { minutos_desde_que_se_pidio: null, pasado_del_tiempo_estimado: false };
+    const minutos = Math.max(0, Math.round((ahora.getTime() - creado) / 60000));
+    const tope = Number(tiempoEstimado?.max) || Number(tiempoEstimado?.min) || null;
+    return {
+        minutos_desde_que_se_pidio: minutos,
+        pasado_del_tiempo_estimado: Boolean(tope) && minutos > tope,
+    };
 }
 
 /**
@@ -393,6 +472,8 @@ function registrarCapacidades() {
             'concreto ("¿tienen hamburguesa doble?", "¿cuánto vale la limonada?") en vez de ' +
             'pedir la carta entera. Si no encuentra nada, dilo y ofrece enseñar las categorías; ' +
             'no inventes productos ni precios: lo único que existe es lo que devuelve esto. ' +
+            'Si el producto viene en `agotados_ahora`, SÍ está en la carta pero hoy se acabó: ' +
+            'dilo así y ofrece otra cosa; nunca digas que no existe. ' +
             'Si salen varias presentaciones del mismo plato (personal/pequeña, mediana, grande, ' +
             'familiar, sencilla, doble) y el cliente NO dijo el tamaño, pregúntale cuál quiere ' +
             'con sus precios; nunca elijas tú el tamaño. Si con el término completo no aparece ' +
@@ -415,6 +496,16 @@ function registrarCapacidades() {
             return {
                 termino: args.termino,
                 productos: productos.slice(0, MAX_PRODUCTOS).map(producto),
+                // Solo cuando no hay nada que vender: así «no tenemos» y «se acabó» dejan de ser
+                // la misma respuesta (Zona Burger, 2026-10-02: la Discordia, agotada por un
+                // stock en −321, se le dijo a una clienta que «no está en la carta»).
+                ...(noTraeLoPedido(productos, args.termino)
+                    ? {
+                          agotados_ahora: (await agotadosQueCoinciden(idNegocio, args.termino)).filter(
+                              (nombre) => !productos.some((p) => p.nombre === nombre)
+                          ),
+                      }
+                    : {}),
             };
         },
     });
@@ -426,8 +517,10 @@ function registrarCapacidades() {
             'cuando el cliente pregunte si ya salió, si ya está listo o dónde está su pedido. ' +
             'Si en la conversación ya salió el número de su pedido, úsalo sin pedírselo otra ' +
             'vez; si no lo tiene, pídeselo. Contesta con `estado_para_el_cliente`, que ya está ' +
-            'en palabras del cliente. El pago casi siempre es al recibir o al recoger: NUNCA le ' +
-            'digas que el pedido espera el pago para prepararse o salir.',
+            'en palabras del cliente; no le añadas etapas que no dice. El pago casi siempre es al ' +
+            'recibir o al recoger: NUNCA le digas que el pedido espera el pago para prepararse o ' +
+            'salir. Si `pasado_del_tiempo_estimado` es true y el pedido sigue abierto, discúlpate ' +
+            'por la demora y usa pasar_a_persona para que alguien del equipo le diga dónde va.',
         vertical: VERTICAL,
         tipo: registry.TIPO.CONSULTA,
         feature: FEATURE.ASISTENTE_IA,
@@ -492,12 +585,20 @@ function registrarCapacidades() {
             // ⚠️ `estado_pago` ya NO sale crudo. Con «pendiente_pago» delante, el modelo le dijo
             // cinco veces a una clienta que su pedido no entraba a cocina «porque está pendiente
             // de pago», cuando iba a pagar en efectivo al recibirlo (Zona Burger, 2026-10-01).
+            const abierta = orden.estado === 'ABIERTA';
+            const ficha = abierta ? await leerFichaDelNegocio(idNegocio, contexto.transaction) : null;
             return {
                 numero_orden: orden.numero_orden,
                 estado_para_el_cliente: estadoParaElCliente(orden),
                 tipo_pedido: orden.tipo_pedido,
                 total: precio(orden.total),
                 ya_pagado: orden.estado_pago === 'pagado' || orden.estado === 'CERRADA',
+                ...(abierta
+                    ? tiempoDelPedido(orden, {
+                          min: ficha?.tiempo_estimado_min,
+                          max: ficha?.tiempo_estimado_max,
+                      })
+                    : {}),
             };
         },
     });
@@ -722,7 +823,12 @@ function registrarCapacidades() {
                     }
                 }
 
-                const donde = enMesa
+                // Sin mesa = «para servir»: el cliente viene en camino y la mesa la pone el
+                // sistema al crear el pedido (ver `ejecutar`).
+                const paraServir = enMesa && !args.id_mesa;
+                const donde = paraServir
+                    ? 'para servirlo en el local (te guardamos una mesa)'
+                    : enMesa
                     ? sumaACuenta
                         ? `para sumarlo a la cuenta de tu mesa${nombreMesa ? ` (${nombreMesa})` : ''}`
                         : `para tu mesa${nombreMesa ? ` (${nombreMesa})` : ''}`
@@ -884,8 +990,11 @@ function registrarCapacidades() {
             hecho: ({ resultado }) =>
                 resultado.suma_a_cuenta
                     ? `¡Listo! Lo sumé a la cuenta de tu mesa (${resultado.mesa}).`
-                    : `¡Listo! Tu pedido quedó tomado. El número es ${resultado.numero_orden} — ` +
-                      'guárdalo para consultar cómo va.',
+                    : resultado.para_servir
+                      ? `¡Listo! Tu pedido quedó para servir en el local: te guardamos la *${resultado.mesa}*. ` +
+                        `El número es ${resultado.numero_orden} 🍽️`
+                      : `¡Listo! Tu pedido quedó tomado. El número es ${resultado.numero_orden} — ` +
+                        'guárdalo para consultar cómo va.',
         },
         feature: FEATURE.ASISTENTE_IA,
         parametros: {
@@ -928,8 +1037,10 @@ function registrarCapacidades() {
                 valores: ['DOMICILIO', 'LLEVAR', 'MESA'],
                 descripcion:
                     'DOMICILIO si se lo llevamos a su dirección, LLEVAR si el cliente pasa a ' +
-                    'recogerlo por el local, MESA si está sentado en el local (exige id_mesa). ' +
-                    'Pregúntaselo antes: no lo supongas.',
+                    'recogerlo por el local, MESA si va a comer EN el local. En Colombia «para ' +
+                    'servir», «para comer aquí» o «para consumir en el local» es MESA. Si viene en ' +
+                    'camino o no sabe su mesa, NO le preguntes la mesa: manda MESA sin id_mesa y el ' +
+                    'sistema le guarda una libre. Pregúntaselo antes: no lo supongas.',
             },
             // Ambos son SUGERENCIAS del cliente: `ejecutar` los relee de la base, comprueba que
             // sean de este negocio y calcula el valor del domicilio él mismo. Un precio que
@@ -1149,14 +1260,25 @@ function registrarCapacidades() {
             // dentro de la misma transacción que crea la orden. Sin dirección ni teléfono
             // obligatorios: quien está sentado no los necesita.
             const esMesa = args.tipo_entrega === 'MESA';
+            // «Para servir» (2026-10-02): MESA sin id_mesa. El cliente viene en camino; se le
+            // guarda la primera mesa libre, como el negocio ya hacía a mano. Hasta hoy esto era
+            // MESA_REQUERIDA y el bot se atascaba preguntando «¿en qué mesa están?».
+            const paraServir = esMesa && !args.id_mesa;
             let mesa = null;
-            if (esMesa) {
-                if (!args.id_mesa) {
-                    const e = new Error('Necesito saber en qué mesa estás.');
-                    e.code = 'MESA_REQUERIDA';
-                    e.statusCode = 400;
+            if (paraServir) {
+                mesa = await mesaPublicaService.mesaLibreParaServir({
+                    idNegocio,
+                    transaction: contexto.transaction,
+                });
+                if (!mesa) {
+                    const e = new Error(
+                        'Ahora mismo no tenemos mesas libres. Si quieres, te lo preparo para recoger.'
+                    );
+                    e.code = 'SIN_MESA_LIBRE';
+                    e.statusCode = 409;
                     throw e;
                 }
+            } else if (esMesa) {
                 mesa = await mesaPublicaService.resolverMesa({
                     idNegocio,
                     idMesa: args.id_mesa,
@@ -1227,7 +1349,7 @@ function registrarCapacidades() {
             // vía de servicio que usa el asistente para «agregar a mi pedido» —así también pasa por
             // el inventario, el recálculo del total y los avisos en vivo—. La mesa quedó bloqueada
             // arriba, así que dos pedidos simultáneos hacen fila.
-            if (mesa) {
+            if (mesa && !paraServir) {
                 const abierta = await mesaPublicaService.cuentaAbierta({
                     idNegocio,
                     idMesa: mesa.id_mesa,
@@ -1275,9 +1397,12 @@ function registrarCapacidades() {
                     valorDomicilio,
                     // En una mesa no hay «contacto»: se deja dicho quién pidió, para que la
                     // cocina no lea un pedido de mesa sin nombre.
+                    // En «para servir» la nota lo dice también: así se ve en cualquier pantalla
+                    // que pinte la nota, aunque todavía no pinte la marca de `para_servir`.
                     nota: esMesa
-                        ? `WhatsApp: ${args.cliente_nombre}${args.nota ? ` — ${args.nota}` : ''}`
+                        ? `${paraServir ? 'Para servir (viene en camino) — ' : ''}WhatsApp: ${args.cliente_nombre}${args.nota ? ` — ${args.nota}` : ''}`
                         : undefined,
+                    paraServir,
                     contactoNombre: args.cliente_nombre,
                     contactoTelefono: telefono,
                     // Nula en un pedido para recoger: no hay a dónde llevarlo.
@@ -1321,6 +1446,7 @@ function registrarCapacidades() {
                 estado: orden.estado,
                 total: precio(orden.total),
                 items: args.items.length,
+                ...(paraServir ? { para_servir: true, mesa: mesa.nombre } : {}),
             };
         },
     });
@@ -1625,4 +1751,4 @@ function registrarFlujo({ flujos }) {
     });
 }
 
-module.exports = { VERTICAL, registrarCapacidades, registrarFlujo, estadoParaElCliente };
+module.exports = { VERTICAL, registrarCapacidades, registrarFlujo, estadoParaElCliente, tiempoDelPedido };

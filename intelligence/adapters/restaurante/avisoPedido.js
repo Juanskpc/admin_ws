@@ -143,6 +143,45 @@ async function avisoSigueEnPie(orden, opciones) {
     return (await estadoDelAviso(orden, opciones)) !== 'fallido';
 }
 
+/**
+ * El chat de WhatsApp donde el asistente le dio al cliente este número de pedido («El número es
+ * ORD-7570»), o `null`. Es el vínculo pedido → conversación que existe aunque el pedido no tenga
+ * teléfono. El número va seguido de algo que no es un dígito (o del final): ORD-757 no puede
+ * encontrar el chat de ORD-7570. El más reciente, por si el número se repitiera en otro chat.
+ */
+async function conversacionDondeSeDioElPedido({ idNegocio, numeroOrden }, { transaction = null } = {}) {
+    if (!numeroOrden) return null;
+    const [fila] = await Models.sequelize.query(
+        `
+        SELECT c.id_conversacion, c.id_negocio, c.canal, c.id_externo, c.estado,
+               c.variables, c.tarea_actual, c.tarea_datos
+          FROM intelligence.mensaje m
+          JOIN intelligence.conversacion c ON c.id_conversacion = m.id_conversacion
+         WHERE m.id_negocio = :idNegocio AND c.canal = :canal
+           AND m.direccion = 'saliente' AND m.id_turno IS NOT NULL
+           -- Un pedido que todavía se puede avisar es de hoy: no hace falta recorrer meses de
+           -- mensajes (la tabla está particionada por fecha y esto deja leer solo la última).
+           AND m.creado_en >= now() - interval '3 days'
+           AND position(:numero in m.contenido) > 0
+           AND m.contenido ~ (:patron)
+         ORDER BY m.creado_en DESC
+         LIMIT 1;
+        `,
+        {
+            replacements: {
+                idNegocio,
+                canal: CANAL,
+                numero: numeroOrden,
+                // Literal: el número solo lleva letras, dígitos y guiones, pero se escapa igual.
+                patron: `${numeroOrden.replace(/[^A-Za-z0-9]/g, (ch) => `\\${ch}`)}([^0-9]|$)`,
+            },
+            type: Models.sequelize.QueryTypes.SELECT,
+            transaction,
+        }
+    );
+    return fila || null;
+}
+
 /** Un error que el despacho puede enseñar tal cual. */
 function rechazar(mensaje, code, statusCode = 409) {
     const e = new Error(mensaje);
@@ -232,28 +271,34 @@ async function avisarListo({ idNegocio, idOrden, idUsuario = null }, { transacti
             );
         }
 
-        const idExterno = comoLoEscribeElCanal(orden.contacto_telefono);
-        if (!idExterno) {
-            rechazar(
-                'Ese pedido no tiene un número de WhatsApp al que escribirle.',
-                'PEDIDO_SIN_TELEFONO'
-            );
-        }
-
         // ── 2. La conversación, que tiene que existir ANTES ──────────────────────────────
         //
         // Se **busca**, no se asegura. Es la diferencia entre contestarle a alguien que nos
         // escribió y escribirle a un número que apareció en una casilla: si no hay conversación,
         // esta persona nunca habló con este negocio por WhatsApp, y estrenar el hilo con una
         // plantilla es exactamente lo que no se debe hacer desde un botón.
-        const conversacion = await repositorio.buscarConversacion(
-            { idNegocio, canal: CANAL, idExterno },
-            { transaction: t }
-        );
+        //
+        // Dos caminos. Por el teléfono del pedido, el de siempre. Y, si no hay teléfono o no
+        // lleva a ningún chat, por el chat donde el asistente le dio al cliente ESE número de
+        // pedido: quien escribe sin enseñar su número (identificador `CO.…` de WhatsApp) deja el
+        // pedido sin teléfono, y el botón fallaba siempre con «no tiene un número» aunque el
+        // chat existiera y estuviera abierto (Zona Burger, 2026-10-02, ORD-7570).
+        const idExterno = comoLoEscribeElCanal(orden.contacto_telefono);
+        let conversacion = idExterno
+            ? await repositorio.buscarConversacion({ idNegocio, canal: CANAL, idExterno }, { transaction: t })
+            : null;
+        if (!conversacion) {
+            conversacion = await conversacionDondeSeDioElPedido(
+                { idNegocio, numeroOrden: orden.numero_orden },
+                { transaction: t }
+            );
+        }
         if (!conversacion) {
             rechazar(
-                'Este pedido no vino por WhatsApp, así que no hay conversación a la que escribir.',
-                'SIN_CONVERSACION'
+                idExterno
+                    ? 'Este pedido no vino por WhatsApp, así que no hay conversación a la que escribir.'
+                    : 'Ese pedido no tiene un número de WhatsApp al que escribirle.',
+                idExterno ? 'SIN_CONVERSACION' : 'PEDIDO_SIN_TELEFONO'
             );
         }
         // Quien pidió la baja no recibe nada, ni siquiera algo que le interesa. El filtro del
@@ -334,4 +379,5 @@ module.exports = {
     avisarListo,
     estadoDelAviso,
     comoLoEscribeElCanal,
+    conversacionDondeSeDioElPedido,
 };

@@ -124,3 +124,59 @@ barrios con precio siguen funcionando y, si el cliente elige uno, su valor manda
 Desplegado el 2026-10-02 13:11 (respaldo `db_2026-10-02_1310.dump`). Zona Burger cargado:
 $7.000–$9.000, nota «Fuera de Pasto, desde $10.000.»; su revisión de preparación queda con
 `domicilio: ok`. **Falta migrar la base compartida (5433)**: el túnel estaba cerrado.
+
+## Adenda 2026-10-02 (noche) — auditoría de la tarde y sus arreglos
+
+Auditoría con `scripts/auditoria_banderas.js` y `scripts/auditoria_conversacion.js` (solo
+lectura). Lo grave: a una clienta se le dijo que la **Discordia no está en la carta** — estaba
+agotada porque `controla_inventario` estaba encendido con el pan brioche en −321 (el negocio ya lo
+apagó). El asistente además le contestó el tiempo «de tu pedido» sin pedido, le preguntó con qué
+pagaba, y dijo «ya queda enviado el comprobante». Oscar creó el pedido a mano (ORD-7562).
+
+Desplegado el 2026-10-02 19:18 (`c5427a2`, admin `888ec77`):
+- **`pasar_a_persona`** (motor, `manejadorLlm.js`): sin el dato, handoff real en vez de
+  «confírmalo con ZONA BURGER». Prompt **`sistema.v8`**.
+- **`agotados_ahora`** en `buscar_producto`: agotado ≠ no existe.
+- **Tiempo sin pedido**: «desde que se confirman» + «todavía no tengo ningún pedido tuyo».
+- **Confirmación**: no anota precios como nota, una foto no repite el resumen, y al 2.º desvío un
+  pedido pasa a una persona.
+- **Bandeja**: `CO.1084…` ya no se muestra como teléfono.
+
+Pendiente, decidido para después: **comprobantes de pago** (fotos) y **domicilio por comuna**.
+
+## Adenda 2026-10-02 (19:41) — «para servir» y doble confirmación
+
+Caso: «Dos salchilimón para servir, veci, ya vamos». El bot (aún con v7) intentó MESA, el sistema
+exigía id_mesa (`MESA_REQUERIDA`), preguntó «¿en qué mesa están?», con «ya estoy en camino» lo
+pasó a «para recoger», y además preguntó «¿te lo anoto?» antes de la confirmación del sistema: la
+clienta dijo sí a esa y no a la segunda, y el pedido no se creó. Oscar lo hizo a mano (ORD-7567,
+mesa 75).
+
+Desplegado (`21dc898`, restaurante `be93da5`, migración `migrate:restaurante-para-servir`,
+respaldo `db_2026-10-02_1941.dump`):
+- MESA sin id_mesa = «para servir»: primera mesa libre (DISPONIBLE y sin cuenta abierta, SKIP
+  LOCKED), `pedid_orden.para_servir`, nombre del cliente, mesa OCUPADA. Sin libres:
+  `SIN_MESA_LIBRE`.
+- Mesas y Cocina muestran «🍽️ Para servir · <nombre>».
+- Flujo sin modelo: entiende «para servir / para comer aquí» y ofrece el botón si hay mesas.
+- Prompt `sistema.v9`: sin pregunta de confirmación propia; «para servir» = en el local.
+- `[revoke]` (mensaje borrado) se guarda sin turno (`sin_contenido`).
+
+Nota de despliegue: los nombres de los archivos de `restaurante` no coinciden entre máquinas
+(otro entorno de compilación); se comprobó con `comparar_textos` que las frases de la interfaz
+eran idénticas antes de reemplazar.
+
+## Adenda 2026-10-02 (20:00–20:30) — tres arreglos más
+
+- `cac5a03` — **un número nunca es «cortesía»**: el filtro quitaba lo que no son letras y los
+  teléfonos de Alejandra Benavidez quedaban vacíos → «cortesía» → el bot se calló con un pedido a
+  medias. También: si el último mensaje del bot PIDE algo sin «?», lo que llega es respuesta.
+- `f079ccb` — **«Avisar que está listo»** con clientes sin número visible (BSUID): busca el chat
+  donde el asistente dio ese número de pedido (ORD-7570 fallaba con 409 tres veces).
+- `48ac038` — búsqueda («salchipapa criollita» solo traía la familiar: las pasadas 2 y 3 ahora se
+  juntan), preguntas de domicilio/tiempo durante la confirmación, estado del pedido sin etapa
+  inventada (Zona Burger no usa Cocina) y «te paso con alguien» sin herramienta → handoff real.
+
+## ➡️ Relevo
+
+Todo el día, consolidado para quien sigue: [`relevo-2026-10-02-whatsapp-zona-burger.md`](relevo-2026-10-02-whatsapp-zona-burger.md).

@@ -918,3 +918,97 @@ describe('fábrica de adaptadores', () => {
         expect(montado.adaptador.capacidades.invocarCapacidades).toBe(true);
     });
 });
+
+// ── pasar_a_persona (2026-10-02, auditoría de Zona Burger) ──────────────────────────────
+// Sin el dato, el asistente decía «confírmalo directamente con ZONA BURGER» — mientras hablaba
+// con Zona Burger. Ahora tiene una herramienta para pasar la conversación de verdad.
+describe('pasar_a_persona', () => {
+    it('se le ofrece al modelo junto a las capacidades del Gate, al final', async () => {
+        const adaptador = adaptadorFalso([{ texto: 'Hola', razonFin: puerto.FIN.TURNO }]);
+        const manejador = crearManejadorLlm({ ...DEPS_BASE, gate: gateFalso(), adaptador });
+        await correr(manejador);
+
+        const ofrecidas = adaptador.peticiones[0].capacidades.map((c) => c.nombre);
+        expect(ofrecidas[ofrecidas.length - 1]).toBe('pasar_a_persona');
+    });
+
+    it('EL CASO: el modelo la pide → handoff con frase honesta, sin tocar el Gate', async () => {
+        const gate = gateFalso();
+        const adaptador = adaptadorFalso([
+            {
+                razonFin: puerto.FIN.CAPACIDADES,
+                invocacionesSolicitadas: [
+                    { id: 't1', capacidad: 'pasar_a_persona', argumentos: { motivo: 'número de Nequi' } },
+                ],
+            },
+            // Si el manejador siguiera el bucle, esto saldría: no debe.
+            { texto: 'Confírmalo con el negocio.', razonFin: puerto.FIN.TURNO },
+        ]);
+        const manejador = crearManejadorLlm({ ...DEPS_BASE, gate, adaptador });
+        const { decision } = await correr(manejador, '¿a qué Nequi te pago?');
+
+        expect(gate.llamadas).toHaveLength(0);
+        expect(adaptador.peticiones).toHaveLength(1);
+        expect(decision.estado).toBe(handoff.ESTADO_HANDOFF);
+        expect(decision.resultado).toBe('handoff');
+        expect(decision.respuestas).toEqual([handoff.mensajeAPersona(NEGOCIO)]);
+        expect(decision.respuestas[0]).toContain('Barbería Don Nico');
+        expect(decision.respuestas[0]).not.toMatch(/confírmalo|comunícate|no tengo a nadie/i);
+        expect(decision.pasos.at(-1)).toMatchObject({
+            tipo: 'handoff',
+            decision: 'modelo_pide_persona',
+            motivo: { motivo: 'número de Nequi' },
+        });
+        // Queda en el Ledger con su vertical (la columna es NOT NULL).
+        expect(decision.invocaciones.at(-1)).toMatchObject({
+            capacidad: 'pasar_a_persona',
+            vertical: 'nucleo',
+            resultado: 'ok',
+        });
+    });
+
+    it('si la pide junto con otra herramienta, gana el handoff y la otra no se ejecuta', async () => {
+        const gate = gateFalso();
+        const adaptador = adaptadorFalso([
+            {
+                razonFin: puerto.FIN.CAPACIDADES,
+                invocacionesSolicitadas: [
+                    { id: 't1', capacidad: 'consultar_servicios', argumentos: {} },
+                    { id: 't2', capacidad: 'pasar_a_persona', argumentos: { motivo: 'quiere hablar con alguien' } },
+                ],
+            },
+        ]);
+        const manejador = crearManejadorLlm({ ...DEPS_BASE, gate, adaptador });
+        const { decision } = await correr(manejador, 'quiero hablar con una persona');
+
+        expect(gate.llamadas).toHaveLength(0);
+        expect(decision.resultado).toBe('handoff');
+    });
+});
+
+// «Voy a pasarte con alguien del equipo» SIN llamar a pasar_a_persona (Zona Burger, 2026-10-02):
+// la frase sale, y la conversación pasa de verdad.
+describe('la promesa de pasar a una persona se cumple', () => {
+    it('EL CASO: el texto promete una persona → handoff real', async () => {
+        const frase = 'Lamento mucho la demora. Voy a pasarte con alguien del equipo para que revise qué pasó.';
+        const adaptador = adaptadorFalso([{ texto: frase, razonFin: puerto.FIN.TURNO }]);
+        const manejador = crearManejadorLlm({ ...DEPS_BASE, gate: gateFalso(), adaptador });
+        const { decision } = await correr(manejador, 'Las pedí hace hora y media');
+
+        expect(decision.respuestas).toEqual([frase]);
+        expect(decision.estado).toBe(handoff.ESTADO_HANDOFF);
+        expect(decision.resultado).toBe('handoff');
+        expect(decision.pasos.at(-1).decision).toBe('promesa_de_persona_cumplida');
+    });
+
+    it.each(['¿Te paso la carta?', 'Paso a recogerlo en 10 minutos', 'La criollita vale $15.500.'])(
+        'sin promesa no hay handoff: %j',
+        async (texto) => {
+            const adaptador = adaptadorFalso([{ texto, razonFin: puerto.FIN.TURNO }]);
+            const manejador = crearManejadorLlm({ ...DEPS_BASE, gate: gateFalso(), adaptador });
+            const { decision } = await correr(manejador);
+            expect(decision.resultado).toBe('resuelto');
+            expect(decision.estado).toBeUndefined();
+        }
+    );
+});

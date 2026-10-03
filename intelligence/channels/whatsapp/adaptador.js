@@ -65,6 +65,30 @@ const LIMITES = {
 /** Tipos que sabemos leer hoy. El resto entra marcado, no se ignora en silencio. */
 const TIPOS_CON_TEXTO = new Set(['text', 'interactive', 'button']);
 
+/** Los tipos de WhatsApp que traen un archivo descargable. */
+const TIPOS_CON_ARCHIVO = new Set(['image', 'sticker', 'audio', 'video', 'document']);
+
+/**
+ * La referencia al archivo de un mensaje (foto, sticker, audio, video, documento), o `null`.
+ *
+ * Solo la REFERENCIA: el id de Meta, el tipo MIME y el pie de foto. El archivo **no se descarga
+ * ni se guarda** —decisión del dueño, 2026-10-02: muchos son comprobantes de pago con datos
+ * personales (Ley 1581)—; la Bandeja se lo pide a Meta cada vez que alguien lo abre, y Meta lo
+ * conserva 7 días. Antes de esto solo quedaba `[image]` y no había forma de verlo.
+ */
+function archivoDeMensaje(mensaje) {
+    if (!TIPOS_CON_ARCHIVO.has(mensaje?.type)) return null;
+    const a = mensaje[mensaje.type] || {};
+    if (!a.id) return null;
+    return {
+        id: String(a.id),
+        mime: a.mime_type ? String(a.mime_type).slice(0, 100) : null,
+        ...(a.caption ? { caption: recortar(a.caption, 1024) } : {}),
+        ...(a.filename ? { nombre: recortar(a.filename, 200) } : {}),
+        ...(mensaje.type === 'sticker' && a.animated ? { animado: true } : {}),
+    };
+}
+
 function recortar(valor, max) {
     const t = String(valor ?? '');
     return t.length <= max ? t : `${t.slice(0, max - 1)}…`;
@@ -227,6 +251,8 @@ function interpretarWebhook(cuerpo, { config = configReal } = {}) {
                         tipo: mensaje.type,
                         soportado: TIPOS_CON_TEXTO.has(mensaje.type),
                         perfil_nombre: valor.contacts?.[0]?.profile?.name || null,
+                        // La referencia al archivo, para que la Bandeja pueda mostrarlo (7 días).
+                        ...(archivoDeMensaje(mensaje) ? { media: archivoDeMensaje(mensaje) } : {}),
                     },
                 });
             }
@@ -855,6 +881,7 @@ module.exports = {
     recibirWebhook,
     interpretarWebhook,
     esAntiguo,
+    archivoDeMensaje,
     renderizar,
     renderizarPlantilla,
     textoDeMensaje,

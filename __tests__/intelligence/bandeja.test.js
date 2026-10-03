@@ -636,3 +636,104 @@ describe('bloquear / desbloquear un número desde el negocio', () => {
 afterAll(async () => {
     await sequelize.close();
 });
+
+// ── Fotos y stickers en la Bandeja (2026-10-02) ───────────────────────────────────────────────
+// El archivo no se guarda: se le pide a Meta al abrirlo. Aquí se prueba lo nuestro —permisos,
+// qué sale en el detalle, cómo se transmite— con Meta sustituida por un doble.
+describe('archivos de los clientes (fotos, stickers…)', () => {
+    const { PassThrough } = require('stream');
+    const WhatsappApi = require('../../intelligence/channels/whatsapp/api');
+
+    /** Un `res` que además es un flujo: el controlador le hace `pipe` al archivo. */
+    function resFlujo() {
+        const r = new PassThrough();
+        const capturado = { statusCode: 200, cuerpo: null, cabeceras: {}, bytes: [] };
+        r.capturado = capturado;
+        r.status = (c) => { capturado.statusCode = c; return r; };
+        r.json = (p) => { capturado.cuerpo = p; r.end(); return r; };
+        r.setHeader = (k, v) => { capturado.cabeceras[k.toLowerCase()] = v; };
+        r.on('data', (b) => capturado.bytes.push(b));
+        return r;
+    }
+    async function pedirArchivo({ idUsuario, id, idMensaje }) {
+        const res = resFlujo();
+        const fin = new Promise((ok) => res.on('end', ok));
+        // Sin `res.end()` aquí: cierra el `pipe` del archivo o el `json` del error, y cerrarlo antes
+        // cortaría la transmisión, que sigue después de que el controlador devuelve.
+        await Bandeja.archivoDeMensaje({ params: { id, idMensaje }, query: {}, body: {}, usuario: { id_usuario: idUsuario } }, res);
+        await fin;
+        return res.capturado;
+    }
+    async function mensajeConFoto(idConversacion, idNegocio) {
+        return unaFila(
+            `INSERT INTO intelligence.mensaje (id_conversacion, id_negocio, direccion, canal, contenido, crudo)
+             VALUES (:c, :n, 'entrante', 'whatsapp', '[image]',
+                     '{"tipo":"image","soportado":false,"media":{"id":"MEDIA_TEST_1","mime":"image/jpeg","caption":"el comprobante"}}'::jsonb)
+             RETURNING id_mensaje;`,
+            { c: idConversacion, n: idNegocio }
+        );
+    }
+
+    afterEach(() => jest.restoreAllMocks());
+
+    test('el detalle dice qué trae (tipo, mime, pie) pero NO el id de Meta', async () => {
+        const c = await nuevaConversacion({ idNegocio: negocioA });
+        const { id_mensaje } = await mensajeConFoto(c.id_conversacion, negocioA);
+
+        const r = await llamar(Bandeja.detalleConversacion, { idUsuario: usuarioA, params: { id: c.id_conversacion } });
+        const m = r.cuerpo.data.mensajes.find((x) => x.id_mensaje === id_mensaje);
+        expect(m.media).toEqual({ tipo: 'image', mime: 'image/jpeg', caption: 'el comprobante', nombre: null });
+        expect(JSON.stringify(r.cuerpo.data.mensajes)).not.toContain('MEDIA_TEST_1');
+    });
+
+    test('EL CASO: se transmite lo que devuelve Meta, con su tipo y sin caché compartida', async () => {
+        const c = await nuevaConversacion({ idNegocio: negocioA });
+        const { id_mensaje } = await mensajeConFoto(c.id_conversacion, negocioA);
+        const spy = jest.spyOn(WhatsappApi, 'obtenerArchivo').mockResolvedValue({
+            respuesta: new Response('BYTES_DE_LA_FOTO'),
+            mime: 'image/jpeg',
+            bytes: 16,
+        });
+
+        const r = await pedirArchivo({ idUsuario: usuarioA, id: c.id_conversacion, idMensaje: id_mensaje });
+
+        expect(spy).toHaveBeenCalledWith({ idArchivo: 'MEDIA_TEST_1', idNegocio: negocioA });
+        expect(r.cabeceras['content-type']).toBe('image/jpeg');
+        expect(r.cabeceras['cache-control']).toBe('private, max-age=300');
+        expect(Buffer.concat(r.bytes).toString()).toBe('BYTES_DE_LA_FOTO');
+    });
+
+    test('un usuario de OTRO negocio recibe 404 y no se le pide nada a Meta', async () => {
+        const c = await nuevaConversacion({ idNegocio: negocioA });
+        const { id_mensaje } = await mensajeConFoto(c.id_conversacion, negocioA);
+        const spy = jest.spyOn(WhatsappApi, 'obtenerArchivo');
+
+        const r = await pedirArchivo({ idUsuario: usuarioB, id: c.id_conversacion, idMensaje: id_mensaje });
+
+        expect(r.statusCode).toBe(404);
+        expect(spy).not.toHaveBeenCalled();
+    });
+
+    test('caducado en Meta → 410 con un mensaje que se puede enseñar', async () => {
+        const c = await nuevaConversacion({ idNegocio: negocioA });
+        const { id_mensaje } = await mensajeConFoto(c.id_conversacion, negocioA);
+        const e = new Error('viejo');
+        e.code = 'ARCHIVO_NO_DISPONIBLE';
+        jest.spyOn(WhatsappApi, 'obtenerArchivo').mockRejectedValue(e);
+
+        const r = await pedirArchivo({ idUsuario: usuarioA, id: c.id_conversacion, idMensaje: id_mensaje });
+
+        expect(r.statusCode).toBe(410);
+        expect(r.cuerpo.message).toMatch(/7 días/);
+    });
+
+    test('un mensaje de texto no tiene archivo → 404', async () => {
+        const c = await nuevaConversacion({ idNegocio: negocioA });
+        const { id_mensaje } = await unaFila(
+            `SELECT id_mensaje FROM intelligence.mensaje WHERE id_conversacion = :c LIMIT 1;`,
+            { c: c.id_conversacion }
+        );
+        const r = await pedirArchivo({ idUsuario: usuarioA, id: c.id_conversacion, idMensaje: id_mensaje });
+        expect(r.statusCode).toBe(404);
+    });
+});

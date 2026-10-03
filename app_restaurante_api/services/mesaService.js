@@ -101,7 +101,7 @@ async function getMesasDashboard(idNegocio) {
             as: 'ordenes',
             where: { estado: 'ABIERTA' },
             required: false,
-            attributes: ['id_orden', 'numero_orden', 'total', 'fecha_creacion', 'estado_cocina', 'id_metodo_pago', 'id_cuenta', 'nota', 'descuento', 'estado_pago'],
+            attributes: ['id_orden', 'numero_orden', 'total', 'fecha_creacion', 'estado_cocina', 'id_metodo_pago', 'id_cuenta', 'nota', 'descuento', 'estado_pago', 'para_servir', 'contacto_nombre'],
             include: [{
                 model: Models.PedidDetalle,
                 as: 'detalles',
@@ -198,6 +198,10 @@ async function getMesasDashboard(idNegocio) {
                     valor: Number(p.valor ?? 0),
                 })),
                 nota: ordenActiva.nota ?? null,
+                // Mesa guardada por el asistente para alguien que viene en camino: la tarjeta
+                // dice «Para servir · <nombre>» para que nadie vaya a buscarlo a una mesa vacía.
+                para_servir: Boolean(ordenActiva.para_servir),
+                contacto_nombre: ordenActiva.contacto_nombre ?? null,
                 usuario: ordenActiva.usuario ? {
                     id_usuario: ordenActiva.usuario.id_usuario,
                     primer_nombre: ordenActiva.usuario.primer_nombre,

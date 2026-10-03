@@ -266,9 +266,89 @@ describe('pedido en el local (MESA)', () => {
             .rejects.toMatchObject({ code: 'MESA_INVALIDA' });
     });
 
-    it('sin id_mesa pide la mesa (MESA_REQUERIDA)', async () => {
-        await expect(pedir({ tipo_entrega: 'MESA' }))
-            .rejects.toMatchObject({ code: 'MESA_REQUERIDA' });
+    // «Para servir» (Zona Burger, 2026-10-02): «dos salchilimón para servir, veci, ya vamos». Sin
+    // mesa que decir, el sistema guarda una libre y la marca. Antes esto era MESA_REQUERIDA y el
+    // bot terminaba convirtiéndolo en «para recoger».
+    it('sin id_mesa es «para servir»: guarda una mesa LIBRE y la marca con el nombre', async () => {
+        const libre = (await unaFila(
+            `INSERT INTO restaurante.rest_mesa (id_negocio, nombre, numero) VALUES (:n, 'TEST-Mesa Servir', 0)
+             RETURNING id_mesa;`, { n: idNegocio }
+        )).id_mesa;
+
+        const { resultado } = await pedir({ tipo_entrega: 'MESA', cliente_nombre: 'Karen Diaz' });
+        const orden = await unaFila(
+            `SELECT o.tipo_pedido, o.id_mesa, o.para_servir, o.contacto_nombre, o.nota, m.estado_servicio
+               FROM restaurante.pedid_orden o JOIN restaurante.rest_mesa m ON m.id_mesa = o.id_mesa
+              WHERE o.id_negocio = :n AND o.numero_orden = :num;`,
+            { n: idNegocio, num: resultado.numero_orden }
+        );
+
+        // La de número más bajo que está libre: la recién creada (número 0).
+        expect(orden).toMatchObject({
+            tipo_pedido: 'MESA',
+            id_mesa: libre,
+            para_servir: true,
+            contacto_nombre: 'Karen Diaz',
+            estado_servicio: 'OCUPADA',
+        });
+        expect(orden.nota).toMatch(/^Para servir/);
+        expect(resultado).toMatchObject({ para_servir: true, mesa: 'TEST-Mesa Servir' });
+
+        const hecho = registry.obtener('tomar_pedido').confirmacion.hecho({ resultado });
+        expect(hecho).toContain('para servir en el local');
+        expect(hecho).toContain('TEST-Mesa Servir');
+    });
+
+    it('«para servir» nunca cae en una mesa con cuenta abierta, aunque figure DISPONIBLE', async () => {
+        // Una mesa que dice DISPONIBLE pero tiene una cuenta abierta (datos a medias: alguien la
+        // liberó sin cobrar). Es la de número más bajo, así que sin el filtro sería la elegida.
+        const conCuenta = (await unaFila(
+            `INSERT INTO restaurante.rest_mesa (id_negocio, nombre, numero) VALUES (:n, 'TEST-Mesa Con Cuenta', -1)
+             RETURNING id_mesa;`, { n: idNegocio }
+        )).id_mesa;
+        const { resultado: previa } = await pedir({ tipo_entrega: 'MESA', id_mesa: conCuenta });
+        await sequelize.query(
+            `UPDATE restaurante.rest_mesa SET estado_servicio = 'DISPONIBLE' WHERE id_mesa = :m;`,
+            { replacements: { m: conCuenta } }
+        );
+        const libre = (await unaFila(
+            `INSERT INTO restaurante.rest_mesa (id_negocio, nombre, numero) VALUES (:n, 'TEST-Mesa Libre 2', 9060)
+             RETURNING id_mesa;`, { n: idNegocio }
+        )).id_mesa;
+
+        const { resultado } = await pedir({ tipo_entrega: 'MESA', cliente_nombre: 'Otra' });
+        const orden = await ordenDe(resultado.numero_orden);
+
+        expect(previa.numero_orden).toBeTruthy();
+        expect(orden.id_mesa).not.toBe(conCuenta);
+        expect(orden.id_mesa).toBe(libre);
+    });
+
+    it('sin mesas libres se rechaza con SIN_MESA_LIBRE (y ofrece recoger)', async () => {
+        const [libres] = await sequelize.query(
+            `UPDATE restaurante.rest_mesa SET estado_servicio = 'OCUPADA'
+              WHERE id_negocio = :n AND estado = 'A' AND estado_servicio = 'DISPONIBLE'
+              RETURNING id_mesa;`, { replacements: { n: idNegocio } }
+        );
+        try {
+            await expect(pedir({ tipo_entrega: 'MESA' }))
+                .rejects.toMatchObject({ code: 'SIN_MESA_LIBRE', statusCode: 409 });
+        } finally {
+            if (libres.length) {
+                await sequelize.query(
+                    `UPDATE restaurante.rest_mesa SET estado_servicio = 'DISPONIBLE' WHERE id_mesa IN (:ids);`,
+                    { replacements: { ids: libres.map((m) => m.id_mesa) } }
+                );
+            }
+        }
+    });
+
+    it('la pregunta de «para servir» no inventa una mesa', async () => {
+        const texto = await registry.obtener('tomar_pedido').confirmacion.pregunta({
+            idNegocio,
+            args: { items: [{ id_producto: idProducto, cantidad: 1 }], cliente_nombre: 'Karen', tipo_entrega: 'MESA' },
+        });
+        expect(texto).toContain('para servirlo en el local (te guardamos una mesa)');
     });
 
     it('la pregunta de confirmación nombra la mesa', async () => {

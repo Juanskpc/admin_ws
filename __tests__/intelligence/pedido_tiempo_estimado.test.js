@@ -79,8 +79,9 @@ describe('fraseDeTiempo', () => {
 
 // ── El flujo entero, con dobles ─────────────────────────────────────────────────────────────
 
-function crear(tiempoEstimado) {
+function crear(tiempoEstimado, { hayPedido = true } = {}) {
     return crearFlujoRestaurante({
+        tienePedidoReciente: async () => hayPedido,
         contextoNegocio: {
             obtener: async () => ({
                 id: 6, nombre: 'ZONA BURGER', tratamiento: 'ZONA BURGER', atencion: null,
@@ -127,6 +128,18 @@ describe('el flujo contesta con el tiempo del negocio', () => {
         expect(d.nivel).toBe('determinista');
     });
 
+    // Zona Burger, 2026-10-02: «¿en cuánto está?» sin ningún pedido tomado se contestó «el tiempo
+    // de TU pedido es de 40 a 60 minutos», y la clienta se fue a pagar un pedido inexistente.
+    test('SIN pedido en el chat: no dice «tu pedido» y avisa de que todavía no hay ninguno', async () => {
+        const d = await decir(crear({ min: 40, max: 60 }, { hayPedido: false }), sinTarea(), 'en cuánto está?');
+
+        const [texto] = textos(d);
+        expect(texto).not.toContain('tu pedido es');
+        expect(texto).toContain('*40 a 60 minutos*');
+        expect(texto).toContain('Todavía no tengo ningún pedido tuyo');
+        expect(d.pasos.find((p) => p.decision === 'tiempo_estimado_respondido').motivo.hay_pedido).toBe(false);
+    });
+
     test('sin tiempo configurado → no se inventa nada: lo cede al modelo', async () => {
         const d = await decir(crear(null), sinTarea(), 'cuánto se demora?');
 
@@ -139,7 +152,10 @@ describe('el flujo contesta con el tiempo del negocio', () => {
         const d = await decir(crear({ min: 30, max: null }), conv, 'cuánto se demora');
 
         const [texto] = textos(d);
-        expect(texto).toContain('de unos *30 minutos*');
+        // Aún no hay pedido: el tiempo se dice «desde que se confirma», no «tu pedido».
+        expect(texto).toContain('unos *30 minutos*');
+        expect(texto).toContain('desde que se confirman');
+        expect(texto).not.toContain('tu pedido es');
         // La pregunta que estaba pendiente sigue ahí, después de la respuesta.
         expect(texto.indexOf('minutos')).toBeLessThan(texto.indexOf('dirección'));
         // La tarea sigue abierta en el mismo paso y NO se cuenta como una respuesta equivocada.

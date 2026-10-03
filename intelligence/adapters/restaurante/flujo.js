@@ -49,6 +49,7 @@ const barrioService = require('../../../app_restaurante_api/services/barrioServi
 const exclusiones = require('./exclusiones');
 const mesaPublicaService = require('../../../app_restaurante_api/services/mesaPublicaService');
 const datosCliente = require('./datosCliente');
+const Models = require('../../../app_core/models/conection');
 
 const VERTICAL = 'restaurante';
 
@@ -72,6 +73,8 @@ const OPCION = {
      */
     ENTREGA_DOMICILIO: 'entrega_domicilio',
     ENTREGA_RECOGER: 'entrega_recoger',
+    /** «Para servir»: comer en el local. Solo se ofrece si el negocio tiene mesas. */
+    ENTREGA_SERVIR: 'entrega_servir',
 };
 
 /**
@@ -432,9 +435,10 @@ const ENTREGA = {
     DOMICILIO: 'DOMICILIO',
     RECOGER: 'LLEVAR',
     /**
-     * Sentado en el local. **Solo entra desde la carta virtual** (`~m=L` del código): el bot no
-     * lo ofrece al preguntar por chat, porque sin la carta no hay forma de saber que la persona
-     * está de verdad en el local.
+     * En el local. Entra de dos formas: desde la carta virtual (`~m=L` con su mesa) o, desde el
+     * 2026-10-02, por chat como «para servir»: el cliente viene en camino, no tiene mesa que decir,
+     * y el sistema le guarda una libre (`datos.para_servir`). Antes esto solo entraba por la carta
+     * y «para servir veci, ya vamos» terminaba convertido en «para recoger».
      */
     MESA: 'MESA',
 };
@@ -544,7 +548,7 @@ function loQueFalta(datos, ctx) {
     if (!datos.entrega) return PASO_PEDIDO.ENTREGA;
     // El barrio y la mesa, antes de nada más: de ellos depende lo que cuesta y adónde va.
     if (necesitaBarrio(datos, ctx)) return PASO_PEDIDO.BARRIO;
-    if (datos.entrega === ENTREGA.MESA && !datos.id_mesa) return PASO_PEDIDO.MESA;
+    if (datos.entrega === ENTREGA.MESA && !datos.id_mesa && !datos.para_servir) return PASO_PEDIDO.MESA;
     const faltan = huecosDelCliente(datos, ctx);
     if (faltan.length === 0) return null;
     // Uno solo se pregunta por su nombre; varios, todos juntos. Preguntar «necesito una cosita»
@@ -607,6 +611,19 @@ function pregunta(paso, datos, ctx) {
             // Las palabras siguen en el texto aunque haya botones, y no es redundancia: el botón
             // no viaja si alguien reenvía el mensaje o responde citándolo, y un canal sin
             // botones solo recibe texto. Decir las dos que valen deja abierto ese camino.
+            // «Para servir» solo si el negocio tiene mesas: sin mesas no hay dónde guardarle una.
+            if ((ctx?.mesas || []).length > 0) {
+                return {
+                    texto:
+                        '¿Te lo llevamos a domicilio, pasas a recogerlo o es para servir aquí? 🛵\n\n' +
+                        'Toca una opción, o escríbeme *domicilio*, *recoger* o *para servir*.',
+                    opciones: [
+                        { id: OPCION.ENTREGA_DOMICILIO, etiqueta: 'A domicilio 🛵' },
+                        { id: OPCION.ENTREGA_RECOGER, etiqueta: 'Paso a recogerlo 🛍️' },
+                        { id: OPCION.ENTREGA_SERVIR, etiqueta: 'Para servir aquí 🍽️' },
+                    ],
+                };
+            }
             return {
                 texto:
                     '¿Te lo llevamos a domicilio o pasas a recogerlo? 🛵\n\n' +
@@ -1036,9 +1053,29 @@ function seguirPedido(ctx, { solicitarConfirmacion }) {
                     nivel: 'determinista',
                 };
             }
+            // «Para servir» en un negocio sin mesas: no hay dónde guardarle una. Se dice y se
+            // vuelve a preguntar con las opciones que sí hay.
+            if (entrega === ENTREGA.MESA && (ctx.mesas || []).length === 0) {
+                const q = pregunta(PASO_PEDIDO.ENTREGA, datos, ctx);
+                return {
+                    pasos: [paso('pedido_servir_sin_mesas')],
+                    respuestas: [
+                        { ...q, texto: `Por aquí solo puedo tomarlo a domicilio o para recoger 🙏\n\n${q.texto}` },
+                    ],
+                    variables: conMemoria(ctx.conversacion),
+                    tarea: tareaPedido(datos),
+                    resultado: 'resuelto',
+                    nivel: 'determinista',
+                };
+            }
             conLoDicho.entrega = entrega;
+            if (entrega === ENTREGA.MESA) conLoDicho.para_servir = true;
             apertura =
-                entrega === ENTREGA.RECOGER ? '¡Listo, te lo dejamos preparado! ' : '¡De una! ';
+                entrega === ENTREGA.RECOGER
+                    ? '¡Listo, te lo dejamos preparado! '
+                    : entrega === ENTREGA.MESA
+                      ? '¡Listo, te guardamos una mesa! '
+                      : '¡De una! ';
             break;
         }
         case PASO_PEDIDO.BARRIO: {
@@ -1209,6 +1246,9 @@ function elegirMesa(texto, mesas) {
  * Cuando las dos familias de palabras aparecen —o ninguna— se devuelve `null` a propósito: en
  * este nivel no se adivina (ADR-018), se pregunta otra vez.
  */
+/** «Para servir», «para comer aquí», «consumir en el local»: comer en el local (Pasto, 2026-10-02). */
+const DICE_SERVIR =
+    /\b(para servir|servir(lo|la|los|las)? (aqui|aca)|comer(lo|la|los|las)? (aqui|aca|alla|en el local)|consumir(lo|la|los|las)? (aqui|aca|en el local)|para la mesa)\b/;
 const DICE_RECOGER = /\b(recoger|recogerlo|recogerla|recojo|recogemos|retiro|retirar|paso|pasar|voy)\b/;
 const DICE_DOMICILIO =
     /\b(domicilio|domis?|delivery|envio|enviar|envien|mandan|manden|mandar|mandalo|lleven|llevenlo|llevan)\b/;
@@ -1219,6 +1259,11 @@ function leerEntrega(texto) {
     // El botón, primero y sin ambigüedad posible: lo que llega es el id que mandamos nosotros.
     if (t === OPCION.ENTREGA_DOMICILIO) return ENTREGA.DOMICILIO;
     if (t === OPCION.ENTREGA_RECOGER) return ENTREGA.RECOGER;
+    if (t === OPCION.ENTREGA_SERVIR) return ENTREGA.MESA;
+
+    // «Para servir» gana a todo lo demás: «para servir, ya voy» lleva un «voy» que, solo, sería
+    // recoger; y quien dice que viene a comer aquí no está pidiendo que se lo lleven.
+    if (DICE_SERVIR.test(t)) return ENTREGA.MESA;
 
     if (/\bpara llevar\b/.test(t)) return ENTREGA.RECOGER;
 
@@ -1457,15 +1502,23 @@ function esPreguntaDeTiempo(texto) {
  * La respuesta con el tiempo que declaró el negocio, o `null` si no lo ha configurado (entonces
  * no se inventa ninguno). Primero el dato, y después la promesa amable: si sale antes, se avisa.
  */
-function fraseDeTiempo(tiempo) {
+function fraseDeTiempo(tiempo, { hayPedido = true, ofrecerTomarlo = false } = {}) {
     const min = Number(tiempo?.min);
     if (!Number.isInteger(min) || min < 1) return null;
     const max = Number(tiempo?.max);
-    const cuanto =
-        Number.isInteger(max) && max > min
-            ? `de *${min} a ${max} minutos*`
-            : `de unos *${min} minutos*`;
-    return `El tiempo estimado de tu pedido es ${cuanto} ⏱️. Si está listo antes, te avisaremos 😊`;
+    const rango = Number.isInteger(max) && max > min;
+    if (hayPedido) {
+        const cuanto = rango ? `de *${min} a ${max} minutos*` : `de unos *${min} minutos*`;
+        return `El tiempo estimado de tu pedido es ${cuanto} ⏱️. Si está listo antes, te avisaremos 😊`;
+    }
+    // Sin pedido confirmado, «tu pedido» es mentira. Zona Burger, 2026-10-02: una clienta
+    // preguntó «¿en cuánto está?», le contestamos «el tiempo estimado de TU pedido es de 40 a 60
+    // minutos», y se fue a pagar un pedido que nadie había tomado.
+    const cuanto = rango ? `*${min} a ${max} minutos*` : `unos *${min} minutos*`;
+    const frase = `Los pedidos están saliendo en ${cuanto} ⏱️, contados desde que se confirman.`;
+    return ofrecerTomarlo
+        ? `${frase}\nTodavía no tengo ningún pedido tuyo: si quieres, te lo tomo por aquí 😊`
+        : frase;
 }
 
 /**
@@ -1482,6 +1535,11 @@ const PREGUNTA_DOMICILIO = [
     /\bcuanto (me )?(cobran|cobrarian|vale|cuesta|sale) (por )?(el |la )?(domicilio|envio|llevarlo|traerlo|traermelo|llevarmelo|traida|llevada)\b/,
     /\b(domicilio|envio|domi) (cuanto|que valor|que precio|en cuanto|que costo)\b/,
     /\b(tiene|tienen|cobran) (costo|valor|recargo) (el |los )?(domicilio|domicilios|envio)\b/,
+    // «¿Vale 7.000 el domicilio?», «¿me cobran 8 mil el domi?», «¿el domicilio es de 7 mil?»
+    // (Zona Burger, 2026-10-02: «Pero es cerca, ¿vale 7.000 el domicilio?» no se reconocía).
+    // Ojo: al normalizar se quitan puntos y comas, así que «7.000» llega como «7 000».
+    /\b(vale|valdria|cuesta|costaria|sale|saldria|cobran|cobrarian|seria|es) (de )?(unos? )?\$? ?\d[\d ]*?( mil| pesos)? (el |los )?(domicilio|domicilios|domi|envio)\b/,
+    /\b(domicilio|domi|envio) (vale|cuesta|sale|seria|es de|queda en) (unos? )?\$? ?\d/,
 ];
 
 function esPreguntaDeDomicilio(texto) {
@@ -1524,6 +1582,38 @@ function fraseDeDomicilio(rango) {
     return lineas.join('\n');
 }
 
+/** Cuánto vale como «reciente» un pedido para decirle al cliente «tu pedido». */
+const HORAS_PEDIDO_RECIENTE = 6;
+
+/**
+ * ¿El asistente tomó un pedido en esta conversación en las últimas horas? Lo dice el Ledger:
+ * `tomar_pedido` con resultado `ok` es un pedido que se creó (la petición que queda esperando
+ * el «sí» no se registra como `ok`). Un pedido que alguien del local creó a mano desde la caja
+ * no sale aquí: eso lo sabrá el día que la caja ligue el pedido a la conversación.
+ *
+ * Ante cualquier fallo, `false`: lo peor que pasa es decir «desde que se confirma» a quien ya
+ * pidió, que es inexacto pero no engaña a nadie. Lo contrario sí engañó (Zona Burger, 2026-10-02).
+ */
+async function pedidoRecienteEnLaConversacion(conversacion) {
+    try {
+        const [fila] = await Models.sequelize.query(
+            `SELECT 1 AS hay FROM intelligence.invocacion_capacidad
+              WHERE id_conversacion = :c AND capacidad = 'tomar_pedido'
+                AND resultado = 'ok' AND NOT dry_run
+                AND creado_en >= now() - (:horas * interval '1 hour')
+              LIMIT 1;`,
+            {
+                replacements: { c: conversacion.id_conversacion, horas: HORAS_PEDIDO_RECIENTE },
+                type: Models.sequelize.QueryTypes.SELECT,
+            }
+        );
+        return Boolean(fila);
+    } catch (error) {
+        console.warn(`[restaurante] no se pudo saber si hay un pedido reciente: ${error.message}`);
+        return false;
+    }
+}
+
 /**
  * Crea el manejador. La inyección existe para los tests, igual que en el flujo de `reserva`.
  * `ahora` también se inyecta: el saludo depende de la hora y una prueba no puede esperar a que
@@ -1547,6 +1637,9 @@ function crearFlujoRestaurante({
     // Barrios con precio y mesas del negocio: lo que hace falta para leer lo que el cliente
     // eligió en la carta. Se inyecta por lo mismo que lo demás. Si leer falla, se sigue como si
     // el negocio no tuviera ni barrios ni mesas: pedir no se rompe por un extra.
+    // ¿Este chat tiene un pedido de verdad, reciente? Decide si el tiempo se dice como «tu
+    // pedido» o como «desde que se confirma». Se inyecta para que los tests no necesiten Postgres.
+    tienePedidoReciente = pedidoRecienteEnLaConversacion,
     catalogo = {
         barrios: (idNegocio) => barrioService.listarPublico(idNegocio),
         mesas: (idNegocio) => mesaPublicaService.listarPublicas(idNegocio),
@@ -1609,6 +1702,36 @@ function crearFlujoRestaurante({
         // `delegar`: turno sin respuesta, silencio, y un pedido que nunca se creó. Nadie lo vio
         // porque hasta hoy ninguna confirmación de restaurante llegó a abrirse.
         if (confirmacion.pendiente(conversacion)) {
+            // «¿Vale 7.000 el domicilio?» o «¿cuánto se demora?» mientras se le pide el sí: son
+            // preguntas razonables ANTES de confirmar. Se contestan y se vuelve a pedir el sí, sin
+            // gastar la repregunta (el cliente no se desvió: está decidiendo). Antes se le repetía
+            // el resumen entero sin contestarle (Zona Burger, 2026-10-02).
+            const respuestaPrevia = esPreguntaDeDomicilio(texto)
+                ? fraseDeDomicilio(negocio.domicilioRango)
+                : esPreguntaDeTiempo(texto)
+                  ? fraseDeTiempo(negocio.tiempoEstimado, { hayPedido: false })
+                  : null;
+            if (respuestaPrevia) {
+                return {
+                    pasos: [paso('confirmacion_pregunta_contestada', {
+                        tema: esPreguntaDeDomicilio(texto) ? 'domicilio' : 'tiempo',
+                    })],
+                    respuestas: [
+                        {
+                            texto: `${respuestaPrevia}\n\n¿Entonces confirmo tu pedido? Respóndeme sí o no.`,
+                            opciones: [
+                                { id: 'si', etiqueta: 'Sí, confirmo' },
+                                { id: 'no', etiqueta: 'No' },
+                            ],
+                        },
+                    ],
+                    variables: conMemoria(conversacion),
+                    // El pendiente sigue igual: ni se toca su hora ni sus repreguntas.
+                    tarea: { nombre: confirmacion.TAREA, datos: conversacion.tarea_datos },
+                    resultado: 'resuelto',
+                    nivel: 'determinista',
+                };
+            }
             await conIdentidad(ctx);
             const decision = await confirmacion.resolver(ctx, { gate });
             return { ...decision, invocaciones: [...invocaciones, ...(decision.invocaciones || [])] };
@@ -1632,8 +1755,16 @@ function crearFlujoRestaurante({
         // («¿a nombre de quién?» → «cuánto se demora»), y apuntar una pregunta como nombre o
         // dirección es justo lo que ese flujo se esfuerza en no hacer.
         if (esPreguntaDeTiempo(texto)) {
-            const frase = fraseDeTiempo(negocio.tiempoEstimado);
-            if (frase && conversacion.tarea_actual === TAREA_PEDIDO) {
+            // A mitad de un pedido todavía no hay pedido: el tiempo se dice «desde que se
+            // confirma». Fuera de un pedido, solo se dice «tu pedido» si este chat tiene uno de
+            // verdad; si no, se avisa de que aún no hay ninguno y se ofrece tomarlo.
+            const armando = conversacion.tarea_actual === TAREA_PEDIDO;
+            const hayPedido = !armando && (await tienePedidoReciente(conversacion));
+            const frase = fraseDeTiempo(negocio.tiempoEstimado, {
+                hayPedido,
+                ofrecerTomarlo: !armando && !hayPedido,
+            });
+            if (frase && armando) {
                 // Se contesta Y se retoma lo que faltaba, sin tocar la tarea ni el contador de
                 // repreguntas: el cliente preguntó algo razonable, no se equivocó.
                 await conIdentidad(ctx);
@@ -1651,7 +1782,7 @@ function crearFlujoRestaurante({
             }
             if (frase) {
                 return {
-                    pasos: [paso('tiempo_estimado_respondido')],
+                    pasos: [paso('tiempo_estimado_respondido', { hay_pedido: hayPedido })],
                     respuestas: [frase],
                     variables: conMemoria(conversacion),
                     tarea: null,

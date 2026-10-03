@@ -1,5 +1,12 @@
 # EscalApp Intelligence — estado y cómo continuar
 
+> **🔁 2026-10-02 (noche) — RELEVO: WhatsApp de Zona Burger, cuatro auditorías y diez arreglos
+> desplegados en el día** (domicilio como rango, `pasar_a_persona`, «para servir» con mesa
+> asignada, agotado ≠ no existe, cortesías que se comían teléfonos, aviso de «listo» para clientes
+> sin número…). Tres migraciones nuevas, ya aplicadas en producción y en la compartida. **Para
+> retomar, empezar aquí:** [`relevo-2026-10-02-whatsapp-zona-burger.md`](relevo-2026-10-02-whatsapp-zona-burger.md)
+> — cómo bajar los cambios, qué hace ahora el bot, cómo auditar y qué queda pendiente.
+
 > **🟢 2026-10-02 — PRIMER CLIENTE REAL EN WHATSAPP (Zona Burger, negocio 6) Y AUDITORÍA DESPLEGADA.**
 > Zona Burger conectó su propio número por coexistencia el 2026-10-01. La auditoría de esa noche
 > encontró 12 problemas (el bot contestaba tarde lo que el negocio ya había atendido, respondía a

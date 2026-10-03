@@ -102,6 +102,7 @@ const CONFIG = {
 // El texto del handoff y su decisión viven en `handoff.js`: son producto, no mecánica del Nivel 4,
 // y los usará también la FSM el día que escale. Aquí se importa, no se reimplementa.
 const handoff = require('./handoff');
+const { normalizar } = require('./texto');
 // El guardarrail de promesas (ADR-023) es una comprobacion POSTERIOR a la generacion: se le pasa
 // lo que el asistente va a decir y lo que las capacidades devolvieron, y dice si hay cifras que
 // nadie respalda. Arranca en observacion, como F2.
@@ -109,6 +110,49 @@ const guardarrail = require('./guardarrailPromesas');
 // La confirmación humana de una mutación (ADR-010, F7). Aquí solo se **solicita**: quien lee el
 // sí y ejecuta es el Nivel 1, en el turno siguiente. Ver la cabecera de `confirmacion.js`.
 const confirmacion = require('./confirmacion');
+
+/**
+ * `pasar_a_persona` — la única herramienta que no es una capacidad de negocio.
+ *
+ * No pasa por el Registry ni por el Gate porque no lee ni cambia ningún dato del negocio: cambia
+ * el ESTADO de la conversación, que es asunto del motor. Por eso se ofrece aquí, junto a las que
+ * devuelve el Gate, y se atiende antes de `ejecutarSolicitud`.
+ *
+ * Existe desde 2026-10-02: sin el dato (el Nequi, el valor exacto del domicilio) el asistente le
+ * decía al cliente «confírmalo con ZONA BURGER» — mientras hablaba con Zona Burger. Ahora pasa la
+ * conversación de verdad (ver `handoff.decisionAPersona`). Ojo con el coste de usarla de más: el
+ * bot se calla en ese chat hasta que una persona conteste (ADR-023: no vuelve solo).
+ */
+const PASAR_A_PERSONA = Object.freeze({
+    nombre: 'pasar_a_persona',
+    descripcion:
+        'Pasa esta conversación a una persona del negocio, que le contesta al cliente por este ' +
+        'mismo chat. Úsala SOLO cuando el cliente necesita un dato que ninguna otra herramienta ' +
+        'te da (un número de cuenta o de Nequi que no aparece, el valor exacto de algo, una ' +
+        'petición especial que tú no puedes resolver) o cuando pide hablar con una persona. NO ' +
+        'la uses para lo que sí puedes resolver (buscar un producto, tomar un pedido, decir un ' +
+        'precio de la carta). Después de usarla no escribas nada más: el cliente recibe solo el ' +
+        'aviso de que le contesta una persona, y tú dejas de atender este chat.',
+    vertical: 'nucleo',
+    tipo: 'consulta',
+    idempotente: true,
+    requiere_confirmacion: false,
+    parametros: {
+        motivo: {
+            tipo: 'string',
+            requerido: true,
+            max_longitud: 200,
+            descripcion: 'Qué necesita el cliente, en pocas palabras, para quien lo atienda.',
+        },
+    },
+});
+
+/**
+ * El asistente dice que le pasa la conversación a una persona («te paso con alguien del equipo»,
+ * «le aviso al equipo para que te escriba»). Sobre texto normalizado (sin tildes, minúsculas).
+ */
+const PROMETE_PERSONA =
+    /\b(te paso con|te voy a pasar|voy a pasarte|pasarte con|te comunico con|voy a comunicarte|comunicarte con|te conecto con|conectarte con|le paso tu (mensaje|pregunta|caso)|le aviso al equipo|aviso al equipo|le dejo tu (mensaje|pregunta)|alguien del equipo (te|le) (va a|escribe|contesta|responde|revisa|contacta|confirma))/;
 
 /**
  * Convierte el resultado de una capacidad en el texto que vuelve al modelo.
@@ -200,7 +244,9 @@ function crearManejadorLlm({
 
         const peticionBase = {
             negocio,
-            capacidades: ofrecidas,
+            // `pasar_a_persona` va al final: así el prefijo que ya estaba cacheado (las
+            // capacidades de siempre) no cambia de orden, solo crece.
+            capacidades: [...ofrecidas, PASAR_A_PERSONA],
             historial,
             mensaje: texto,
             ahora: ahora(),
@@ -293,6 +339,24 @@ function crearManejadorLlm({
                     if (guardarrail.bloquea()) return decisionDeHandoff(pasos, invocaciones);
                 }
 
+                // Dijo «te paso con alguien del equipo» sin llamar a `pasar_a_persona`: se cumple
+                // lo prometido. Zona Burger, 2026-10-02: «Voy a pasarte con alguien del equipo
+                // para que revise qué pasó» — y nadie se enteró; esa vez una persona ya estaba en
+                // el chat por casualidad. Su frase sale tal cual (ya le dijo lo correcto), pero la
+                // conversación pasa de verdad: Bandeja, campanita y correo.
+                if (PROMETE_PERSONA.test(normalizar(dicho))) {
+                    pasos.push({ tipo: 'handoff', decision: 'promesa_de_persona_cumplida', motivo: {} });
+                    return {
+                        pasos,
+                        invocaciones,
+                        respuestas: [dicho],
+                        variables: conversacion.variables || {},
+                        estado: handoff.ESTADO_HANDOFF,
+                        resultado: 'handoff',
+                        nivel: 'llm',
+                    };
+                }
+
                 return {
                     pasos,
                     invocaciones,
@@ -304,6 +368,33 @@ function crearManejadorLlm({
             }
 
             // ── Ejecutar lo que pidió ────────────────────────────────────────────────────
+            // El modelo pide una persona: el turno termina aquí, pida lo que pida además. Seguir
+            // ejecutando otras herramientas y luego callarse sería hacer cosas que nadie va a
+            // contarle al cliente.
+            const aPersona = respuesta.invocacionesSolicitadas.find(
+                (s) => s.capacidad === PASAR_A_PERSONA.nombre
+            );
+            if (aPersona) {
+                const motivo = String(aPersona.argumentos?.motivo ?? '').trim().slice(0, 200);
+                invocaciones.push({
+                    capacidad: PASAR_A_PERSONA.nombre,
+                    vertical: PASAR_A_PERSONA.vertical,
+                    argumentos: { motivo },
+                    resultado: 'ok',
+                    latenciaMs: 0,
+                });
+                pasos.push({ tipo: 'handoff', decision: 'modelo_pide_persona', motivo: { motivo } });
+                return handoff.decisionAPersona(
+                    {
+                        pasos,
+                        invocaciones,
+                        variables: conversacion.variables || {},
+                        nivel: 'llm',
+                    },
+                    negocio
+                );
+            }
+
             const resultados = [];
             for (const solicitada of respuesta.invocacionesSolicitadas) {
                 const salida = await ejecutarSolicitud({

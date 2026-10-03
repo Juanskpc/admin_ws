@@ -66,6 +66,9 @@ const sequelize = Models.sequelize;
  */
 const EVENTO_ESCALADA = 'conversacion.escalada.v1';
 
+/** Avisos del canal que no son un mensaje del cliente: hoy, que borró uno (`[revoke]`). */
+const SIN_CONTENIDO = /^\[revoke\]$/i;
+
 const CONFIG = {
     /** Días hacia atrás que se consideran «pendiente». Ver `repositorio.mensajesPendientes`. */
     ventanaPendientesDias: numeroDeEntorno('CONVERSACION_VENTANA_DIAS', 7),
@@ -288,9 +291,14 @@ async function recibir(entrada) {
             // lo ve y lo contesta, y cuando la conversación vuelva al asistente no puede quedar
             // como «pendiente». Sin esta marca, el 2026-10-01 el bot contestó de golpe mensajes de
             // una hora antes que Zona Burger ya había atendido a mano.
+            // `sin_contenido`: el cliente BORRÓ un mensaje (WhatsApp lo avisa como `[revoke]`). No
+            // hay nada que contestar; el 2026-10-02 el modelo se quedó en blanco ante uno y el
+            // turno terminó en «no tengo a nadie del negocio disponible», con el local abierto.
             const sinTurnoMotivo = antiguo
                 ? 'antiguo'
-                : repositorio.ESTADOS_PROCESABLES.includes(conversacion.estado)
+                : SIN_CONTENIDO.test(String(contenido || '').trim())
+                  ? 'sin_contenido'
+                  : repositorio.ESTADOS_PROCESABLES.includes(conversacion.estado)
                   ? null
                   : conversacion.estado;
             await repositorio.insertarMensajeEntrante(

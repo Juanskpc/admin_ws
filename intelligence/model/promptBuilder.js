@@ -65,7 +65,21 @@ const puerto = require('./puerto');
  * pueda comparar y decir si la nueva mejora o empeora, que es la razón de que los prompts sean
  * archivos versionados y no cadenas en el código.
  */
-const PROMPT_SISTEMA = 'sistema.v7';
+/*
+ * `v8` (2026-10-02, auditoría de Zona Burger) cambia tres comportamientos, no el estilo:
+ *   - «di que no lo sabes y que lo confirme el negocio» mandaba al cliente a «confirmar con ZONA
+ *     BURGER»… mientras hablaba con Zona Burger. Ahora el asistente ES el negocio y, sin el dato,
+ *     usa `pasar_a_persona`.
+ *   - un producto en `agotados_ahora` se dice agotado, no «no está en la carta» (la Discordia).
+ *   - sin pedido tomado, no se habla como si lo hubiera («¿con qué medio vas a pagar?»).
+ */
+/*
+ * `v9` (2026-10-02, noche) añade dos reglas de la misma auditoría:
+ *   - no preguntar «¿te lo anoto?» antes de pedir la acción: el cliente dijo «sí» a esa, no a la
+ *     del negocio, y el pedido de Karen Díaz se quedó esperando un segundo sí que nunca llegó.
+ *   - «para servir» es comer en el local; sin mesa, se pide igual y el negocio le guarda una.
+ */
+const PROMPT_SISTEMA = 'sistema.v9';
 
 /**
  * Los prompts se leen una vez y se quedan en memoria.
