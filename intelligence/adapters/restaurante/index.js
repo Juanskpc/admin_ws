@@ -61,6 +61,7 @@ const cuentaService = require('../../../app_restaurante_api/services/cuentaServi
 const horarioService = require('../../../app_restaurante_api/services/horarioService');
 const barrioService = require('../../../app_restaurante_api/services/barrioService');
 const exclusiones = require('./exclusiones');
+const pago = require('./pago');
 const mesaPublicaService = require('../../../app_restaurante_api/services/mesaPublicaService');
 const usuarioAsistenteDao = require('../../../app_core/dao/usuarioAsistenteDao');
 const Models = require('../../../app_core/models/conection');
@@ -653,7 +654,8 @@ function registrarCapacidades() {
         nombre: 'consultar_info_negocio',
         descripcion:
             'Los datos prácticos del restaurante: si está abierto AHORA y su horario de hoy, ' +
-            'con qué se puede pagar (y el número de Nequi u otra cuenta si el negocio lo dio), ' +
+            'con qué se puede pagar y CÓMO según el tipo de pedido (`como_pagar`: dilo tal cual, sin ' +
+            'mezclar el de domicilio con el de llevar), el número de Nequi si el negocio lo dio, ' +
             'cuánto vale el domicilio (un rango de precios, o por barrio si lo tiene; con rango, ' +
             'di el rango tal cual y que el valor exacto lo confirma el restaurante — nunca elijas ' +
             'tú un valor dentro del rango), cuánto suele tardar un pedido y ' +
@@ -711,6 +713,14 @@ function registrarCapacidades() {
                         ? null
                         : `${proxima.dias_adelante === 0 ? 'hoy' : DIAS[proxima.dia_semana]} a las ${proxima.hora}`,
                 metodos_de_pago: metodos.map((m) => m.nombre),
+                // Cómo se paga según el pedido, con las palabras del negocio (a domicilio se paga al
+                // domiciliario; para llevar o en mesa, por transferencia al local). Dilo tal cual.
+                como_pagar: await (async () => {
+                    const t = await pago.textosDePago(idNegocio);
+                    return t.domicilio || t.local
+                        ? { a_domicilio: t.domicilio, para_llevar_o_en_mesa: t.local }
+                        : null;
+                })(),
                 // El rango que declaró el negocio (2026-10-02): «entre $7.000 y $9.000» + su nota.
                 // Si además hay barrios con precio, el del barrio es el exacto.
                 domicilio_rango: negocio.domicilio_rango

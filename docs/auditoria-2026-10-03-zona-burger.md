@@ -40,3 +40,23 @@ Método: `scripts/auditoria_banderas.js` y `auditoria_transcripciones.js` (solo 
 - Por la noche de hoy no se vio ningún error de modelo ni de entrega.
 
 Tests: `__tests__/intelligence/auditoria_2026_10_03.test.js` (40) y `confirmacion_nombre_y_entrega.test.js` (21).
+
+## Adenda (noche del 2026-10-03) — «cancelar» es pagar, y cómo se paga según el pedido
+
+- **«Cancelar» ya no anula nada por sí solo.** Cualquier mensaje corto con «cancel…» (cancelar,
+  cancelo, «¿cuánto le cancelo?», «cancelo por Nequi») sin «anul…» se contesta con **«¿Deseas anular
+  el pedido o pagar?»** y dos botones (*Anular el pedido* / *Pagar*) — `adapters/restaurante/pago.js`.
+  *Anular* abre la confirmación de siempre de `cancelar_pedido` («¿Estás seguro de cancelar tu pedido
+  de…?» Sí/No) sobre el último pedido vivo de la conversación; *Pagar* da el texto de pago. Durante
+  un pedido a medias o una confirmación, «cancelar» sigue siendo dejar de armarlo.
+- **Cómo se paga, por tipo de pedido**, con el texto del negocio (`gener_negocio.pago_texto_domicilio` y
+  `pago_texto_local`; migración `migrate:negocio-texto-pago`, que carga el de Zona Burger):
+  - *Domicilio*: transferencia o efectivo, al llegar el domiciliario.
+  - *Para llevar o mesa*: transferencia a la llave BreB o al Nequi 3236388196 («Bra*** Mej**»).
+  Se responde sin modelo a «¿cómo pago?», «¿me das el Nequi?», «formas de pago» y a «Pagar»; una
+  palabra suelta («Nequi», «transferencia») cuenta solo con un pedido ya hecho. Sin saber el tipo se
+  dan los dos, rotulados. Sin texto configurado no se inventa nada: sigue el modelo con
+  `consultar_info_negocio` (que ahora devuelve `como_pagar`).
+- Falta una pantalla para editar esos dos textos (hoy se cambian en la base).
+
+Tests: `__tests__/intelligence/cancelar_y_pago.test.js` (30).

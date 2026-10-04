@@ -49,6 +49,7 @@ const barrioService = require('../../../app_restaurante_api/services/barrioServi
 const exclusiones = require('./exclusiones');
 const mesaPublicaService = require('../../../app_restaurante_api/services/mesaPublicaService');
 const datosCliente = require('./datosCliente');
+const pago = require('./pago');
 const Models = require('../../../app_core/models/conection');
 
 const VERTICAL = 'restaurante';
@@ -1601,7 +1602,11 @@ function reclama(texto) {
         Boolean(codigoPedido.leer(texto)) ||
         esPreguntaDeTiempo(texto) ||
         esPreguntaDeDomicilio(texto) ||
-        Boolean(mediaSuelta(texto))
+        Boolean(mediaSuelta(texto)) ||
+        pago.esCancelarAmbiguo(texto) ||
+        pago.eligioAnular(texto) ||
+        pago.eligioPagar(texto) ||
+        pago.esPreguntaDePago(texto, { hayPedido: true })
     );
 }
 
@@ -1928,6 +1933,73 @@ function crearFlujoRestaurante({
             tienePedidoReciente,
         });
         if (cerrado) return avisoFueraDeServicio(ctx, cerrado, { proximaApertura });
+
+        // ── «Cancelar» y pagar ──────────────────────────────────────────────────────────────
+        // En Colombia «cancelar» es PAGAR. Con cualquier «cancel…» se pregunta qué quiere, con dos
+        // botones, y NO se anula nada por una palabra ambigua (ver `pago.js`). Solo sin un pedido a
+        // medias: durante uno, «cancelar» ya significa dejar de armarlo.
+        if (!conversacion.tarea_actual) {
+            if (pago.eligioAnular(texto)) {
+                await conIdentidad(ctx);
+                const pedido = await pago.ultimoPedidoVivo(conversacion);
+                if (!pedido) {
+                    return {
+                        pasos: [paso('anular_sin_pedido')],
+                        respuestas: [
+                            'No encuentro un pedido tuyo vivo por aquí. Si quieres anular uno, escríbeme su número (ORD-…) o llama al restaurante 🙏',
+                        ],
+                        variables: conMemoria(conversacion),
+                        tarea: null,
+                        resultado: 'resuelto',
+                        nivel: 'determinista',
+                    };
+                }
+                return confirmacion.solicitar({
+                    capacidad: 'cancelar_pedido',
+                    args: { numero_orden: pedido.numero_orden },
+                    conversacion,
+                    pasos: [paso('anular_elegido', { numero_orden: pedido.numero_orden })],
+                    nivel: 'determinista',
+                });
+            }
+
+            const preguntaDePago = pago.esPreguntaDePago(texto, { hayPedido: true });
+            if (pago.eligioPagar(texto) || preguntaDePago) {
+                const pedido = await pago.ultimoPedidoVivo(conversacion);
+                // «Nequi» a secas solo cuenta con un pedido ya hecho; sin él lo atiende el modelo.
+                const vale = pago.eligioPagar(texto) || pago.esPreguntaDePago(texto, { hayPedido: Boolean(pedido) });
+                const frase = vale ? pago.frasePago(pedido?.tipo_pedido, await pago.textosDePago(ctx.idNegocio)) : null;
+                if (frase) {
+                    return {
+                        pasos: [paso('pago_respondido', { tipo: pedido?.tipo_pedido ?? null })],
+                        respuestas: [frase],
+                        variables: conMemoria(conversacion),
+                        tarea: null,
+                        resultado: 'resuelto',
+                        nivel: 'determinista',
+                    };
+                }
+            }
+
+            if (pago.esCancelarAmbiguo(texto)) {
+                return {
+                    pasos: [paso('cancelar_ambiguo')],
+                    respuestas: [
+                        {
+                            texto: pago.PREGUNTA_ANULAR_O_PAGAR,
+                            opciones: [
+                                { id: pago.OPCION_PAGO.ANULAR, etiqueta: 'Anular el pedido' },
+                                { id: pago.OPCION_PAGO.PAGAR, etiqueta: 'Pagar' },
+                            ],
+                        },
+                    ],
+                    variables: conMemoria(conversacion),
+                    tarea: null,
+                    resultado: 'resuelto',
+                    nivel: 'determinista',
+                };
+            }
+        }
 
         // «¿Cuánto se demora?» — se contesta con el tiempo que declaró el negocio. Va ANTES del
         // pedido a medias: ahí cualquier texto se leería como la respuesta al paso pendiente
