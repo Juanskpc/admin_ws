@@ -377,6 +377,34 @@ async function marcarIntervencionHumana(idConversacion, { transaction = null, at
 }
 
 /**
+ * Devuelve al asistente una conversación en `handoff_humano` SOLO para ejecutar la confirmación de
+ * pedido que ya estaba pendiente cuando la persona entró (el cliente acaba de decir «sí»).
+ *
+ * Zona Burger, 2026-10-03 (dos pedidos en una noche): el cliente tenía el resumen delante, una
+ * persona entró a decir «confirme el pedido, veci», el cliente contestó «sí» y ese «sí» se perdió
+ * porque la conversación ya estaba con una persona: el pedido no se creó y alguien lo tuvo que
+ * teclear a mano. Se marca `volver_a_humano` en la tarea para que, ejecutada, la conversación
+ * regrese a la persona y no se quede el asistente contestando por encima.
+ *
+ * Devuelve la fila si la había (y estaba así), o `null`.
+ */
+async function reanudarConfirmacionPendiente(idConversacion, { transaction = null } = {}) {
+    return unaFila(
+        `
+        UPDATE intelligence.conversacion
+           SET estado = 'activa',
+               tarea_datos = jsonb_set(COALESCE(tarea_datos, '{}'::jsonb), '{volver_a_humano}', 'true'::jsonb)
+         WHERE id_conversacion = :idConversacion
+           AND estado = 'handoff_humano'
+           AND tarea_actual = 'confirmar_mutacion'
+        RETURNING id_conversacion;
+        `,
+        { idConversacion },
+        transaction
+    );
+}
+
+/**
  * Busca una conversación sin crearla (F8-A).
  *
  * Existe porque `asegurarConversacion` **escribe**, y hay un caso que solo necesita mirar: cuando
@@ -1481,6 +1509,7 @@ module.exports = {
     ESTADOS_CONVERSACION,
     esErrorDeLock,
     reservarIngesta,
+    reanudarConfirmacionPendiente,
     registrarMensajeDelNegocio,
     aplicarCambioDeMensaje,
     asegurarConversacion,

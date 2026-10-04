@@ -57,7 +57,7 @@ const MAX_ANOTACIONES = 3;
  * al pedido sino una pregunta o un reclamo sobre el precio, y anotarlo en la nota de cocina (como
  * pasó con Zona Burger el 2026-10-02) no le contesta nada a nadie.
  */
-const HABLA_DE_PRECIO = /\b(cobran|cobra|cobro|cobraron|cobrar|cobrarian|vale|valen|cuesta|cuestan|precio|valor|total|pago|pagar)\b/;
+const HABLA_DE_PRECIO = /\b(cobran|cobra|cobro|cobraron|cobrar|cobrarian|vale|valen|cuesta|cuestan|precio|valor|total|pago|pagar|cuanto|cuanta|demora|demoran|demoras|tarda|tardan|tiempo|tienpo)\b/;
 
 /** Un mensaje que no es texto: el canal lo trae como `[image]`, `[audio]`, `[sticker]`… */
 const ES_MEDIA = /^\[(image|audio|video|sticker|document|location|contacts|unsupported)\]$/;
@@ -432,6 +432,8 @@ async function resolver(ctx, { gate, registry = registryReal, ahora = () => new 
             pasos,
             respuestas: [texto],
             variables: vars,
+            // Si el «sí» llegó con una persona atendiendo (motor.recibir), la conversación vuelve a ella.
+            ...(datos.volver_a_humano ? { estado: 'handoff_humano' } : {}),
             tarea: null,
             resultado: 'resuelto',
             nivel: 'determinista',

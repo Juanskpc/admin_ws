@@ -272,7 +272,16 @@ async function resolver(conversacion, opciones = {}) {
  * nombre, y el asistente pregunta como siempre.
  */
 function nombreLegible(valor) {
-    const limpio = String(valor ?? '').trim().replace(/\s+/g, ' ');
+    // Solo letras latinas (con tildes), espacios y los signos de un nombre: un perfil como
+    // «. 𐙚 Natha 𝜗𝜚» (Zona Burger, 2026-10-03) acabó en el resumen del pedido tal cual. Lo decorativo
+    // —símbolos, emoji, letras de otros alfabetos, números— se quita; lo que queda se enseña.
+    const limpio = String(valor ?? '')
+        .normalize('NFC')
+        .replace(/[︀-️‍]/g, '')
+        .replace(/[^\p{Script=Latin}\p{M}\s'.-]/gu, '')
+        .replace(/\s+/g, ' ')
+        .replace(/^[\s.'-]+|[\s.'-]+$/g, '')
+        .trim();
     if (limpio.length < 2 || limpio.length > 80) return null;
     return /\p{L}{2}/u.test(limpio) ? limpio : null;
 }

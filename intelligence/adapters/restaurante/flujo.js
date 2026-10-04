@@ -179,6 +179,18 @@ function conMemoria(conversacion, extra = {}) {
  * (`horarioService.estadoDeAtencion`), para que la respuesta no contradiga lo que pasaría si el
  * cliente insistiera en pedir.
  */
+/**
+ * El saludo que el cliente trajo, devuelto igual: si escribe «buenas noches» a las 6:52 PM, contestarle
+ * «buenas tardes» suena a máquina (Zona Burger, 2026-10-03). Sin saludo con franja, se usa la hora.
+ */
+function saludoDelCliente(texto) {
+    const t = normalizar(ultimaLinea(texto));
+    if (/buena?s? noches?/.test(t)) return '¡Buenas noches!';
+    if (/buena?s? tardes?/.test(t)) return '¡Buenas tardes!';
+    if (/buen(os)? dias?/.test(t)) return '¡Buenos días!';
+    return null;
+}
+
 async function bienvenida(
     ctx,
     pasosPrevios = [],
@@ -188,7 +200,7 @@ async function bienvenida(
     } = {}
 ) {
     const enlace = enlaceDelMenu(ctx.idNegocio);
-    const encabezado = `👋 ${saludoPorLaHora(ctx.ahora())} Te saluda *${ctx.negocio.tratamiento}*.`;
+    const encabezado = `👋 ${saludoDelCliente(ctx.texto) || saludoPorLaHora(ctx.ahora())} Te saluda *${ctx.negocio.tratamiento}*.`;
     const { estado } = await estadoAtencion({ idNegocio: ctx.idNegocio, ahora: ctx.ahora() });
     const cuandoAbre = await cuandoAbreDe(ctx, estado, proximaApertura);
 
@@ -1563,8 +1575,34 @@ async function cartaDe(idNegocio) {
  * `pregunta_libre` y se lo quedaba el modelo, que se apañaba decodificando el código a mano
  * hasta que se le olvidó el carrito a mitad de conversación.
  */
+/**
+ * Una foto, un audio, un video, un documento o una ubicación SIN texto: el canal lo trae como
+ * `[image]`, `[audio]`… El asistente no los ve. Es casi siempre el comprobante de la transferencia
+ * o la ubicación del domicilio, y antes se contestaba con el modelo: «¿quieres que revise algo de las
+ * imágenes o te ayudo a elegir otra hamburguesa?» (Zona Burger, 2026-10-03). Los stickers los calla
+ * `cortesia`.
+ */
+const MEDIA_PARA_PERSONA = {
+    image: 'tu foto',
+    audio: 'tu audio',
+    video: 'tu video',
+    document: 'tu documento',
+    location: 'tu ubicación',
+    contacts: 'ese contacto',
+};
+
+function mediaSuelta(texto) {
+    const m = String(ultimaLinea(texto) || '').trim().match(/^\[(image|audio|video|document|location|contacts)\]$/);
+    return m ? m[1] : null;
+}
+
 function reclama(texto) {
-    return Boolean(codigoPedido.leer(texto)) || esPreguntaDeTiempo(texto) || esPreguntaDeDomicilio(texto);
+    return (
+        Boolean(codigoPedido.leer(texto)) ||
+        esPreguntaDeTiempo(texto) ||
+        esPreguntaDeDomicilio(texto) ||
+        Boolean(mediaSuelta(texto))
+    );
 }
 
 /**
@@ -1581,8 +1619,10 @@ function reclama(texto) {
  * un pedido o una queja, no esta pregunta, y no se le contesta con un tiempo.
  */
 const PREGUNTA_TIEMPO = [
-    /\bcuanto (tiempo )?(se |me |les |lo )?(demora|demoran|demoraria|tarda|tardan|tardaria|toma|tomaria|falta|faltan)\b/,
-    /\bque tanto (se |me )?(demora|demoran|tarda|tardan)\b/,
+    // «te demoras», «le demora», y la errata «tienpo» (Zona Burger, 2026-10-03: «Cuánto te demoras?»
+    // y «cuanto tienpo se demora» no se reconocían y acabaron en el modelo o en la nota del pedido).
+    /\bcuanto (ti?em?n?po )?(se |me |les |lo |te |nos |le )?(demora|demoran|demoras|demoraria|demorarian|tarda|tardan|tardas|tardaria|toma|tomaria|falta|faltan)\b/,
+    /\bque tanto (se |me |te )?(demora|demoran|demoras|tarda|tardan|tardas)\b/,
     /\bcuanto (de )?(demora|espera|tiempo de espera|tiempo de entrega)\b/,
     /\b(tiempo|demora) (estimado )?de (entrega|espera|preparacion)\b/,
     /\ben cuanto (tiempo )?(llega|llegaria|esta|estaria|lo tienen|me lo traen|me lo entregan|me llega)\b/,
@@ -1636,6 +1676,10 @@ const PREGUNTA_DOMICILIO = [
     /\bcuanto (me )?(cobran|cobrarian|vale|cuesta|sale) (por )?(el |la )?(domicilio|envio|llevarlo|traerlo|traermelo|llevarmelo|traida|llevada)\b/,
     /\b(domicilio|envio|domi) (cuanto|que valor|que precio|en cuanto|que costo)\b/,
     /\b(tiene|tienen|cobran) (costo|valor|recargo) (el |los )?(domicilio|domicilios|envio)\b/,
+    // Después de oír el total: «¿Con el domicilio?», «¿Cuánto es con domicilio?» (Zona Burger,
+    // 2026-10-03: tres clientes lo preguntaron así y acabaron con una persona). Solo si el
+    // mensaje ENTERO es eso: es la pregunta corta, no un pedido que menciona el domicilio.
+    /^(y |entonces |osea )?(cuanto (me )?(es|seria|sale|son|queda|quedaria) )?(con|incluyendo|incluido|mas|sumando)( el| los)? (domicilio|domicilios|domi|envio)( incluido)?$/,
     // «¿Vale 7.000 el domicilio?», «¿me cobran 8 mil el domi?», «¿el domicilio es de 7 mil?»
     // (Zona Burger, 2026-10-02: «Pero es cerca, ¿vale 7.000 el domicilio?» no se reconocía).
     // Ojo: al normalizar se quitan puntos y comas, así que «7.000» llega como «7 000».
@@ -1842,6 +1886,25 @@ function crearFlujoRestaurante({
             return { ...decision, invocaciones: [...invocaciones, ...(decision.invocaciones || [])] };
         }
 
+        // Una foto, un audio o una ubicación suelta, sin pedido a medias: no se ve, se le pasa a una
+        // persona (que además la ve en la Bandeja) en vez de improvisar con el modelo.
+        const media = conversacion.tarea_actual === TAREA_PEDIDO ? null : mediaSuelta(texto);
+        if (media) {
+            const quien = String(negocio.tratamiento || '').trim();
+            const equipo = quien && quien !== 'el negocio' ? `alguien del equipo de ${quien}` : 'alguien del equipo';
+            return {
+                pasos: [paso('media_a_persona', { tipo: media })],
+                respuestas: [
+                    `Recibí ${MEDIA_PARA_PERSONA[media]} 🙌 Se la paso a ${equipo}, que la revisa y te contesta por este mismo chat.`,
+                ],
+                variables: conMemoria(conversacion),
+                tarea: null,
+                estado: 'handoff_humano',
+                resultado: 'handoff',
+                nivel: 'determinista',
+            };
+        }
+
         // Lo PRIMERO después: ¿viene con el carrito del menú digital? Va antes que cualquier
         // otra lectura porque el mensaje trae texto humano delante («Hola, quiero pedir…») que
         // si no se confundiría con un saludo, y el cliente recibiría la bienvenida en vez de su
@@ -1994,6 +2057,7 @@ module.exports = {
     fueraDeServicio,
     avisoFueraDeServicio,
     esPreguntaDeTiempo,
+    mediaSuelta,
     fraseDeTiempo,
     esPreguntaDeDomicilio,
     fraseDeDomicilio,

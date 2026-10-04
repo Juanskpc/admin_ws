@@ -67,6 +67,8 @@ const sequelize = Models.sequelize;
 const EVENTO_ESCALADA = 'conversacion.escalada.v1';
 // Para decidir si un mensaje del cliente reabre «Esperan respuesta» (solo cortesía → no).
 const cortesia = require('./cortesia');
+const confirmacion = require('./confirmacion');
+const { esAfirmacionConEntrega } = require('./texto');
 
 /** Avisos del canal que no son un mensaje del cliente: hoy, que borró uno (`[revoke]`). */
 const SIN_CONTENIDO = /^\[revoke\]$/i;
@@ -285,6 +287,28 @@ async function recibir(entrada) {
                 reabrirEspera: !duplicado && !cortesia.leer(contenido).cortesia,
             }
         );
+
+        // Un «sí» a una confirmación de pedido que ya estaba pendiente NO se pierde porque una persona
+        // haya entrado a la conversación: se ejecuta y la conversación vuelve a la persona (ver
+        // `repositorio.reanudarConfirmacionPendiente`). Solo con un sí claro y con la confirmación
+        // vigente (10 min); cualquier otra cosa sigue siendo asunto de la persona.
+        if (
+            !duplicado &&
+            !antiguo &&
+            conversacion.estado === ESTADO_HANDOFF &&
+            confirmacion.pendiente(conversacion) &&
+            !confirmacion.caducado(conversacion.tarea_datos) &&
+            esAfirmacionConEntrega(contenido, conversacion.tarea_datos?.args?.tipo_entrega)
+        ) {
+            const fila = await repositorio.reanudarConfirmacionPendiente(
+                conversacion.id_conversacion,
+                { transaction: t }
+            );
+            if (fila) {
+                conversacion.estado = 'activa';
+                conversacion.tarea_datos = { ...conversacion.tarea_datos, volver_a_humano: true };
+            }
+        }
 
         if (duplicado) {
             // El canal reentregó. Ni se guarda otra vez ni se despierta: un duplicado que
@@ -508,6 +532,8 @@ function sellarTarea(tarea) {
 async function avisarSiSeEscalo({ conversacion, estadoNuevo, transaction }) {
     if (estadoNuevo !== ESTADO_HANDOFF) return false;
     if (conversacion.estado === ESTADO_HANDOFF) return false;
+    // Volvió a la persona tras ejecutar un «sí» que se le había quitado: no es una escalada nueva.
+    if (conversacion.tarea_datos?.volver_a_humano) return false;
 
     await outboxDao.emitir(
         {

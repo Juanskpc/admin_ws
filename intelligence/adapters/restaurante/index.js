@@ -223,7 +223,35 @@ function mismaPalabra(a, b) {
     if (corta.length >= 4 && larga.startsWith(corta)) return true;
     let i = 0;
     while (i < corta.length && corta[i] === larga[i]) i++;
-    return i >= 5 && i >= corta.length * 0.7;
+    return (i >= 5 && i >= corta.length * 0.7) || conErrata(a, b);
+}
+
+/** Distancia de edición (Levenshtein) entre dos palabras cortas. */
+function distancia(a, b) {
+    let previa = Array.from({ length: b.length + 1 }, (_, j) => j);
+    for (let i = 1; i <= a.length; i++) {
+        const fila = [i];
+        for (let j = 1; j <= b.length; j++) {
+            fila[j] = Math.min(
+                previa[j] + 1,
+                fila[j - 1] + 1,
+                previa[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)
+            );
+        }
+        previa = fila;
+    }
+    return previa[b.length];
+}
+
+/**
+ * ¿Es la misma palabra con una errata? («visiosa» ~ «viciosa», «limos» ~ «limon», «dulsinea» ~
+ * «dulcinea»). Zona Burger, 2026-10-03: «papas con limos» y «visiosa» devolvieron «no la
+ * encuentro» con el producto en la carta. Solo palabras de 5+ letras y con 1 error (2 si pasan de
+ * 8): con menos, «mora» y «moda» serían lo mismo.
+ */
+function conErrata(a, b) {
+    if (a.length < 5 || b.length < 5 || Math.abs(a.length - b.length) > 2) return false;
+    return distancia(a, b) <= (Math.min(a.length, b.length) >= 8 ? 2 : 1);
 }
 
 /**
@@ -599,10 +627,23 @@ function registrarCapacidades() {
                 total: precio(orden.total),
                 ya_pagado: orden.estado_pago === 'pagado' || orden.estado === 'CERRADA',
                 ...(abierta
-                    ? tiempoDelPedido(orden, {
-                          min: ficha?.tiempo_estimado_min,
-                          max: ficha?.tiempo_estimado_max,
-                      })
+                    ? {
+                          ...tiempoDelPedido(orden, {
+                              min: ficha?.tiempo_estimado_min,
+                              max: ficha?.tiempo_estimado_max,
+                          }),
+                          // Lo que el negocio declaró, dicho tal cual. Sin esto el modelo sabía cuánto
+                          // llevaba el pedido pero no cuánto suele tardar, y contestaba «aún no tengo
+                          // un tiempo estimado» (Zona Burger, 2026-10-03: «Cuánto te demoras?»).
+                          ...(Number(ficha?.tiempo_estimado_min) > 0
+                              ? {
+                                    tiempo_estimado_del_negocio:
+                                        Number(ficha.tiempo_estimado_max) > Number(ficha.tiempo_estimado_min)
+                                            ? `${ficha.tiempo_estimado_min} a ${ficha.tiempo_estimado_max} minutos`
+                                            : `unos ${ficha.tiempo_estimado_min} minutos`,
+                                }
+                              : {}),
+                      }
                     : {}),
             };
         },
@@ -1759,4 +1800,4 @@ function registrarFlujo({ flujos }) {
     });
 }
 
-module.exports = { VERTICAL, registrarCapacidades, registrarFlujo, estadoParaElCliente, tiempoDelPedido };
+module.exports = { VERTICAL, registrarCapacidades, registrarFlujo, estadoParaElCliente, tiempoDelPedido, mismaPalabra };

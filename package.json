@@ -92,6 +92,7 @@
     "migrate:reserva-config-minutos": "node migrations/migrate_reserva_config_minutos.js",
     "migrate:reserva-asesoria": "node migrations/migrate_reserva_asesoria.js",
     "migrate:intelligence-consultas-reserva": "node migrations/migrate_intelligence_consultas_reserva.js",
+    "migrate:intelligence-info-negocio": "node migrations/migrate_intelligence_info_negocio_restaurante.js",
     "migrate:intelligence-reportes": "node migrations/migrate_intelligence_reportes.js",
     "migrate:restaurante-pago-domicilio": "node migrations/migrate_restaurante_pago_domicilio.js",
     "migrate:restaurante-subniveles-tipo-pedido": "node migrations/migrate_restaurante_subniveles_tipo_pedido.js",
