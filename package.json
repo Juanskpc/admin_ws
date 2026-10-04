@@ -123,7 +123,9 @@
     "migrate:planes-landing": "node migrations/migrate_planes_landing.js",
     "migrate:usuario-eliminado": "node migrations/migrate_usuario_eliminado.js",
     "migrate:restaurante-cajas": "node migrations/migrate_restaurante_cajas.js",
-    "migrate:restaurante-para-servir": "node migrations/migrate_restaurante_para_servir.js"
+    "migrate:restaurante-para-servir": "node migrations/migrate_restaurante_para_servir.js",
+    "migrate:registro-migraciones": "node migrations/migrate_registro_migraciones.js",
+    "migrar": "node scripts/migrar.js"
   },
   "keywords": [],
   "author": "",
