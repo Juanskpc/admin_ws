@@ -828,4 +828,20 @@ describe('ediciones y borrados no son mensajes nuevos', () => {
         expect(r.ecos).toHaveLength(0);
         expect(r.cambios[0]).toMatchObject({ origen: 'negocio', tipo: 'revoke', wamidOriginal: 'wamid.ORIG2' });
     });
+
+    test('una reacción no crea un mensaje nuevo — no llega "[reaction]" a la Bandeja', () => {
+        const r = interpretarWebhook(
+            webhook({
+                messages: [{
+                    from: '573001234567', id: 'wamid.REACT', timestamp: '1700000000', type: 'reaction',
+                    reaction: { message_id: 'wamid.ORIG3', emoji: '❤️' },
+                }],
+            }),
+            { config }
+        );
+        expect(r.mensajes).toHaveLength(0);
+        expect(r.cambios).toEqual([
+            { idNegocio: expect.anything(), origen: 'cliente', tipo: 'reaction', wamidOriginal: 'wamid.ORIG3' },
+        ]);
+    });
 });
