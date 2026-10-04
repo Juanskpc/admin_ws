@@ -117,7 +117,6 @@ function normalizarTexto(texto) {
  */
 async function buscarEnLaCarta(idNegocio, termino) {
     const directa = await cartaService.buscarProductos(idNegocio, termino);
-    if (directa.length > 0) return directa;
 
     const palabras = normalizarTexto(termino)
         .split(/\s+/)
@@ -134,14 +133,20 @@ async function buscarEnLaCarta(idNegocio, termino) {
         });
     }
 
-    // La segunda y la tercera se JUNTAN, no se elige la primera que encuentre algo. Zona Burger,
-    // 2026-10-02: «salchipapa criollita» → la segunda solo veía la «familiar» (la única que
-    // escribe «salchipapas» en su descripción) y se quedaba ahí; las criollitas pequeña, mediana
-    // y grande solo lo dicen en la CATEGORÍA, que es lo que mira la tercera. El bot ofreció la de
-    // $60.000 como si fuera la única.
+    // La primera, la segunda y la tercera se JUNTAN; ninguna corta el camino a las demás.
+    //
+    // Zona Burger, 2026-10-03: «hamburguesa» → la primera pasada devolvía solo la Pata-crunch
+    // (cuya descripción dice «hamburguesa») y retornaba ahí. La tercera pasada —que recorre la
+    // CATEGORÍA HAMBURGUESAS y trae todos los productos— nunca corría. El bot ofrecía una sola
+    // hamburguesa como si fuera la única de la carta.
+    //
+    // Mismo patrón que segunda+tercera (salchipapa criollita, 2026-10-02): la primera puede
+    // traer un resultado suelto sin agotar lo que hay en esa categoría.
     const tercera = await buscarPorCategoriaYNombre(idNegocio, termino);
     const vistos = new Set(tercera.map((p) => p.id_producto));
-    return [...tercera, ...segunda.filter((p) => !vistos.has(p.id_producto))];
+    const deSegunda = segunda.filter((p) => !vistos.has(p.id_producto));
+    deSegunda.forEach((p) => vistos.add(p.id_producto));
+    return [...tercera, ...deSegunda, ...directa.filter((p) => !vistos.has(p.id_producto))];
 }
 
 /**
