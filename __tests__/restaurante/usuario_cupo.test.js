@@ -22,6 +22,7 @@ const Models = require('../../app_core/models/conection');
 const { getLimitesNegocio } = require('../../app_core/helpers/limitesNegocio');
 const { contarUsuarios } = require('../../app_core/helpers/cupoUsuarios');
 const UsuarioAdminController = require('../../app_admin_api/controllers/usuarioAdminController');
+const { crearPrincipal } = require('../../app_core/authz/principal');
 
 const sequelize = Models.sequelize;
 let idNegocio;
@@ -31,9 +32,26 @@ async function fila(sql, r = {}) {
     return (await sequelize.query(sql, { replacements: r, type: sequelize.QueryTypes.SELECT }))[0] ?? null;
 }
 
+/**
+ * El `req` lleva `principal` porque en producción SIEMPRE lo lleva.
+ *
+ * `exigirPertenenciaNegocio` lo deja puesto en todas las rutas protegidas del router de admin
+ * (`app_admin_api/routes/index.js`), y desde la auditoría del 2026-10-04 `createUsuario` lo
+ * exige: sin él no puede saber si quien pide tiene permiso sobre ese negocio, y falla cerrado
+ * con 403 (ver `app_core/authz/alcanceAdmin.js`).
+ *
+ * Sin esta línea la prueba recibía ese 403 y nunca llegaba a la regla del cupo, que es lo que
+ * mide. El principal es de super administrador a propósito: el tope de usuarios se aplica a
+ * todo el mundo, también a quien tiene alcance sobre cualquier negocio, y así la prueba afirma
+ * la regla de negocio sin que la autorización se interponga.
+ */
 function llamar(body) {
     const res = { status: jest.fn().mockReturnThis(), json: jest.fn().mockReturnThis() };
-    return UsuarioAdminController.createUsuario({ body, usuario: { id_usuario: 1 }, query: {} }, res).then(() => res);
+    const principal = crearPrincipal({ tipo: 'usuario', idUsuario: 1, esSuperAdmin: true });
+
+    return UsuarioAdminController
+        .createUsuario({ body, usuario: { id_usuario: 1 }, principal, query: {} }, res)
+        .then(() => res);
 }
 
 beforeAll(async () => {
