@@ -4,7 +4,6 @@ const path = require('path');
 const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
-const rateLimit = require('express-rate-limit');
 
 const db = require('./app_core/models/conection');
 const adminRoutes = require('./app_admin_api/routes/index');
@@ -82,16 +81,14 @@ app.use(cors((req, callback) => {
     });
 }));
 
-// ⚠️  Rate limiting DESACTIVADO por defecto (migración AWS → VPS Vultr).
+// Rate limiting — ENCENDIDO por defecto desde 2026-10-04.
 //
-// En el VPS único todo el tráfico entra por Caddy, y el conteo por IP se hacía
-// sobre la IP del proxy: los 200 req/15min de producción se repartían entre
-// TODOS los clientes a la vez, no por usuario. Resultado: "Demasiadas
-// peticiones" en el login de clientes legítimos.
+// Estuvo apagado desde la migración a Vultr con el diagnóstico equivocado (se creyó que el
+// conteo iba contra la IP de Caddy; no era eso, era que 200/15min queda por debajo del tráfico
+// normal de un restaurante). El por qué completo, las mediciones que fijan los números y la
+// razón de que el límite de login vaya aparte están en `app_core/middleware/limites.js`.
 //
-// Se deja apagado hasta rediseñarlo para la nueva arquitectura (clave por
-// usuario/negocio + almacén compartido, no en memoria del proceso).
-// Para reactivarlo temporalmente: RATE_LIMIT_ENABLED=true en el .env
+// Para apagarlo en una emergencia: RATE_LIMIT_ENABLED=false en el .env.
 
 // ========================
 // Los webhooks de cobranza van ANTES del rate limiter y del parser JSON
@@ -104,33 +101,25 @@ app.use(cors((req, callback) => {
 //      límite, mucho más holgado.
 app.use('/admin/cobranza/webhook', require('./app_admin_api/webhooks/cobranzaWebhook'));
 
-const rateLimitEnabled = process.env.RATE_LIMIT_ENABLED === 'true';
+// Apagado solo si se pide explícitamente: un `.env` al que le falte la variable debe quedar
+// protegido, no a la intemperie. Es la elección contraria a la de antes, y a propósito.
+const rateLimitEnabled = process.env.RATE_LIMIT_ENABLED !== 'false';
 const isDev = process.env.NODE_ENV !== 'production';
 
 if (rateLimitEnabled) {
-    // Rate limiting global:
-    //   - Producción: 200 peticiones por IP cada 15 min
-    //   - Desarrollo:  2 000 peticiones por IP cada 15 min (SSR + HMR generan muchas)
-    const limiter = rateLimit({
-        windowMs: 15 * 60 * 1000,
-        max: isDev ? 2000 : 200,
-        standardHeaders: true,
-        legacyHeaders: false,
-        message: { success: false, message: 'Demasiadas peticiones, intente más tarde' }
-    });
-    app.use(limiter);
+    const { limitadorGeneral } = require('./app_core/middleware/limites');
 
-    // Rate limiting específico para login (más restrictivo)
-    const loginLimiter = rateLimit({
-        windowMs: 15 * 60 * 1000,
-        max: 1000,
-        standardHeaders: true,
-        legacyHeaders: false,
-        message: { success: false, message: 'Demasiados intentos de login, intente más tarde' }
-    });
-    app.use('/admin/auth/login', loginLimiter);
+    // En desarrollo el techo sube: SSR, recarga en caliente y las suites de pruebas generan
+    // ráfagas que no se parecen en nada al uso real.
+    app.use(limitadorGeneral({ max: isDev ? 20000 : undefined }));
+
+    // El límite estrecho del login NO va aquí: necesita leer la identificación del cuerpo para
+    // no dejar que quien prueba cédulas estrene cubo con cada una, y `express.json()` todavía no
+    // ha corrido en este punto. Vive en `app_admin_api/routes/index.js`, sobre cada ruta de
+    // autenticación.
+    console.log('🛡️  Rate limiting activo (general por IP; el de login va en sus rutas)');
 } else {
-    console.log('⚠️  Rate limiting DESACTIVADO (RATE_LIMIT_ENABLED != true)');
+    console.log('⚠️  Rate limiting DESACTIVADO (RATE_LIMIT_ENABLED=false)');
 }
 
 // ========================
@@ -251,6 +240,31 @@ app.get('/', (req, res) => {
         message: 'Admin WS funcionando correctamente',
         timestamp: new Date().toISOString()
     });
+});
+
+// ========================
+// Sonda de salud REAL — para un monitor externo
+// ========================
+//
+// `GET /` de arriba responde 200 mientras el proceso de Node esté vivo, y eso es justo lo que
+// NO sirve para vigilar: el modo de fallo que de verdad tira el servicio es que la base no
+// conteste —se cae PostgreSQL, se agota el pool, el disco se llena—, y en ese caso `/` sigue
+// devolviendo 200 alegremente. Un monitor apuntado ahí nunca avisa de la avería que importa.
+//
+// Esta toca la base con la consulta más barata que existe y devuelve **503** si falla, porque
+// es el código que todos los servicios de monitoreo entienden como «caído» sin configurar nada.
+//
+// Deliberadamente NO lleva autenticación y NO dice nada de dentro: ni versión, ni nombre de
+// base, ni el mensaje de error de PostgreSQL. Un monitor externo necesita llegar sin
+// credenciales, y el detalle del fallo se mira en `journalctl`, no se publica en internet.
+app.get('/health', async (req, res) => {
+    try {
+        await db.sequelize.query('SELECT 1');
+        return res.status(200).json({ ok: true });
+    } catch (error) {
+        console.error('[health] La base no responde:', error.message);
+        return res.status(503).json({ ok: false });
+    }
 });
 
 // ========================

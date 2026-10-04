@@ -2,6 +2,9 @@ const { body, param, query, validationResult } = require('express-validator');
 
 const UsuarioAdminDao = require('../../app_core/dao/usuarioAdminDao');
 const Respuesta = require('../../app_core/helpers/respuesta');
+// Autorización de estas rutas: alcance por negocio, no rango. `negocio_app` las usa para su
+// vista «Personal», así que `requireSuperAdmin` las habría roto — el por qué, en el módulo.
+const Alcance = require('../../app_core/authz/alcanceAdmin');
 const { initTransaction } = require('../../app_core/helpers/funcionesAdicionales');
 const Audit = require('../../app_core/helpers/auditHelper');
 const Models = require('../../app_core/models/conection');
@@ -191,10 +194,17 @@ async function listUsuarios(req, res) {
 
         const estado = req.query.estado === 'ALL' ? null : req.query.estado;
         const idNegocio = req.query.id_negocio ? Number(req.query.id_negocio) : null;
+
+        // Quien no es super administrador solo ve la plantilla de SUS negocios. El alcance va
+        // al DAO como filtro, no como comprobación posterior: filtrar en JavaScript lo que la
+        // consulta ya trajo deja los datos de otro inquilino en memoria del proceso, y basta un
+        // `console.log` o un error con la fila dentro para que se escapen.
+        const alcance = Alcance.alcanceDe(req);
         const usuarios = await UsuarioAdminDao.getUsuarios({
             search: req.query.search || '',
             idRol: req.query.id_rol || null,
             idNegocio,
+            idsNegocio: alcance.superAdmin ? null : alcance.ids,
             estado,
         });
 
@@ -242,6 +252,16 @@ async function createUsuario(req, res) {
             es_admin_principal: Boolean(req.body.es_admin_principal),
         };
 
+        // `id_negocio` es opcional en el validador porque el super administrador crea cuentas
+        // sin negocio (soporte, su propia cuenta). Para todos los demás es obligatorio y tiene
+        // que ser uno suyo: sin esto, un dueño de restaurante creaba usuarios en el negocio del
+        // vecino, o globales. `negocio_app` ya lo manda siempre, desde la sesión.
+        if (Alcance.negarSiNegocioFuera(req, res, payload.id_negocio)) return;
+
+        if (Alcance.negarSiEscalaARolSuperAdmin(
+            req, res, payload.id_rol, await UsuarioAdminDao.getRolesActivos()
+        )) return;
+
         const existe = await UsuarioAdminDao.findUsuarioDuplicado({
             email: payload.email,
             num_identificacion: payload.num_identificacion,
@@ -282,11 +302,22 @@ async function updateUsuario(req, res) {
             return Respuesta.error(res, 'Usuario no encontrado', 404);
         }
 
+        if (Alcance.negarSiUsuarioFuera(req, res, usuarioActual)) return;
+
         const payload = {
             ...req.body,
             email: req.body.email.toLowerCase().trim(),
             es_admin_principal: Boolean(req.body.es_admin_principal),
         };
+
+        // Dos comprobaciones distintas y las dos hacen falta: la de arriba dice que puede tocar
+        // a ESTE usuario, estas dos que no puede usar la edición para sacarlo de su alcance ni
+        // para convertirlo en super administrador.
+        if (Alcance.negarSiNegocioFuera(req, res, payload.id_negocio)) return;
+
+        if (Alcance.negarSiEscalaARolSuperAdmin(
+            req, res, payload.id_rol, await UsuarioAdminDao.getRolesActivos()
+        )) return;
 
         const duplicado = await UsuarioAdminDao.findUsuarioDuplicado({
             email: payload.email,
@@ -335,6 +366,8 @@ async function updatePerfilUsuario(req, res) {
         if (!usuarioActual) {
             return Respuesta.error(res, 'Usuario no encontrado', 404);
         }
+
+        if (Alcance.negarSiUsuarioFuera(req, res, usuarioActual)) return;
 
         const payload = {
             primer_nombre: req.body.primer_nombre,
@@ -398,6 +431,8 @@ async function setEstadoUsuario(req, res) {
             return Respuesta.error(res, 'Usuario no encontrado', 404);
         }
 
+        if (Alcance.negarSiUsuarioFuera(req, res, usuario)) return;
+
         if (usuario.es_admin_principal && estado === 'I') {
             return Respuesta.error(res, 'No se puede inactivar el administrador principal.', 409);
         }
@@ -442,6 +477,8 @@ async function deleteUsuario(req, res) {
         if (!usuario) {
             return Respuesta.error(res, 'Usuario no encontrado', 404);
         }
+
+        if (Alcance.negarSiUsuarioFuera(req, res, usuario)) return;
 
         if (usuario.es_admin_principal) {
             return Respuesta.error(res, 'No se puede eliminar el administrador principal.', 409);
@@ -508,6 +545,16 @@ async function getPermisosUsuario(req, res) {
         if (validationError) return validationError;
 
         const idUsuario = Number(req.params.id);
+
+        // El alcance se comprueba ANTES de pedir los permisos: la matriz de un usuario dice en
+        // qué negocio tiene cada nivel, así que filtrarla después ya habría revelado dónde
+        // trabaja. Se resuelve contra la ficha completa, que es la que trae todos sus roles.
+        const ficha = await UsuarioAdminDao.getUsuarioById(idUsuario);
+        if (!ficha) {
+            return Respuesta.error(res, 'Usuario no encontrado', 404);
+        }
+        if (Alcance.negarSiUsuarioFuera(req, res, ficha)) return;
+
         const result = await UsuarioAdminDao.getPermisosEfectivosUsuario(idUsuario);
 
         if (!result) {
@@ -528,6 +575,11 @@ async function getPermisosRol(req, res) {
 
         const idRol = Number(req.params.id);
         const idNegocio = req.query.id_negocio ? Number(req.query.id_negocio) : null;
+
+        // Sin `id_negocio` la matriz es la plantilla global del rol, y esa es del super
+        // administrador. `negocio_app` siempre manda el suyo, así que no pierde nada.
+        if (Alcance.negarSiNegocioFuera(req, res, idNegocio)) return;
+
         const result = await UsuarioAdminDao.getPermisosMatrizRol({ idRol, idNegocio });
 
         if (!result) {
@@ -550,6 +602,12 @@ async function savePermisosRol(req, res) {
         const idRol = Number(req.params.id);
         const idNegocio = req.body.id_negocio ? Number(req.body.id_negocio) : null;
         const payload = req.body.modulos;
+
+        // La escalada más silenciosa que dejaba abierta esta ruta: con cualquier token válido se
+        // reescribía la matriz de permisos de un rol de otro negocio —o la global, que afecta a
+        // todos— y en la siguiente sesión el atacante entraba a donde quisiera. Sin `id_negocio`
+        // es la plantilla global: solo super administrador.
+        if (Alcance.negarSiNegocioFuera(req, res, idNegocio)) return;
 
         const matriz = await UsuarioAdminDao.getPermisosMatrizRol({ idRol, idNegocio });
         if (!matriz) {
