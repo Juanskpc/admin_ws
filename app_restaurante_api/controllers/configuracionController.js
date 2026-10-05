@@ -36,6 +36,7 @@ const CAMPOS_EDITABLES = [
     'url_instagram',
     'permite_multipago',
     'permite_pago_domicilio',
+    'id_metodo_pago_domicilio',
     'permite_descuento',
     'pregunta_cobro_envio',
     'permite_cuentas_cliente',

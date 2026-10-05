@@ -136,18 +136,28 @@ async function abrirCaja({ idNegocio, idUsuario, montoApertura, observaciones, i
  * lo que de verdad hay en el cajón. Sumar solo los ingresos hacía que el desglose no
  * cuadrara nunca con el esperado en cuanto había un egreso.
  *
+ * «La forma de pago con la que salieron» no siempre es la del pedido: si el negocio
+ * eligió una para el pago al domiciliario (`gener_negocio.id_metodo_pago_domicilio`),
+ * el egreso resta de ESA. Un pedido de 20.000 + 7.000 de domicilio cobrado por
+ * transferencia deja «Transferencia +27.000» y «Efectivo −7.000», que es lo que de
+ * verdad pasó: el banco recibió todo y del cajón salió el pago del domiciliario.
+ *
  * Los movimientos sin orden ni forma de pago se listan como "Manual / Sin orden".
  */
 async function getDesglosePorMetodo(idCaja) {
-    // El dinero de cada movimiento se atribuye por forma de pago:
+    // El dinero de cada movimiento se atribuye por forma de pago, en este orden:
+    //  - Movimiento con forma de pago PROPIA: manda ella y punto. Son los manuales, los
+    //    abonos a cuentas y el pago al domiciliario cuando el negocio dijo de dónde sale
+    //    (`gener_negocio.id_metodo_pago_domicilio`).
     //  - Órdenes con Multipago (filas en rest_pago_orden): se reparte el monto
     //    proporcionalmente al valor de cada forma de pago.
-    //  - Órdenes con pago simple o movimientos manuales: el monto completo va
-    //    al id_metodo_pago de la orden (o "Manual / Sin orden").
+    //  - Órdenes con pago simple: el monto completo va al id_metodo_pago de la orden
+    //    (o "Manual / Sin orden" si tampoco hay).
     const rows = await Models.sequelize.query(`
         WITH ingresos AS (
-            -- La forma de pago viaja en el propio movimiento solo cuando NO hay pedido detrás
-            -- (un abono a la cuenta de un cliente o un egreso manual). Con pedido manda la orden.
+            -- La forma de pago viaja en el propio movimiento cuando no hay pedido detrás (un
+            -- abono o un egreso manual) y cuando sí hay pero el dinero salió por otra vía (el
+            -- pago al domiciliario). Si viene, gana a la de la orden.
             -- El signo lo pone el tipo: un EGRESO entra al desglose en negativo.
             SELECT m.id_orden,
                    CASE WHEN m.tipo = 'EGRESO' THEN -m.monto ELSE m.monto END AS monto,
@@ -183,17 +193,21 @@ async function getDesglosePorMetodo(idCaja) {
                   ON mp2.id_metodo_pago = po2.id_metodo_pago AND NOT mp2.es_cuenta
                 GROUP BY po2.id_orden
             ) tot ON tot.id_orden = i.id_orden
+            -- El movimiento que trae forma de pago propia no se reparte entre las del
+            -- pedido: ya dice por dónde salió el dinero.
+            WHERE i.metodo_directo IS NULL
             GROUP BY pp.id_metodo_pago
         ),
         simple AS (
-            SELECT COALESCE(po.id_metodo_pago, i.metodo_directo) AS id_metodo_pago,
+            SELECT COALESCE(i.metodo_directo, po.id_metodo_pago) AS id_metodo_pago,
                    SUM(i.monto) AS total
             FROM ingresos i
             LEFT JOIN restaurante.pedid_orden po ON po.id_orden = i.id_orden
-            WHERE NOT EXISTS (
-                SELECT 1 FROM restaurante.rest_pago_orden pp WHERE pp.id_orden = i.id_orden
-            )
-            GROUP BY COALESCE(po.id_metodo_pago, i.metodo_directo)
+            WHERE i.metodo_directo IS NOT NULL
+               OR NOT EXISTS (
+                   SELECT 1 FROM restaurante.rest_pago_orden pp WHERE pp.id_orden = i.id_orden
+               )
+            GROUP BY COALESCE(i.metodo_directo, po.id_metodo_pago)
         ),
         combinado AS (
             SELECT id_metodo_pago, total FROM multipago
@@ -734,14 +748,26 @@ async function listarHistorialCajas({ idNegocio, idPuntoCaja = null, desde = nul
  *
  * La forma de pago vive en tres sitios distintos según el movimiento, y esto los
  * unifica en una sola lista para que la pantalla no tenga que saberlo:
+ *  - movimiento con forma de pago propia → la del propio movimiento. Son los manuales,
+ *    los abonos y el pago al domiciliario cuando el negocio eligió de dónde sale;
  *  - pedido con multipago → una entrada por cada forma de pago del desglose;
- *  - pedido con pago simple → la forma de pago de la orden;
- *  - movimiento manual o abono → la del propio movimiento.
+ *  - pedido con pago simple → la forma de pago de la orden.
  *
  * Es una lista y no un valor porque un pedido cobrado en efectivo y transferencia
  * pertenece a las dos, y al filtrar por cualquiera de ellas debe aparecer.
  */
 function formasPagoDeMovimiento(json) {
+    // Primero la del propio movimiento: si la trae, es la verdad sobre ESE dinero y no hay
+    // nada que repartir. Mismo orden que `getDesglosePorMetodo`, para que la fila diga lo
+    // mismo que el total del turno.
+    if (json.metodoPago?.id_metodo_pago != null) {
+        return [{
+            id_metodo_pago: Number(json.metodoPago.id_metodo_pago),
+            nombre: json.metodoPago.nombre || 'Forma de pago',
+            valor: json.monto != null ? Number(json.monto) : null,
+        }];
+    }
+
     const pagos = (json.orden?.pagos || []).filter((p) => p.id_metodo_pago != null);
     if (pagos.length > 0) {
         // El `valor` que se devuelve es la parte de ESTE movimiento, no la de la orden:
@@ -772,7 +798,7 @@ function formasPagoDeMovimiento(json) {
         });
     }
 
-    const directo = json.orden?.metodoPago || json.metodoPago;
+    const directo = json.orden?.metodoPago;
     if (directo?.id_metodo_pago != null) {
         return [{
             id_metodo_pago: Number(directo.id_metodo_pago),
@@ -941,10 +967,14 @@ async function registrarMovimiento({
         concepto: concepto || null,
         id_orden: idOrden || null,
         id_usuario: idUsuario,
-        // Solo tiene sentido cuando el movimiento NO cuelga de un pedido: si hay pedido, la
-        // forma de pago la manda la orden (o su desglose de multipago) y guardarla otra vez
-        // aquí crearía dos verdades para el mismo cobro.
-        id_metodo_pago: idOrden ? null : (idMetodoPago || null),
+        // Con pedido detrás, la forma de pago normalmente la manda la orden (o su desglose de
+        // multipago) y guardarla otra vez aquí crearía dos verdades para el mismo cobro: por eso
+        // el INGRESO del cobro no la pasa nunca.
+        //
+        // La excepción es el EGRESO del domicilio: ese dinero SALE por una forma de pago que no
+        // tiene por qué ser la que usó el cliente —se cobra por transferencia y se le paga al
+        // domiciliario en efectivo—, así que cuando quien llama la indica, manda ella.
+        id_metodo_pago: idMetodoPago || null,
         id_movimiento_anula: idMovimientoAnula || null,
     }, { transaction });
 
@@ -1037,12 +1067,42 @@ async function puntoDeOrden({ idOrden, transaction }) {
 }
 
 /**
+ * De qué forma de pago sale el pago al domiciliario en este negocio.
+ *
+ * Devuelve `null` —y entonces el egreso resta de la forma de pago del pedido, como
+ * siempre— en tres casos: el negocio no eligió ninguna, la que eligió ya no está
+ * activa, o es la de «Cuenta / Tiquetera» (ese dinero no está en el cajón, así que no
+ * se le puede sacar nada).
+ *
+ * Nunca lanza: esto se consulta en medio de un cobro y una configuración que quedó
+ * rancia no puede impedir que el cajero cobre. Se degrada al comportamiento anterior.
+ */
+async function resolverMetodoPagoDomicilio({ idNegocio, transaction }) {
+    const [fila] = await Models.sequelize.query(
+        `SELECT mp.id_metodo_pago
+           FROM general.gener_negocio n
+           JOIN restaurante.rest_metodo_pago mp
+             ON mp.id_metodo_pago = n.id_metodo_pago_domicilio
+            AND mp.id_negocio = n.id_negocio
+            AND mp.estado = 'A'
+            AND NOT mp.es_cuenta
+          WHERE n.id_negocio = :idNegocio;`,
+        { replacements: { idNegocio }, type: Models.sequelize.QueryTypes.SELECT, transaction },
+    );
+    return fila ? Number(fila.id_metodo_pago) : null;
+}
+
+/**
  * Variante segura para registrar el INGRESO automático del cobro:
  * verifica que la caja siga abierta dentro de la transacción.
  *
  * Si la orden trae `valor_domicilio` (funcionalidad opt-in por negocio), registra
  * además el EGRESO por el pago al domiciliario. El cliente pagó el domicilio dentro
  * del total, así que ingreso y egreso se anulan y en caja solo queda la venta.
+ *
+ * De qué forma de pago sale ese egreso lo decide el negocio en Configuración: si eligió
+ * una, el movimiento la lleva y el desglose del turno resta de ella; si no, se queda sin
+ * forma de pago propia y resta de la del pedido, como antes de esta opción.
  *
  * Los dos movimientos van en la MISMA transacción que el cobro: o quedan ambos, o
  * no queda ninguno. Y como este es el único punto donde una orden entra a caja
@@ -1090,6 +1150,10 @@ async function registrarIngresoOrden({
             concepto: `Pago domicilio orden ${numeroOrden}`,
             idUsuario,
             idOrden,
+            // Se resuelve aquí y no en quien llama: los tres caminos por los que una orden
+            // entra a caja (cobro en despacho, cierre de orden, transferencia del
+            // domiciliario) pasan por esta función, y así ninguno puede olvidarlo.
+            idMetodoPago: await resolverMetodoPagoDomicilio({ idNegocio, transaction }),
             transaction,
         });
     }
@@ -1196,6 +1260,11 @@ async function anularOrdenCobrada({ idNegocio, idOrden, idUsuario }) {
                 idUsuario,
                 idOrden,
                 idMovimientoAnula: mov.id_movimiento,
+                // La reversa devuelve el dinero por donde salió: si el egreso del domicilio
+                // se le restó al efectivo, su compensatorio se lo tiene que sumar al efectivo.
+                // Sin copiar la forma de pago, el ingreso de la reversa caía en la del pedido
+                // y la anulación dejaba el desglose descuadrado aunque el neto fuera cero.
+                idMetodoPago: mov.id_metodo_pago || null,
                 // Reversar un cero da un cero. El original ya pasó por la comprobación del
                 // descuento; volver a exigirla aquí impediría anular una cena de empleado.
                 permitirCero: Number(mov.monto) === 0,
@@ -1298,6 +1367,8 @@ async function anularMovimientoCaja({ idNegocio, idMovimiento, idUsuario }) {
             idUsuario,
             idOrden: mov.id_orden || null,
             idMovimientoAnula: mov.id_movimiento,
+            // La reversa entra por donde salió el dinero. Ver `anularOrdenCobrada`.
+            idMetodoPago: mov.id_metodo_pago || null,
             transaction: t,
         });
 
@@ -1405,6 +1476,7 @@ module.exports = {
     transferirDomiciliarioACaja,
     registrarMovimiento,
     validarMetodoPagoManual,
+    resolverMetodoPagoDomicilio,
     registrarIngresoOrden,
     getDesglosePorMetodo,
     validarPendientesCierre,

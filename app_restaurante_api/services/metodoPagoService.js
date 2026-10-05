@@ -110,6 +110,24 @@ async function inactivar({ idMetodo, idNegocio }) {
         throw e;
     }
 
+    // Si es la que paga los domicilios, apagarla no rompería nada —el cobro se degrada a
+    // «sale de la forma de pago del pedido»— pero cambiaría en silencio de dónde sale esa
+    // plata, y eso solo se descubre al cuadrar el turno. Que lo decida el administrador.
+    const [enUsoDomicilio] = await Models.sequelize.query(
+        `SELECT 1 FROM general.gener_negocio
+          WHERE id_negocio = :idNegocio AND id_metodo_pago_domicilio = :idMetodo;`,
+        { replacements: { idMetodo, idNegocio }, type: Models.sequelize.QueryTypes.SELECT },
+    );
+    if (enUsoDomicilio) {
+        const e = new Error(
+            `No se puede eliminar «${m.nombre}»: es la forma de pago con la que se paga a los `
+            + 'domiciliarios. Cámbiala en Configuración → Operación y vuelve a intentarlo.',
+        );
+        e.code = 'METODO_PAGO_EN_USO_DOMICILIO';
+        e.statusCode = 409;
+        throw e;
+    }
+
     // La caja tiene que estar limpia de esta forma de pago antes de apagarla. Cerrar el
     // turno basta: a partir de ahí nada vuelve a validarla, y el histórico la sigue
     // mostrando por su nombre porque la fila no se borra.

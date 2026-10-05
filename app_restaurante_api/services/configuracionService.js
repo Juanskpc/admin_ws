@@ -108,6 +108,7 @@ async function getConfiguracionNegocio(idUsuario, idNegocio = null) {
             'id_paleta',
             'permite_multipago',
             'permite_pago_domicilio',
+            'id_metodo_pago_domicilio',
             'permite_descuento',
             'pregunta_cobro_envio',
             'permite_cuentas_cliente',
@@ -154,6 +155,10 @@ async function getConfiguracionNegocio(idUsuario, idNegocio = null) {
         paleta: negocio.paletaColor || null,
         permite_multipago: !!negocio.permite_multipago,
         permite_pago_domicilio: !!negocio.permite_pago_domicilio,
+        // De qué forma de pago sale el pago al domiciliario. null = de la del pedido.
+        id_metodo_pago_domicilio: negocio.id_metodo_pago_domicilio != null
+            ? Number(negocio.id_metodo_pago_domicilio)
+            : null,
         permite_descuento: !!negocio.permite_descuento,
         pregunta_cobro_envio: !!negocio.pregunta_cobro_envio,
         permite_cuentas_cliente: !!negocio.permite_cuentas_cliente,
@@ -228,6 +233,37 @@ async function updateConfiguracionNegocio(idUsuario, payload = {}) {
 
     if (payload.permite_pago_domicilio !== undefined) {
         patch.permite_pago_domicilio = payload.permite_pago_domicilio === true || payload.permite_pago_domicilio === 'true';
+    }
+
+    // De dónde sale el pago al domiciliario. Vacío/null = «de la misma del pedido», que es
+    // como funcionaba antes de existir esta opción, así que es una respuesta válida y no un
+    // campo sin llenar. Se valida aquí y no solo en el validador de la ruta porque lo que
+    // hay que comprobar es la pertenencia al negocio, y eso el validador no lo sabe.
+    if (payload.id_metodo_pago_domicilio !== undefined) {
+        const bruto = payload.id_metodo_pago_domicilio;
+        if (bruto === null || bruto === '' || Number(bruto) === 0) {
+            patch.id_metodo_pago_domicilio = null;
+        } else {
+            const mp = await Models.RestMetodoPago.findOne({
+                where: { id_metodo_pago: Number(bruto), id_negocio: acceso.idNegocio, estado: 'A' },
+                attributes: ['id_metodo_pago', 'es_cuenta'],
+            });
+            if (!mp) {
+                const error = new Error('Forma de pago inválida para este negocio.');
+                error.code = 'METODO_PAGO_INVALIDO';
+                error.statusCode = 422;
+                throw error;
+            }
+            // «Cuenta / Tiquetera» no es plata en el cajón: no se le puede sacar el pago
+            // del domiciliario sin descuadrar el saldo de un cliente que no pidió nada.
+            if (mp.es_cuenta) {
+                const error = new Error('La forma de pago de las cuentas de cliente no puede pagar domicilios.');
+                error.code = 'METODO_PAGO_INVALIDO';
+                error.statusCode = 422;
+                throw error;
+            }
+            patch.id_metodo_pago_domicilio = Number(bruto);
+        }
     }
 
     if (payload.permite_descuento !== undefined) {

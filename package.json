@@ -97,6 +97,7 @@
     "migrate:negocio-asistente-pausa": "node migrations/migrate_negocio_asistente_pausa.js",
     "migrate:intelligence-reportes": "node migrations/migrate_intelligence_reportes.js",
     "migrate:restaurante-pago-domicilio": "node migrations/migrate_restaurante_pago_domicilio.js",
+    "migrate:restaurante-metodo-pago-domicilio": "node migrations/migrate_restaurante_metodo_pago_domicilio.js",
     "migrate:restaurante-subniveles-tipo-pedido": "node migrations/migrate_restaurante_subniveles_tipo_pedido.js",
     "migrate:restaurante-caja-anular-pedido": "node migrations/migrate_restaurante_caja_anular_pedido.js",
     "migrate:restaurante-caja-movimientos": "node migrations/migrate_restaurante_caja_movimientos.js",

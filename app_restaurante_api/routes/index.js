@@ -212,6 +212,9 @@ router.patch('/configuracion', [
 	body('url_instagram').optional({ nullable: true }).isURL({ require_protocol: true }),
 	body('permite_multipago').optional().isBoolean(),
 	body('permite_pago_domicilio').optional().isBoolean(),
+	// null/vacío es una respuesta válida: «el egreso del domicilio sale de la forma de pago
+	// del pedido», que es el comportamiento anterior a esta opción.
+	body('id_metodo_pago_domicilio').optional({ nullable: true }).custom((v) => v === null || v === '' || Number.isInteger(Number(v))),
 	body('permite_descuento').optional().isBoolean(),
 	body('pregunta_cobro_envio').optional().isBoolean(),
 	body('permite_cuentas_cliente').optional().isBoolean(),
