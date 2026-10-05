@@ -17,6 +17,10 @@ const realtime = require('../../app_core/realtime');
  *   clientes → las cuentas de cliente: tiqueteras, fiado y sus saldos.
  *   whatsapp → llegó un pedido tomado por el asistente. A diferencia de los demás NO pide recargar
  *              una lista —eso ya lo hace `pedidos`—: es el «suena» para que alguien lo mire.
+ *   escalada → el asistente se quedó sin respuesta y le pasó la conversación a una persona.
+ *              Tampoco recarga nada: es otro «suena», y a propósito con OTRO sonido —lo que pide
+ *              es abrir Conversaciones, no confirmar un pedido. Lo emite
+ *              `intelligence/avisos/escalado.js`, que hasta ahora solo mandaba un correo.
  *
  * ## La regla que no se puede saltar: avisar DESPUÉS del commit
  *
@@ -40,6 +44,7 @@ const TEMAS = Object.freeze({
     CAJA: 'caja',
     CLIENTES: 'clientes',
     WHATSAPP: 'whatsapp',
+    ESCALADA: 'escalada',
 });
 
 /** Avisa ya. Para operaciones que no abren transacción explícita. */

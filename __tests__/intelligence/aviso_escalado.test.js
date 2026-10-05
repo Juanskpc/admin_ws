@@ -1,15 +1,19 @@
 /**
  * El aviso de escalado — que el negocio se entere de que le pasaron una conversación.
  *
- * Lo que esta suite tiene que dejar clavado son dos promesas, y ninguna es «se manda un correo»:
+ * Lo que esta suite tiene que dejar clavado son tres promesas, y ninguna es «se manda un correo»
+ * —el correo quedó apagado por defecto el 2026-10-05, y aquí se comprueba justo eso:
  *
  *   1. **Solo se avisa de escalados que ocurrieron de verdad.** El evento se escribe dentro del
  *      savepoint del turno, así que un turno que revienta no avisa; y se emite solo en la
  *      transición, así que una conversación ya escalada no vuelve a avisar.
- *   2. **Avisar no puede volverse ruido.** Si el negocio ya la atendió en los segundos que tarda
- *      el relay, el aviso no sale; y una ráfaga de escalados produce un aviso, no cinco. Esa
- *      segunda regla es además lo que hace idempotente al consumidor, que el outbox exige porque
- *      entrega al menos una vez (ADR-012).
+ *   2. **La campanita no puede volverse ruido.** Si el negocio ya la atendió en los segundos que
+ *      tarda el relay, el aviso no sale; y una ráfaga de escalados deja UNA notificación, no cinco.
+ *   3. **Pero la señal en vivo suena por cada conversación.** Es la asimetría que distingue las
+ *      dos vías y la razón de ser de este cambio: la ventana de quince minutos protege un buzón
+ *      y una lista de notificaciones, no un altavoz. Cinco clientes esperando se tienen que oír
+ *      cinco veces. Contra la reentrega del outbox —que entrega al menos una vez (ADR-012)— la
+ *      señal se protege aparte, por conversación y en memoria.
  *
  * Corre contra la base de verdad: todo lo que importa aquí —la atomicidad del evento, la ventana
  * de la campanita— está en SQL, y con dobles se probaría la maqueta en vez del mecanismo.
@@ -29,6 +33,7 @@ const handoff = require('../../intelligence/engine/handoff');
 const escalado = require('../../intelligence/avisos/escalado');
 const relay = require('../../app_core/outbox/outboxRelay');
 const mailService = require('../../app_admin_api/services/mailService');
+const realtime = require('../../app_core/realtime');
 
 const sequelize = Models.sequelize;
 const SELECT = { type: sequelize.QueryTypes.SELECT, logging: false };
@@ -36,6 +41,21 @@ const SELECT = { type: sequelize.QueryTypes.SELECT, logging: false };
 /** Canal sintético: nada real usa este nombre, así que la limpieza es inequívoca. */
 const CANAL = 'test_aviso';
 const CORREO_FIXTURE = 'aviso.escalado@qa.local';
+
+/**
+ * El canal en vivo se espía, no se dobla.
+ *
+ * `emitir` sobre una sala vacía ya es inofensivo —devuelve 0 y no escribe en ningún sitio—, así
+ * que lo único que hace falta es poder preguntar «¿se mandó, y con qué tema?». Doblar el módulo
+ * entero habría dejado de probar que `escalado.js` lo llama como el canal espera.
+ */
+let emitir;
+
+/** Las señales de `escalada` que salieron, una por canal de pantalla. */
+const senalesEmitidas = () =>
+    emitir.mock.calls
+        .map(([aviso]) => aviso)
+        .filter((aviso) => (aviso?.temas ?? []).includes(escalado.TEMA_PANTALLA));
 
 let idNegocio;
 let contador = 0;
@@ -110,6 +130,7 @@ beforeEach(async () => {
     motor._reiniciar();
     motor.registrarManejador(manejadorQueEscala);
     mailService.sendConversacionEscaladaEmail.mockClear();
+    emitir = jest.spyOn(realtime, 'emitir');
     // La ventana anti-ruido es por negocio y dura quince minutos: sin esto, el primer test le
     // taparía el aviso a todos los demás.
     await sequelize.query(
@@ -121,6 +142,10 @@ beforeEach(async () => {
 afterEach(() => {
     motor.detener();
     relay.limpiarConsumidores();
+    emitir.mockRestore();
+    // El correo se enciende a mano en el único test que lo prueba; dejarlo encendido le
+    // cambiaría el resultado al siguiente.
+    escalado.CONFIG.correo = false;
 });
 
 afterAll(async () => {
@@ -219,21 +244,42 @@ describe('el motor emite conversacion.escalada.v1', () => {
 // ── El consumidor ───────────────────────────────────────────────────────────────────────
 
 describe('el consumidor avisa al negocio', () => {
-    test('deja la notificación de la campanita y manda el correo', async () => {
+    test('deja la notificación de la campanita y señala a las pantallas', async () => {
         const conversacion = await escalarPorUnTurno(nuevoInterlocutor());
 
         const resultado = await escalado.alEscalarse(sobreDe(conversacion));
         expect(resultado.avisado).toBe(true);
         expect(resultado.esperando).toBeGreaterThanOrEqual(1);
+        expect(resultado.senalada).toBe(true);
 
         const avisos = await avisosDelNegocio();
         expect(avisos).toHaveLength(1);
         // Ni el texto del cliente ni su número: eso se lee en la Bandeja (ADR-024).
         expect(avisos[0].mensaje).toMatch(/Conversaciones/);
 
-        expect(mailService.sendConversacionEscaladaEmail).toHaveBeenCalled();
-        const [destino] = mailService.sendConversacionEscaladaEmail.mock.calls[0];
-        expect(destino).toBe(CORREO_FIXTURE);
+        // Una señal por canal de pantalla, cada una acotada a ESE negocio y sin nada dentro más
+        // que el tema: es lo que le deja al navegador elegir un sonido propio.
+        const senales = senalesEmitidas();
+        expect(senales.map((aviso) => aviso.canal).sort()).toEqual(
+            [...escalado.CANALES_DE_PANTALLA].sort()
+        );
+        for (const senal of senales) {
+            expect(senal.idNegocio).toBe(idNegocio);
+            expect(senal.temas).toEqual([escalado.TEMA_PANTALLA]);
+        }
+    }, 20000);
+
+    test('el correo NO sale: está apagado por defecto desde 2026-10-05', async () => {
+        // El motivo del cambio entero. Si alguien le devuelve a la variable su valor de antes,
+        // este test es quien lo cuenta — y no el dueño del negocio con la bandeja llena.
+        expect(escalado.CONFIG.correo).toBe(false);
+
+        const conversacion = await escalarPorUnTurno(nuevoInterlocutor());
+        const resultado = await escalado.alEscalarse(sobreDe(conversacion));
+
+        expect(resultado.avisado).toBe(true);
+        expect(resultado.correos).toBe(0);
+        expect(mailService.sendConversacionEscaladaEmail).not.toHaveBeenCalled();
     }, 20000);
 
     test('no avisa si el negocio ya la atendió mientras el evento viajaba', async () => {
@@ -247,6 +293,8 @@ describe('el consumidor avisa al negocio', () => {
         expect(resultado.avisado).toBe(false);
         expect(resultado.motivo).toMatch(/atendieron/);
         expect(await avisosDelNegocio()).toHaveLength(0);
+        // Tampoco suena: la señal va después de releer el estado, nunca antes.
+        expect(senalesEmitidas()).toHaveLength(0);
         expect(mailService.sendConversacionEscaladaEmail).not.toHaveBeenCalled();
     }, 20000);
 
@@ -262,20 +310,26 @@ describe('el consumidor avisa al negocio', () => {
         const resultado = await escalado.alEscalarse(sobreDe(conversacion));
         expect(resultado.avisado).toBe(false);
         expect(await avisosDelNegocio()).toHaveLength(0);
+        expect(senalesEmitidas()).toHaveLength(0);
     }, 20000);
 
-    test('una reentrega del mismo evento NO produce un segundo aviso', async () => {
-        // El outbox entrega al menos una vez (ADR-012). Sin esto, cada reintento sería otro
-        // correo por el mismo escalado.
+    test('una reentrega del mismo evento no vuelve a avisar NI a sonar', async () => {
+        // El outbox entrega al menos una vez (ADR-012). La campanita se protege con su ventana;
+        // la señal, que no deja fila que consultar, con su propia memoria por conversación.
         const conversacion = await escalarPorUnTurno(nuevoInterlocutor());
 
-        expect((await escalado.alEscalarse(sobreDe(conversacion))).avisado).toBe(true);
+        const primero = await escalado.alEscalarse(sobreDe(conversacion));
+        expect(primero.avisado).toBe(true);
+        expect(primero.senalada).toBe(true);
+        const cuantasSonaron = senalesEmitidas().length;
+
         const segundo = await escalado.alEscalarse(sobreDe(conversacion));
 
         expect(segundo.avisado).toBe(false);
         expect(segundo.motivo).toMatch(/ventana/);
+        expect(segundo.senalada).toBe(false);
         expect(await avisosDelNegocio()).toHaveLength(1);
-        expect(mailService.sendConversacionEscaladaEmail).toHaveBeenCalledTimes(1);
+        expect(senalesEmitidas()).toHaveLength(cuantasSonaron);
     }, 20000);
 
     test('una ráfaga de escalados es UN aviso, y cuenta cuántas esperan', async () => {
@@ -286,16 +340,24 @@ describe('el consumidor avisa al negocio', () => {
 
         expect(await escalado.contarEsperando(idNegocio)).toBe(antes + 2);
 
-        await escalado.alEscalarse(sobreDe(primera));
-        await escalado.alEscalarse(sobreDe(segunda));
+        expect((await escalado.alEscalarse(sobreDe(primera))).senalada).toBe(true);
+        // La segunda cae dentro de la ventana: sin campanita nueva, pero CON señal. Es la
+        // asimetría a propósito — una lista ilegible es un problema, un segundo «tilín» no.
+        const siguiente = await escalado.alEscalarse(sobreDe(segunda));
+        expect(siguiente.avisado).toBe(false);
+        expect(siguiente.senalada).toBe(true);
 
         expect(await avisosDelNegocio()).toHaveLength(1);
-        expect(mailService.sendConversacionEscaladaEmail).toHaveBeenCalledTimes(1);
+        expect(senalesEmitidas()).toHaveLength(2 * escalado.CANALES_DE_PANTALLA.length);
     }, 30000);
 
     test('un correo que falla no tumba el aviso ni el relay', async () => {
         // La campanita ya está puesta. Hacer fallar el evento reintentaría la parte que salió
         // bien y acabaría mandando a dead letter un escalado real.
+        //
+        // Se enciende a mano porque el valor por defecto ya no lo manda: el camino sigue vivo
+        // para quien ponga `AVISO_ESCALADO_CORREO=true`, y sigue teniendo que degradar solo.
+        escalado.CONFIG.correo = true;
         mailService.sendConversacionEscaladaEmail.mockRejectedValue(new Error('SMTP caído'));
         const conversacion = await escalarPorUnTurno(nuevoInterlocutor());
 
@@ -331,7 +393,20 @@ describe('de punta a punta: el turno escala y el negocio se entera', () => {
         await relay.drenarUnaVez();
 
         expect(await avisosDelNegocio()).toHaveLength(1);
-        expect(mailService.sendConversacionEscaladaEmail).toHaveBeenCalledTimes(1);
+        expect(mailService.sendConversacionEscaladaEmail).not.toHaveBeenCalled();
+
+        // No se cuenta un número exacto: `drenarUnaVez` vacía el outbox entero, y ahí siguen los
+        // escalados que dejaron los tests de arriba. Lo que este test prueba es que el cable
+        // está puesto —que el consumidor está enganchado al tipo correcto— así que basta con que
+        // la señal haya salido, y que haya salido entera: un múltiplo de los canales, nunca
+        // medio aviso.
+        const senales = senalesEmitidas();
+        expect(senales.length).toBeGreaterThanOrEqual(escalado.CANALES_DE_PANTALLA.length);
+        expect(senales.length % escalado.CANALES_DE_PANTALLA.length).toBe(0);
+        for (const senal of senales) {
+            expect(senal.idNegocio).toBe(idNegocio);
+            expect(senal.temas).toEqual([escalado.TEMA_PANTALLA]);
+        }
 
         const entregado = await unaFila(
             `SELECT estado FROM platform.outbox WHERE payload->>'id_conversacion' = :id
