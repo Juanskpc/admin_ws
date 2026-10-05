@@ -413,4 +413,4 @@ async function diagnosticar(idNegocio, { buscar = null } = {}) {
     };
 }
 
-module.exports = { diagnosticar, analizarCarta, pruebaDeHumo, singular };
+module.exports = { diagnosticar, analizarCarta, pruebaDeHumo, singular, leerCarta };

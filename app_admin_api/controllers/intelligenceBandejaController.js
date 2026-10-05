@@ -1158,7 +1158,36 @@ async function leerDiagnostico(req, res) {
     }
 }
 
+/**
+ * POST /admin/intelligence/bandeja/diagnostico/recomendaciones   { id_negocio, forzar? }
+ *
+ * Fase 2 del diagnóstico: un modelo redacta el arreglo concreto de la carta («renómbralo así»).
+ * Solo recomienda; nada se cambia. Cuesta centavos y se guarda por carta, así que repetir sin
+ * cambios no gasta (`forzar: true` vuelve a preguntar). Administrador del negocio o super admin.
+ */
+async function pedirRecomendaciones(req, res) {
+    try {
+        if (!revisar(req, res)) return;
+        const idNegocio = Number(req.body.id_negocio);
+        if (!(await esAdministradorDelNegocio(req.usuario.id_usuario, idNegocio))) {
+            return Respuesta.error(res, 'Negocio no encontrado', 404);
+        }
+        const recomendaciones = await require('../services/recomendacionesAsistenteService').recomendar(idNegocio, {
+            forzar: req.body.forzar === true,
+            idUsuario: req.usuario.id_usuario,
+        });
+        // El costo y el modelo son internos (quedan en la auditoría): al panel no viajan.
+        const { costo_usd: _c, modelo: _m, descartados: _d, ...paraElPanel } = recomendaciones;
+        return Respuesta.success(res, 'Recomendaciones para la carta', paraElPanel);
+    } catch (err) {
+        if (err.statusCode && err.code) return Respuesta.error(res, err.message, err.statusCode);
+        console.error('Error en bandeja.pedirRecomendaciones:', err);
+        return Respuesta.error(res, 'No se pudieron generar las recomendaciones');
+    }
+}
+
 module.exports = {
+    pedirRecomendaciones,
     leerDiagnostico,
     pausarAsistente,
     leerPreparacion,

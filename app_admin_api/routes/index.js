@@ -908,6 +908,11 @@ router.get('/intelligence/bandeja/preparacion', [
 router.get('/intelligence/bandeja/diagnostico', [
     query('id_negocio').isInt({ min: 1 }).withMessage('ID de negocio inválido'),
 ], IntelligenceBandejaController.leerDiagnostico);
+// Recomendaciones con IA sobre la carta (fase 2): solo recomienda, no cambia nada.
+router.post('/intelligence/bandeja/diagnostico/recomendaciones', [
+    body('id_negocio').isInt({ min: 1 }).withMessage('ID de negocio inválido'),
+    body('forzar').optional().isBoolean({ strict: true }).withMessage('forzar debe ser true o false'),
+], IntelligenceBandejaController.pedirRecomendaciones);
 // Pausa de emergencia del asistente: deja de contestar a todos hasta que se reanude.
 router.post('/intelligence/bandeja/asistente-pausa', [
     body('id_negocio').isInt({ min: 1 }).withMessage('ID de negocio inválido'),
