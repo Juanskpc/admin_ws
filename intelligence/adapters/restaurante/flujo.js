@@ -39,6 +39,7 @@ const {
     esComando,
     esSaludo,
     saludoPorLaHora,
+    esAfirmacionConEntrega,
 } = require('../../engine/texto');
 const codigoPedido = require('./codigoPedido');
 const confirmacion = require('../../engine/confirmacion');
@@ -1620,6 +1621,7 @@ function reclama(texto) {
         Boolean(codigoPedido.leer(texto)) ||
         esPreguntaDeTiempo(texto) ||
         preguntaPorSuPedido(texto) ||
+        preguntaPorEmpaque(texto) ||
         esPreguntaDeDomicilio(texto) ||
         Boolean(mediaSuelta(texto)) ||
         pago.esCancelarAmbiguo(texto) ||
@@ -1770,7 +1772,51 @@ const PREGUNTA_POR_SU_PEDIDO = [
     /\b(como va|como vamos con|que paso con|que hubo de|y) (mi|el) (pedido|domicilio|domi)\b/,
     /\bse demora (aun |todavia |mucho )?(el|mi) (pedido|domicilio|domi)\b/,
     /\b(mi|el) (pedido|domicilio|domi) (ya |aun |todavia )?(viene|sale|salio|llega|esta|demora)\b/,
+    // Reclamos de demora: «pues ya son los 60 minutos que me dijeron, ¿se demora aún más?».
+    /\bse demora(n)? (aun |todavia )?mas\b/,
+    /\bya (son|van|paso|pasaron|llevo|llevamos) (los |mas de |casi )?(\d+|una hora|media hora)\b/,
+    /\b(no ha llegado|no llega|todavia no llega|aun no llega|no ha salido|cuanto falta|falta mucho)\b/,
 ];
+
+/** La entrega que nombra una frase, o `null`. */
+function entregaNombrada(t) {
+    if (/\b(para servir|servir aqui|(consumir|comer|como|consumo) (aqui|alla|en el local)|sin empaque|no necesito (el )?empaque|no (me )?empaque)/.test(t)) return 'MESA';
+    if (/\b(para recoger|recoger(lo|la|los|las)?|la recojo|lo recojo|paso a recoger|para llevar)\b/.test(t)) return 'LLEVAR';
+    if (/\b(a domicilio|domicilio|me lo (traen|mandan|envian)|me la (traen|mandan|envian))\b/.test(t)) return 'DOMICILIO';
+    return null;
+}
+
+const PIDE_CAMBIO = /\b(cambio|cambios|cambiar|cambia|cambiale|cambiame|quitar|quita|quitale|quitame|mejor|en vez|en lugar|agrega|agregar|agregale|agregame|anade|adiciona|adicionar|tambien quiero|otra cosa)\b/;
+const PREGUNTA = /^(cuanto|cuantos|cuanta|que|cual|cuales|como|donde|cuando|tienen|tiene|tienes|hay|me pueden|puedo|podria|se puede|lo tienen|lo tienes|viene|vienen|trae|traen)\b/;
+const HABLA_DE_COBRO = /\b(cobran|cobra|cobro|cobraron|valor|precio|cuesta|vale|combo|promo|promocion|descuento)\b/;
+
+/**
+ * Con un pedido esperando el sí, ¿este mensaje es una pregunta o un cambio que tiene que contestar
+ * el modelo? No lo es un sí, un no, «a nombre de…» ni lo que se anota (una nota de cocina).
+ */
+function vaAlModeloDuranteLaConfirmacion(texto, datos) {
+    const linea = ultimaLinea(texto);
+    const t = normalizar(linea).replace(/[¡¿!.,;:]/g, ' ').replace(/\s+/g, ' ').trim();
+    if (!t) return false;
+    if (esComando(texto, COMANDO.NO) || esComando(texto, COMANDO.CANCELAR)) return false;
+    if (/\b(a nombre de|me llamo|mi nombre es)\b/.test(t)) return false;
+    const entregaPendiente = datos?.args?.tipo_entrega ?? null;
+    if (esAfirmacionConEntrega(texto, entregaPendiente) && !PIDE_CAMBIO.test(t)) return false;
+    if (PIDE_CAMBIO.test(t)) return true;
+    const nombrada = entregaNombrada(t);
+    if (nombrada && entregaPendiente && nombrada !== entregaPendiente) return true;
+    return linea.includes('?') || PREGUNTA.test(t) || HABLA_DE_COBRO.test(t);
+}
+
+/**
+ * ¿Pregunta cuántas cajas, empaques o recipientes trae? Es un dato que ningún sistema guarda.
+ */
+const PREGUNTA_EMPAQUE = /\bcuant[oa]s? (cajas?|empaques?|recipientes?|bolsas?|tarrinas?|cajitas?)\b|\b(en cuant[oa]s?|cuant[oa]s?) (cajas?|empaques?)\b|\b(viene|vienen|trae|traen) (en )?(una|dos|1|2) (caja|cajas)\b|\bcaja y media\b/;
+function preguntaPorEmpaque(texto) {
+    const t = normalizar(ultimaLinea(texto)).replace(/[¿?¡!.,]/g, ' ').replace(/\s+/g, ' ').trim();
+    if (!t || t.split(' ').length > MAX_PALABRAS_PREGUNTA) return false;
+    return PREGUNTA_EMPAQUE.test(t);
+}
 
 function preguntaPorSuPedido(texto) {
     const t = normalizar(ultimaLinea(texto)).replace(/[¿?¡!.,]/g, ' ').replace(/\s+/g, ' ').trim();
@@ -1815,6 +1861,40 @@ async function pedidoRecienteEnLaConversacion(conversacion) {
 }
 
 /**
+ * ¿Ya se le dijo a este cliente cómo va su pedido, después de tomarlo? Cuenta el tiempo contestado
+ * por el flujo y `consultar_estado_pedido` del modelo, solo desde el último pedido del asistente.
+ * Ante un fallo, `false`: se contesta como la primera vez, que no engaña a nadie.
+ */
+async function yaSeContestoElEstado(conversacion) {
+    try {
+        const [fila] = await Models.sequelize.query(
+            `WITH ult AS (
+                 SELECT max(creado_en) AS en FROM intelligence.invocacion_capacidad
+                  WHERE id_conversacion = :c AND capacidad = 'tomar_pedido' AND resultado = 'ok'
+                    AND NOT dry_run AND creado_en >= now() - (:horas * interval '1 hour'))
+             SELECT 1 AS hay FROM ult
+              WHERE ult.en IS NOT NULL AND (
+                    EXISTS (SELECT 1 FROM intelligence.paso p
+                              JOIN intelligence.turno t ON t.id_turno = p.id_turno
+                             WHERE t.id_conversacion = :c AND p.creado_en > ult.en
+                               AND p.decision = 'tiempo_estimado_respondido')
+                 OR EXISTS (SELECT 1 FROM intelligence.invocacion_capacidad i
+                             WHERE i.id_conversacion = :c AND i.creado_en > ult.en
+                               AND i.capacidad = 'consultar_estado_pedido' AND i.resultado = 'ok'))
+              LIMIT 1;`,
+            {
+                replacements: { c: conversacion.id_conversacion, horas: HORAS_PEDIDO_RECIENTE },
+                type: Models.sequelize.QueryTypes.SELECT,
+            }
+        );
+        return Boolean(fila);
+    } catch (error) {
+        console.warn(`[restaurante] no se pudo saber si ya se contestó el estado: ${error.message}`);
+        return false;
+    }
+}
+
+/**
  * Crea el manejador. La inyección existe para los tests, igual que en el flujo de `reserva`.
  * `ahora` también se inyecta: el saludo depende de la hora y una prueba no puede esperar a que
  * sean las ocho de la tarde.
@@ -1840,6 +1920,7 @@ function crearFlujoRestaurante({
     // ¿Este chat tiene un pedido de verdad, reciente? Decide si el tiempo se dice como «tu
     // pedido» o como «desde que se confirma». Se inyecta para que los tests no necesiten Postgres.
     tienePedidoReciente = pedidoRecienteEnLaConversacion,
+    yaSeLeContestoSuPedido = yaSeContestoElEstado,
     catalogo = {
         barrios: (idNegocio) => barrioService.listarPublico(idNegocio),
         mesas: (idNegocio) => mesaPublicaService.listarPublicas(idNegocio),
@@ -1935,6 +2016,16 @@ function crearFlujoRestaurante({
                     resultado: 'resuelto',
                     nivel: 'determinista',
                 };
+            }
+            // Cualquier otra pregunta («¿lo tienes en combo?», «el domicilio siempre me cobran 6
+            // mil») o un cambio («cambios», «no necesito empaque, allá voy a consumir») lo atiende
+            // el modelo, con el pedido todavía esperando su sí: antes se le repetía el resumen sin
+            // contestarle, o la frase acababa en la nota de cocina (2026-10-04). La tarea no se
+            // toca (`sin tarea` en la decisión) y el motor la conserva; el modelo puede rehacer
+            // el pedido con el cambio, lo que abre una confirmación nueva.
+            if (vaAlModeloDuranteLaConfirmacion(texto, conversacion.tarea_datos)) {
+                const { tarea: _sinTocar, ...cedido } = delegar(ctx);
+                return { ...cedido, pasos: [paso('confirmacion_pregunta_al_modelo')] };
             }
             await conIdentidad(ctx);
             const decision = await confirmacion.resolver(ctx, { gate });
@@ -2054,24 +2145,47 @@ function crearFlujoRestaurante({
         // ¿Pregunta por su pedido y quien lo atendió fue una persona del local? Ese pedido lo
         // tomó ella a mano y aquí no se ve: decir «no tengo ningún pedido tuyo» es falso. Se le
         // devuelve a la persona. Sin persona reciente, lo de siempre (tiempo o modelo).
+        const quien = String(negocio.tratamiento || '').trim();
+        const equipo = quien && quien !== 'el negocio' ? `alguien del equipo de ${quien}` : 'alguien del equipo';
+        const aPersona = (decision, texto) => ({
+            pasos: [paso(decision)],
+            respuestas: [texto],
+            variables: conMemoria(conversacion),
+            tarea: null,
+            estado: 'handoff_humano',
+            resultado: 'handoff',
+            nivel: 'determinista',
+        });
+
+        // «¿Cuántas cajas vienen?»: ningún dato del sistema lo dice, y el modelo contestó «una
+        // sola caja» a quien siempre recibe caja y media (2026-10-04). No se adivina: a una persona.
+        if (!conversacion.tarea_actual && preguntaPorEmpaque(texto)) {
+            return aPersona(
+                'empaque_a_persona',
+                `No tengo ese dato con exactitud 🙏 Ya le dejé tu pregunta a ${equipo}, que te responde por este mismo chat.`
+            );
+        }
+
         const porSuPedido = preguntaPorSuPedido(texto);
-        if (
-            !conversacion.tarea_actual &&
-            (porSuPedido || esPreguntaDeTiempo(texto)) &&
-            personaAtendioHacePoco(conversacion, ahora()) &&
-            !(await tienePedidoReciente(conversacion))
-        ) {
-            const quien = String(negocio.tratamiento || '').trim();
-            const equipo = quien && quien !== 'el negocio' ? `alguien del equipo de ${quien}` : 'alguien del equipo';
-            return {
-                pasos: [paso('pedido_de_persona_a_persona')],
-                respuestas: [`Tu pedido lo está llevando ${equipo} 🙌 Ya le dejé tu mensaje para que te cuente cómo va.`],
-                variables: conMemoria(conversacion),
-                tarea: null,
-                estado: 'handoff_humano',
-                resultado: 'handoff',
-                nivel: 'determinista',
-            };
+        if (!conversacion.tarea_actual && (porSuPedido || esPreguntaDeTiempo(texto))) {
+            const hayPedidoDelBot = await tienePedidoReciente(conversacion);
+            // ¿Lo atendió una persona? Ese pedido lo tomó ella a mano y aquí no se ve: decir «no
+            // tengo ningún pedido tuyo» es falso. Se le devuelve a la persona.
+            if (!hayPedidoDelBot && personaAtendioHacePoco(conversacion, ahora())) {
+                return aPersona(
+                    'pedido_de_persona_a_persona',
+                    `Tu pedido lo está llevando ${equipo} 🙌 Ya le dejé tu mensaje para que te cuente cómo va.`
+                );
+            }
+            // ¿Ya se le contestó cómo va y vuelve a preguntar? La primera vez se contesta; la
+            // segunda, repetir el estado («va en 57 minutos…») suena a reproche y no le sirve:
+            // lo que necesita es que alguien del local mire su pedido (pedido del dueño, 2026-10-04).
+            if (hayPedidoDelBot && (await yaSeLeContestoSuPedido(conversacion))) {
+                return aPersona(
+                    'pedido_repreguntado_a_persona',
+                    `Ya le dejé tu mensaje a ${equipo}, que te cuenta cómo va tu pedido por este mismo chat 🙌`
+                );
+            }
         }
         if (porSuPedido && !esPreguntaDeTiempo(texto) && !conversacion.tarea_actual) return delegar(ctx);
 
@@ -2195,6 +2309,7 @@ function crearFlujoRestaurante({
 module.exports = {
     VERTICAL,
     TIPOS_NEGOCIO,
+    yaSeContestoElEstado,
     OPCION,
     ENTREGA,
     TAREA_PEDIDO,

@@ -79,7 +79,7 @@ const puerto = require('./puerto');
  *     del negocio, y el pedido de Karen Díaz se quedó esperando un segundo sí que nunca llegó.
  *   - «para servir» es comer en el local; sin mesa, se pide igual y el negocio le guarda una.
  */
-const PROMPT_SISTEMA = 'sistema.v11';
+const PROMPT_SISTEMA = 'sistema.v12';
 
 /**
  * Los prompts se leen una vez y se quedan en memoria.

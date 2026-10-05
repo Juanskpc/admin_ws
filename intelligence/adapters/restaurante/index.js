@@ -554,7 +554,9 @@ function registrarCapacidades() {
             'en palabras del cliente; no le añadas etapas que no dice. El pago casi siempre es al ' +
             'recibir o al recoger: NUNCA le digas que el pedido espera el pago para prepararse o ' +
             'salir. Si `pasado_del_tiempo_estimado` es true y el pedido sigue abierto, discúlpate ' +
-            'por la demora y usa pasar_a_persona para que alguien del equipo le diga dónde va.',
+            'por la demora y usa pasar_a_persona para que alguien del equipo le diga dónde va. ' +
+            'Nunca le digas cuántos minutos lleva su pedido. Si en esta conversación ya le dijiste ' +
+            'cómo va y vuelve a preguntar, no repitas: usa pasar_a_persona.',
         vertical: VERTICAL,
         tipo: registry.TIPO.CONSULTA,
         feature: FEATURE.ASISTENTE_IA,
@@ -629,10 +631,13 @@ function registrarCapacidades() {
                 ya_pagado: orden.estado_pago === 'pagado' || orden.estado === 'CERRADA',
                 ...(abierta
                     ? {
-                          ...tiempoDelPedido(orden, {
+                          // Solo si ya pasó el tiempo, NO cuántos minutos lleva: con el número
+                          // delante el modelo contestó «va en 57 minutos desde que se pidió» a
+                          // quien reclamaba la demora (Zona Burger, 2026-10-04). Suena a reproche.
+                          pasado_del_tiempo_estimado: tiempoDelPedido(orden, {
                               min: ficha?.tiempo_estimado_min,
                               max: ficha?.tiempo_estimado_max,
-                          }),
+                          }).pasado_del_tiempo_estimado,
                           // Lo que el negocio declaró, dicho tal cual. Sin esto el modelo sabía cuánto
                           // llevaba el pedido pero no cuánto suele tardar, y contestaba «aún no tengo
                           // un tiempo estimado» (Zona Burger, 2026-10-03: «Cuánto te demoras?»).

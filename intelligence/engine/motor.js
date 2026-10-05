@@ -70,8 +70,14 @@ const cortesia = require('./cortesia');
 const confirmacion = require('./confirmacion');
 const { esAfirmacionConEntrega } = require('./texto');
 
-/** Avisos del canal que no son un mensaje del cliente: hoy, que borró uno (`[revoke]`). */
-const SIN_CONTENIDO = /^\[revoke\]$/i;
+/**
+ * Avisos del canal que no son un mensaje del cliente: que borró uno (`[revoke]`) o que reaccionó
+ * con un emoji a otro (`[reaction]`). El canal de WhatsApp ya descarta las reacciones (a47a8ac),
+ * esto es la red por si otro canal o un mensaje viejo las trae: el 2026-10-04 una clienta reaccionó
+ * al aviso de «pedido listo» una hora después, la regla de cortesía no aplicó (sesión nueva), el
+ * modelo se quedó en blanco y salió «no tengo a nadie del negocio disponible».
+ */
+const SIN_CONTENIDO = /^\[(revoke|reaction)\]$/i;
 
 const CONFIG = {
     /** Días hacia atrás que se consideran «pendiente». Ver `repositorio.mensajesPendientes`. */

@@ -382,7 +382,7 @@ function crearManejadorEscalera({
                     const delModelo = await llm(ctx);
                     if (!sinNadaQueDecir(delModelo)) {
                         return conPaso(
-                            conPaso(conPaso(conAviso(delModelo), cesion), pasoDeRuta),
+                            conPaso(conPaso(conAviso(conSiPendiente(delModelo, ctx)), cesion), pasoDeRuta),
                             pasoDeCaducidad
                         );
                     }
@@ -554,6 +554,30 @@ function crearManejadorEscalera({
  */
 function sinNadaQueDecir(decision) {
     return !decision || (decision.respuestas || []).length === 0;
+}
+
+/**
+ * El modelo contestó una pregunta mientras algo esperaba el sí del cliente (el flujo se la cedió
+ * sin tocar la confirmación): se vuelve a pedir el sí al final, corto, para que el cliente sepa
+ * que su pedido sigue sin enviarse. No si el modelo abrió otra confirmación, escaló o cerró la
+ * tarea: entonces ya dijo lo que tocaba.
+ */
+function conSiPendiente(decision, ctx) {
+    if (!confirmacion.pendiente(ctx.conversacion)) return decision;
+    if (decision.tarea !== undefined || decision.estado || decision.resultado === 'handoff') return decision;
+    return {
+        ...decision,
+        respuestas: [
+            ...(decision.respuestas || []),
+            {
+                texto: 'Todavía no he enviado tu pedido. ¿Lo confirmo? Respóndeme sí o no.',
+                opciones: [
+                    { id: 'si', etiqueta: 'Sí, confirmo' },
+                    { id: 'no', etiqueta: 'No' },
+                ],
+            },
+        ],
+    };
 }
 
 /** Antepone un paso a la decisión, sin mutarla: la del manejador es suya. `null` no añade nada. */

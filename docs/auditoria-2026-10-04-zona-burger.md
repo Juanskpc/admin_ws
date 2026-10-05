@@ -21,18 +21,22 @@ Método: `scripts/auditoria_banderas.js` y `auditoria_transcripciones.js` (solo 
 | 5 | Media | Teléfono con una frase detrás («3169932352 , porfa es que pago es con tarjeta») se guardó entero: `tomar_pedido` lo rechazó y el cliente leyó «"cliente_telefono" es demasiado largo (máximo 40)». | El paso TELÉFONO guarda solo el número; el resto va a la nota. |
 | 6 | Media | El modelo llamó `tomar_pedido` con `id_producto: 0` sin buscar el producto (2 veces) y a una clienta le dijo «no pude registrarla por un problema interno». | El error de argumentos le llega al modelo con `instruccion`: corregir, buscar el id, no contárselo al cliente. |
 
-## Visto y NO arreglado (para decidir)
-- **Durante una confirmación, una pregunta se repregunta sin contestar** («¿Lo tienes en combo?»,
-  «El domicilio siempre me cobran 6 mil») y otras frases se anotan como nota de cocina («Si.
-  Cambios», «Voy para allá», «No necesito empaque allá voy a consumir» — este último debía cambiar
-  a *para servir* y quitar el empaque).
+## Segunda tanda (pedidos del dueño, misma noche)
+
+| # | Qué pasó | Arreglo |
+|---|---|---|
+| 7 | Con un pedido esperando el sí, una pregunta («¿Lo tienes en combo?», «el domicilio siempre me cobran 6 mil») se repreguntaba sin contestar, y un cambio («Si. Cambios», «No necesito empaque, allá voy a consumir») acababa en la nota de cocina. | `vaAlModeloDuranteLaConfirmacion` (flujo): preguntas, cobros y cambios —incluido cambiar la entrega— los contesta el modelo **sin cerrar la confirmación**; el modelo recibe una nota de que el pedido aún no se envió, y la escalera añade «Todavía no he enviado tu pedido. ¿Lo confirmo?» (`conSiPendiente`). |
+| 8 | «Voy para allá», «Para Servir», «Para recogerla» se anotaban como nota de cocina. | `confirmacion.lineasParaAnotar` ya no anota repetir la entrega ni avisar que va en camino. |
+| 9 | Al reclamar la demora, el modelo dijo «Va en 57 minutos desde que se pidió… aún está dentro del tiempo». | `consultar_estado_pedido` ya no devuelve los minutos (solo si se pasó del tiempo). **La primera** pregunta por el pedido se contesta; **la segunda** va a una persona: «Ya le dejé tu mensaje a alguien del equipo…» (`yaSeContestoElEstado` mira tiempo contestado o `consultar_estado_pedido` después del último pedido). Reclamos de demora («ya son los 60 minutos», «no ha llegado») también cuentan. |
+| 10 | «¿Cuántas cajas vienen?» → el modelo inventó «una sola caja» y discutió con quien siempre recibe caja y media. | Preguntas de cajas/empaques → «No tengo ese dato con exactitud 🙏 Ya le dejé tu pregunta a alguien del equipo», en Esperan respuesta. Y prompt **`sistema.v12`** (= v11 + dos párrafos): lo que ninguna herramienta dice no se afirma, se pasa a una persona; si ya dijo cómo va el pedido y repreguntan, no repite ni cuenta minutos. |
+| 11 | Una clienta reaccionó con un emoji al aviso de «pedido listo» una hora después y recibió «Ahora mismo no tengo a nadie del negocio disponible…». La regla de cortesía no aplica en sesión nueva, el modelo se quedó en blanco y salió el respaldo. | El canal ya las descarta (`a47a8ac`, falta desplegar) y el motor guarda `[reaction]` como `sin_contenido`: nunca abre un turno. |
+
+## Visto y NO arreglado
 - **Fuera de horario, una queja recibe «seguimos fuera de horario» tres veces** (11:42, la
   salchipapa «mojada»). Al abrir, el modelo la pasó bien a una persona. Valdría marcarla para la
   Bandeja aunque esté cerrado.
 - «gaseosa personal sabor cuatro» no encontró el producto «cuatro» a la primera.
 - La **familiar** es un solo producto con el sabor en la nota («The House»): dato de la carta.
-- `[reaction]` sigue saliendo en la Bandeja en producción: el arreglo (`a47a8ac`) está en `master`
-  pero **no desplegado**.
 
 ## Lo que NO es del código (decisiones del negocio)
 - Domicilio: el personal dio 5, 6, 7 y 8 mil en distintos chats; el rango configurado es 7–9 mil.
@@ -40,6 +44,7 @@ Método: `scripts/auditoria_banderas.js` y `auditoria_transcripciones.js` (solo 
 - Empleo: el personal contesta «escribe al número del video»; si es la respuesta fija, cabe en
   `info_asistente` y el bot la daría sin persona.
 
-Tests: `__tests__/intelligence/auditoria_2026_10_04.test.js` (14). Suite de `intelligence` contra
-la local: 1134 pasan; los 30 que fallan (`e2e_agendar`, `reinicio_por_inactividad`,
-`whatsapp_embedded_signup`, `reportes`) fallan igual sin estos cambios (deriva de la base local).
+Tests: `__tests__/intelligence/auditoria_2026_10_04.test.js` (32). Suite de `intelligence` contra
+la local: 1151 pasan; los 30 que fallan (`e2e_agendar`, `reinicio_por_inactividad`,
+`whatsapp_embedded_signup`, `reportes`) fallan igual sin estos cambios (deriva de la base local);
+`ventana.test.js` falló una vez dentro de la suite completa y pasa sola (intermitente, por tiempos).

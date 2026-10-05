@@ -56,9 +56,10 @@ describe('el flujo', () => {
         resolverExclusiones: async () => ({ validas: [], descartadas: [] }),
     };
     const AHORA = new Date('2026-10-04T18:20:00-05:00');
-    const crear = ({ pedidoReciente = false, telefonoProbado = '573000000000' } = {}) =>
+    const crear = ({ pedidoReciente = false, telefonoProbado = '573000000000', yaContestado = false } = {}) =>
         crearFlujoRestaurante({
             tienePedidoReciente: async () => pedidoReciente,
+            yaSeLeContestoSuPedido: async () => yaContestado,
             contextoNegocio: {
                 obtener: async () => ({
                     id: 6, nombre: 'ZONA BURGER', tratamiento: 'ZONA BURGER', atencion: null,
@@ -133,5 +134,66 @@ describe('el flujo', () => {
     test('«buenas noches» con espacio duro se devuelve igual a las 6 PM', async () => {
         const d = await decir(crear(), conv({ variables: {} }), 'Buenas noches');
         expect(d.respuestas[0].texto).toMatch(/Buenas noches/);
+    });
+
+    describe('estado del pedido: la primera vez se contesta, la segunda va a una persona', () => {
+        test('primera vez: el tiempo, como siempre', async () => {
+            const d = await decir(crear({ pedidoReciente: true }), conv(), 'Cuánto se demora');
+            expect(d.pasos[0].decision).toBe('tiempo_estimado_respondido');
+        });
+        test.each(['Cuánto se demora', 'Pues ya son los 60 minutos que me dijeron se demora aún más?', 'Ya salió mi pedido'])(
+            'repreguntado %p → persona, sin contar minutos',
+            async (texto) => {
+                const d = await decir(crear({ pedidoReciente: true, yaContestado: true }), conv(), texto);
+                expect(d.pasos[0].decision).toBe('pedido_repreguntado_a_persona');
+                expect(d.estado).toBe('handoff_humano');
+                expect(d.respuestas[0]).toMatch(/Ya le dejé tu mensaje/);
+                expect(d.respuestas[0]).not.toMatch(/minutos/);
+            }
+        );
+    });
+
+    test.each(['Cuantas cajas vienen', 'en cuántas cajas viene?', 'No venia una caja y media'])(
+        '%p: no se adivina, va a una persona',
+        async (texto) => {
+            const d = await decir(crear({ pedidoReciente: true }), conv(), texto);
+            expect(d.pasos[0].decision).toBe('empaque_a_persona');
+            expect(d.respuestas[0]).toMatch(/No tengo ese dato con exactitud/);
+            expect(d.estado).toBe('handoff_humano');
+        }
+    );
+
+    describe('con un pedido esperando el sí', () => {
+        const pendiente = (tipo) =>
+            conv({
+                tarea_actual: 'confirmar_mutacion',
+                tarea_datos: {
+                    capacidad: 'tomar_pedido',
+                    args: { items: [{ id_producto: 4, cantidad: 1 }], tipo_entrega: tipo, cliente_nombre: 'Ana' },
+                    preguntado_en: AHORA.toISOString(),
+                },
+            });
+        test.each([
+            ['¿Lo tienes en combo?', 'DOMICILIO'],
+            ['El domicilio siempre me cobran 6 mil', 'DOMICILIO'],
+            ['Si. Cambios', 'DOMICILIO'],
+            ['No necesito empaque allá voy a consumir', 'LLEVAR'],
+            ['que salsas trae', 'LLEVAR'],
+        ])('%p lo contesta el modelo y el pedido sigue esperando', async (texto, tipo) => {
+            const d = await decir(crear(), pendiente(tipo), texto);
+            expect(d.pasos[0].decision).toBe('confirmacion_pregunta_al_modelo');
+            expect(d.respuestas).toEqual([]);
+            expect('tarea' in d).toBe(false); // el motor conserva la confirmación
+        });
+    });
+});
+
+describe('lo que no se anota como nota de cocina', () => {
+    const confirmacion = require('../../intelligence/engine/confirmacion');
+    test.each(['Voy para allá', 'Para Servir', 'Para recogerla', 'ya voy', 'Estoy llegando'])('%p no se anota', (t) => {
+        expect(confirmacion.lineasParaAnotar(t, { afirma: false })).toEqual([]);
+    });
+    test('una nota de verdad sí', () => {
+        expect(confirmacion.lineasParaAnotar('sin cebolla por favor', { afirma: false })).toEqual(['sin cebolla por favor']);
     });
 });

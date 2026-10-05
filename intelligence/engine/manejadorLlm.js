@@ -250,7 +250,15 @@ function crearManejadorLlm({
             // capacidades de siempre) no cambia de orden, solo crece.
             capacidades: [...ofrecidas, PASAR_A_PERSONA],
             historial,
-            mensaje: texto,
+            // Con algo esperando el sí del cliente, el modelo lo sabe: contesta la pregunta y no
+            // dice que ya quedó hecho (el «¿lo confirmo?» lo añade la escalera después). Va en el
+            // mensaje y no en el sistema para no mover el prefijo cacheado (ADR-019).
+            mensaje: confirmacion.pendiente(conversacion)
+                ? `${texto}\n\n[Nota del sistema, no del cliente: hay un pedido esperando que el ` +
+                  'cliente diga sí; todavía NO se ha enviado. Contesta solo lo que pregunta, sin ' +
+                  'decir que quedó hecho. Si pide cambiar algo del pedido, vuelve a llamar la ' +
+                  'herramienta del pedido con el cambio.]'
+                : texto,
             ahora: ahora(),
             modelo: config.modelo,
             maxTokens: config.maxTokensRespuesta,

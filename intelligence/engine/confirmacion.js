@@ -62,6 +62,14 @@ const HABLA_DE_PRECIO = /\b(cobran|cobra|cobro|cobraron|cobrar|cobrarian|vale|va
 /** Un mensaje que no es texto: el canal lo trae como `[image]`, `[audio]`, `[sticker]`… */
 const ES_MEDIA = /^\[(image|audio|video|sticker|document|location|contacts|unsupported)\]$/;
 
+/**
+ * Frases que no son un añadido al pedido y no se anotan (Zona Burger, 2026-10-04): repetir la
+ * entrega que ya dice el resumen («Para servir», «para recogerla») y avisar que va en camino
+ * («Voy para allá», «ya voy», «estoy llegando»). Acababan en la nota de cocina.
+ */
+const SOLO_ENTREGA = /^(para |pa )?(servir|recoger|recogerla|recogerlo|recogerlas|recogerlos|llevar|domicilio|a domicilio|comer aqui|consumir aqui)( aqui| alla| en el local| por favor| porfa)?$/;
+const VA_EN_CAMINO = /^(ya )?(voy|vamos|salgo|voy saliendo|estoy llegando|ya llego|llego|voy para alla|voy en camino|en camino|ya paso|ahi voy)\b/;
+
 /** Empieza como pregunta: eso no se anota, se contesta (y lo atiende el repreguntado). */
 const EMPIEZA_PREGUNTA = /^(cuanto|cuantos|cuanta|que|cual|cuales|como|donde|cuando|tienen|tiene|hay|me pueden|puedo|podria|se puede|a que)\b/;
 
@@ -81,6 +89,7 @@ function lineasParaAnotar(texto, { afirma }) {
         if (palabras.length < 2 || palabras.length > 40) return false;
         if (l.includes('?') || EMPIEZA_PREGUNTA.test(t)) return false;
         if (HABLA_DE_PRECIO.test(t)) return false;
+        if (SOLO_ENTREGA.test(t) || (VA_EN_CAMINO.test(t) && palabras.length <= 6)) return false;
         if (esAfirmacion(l) || esComando(l, COMANDO.NO) || esComando(l, COMANDO.CANCELAR)) return false;
         return true;
     });
