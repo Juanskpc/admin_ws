@@ -62,6 +62,17 @@ async function getUsuarioLogin(idUsuario) {
     const idNegocios = negociosUsuario.map(nu => nu.negocio.id_negocio);
     const estadosPlan = await getEstadosPlanPorNegocio(idNegocios);
 
+    // Qué incluye el plan de cada negocio (p. ej. `asistente_ia` = WhatsApp). Con esto el panel
+    // decide si un CAJERO ve la vista de WhatsApp (2026-10-04); el servidor lo vuelve a comprobar
+    // en cada petición. Si no se puede leer, el login sigue igual, sin features.
+    let featuresPorNegocio = new Map();
+    try {
+        const { featuresDeNegocios } = require('../../intelligence/core/features');
+        featuresPorNegocio = await featuresDeNegocios(idNegocios);
+    } catch (error) {
+        console.warn(`[login] no se pudieron leer las features del plan: ${error.message}`);
+    }
+
     // Agrupar negocios con sus roles y estado de plan
     const negocios = negociosUsuario.map(nu => {
         const negocio = nu.negocio;
@@ -75,6 +86,7 @@ async function getUsuarioLogin(idUsuario) {
             roles,
             plan_activo: estadosPlan.get(negocio.id_negocio)?.activo ?? false,
             plan: estadosPlan.get(negocio.id_negocio) ?? null,
+            features: featuresPorNegocio.get(negocio.id_negocio) ?? [],
         };
     });
 

@@ -13,11 +13,19 @@ const Respuesta = require('../../app_core/helpers/respuesta');
 const canalEmbeddedSignup = require('../../app_core/whatsapp/canalEmbeddedSignup');
 const Audit = require('../../app_core/helpers/auditHelper');
 const { resolverPrincipalUsuario } = require('../../app_core/authz/principal');
+const { esAdministradorDelNegocio } = require('../services/accesoBandejaService');
 
-async function autorizar(req, res, idNegocio) {
+async function autorizar(req, res, idNegocio, { soloAdministrador = false } = {}) {
     const principal = await resolverPrincipalUsuario(req.usuario?.id_usuario);
     if (!principal || !principal.puedeOperarEn(idNegocio)) {
         Respuesta.error(res, 'No tienes acceso a este negocio', 403);
+        return false;
+    }
+    // Conectar o desconectar el número cambia el negocio: solo su administrador. Desde 2026-10-04
+    // los cajeros entran a la vista de WhatsApp y antes cualquier empleado vinculado podía hacerlo
+    // llamando a la API (el panel solo lo escondía).
+    if (soloAdministrador && !(await esAdministradorDelNegocio(req.usuario.id_usuario, idNegocio))) {
+        Respuesta.error(res, 'Solo un administrador del negocio puede conectar o desconectar el número.', 403);
         return false;
     }
     return true;
@@ -67,7 +75,7 @@ async function postCanjear(req, res) {
     try {
         if (!validar(req, res)) return;
         const idNegocio = Number(req.params.id_negocio);
-        if (!(await autorizar(req, res, idNegocio))) return;
+        if (!(await autorizar(req, res, idNegocio, { soloAdministrador: true }))) return;
 
         const { code, phoneNumberId, numeroE164, businessId, modo } = req.body;
         const resultado = await canalEmbeddedSignup.conectar({
@@ -121,7 +129,7 @@ async function postDesconectar(req, res) {
     try {
         if (!validar(req, res)) return;
         const idNegocio = Number(req.params.id_negocio);
-        if (!(await autorizar(req, res, idNegocio))) return;
+        if (!(await autorizar(req, res, idNegocio, { soloAdministrador: true }))) return;
 
         const { desconectado } = await canalEmbeddedSignup.desconectar({
             idNegocio,

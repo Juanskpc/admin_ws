@@ -4,6 +4,8 @@ const Respuesta = require('../../app_core/helpers/respuesta');
 const Models = require('../../app_core/models/conection');
 const Audit = require('../../app_core/helpers/auditHelper');
 const { alcanceDeNegocios } = require('../../app_core/middleware/auth');
+// Quién ve la Bandeja: administrador siempre, cajero si el plan incluye WhatsApp (2026-10-04).
+const { alcanceBandeja } = require('../services/accesoBandejaService');
 const PreparacionAsistente = require('../services/preparacionAsistenteService');
 const { Readable } = require('stream');
 
@@ -179,7 +181,7 @@ async function listarConversaciones(req, res) {
         if (!revisar(req, res)) return;
         if (!(await hayEsquemaIntelligence())) return sinEsquema(res);
 
-        const alcance = await alcanceDeNegocios(req.usuario.id_usuario);
+        const alcance = await alcanceBandeja(req.usuario.id_usuario);
         const idNegocio = req.query.id_negocio ? Number(req.query.id_negocio) : null;
         const filtro = filtroDeNegocio(alcance, idNegocio);
 
@@ -271,7 +273,7 @@ async function cargarConversacionPermitida(idConversacion, idUsuario) {
     );
     if (!conversacion) return null;
 
-    const alcance = await alcanceDeNegocios(idUsuario);
+    const alcance = await alcanceBandeja(idUsuario);
     if (alcance.superAdmin) return conversacion;
     if (alcance.idNegocios.includes(Number(conversacion.id_negocio))) return conversacion;
     return null;
@@ -692,7 +694,7 @@ async function esAdministradorDelNegocio(idUsuario, idNegocio) {
 
 /** El negocio que se pide, comprobado contra lo que el usuario puede ver. Nunca se cree el id. */
 async function negocioVisible(idUsuario, idNegocio) {
-    const alcance = await alcanceDeNegocios(idUsuario);
+    const alcance = await alcanceBandeja(idUsuario);
     return alcance.superAdmin || alcance.idNegocios.includes(Number(idNegocio));
 }
 
