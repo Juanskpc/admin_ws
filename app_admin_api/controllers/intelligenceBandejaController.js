@@ -1186,7 +1186,36 @@ async function pedirRecomendaciones(req, res) {
     }
 }
 
+/**
+ * GET /admin/intelligence/bandeja/informe?id_negocio=&dias=
+ *
+ * Cómo le fue al asistente con las conversaciones reales (fase 3): pedidos por carta y por chat,
+ * lo que se pidió y no se encontró, chats que acabaron en una persona, pedidos rechazados, y qué
+ * hacer. Administrador del negocio o super admin; el gasto en IA —que es de EscalApp, no del
+ * negocio— solo viaja al super admin.
+ */
+async function leerInforme(req, res) {
+    try {
+        if (!revisar(req, res)) return;
+        if (!(await hayEsquemaIntelligence())) return sinEsquema(res);
+        const idNegocio = Number(req.query.id_negocio);
+        if (!(await esAdministradorDelNegocio(req.usuario.id_usuario, idNegocio))) {
+            return Respuesta.error(res, 'Negocio no encontrado', 404);
+        }
+        const { superAdmin } = await alcanceDeNegocios(req.usuario.id_usuario);
+        const informe = await require('../services/informeAsistenteService').informe(idNegocio, {
+            dias: req.query.dias ? Number(req.query.dias) : 7,
+            conCosto: superAdmin,
+        });
+        return Respuesta.success(res, 'Informe del asistente', informe);
+    } catch (err) {
+        console.error('Error en bandeja.leerInforme:', err);
+        return Respuesta.error(res, 'No se pudo generar el informe');
+    }
+}
+
 module.exports = {
+    leerInforme,
     pedirRecomendaciones,
     leerDiagnostico,
     pausarAsistente,

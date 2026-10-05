@@ -908,6 +908,11 @@ router.get('/intelligence/bandeja/preparacion', [
 router.get('/intelligence/bandeja/diagnostico', [
     query('id_negocio').isInt({ min: 1 }).withMessage('ID de negocio inválido'),
 ], IntelligenceBandejaController.leerDiagnostico);
+// Informe del asistente con las conversaciones reales de los últimos días (fase 3).
+router.get('/intelligence/bandeja/informe', [
+    query('id_negocio').isInt({ min: 1 }).withMessage('ID de negocio inválido'),
+    query('dias').optional().isInt({ min: 1, max: 31 }).withMessage('Los días deben estar entre 1 y 31'),
+], IntelligenceBandejaController.leerInforme);
 // Recomendaciones con IA sobre la carta (fase 2): solo recomienda, no cambia nada.
 router.post('/intelligence/bandeja/diagnostico/recomendaciones', [
     body('id_negocio').isInt({ min: 1 }).withMessage('ID de negocio inválido'),
