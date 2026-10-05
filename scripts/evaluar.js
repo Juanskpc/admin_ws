@@ -65,6 +65,7 @@ function pintar(resumen, etiqueta = '') {
             // `--detalle`: qué dijo y qué herramientas usó, para saber POR QUÉ falló.
             if (process.argv.includes('--detalle')) {
                 console.log(`       herramientas: ${(f.invocaciones || []).join(', ') || '—'}`);
+                if (f.confirmaria) console.log(`       pidió confirmar con: ${JSON.stringify(f.confirmaria)}`);
                 console.log(`       respondió: ${String(f.respuesta || '').replace(/\s+/g, ' ').slice(0, 300)}`);
             }
         }

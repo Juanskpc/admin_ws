@@ -213,6 +213,8 @@ async function evaluarConversaciones({ suite: nombreSuite, manejador, gate, idNe
             respuesta: texto,
             // Qué pidió el modelo y cómo le fue: sin esto un «no pidió confirmar» no dice si el
             // modelo no lo intentó o si la capacidad se le rechazó.
+            // Con qué argumentos pidió confirmar (si lo hizo): ahí se ve un teléfono inventado.
+            confirmaria: decision.tarea?.datos?.args ?? null,
             invocaciones: (decision.invocaciones || []).map(
                 (i) => `${i.capacidad}:${i.resultado}${i.errorCodigo ? `(${i.errorCodigo})` : ''}`
             ),

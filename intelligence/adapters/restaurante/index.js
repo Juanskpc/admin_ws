@@ -209,6 +209,8 @@ const RELLENO = new Set([
     'con', 'sin', 'para', 'que', 'quiero', 'quisiera', 'pedir', 'dame', 'deme', 'tienen',
     'tiene', 'hay', 'precio', 'cuanto', 'vale', 'cuesta', 'tamano', 'size', 'me', 'regala',
     'regalas', 'regalame', 'mas', 'otra', 'otro', 'también', 'tambien',
+    // «gaseosa personal sabor cuatro» no encontraba nada: «sabor» no está en ningún nombre (2026-10-04).
+    'sabor', 'sabores',
 ]);
 
 /** Tamaños que NO figuran en el nombre cuando el producto es el básico («criollita» = personal). */
@@ -1370,6 +1372,26 @@ function registrarCapacidades() {
                 e.code = 'TELEFONO_REQUERIDO';
                 e.statusCode = 400;
                 throw e;
+            }
+            // El teléfono que DICE el cliente no puede ser el del propio negocio. gpt-5.6-luna, a
+            // falta de número, copió el del restaurante —que tiene delante en el prompt— como
+            // `cliente_telefono` (evaluación de 2026-10-04): el domiciliario habría llamado al
+            // local. Solo se mira el dicho; el probado por el canal no pasa por aquí.
+            if (args.cliente_telefono && !contexto.principal?.telefono_verificado) {
+                const soloDigitos = (v) => String(v || '').replace(/\D/g, '').replace(/^57/, '');
+                const [delNegocio] = await Models.sequelize.query(
+                    `SELECT telefono FROM general.gener_negocio WHERE id_negocio = :idNegocio;`,
+                    { replacements: { idNegocio }, type: Models.sequelize.QueryTypes.SELECT, transaction: contexto.transaction }
+                );
+                const dicho = soloDigitos(args.cliente_telefono);
+                if (dicho && dicho === soloDigitos(delNegocio?.telefono)) {
+                    const e = new Error(
+                        'Ese es el teléfono del restaurante, no el del cliente. Pídele al cliente su número de contacto.'
+                    );
+                    e.code = 'TELEFONO_REQUERIDO';
+                    e.statusCode = 400;
+                    throw e;
+                }
             }
 
             // ── La mesa, releída de la base ───────────────────────────────────────────────

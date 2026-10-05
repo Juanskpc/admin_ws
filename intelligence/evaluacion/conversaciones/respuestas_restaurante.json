@@ -96,7 +96,7 @@
     },
     {
       "id": "recoger-en-el-mismo-mensaje",
-      "mensaje": "Me podria preparar una salchipapa la criollita yo la recojo",
+      "mensaje": "Me podria preparar una salchipapa la criollita pequeña yo la recojo",
       "espera": {
         "pide_confirmacion": "tomar_pedido"
       }
@@ -116,33 +116,6 @@
       "mensaje": "La de 28000",
       "espera": {
         "pide_confirmacion": "tomar_pedido"
-      }
-    },
-    {
-      "id": "varios-productos-falta-telefono",
-      "historial": [
-        {
-          "rol": "cliente",
-          "texto": "Para pedir un domicilio por favor"
-        },
-        {
-          "rol": "asistente",
-          "texto": "Claro. ¿Qué te gustaría pedir para el domicilio?"
-        }
-      ],
-      "mensaje": "Un perro smoked dog Una dulcinea Una choripapa Barrio Santa Monica Manzana E casa 124 Pago en efectivo por favor",
-      "espera": {
-        "invoca": [
-          "buscar_producto"
-        ],
-        "menciona_alguno": [
-          "número",
-          "numero",
-          "contacto",
-          "celular",
-          "teléfono"
-        ],
-        "no_pide_confirmacion": true
       }
     },
     {
@@ -244,7 +217,13 @@
           "buscar_producto"
         ],
         "menciona_alguno": [
-          "cuatro"
+          "cuatro",
+          "domicilio",
+          "recoger"
+        ],
+        "no_menciona": [
+          "no me aparece",
+          "no la encuentro"
         ]
       }
     },
@@ -451,6 +430,50 @@
           "ya van en camino",
           "listo, van los tenedores"
         ]
+      }
+    },
+    {
+      "id": "sin-tamano-pregunta",
+      "mensaje": "Me podria preparar una salchipapa la criollita yo la recojo",
+      "espera": {
+        "invoca": [
+          "buscar_producto"
+        ],
+        "menciona_alguno": [
+          "pequeña",
+          "tamaño",
+          "15.500"
+        ],
+        "no_menciona": [
+          "problema interno"
+        ]
+      }
+    },
+    {
+      "id": "varios-productos-falta-telefono",
+      "historial": [
+        {
+          "rol": "cliente",
+          "texto": "Para pedir un domicilio por favor"
+        },
+        {
+          "rol": "asistente",
+          "texto": "Claro. ¿Qué te gustaría pedir para el domicilio?"
+        }
+      ],
+      "mensaje": "Un perro smoked dog Una dulcinea Una choripapa Barrio Santa Monica Manzana E casa 124 Pago en efectivo por favor",
+      "espera": {
+        "invoca": [
+          "buscar_producto"
+        ],
+        "menciona_alguno": [
+          "número",
+          "numero",
+          "contacto",
+          "celular",
+          "teléfono"
+        ],
+        "no_pide_confirmacion": true
       }
     }
   ]
