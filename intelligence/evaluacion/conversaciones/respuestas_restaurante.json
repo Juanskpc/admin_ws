@@ -475,6 +475,44 @@
         ],
         "no_pide_confirmacion": true
       }
+    },
+    {
+      "id": "tamano-que-no-existe",
+      "historial": [
+        { "rol": "cliente", "texto": "Hola para un domicilio" },
+        { "rol": "asistente", "texto": "¡Hola! Claro 😊 Dime qué productos quieres y, para enviártelo, necesito también la dirección y un número de contacto." }
+      ],
+      "mensaje": "Me regala una salchilimon grande",
+      "espera": {
+        "invoca": ["buscar_producto"],
+        "menciona_alguno": ["personal", "mediana"],
+        "no_pide_confirmacion": true
+      }
+    },
+    {
+      "id": "pedido-sin-decir-como-lo-recibe",
+      "historial": [
+        { "rol": "cliente", "texto": "Hola" },
+        { "rol": "asistente", "texto": "👋 ¡Buenas tardes! Te saluda *ZONA BURGER*. Aquí tienes la carta completa, con fotos y precios. O si prefieres, dime por aquí qué se te antoja y yo te lo anoto." }
+      ],
+      "mensaje": "Me puedes dar tres salchipapa viciosa 15500",
+      "espera": {
+        "invoca": ["buscar_producto"],
+        "menciona_alguno": ["domicilio", "recoger", "viciosa"],
+        "no_pide_confirmacion": true
+      }
+    },
+    {
+      "id": "dos-productos-sin-decir-como-los-recibe",
+      "historial": [
+        { "rol": "cliente", "texto": "Buenas tardes" },
+        { "rol": "asistente", "texto": "👋 ¡Buenas tardes! Te saluda *ZONA BURGER*. Aquí tienes la carta completa, con fotos y precios. O si prefieres, dime por aquí qué se te antoja y yo te lo anoto." }
+      ],
+      "mensaje": "Me puede regalar una criolla mediana\nY una pequeña",
+      "espera": {
+        "menciona_alguno": ["domicilio", "recoger"],
+        "no_pide_confirmacion": true
+      }
     }
   ]
 }

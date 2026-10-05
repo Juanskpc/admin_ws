@@ -422,6 +422,13 @@ function crearManejadorLlm({
                     turno,
                     mutacionesEjecutadas,
                     dryRun: config.dryRun,
+                    conversado: {
+                        cliente: [
+                            ...historial.filter((t) => t.rol === 'cliente').map((t) => t.texto),
+                            texto,
+                        ],
+                        asistente: historial.filter((t) => t.rol !== 'cliente').map((t) => t.texto),
+                    },
                 });
 
                 // Una mutación que exige confirmación **termina el turno aquí**. No se le
@@ -519,6 +526,9 @@ async function ejecutarSolicitud({
     // en `invocaciones` a proposito: eso se persiste y aqui hay datos del cliente (ADR-024).
     respaldoDelTurno = [],
     dryRun = false,
+    // Lo dicho en el chat, por quién: `{ cliente: [textos], asistente: [textos] }`. Solo lo leen
+    // las capacidades que declaran `confirmacion.falta`.
+    conversado = null,
 }) {
     const iniciado = Date.now();
 
@@ -563,6 +573,32 @@ async function ejecutarSolicitud({
     // cliente lo descubra después de haber dicho que sí. Es en seco de verdad pase lo que pase
     // dentro: la transacción se deshace siempre, así que no hay nada que perder por intentarlo.
     if (exigenConfirmacion.has(solicitada.capacidad)) {
+        // Antes de preguntar nada: ¿al modelo le falta un dato que solo puede dar el cliente y
+        // que él rellenó por su cuenta? La capacidad lo declara (`confirmacion.falta`) mirando
+        // lo que de verdad se ha dicho en el chat, que es lo que los argumentos no cuentan. El
+        // error vuelve al modelo, que entonces pregunta. Zona Burger, 2026-10-05: «me puedes dar
+        // tres salchipapas» salió a confirmar «para recoger» sin que nadie lo hubiera dicho.
+        const falta = conversado
+            ? registry.obtener(solicitada.capacidad)?.confirmacion?.falta?.({
+                  args: solicitada.argumentos,
+                  ...conversado,
+              })
+            : null;
+        if (falta) {
+            invocaciones.push({
+                capacidad: solicitada.capacidad,
+                vertical: registry.describir(solicitada.capacidad)?.vertical ?? null,
+                argumentos: solicitada.argumentos,
+                resultado: 'error',
+                errorCodigo: falta.codigo,
+                latenciaMs: Date.now() - iniciado,
+            });
+            return {
+                id: solicitada.id,
+                error: true,
+                contenido: comoResultado({ error: falta.codigo, mensaje: falta.mensaje }),
+            };
+        }
         try {
             await gate.ejecutar({
                 capacidad: solicitada.capacidad,

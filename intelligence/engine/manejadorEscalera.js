@@ -379,10 +379,29 @@ function crearManejadorEscalera({
             // el sistema de F5 entero funcionaba así y el silencio nunca fue parte del diseño.
             if (llm) {
                 try {
-                    const delModelo = await llm(ctx);
+                    // El flujo puede ceder SOLTANDO la tarea (`soltarTarea`): lo que esperaba el
+                    // sí del cliente ya no es lo que quiere (2026-10-05, un domicilio que quedó
+                    // tomado «para recoger»). El modelo atiende entonces sin pendiente —con la
+                    // nota que le deja el flujo— y la tarea se cierra aunque él no abra otra.
+                    const soltar = decision.soltarTarea === true;
+                    if (soltar) cesion.motivo.tarea_soltada = true;
+                    const ctxModelo = soltar
+                        ? {
+                              ...ctx,
+                              conversacion: { ...ctx.conversacion, tarea_actual: null, tarea_datos: {} },
+                              texto: decision.notaParaElModelo
+                                  ? `${ctx.texto}\n\n${decision.notaParaElModelo}`
+                                  : ctx.texto,
+                          }
+                        : ctx;
+                    const contestado = await llm(ctxModelo);
+                    const delModelo =
+                        soltar && contestado && contestado.tarea === undefined
+                            ? { ...contestado, tarea: null }
+                            : contestado;
                     if (!sinNadaQueDecir(delModelo)) {
                         return conPaso(
-                            conPaso(conPaso(conAviso(conSiPendiente(delModelo, ctx)), cesion), pasoDeRuta),
+                            conPaso(conPaso(conAviso(conSiPendiente(delModelo, ctxModelo)), cesion), pasoDeRuta),
                             pasoDeCaducidad
                         );
                     }

@@ -200,7 +200,33 @@ function noTraeLoPedido(productos, termino) {
         .filter((w) => w.length >= 3 && !RELLENO.has(w))
         .sort((a, b) => b.length - a.length)[0];
     if (!ancla) return false;
-    return !productos.some((p) => normalizarTexto(p.nombre).includes(ancla));
+    // «salchilimon» SÍ es «Salchi-limón»: el nombre se mira también palabra por palabra, con la
+    // misma tolerancia que la búsqueda (2026-10-05).
+    return !productos.some((p) => {
+        const nombre = normalizarTexto(p.nombre);
+        return (
+            nombre.includes(ancla) ||
+            nombre.replace(/[^a-z0-9ñ\s]/g, ' ').split(/\s+/).some((b) => b && mismaPalabra(ancla, b))
+        );
+    });
+}
+
+/** El cliente habló de recoger, pasar o ir al local (sobre texto sin tildes). */
+const HABLA_DE_RECOGER = /\b(recog\w*|recoj\w*|llevar|llevo|llevarl[oa]s?|paso|pasar|pasare|pasamos|voy|vamos|retir\w*|busc\w*|local|alla|caigo)\b|~m=r\b/;
+
+/** Palabras de tamaño que el cliente puede pedir y que la carta puede no tener para ese plato. */
+const PIDE_TAMANO = /^(mediana|mediano|medianas|medianos|grande|grandes|familiar|familiares|xl|jumbo|gigante|gigantes)$/;
+
+/**
+ * Separa el tamaño del resto: «salchilimon grande» → { resto: 'salchilimon', tamano: 'grande' }.
+ * Sin tamaño, o si el término ES solo el tamaño, `tamano` es null.
+ */
+function sinElTamano(termino) {
+    const palabras = String(termino || '').trim().split(/\s+/).filter(Boolean);
+    const tamanos = palabras.filter((w) => PIDE_TAMANO.test(normalizarTexto(w)));
+    const resto = palabras.filter((w) => !PIDE_TAMANO.test(normalizarTexto(w))).join(' ');
+    if (tamanos.length === 0 || resto.length < 2) return { resto: termino, tamano: null };
+    return { resto, tamano: normalizarTexto(tamanos[0]) };
 }
 
 /** Palabras de relleno: no dicen QUÉ producto es, así que no se le exigen a la carta. */
@@ -545,6 +571,8 @@ function registrarCapacidades() {
             'no inventes productos ni precios: lo único que existe es lo que devuelve esto. ' +
             'Si el producto viene en `agotados_ahora`, SÍ está en la carta pero hoy se acabó: ' +
             'dilo así y ofrece otra cosa; nunca digas que no existe. ' +
+            'Si viene `tamano_que_no_hay`, el producto SÍ existe pero no en ese tamaño: dile ' +
+            'cuáles hay con sus precios; nunca digas que no está en la carta. ' +
             'Si salen varias presentaciones del mismo plato (personal/pequeña, mediana, grande, ' +
             'familiar, sencilla, doble) y el cliente NO dijo el tamaño, pregúntale cuál quiere ' +
             'con sus precios; nunca elijas tú el tamaño. Si con el término completo no aparece ' +
@@ -561,20 +589,47 @@ function registrarCapacidades() {
             // panel del negocio, donde ver lo oculto es justo lo que se quiere. Por el bot no
             // puede salir. Se filtra aquí y no en el servicio para no cambiarle el
             // comportamiento a la vertical desde el adaptador — es su contrato, no el nuestro.
-            const productos = (await buscarEnLaCarta(idNegocio, args.termino)).filter(
+            let productos = (await buscarEnLaCarta(idNegocio, args.termino)).filter(
                 (p) => p.visible !== false
             );
+            // El plato existe pero no en ESE tamaño. Zona Burger, 2026-10-05: «una salchilimon
+            // grande» —hay personal y mediana— devolvía vacío, el modelo contestó dos veces «no
+            // la encuentro en la carta» y la clienta se fue. Se busca sin el tamaño y se dice
+            // cuál es el que no hay: así la respuesta es «grande no, hay estas», no «no existe».
+            let terminoUsado = args.termino;
+            let tamanoQueNoHay = null;
+            if (productos.length === 0) {
+                const { resto, tamano } = sinElTamano(args.termino);
+                if (tamano) {
+                    const sinTamano = (await buscarEnLaCarta(idNegocio, resto)).filter(
+                        (p) => p.visible !== false
+                    );
+                    if (sinTamano.length > 0) {
+                        productos = sinTamano;
+                        terminoUsado = resto;
+                        tamanoQueNoHay = tamano;
+                    }
+                }
+            }
             // Lo que se nombró, y sin descripciones si es una lista: el modelo vuelve a buscar
             // el producto concreto si le preguntan qué trae (ver `afinarResultado`).
-            const afinados = afinarResultado(productos, args.termino).slice(0, MAX_PRODUCTOS);
+            const afinados = afinarResultado(productos, terminoUsado).slice(0, MAX_PRODUCTOS);
             const conDescripcion = afinados.length <= MAX_CON_DESCRIPCION;
             return {
                 termino: args.termino,
                 productos: afinados.map((p) => producto(p, { conDescripcion })),
+                ...(tamanoQueNoHay
+                    ? {
+                          tamano_que_no_hay: tamanoQueNoHay,
+                          nota:
+                              `Este producto SÍ está en la carta, pero no en tamaño «${tamanoQueNoHay}». ` +
+                              'Dile al cliente las presentaciones que hay, con sus precios, y que elija.',
+                      }
+                    : {}),
                 // Solo cuando no hay nada que vender: así «no tenemos» y «se acabó» dejan de ser
                 // la misma respuesta (Zona Burger, 2026-10-02: la Discordia, agotada por un
                 // stock en −321, se le dijo a una clienta que «no está en la carta»).
-                ...(noTraeLoPedido(productos, args.termino)
+                ...(noTraeLoPedido(productos, terminoUsado)
                     ? {
                           agotados_ahora: (await agotadosQueCoinciden(idNegocio, args.termino)).filter(
                               (nombre) => !productos.some((p) => p.nombre === nombre)
@@ -1096,6 +1151,23 @@ function registrarCapacidades() {
                 const previa = String(args?.nota || '').trim();
                 const nota = (previa ? `${previa}. ${texto}` : texto).slice(0, 500);
                 return { ...args, nota };
+            },
+            // «Para recoger» no se supone. Si el modelo lo pone y en el chat nadie ha hablado de
+            // recoger —ni el cliente lo dijo ni se le preguntó—, se le devuelve para que pregunte
+            // (Zona Burger, 2026-10-05: un domicilio quedó tomado para recoger). Solo LLEVAR: es
+            // lo que el modelo elige cuando no sabe; un domicilio ya exige dirección y teléfono.
+            falta: ({ args, cliente = [], asistente = [] }) => {
+                if (args?.tipo_entrega !== 'LLEVAR') return null;
+                const loDijo = cliente.some((t) => HABLA_DE_RECOGER.test(normalizarTexto(t)));
+                const sePregunto = asistente.some((t) => /recog/.test(normalizarTexto(t)));
+                if (loDijo || sePregunto) return null;
+                return {
+                    codigo: 'ENTREGA_SIN_DECIR',
+                    mensaje:
+                        'El cliente no ha dicho cómo quiere recibir el pedido. No lo elijas tú: ' +
+                        'pregúntale si es a domicilio, para recoger o para comer en el local, y ' +
+                        'vuelve a llamar con lo que conteste. No le cuentes este error.',
+                };
             },
             hecho: ({ resultado }) =>
                 resultado.suma_a_cuenta

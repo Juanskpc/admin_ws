@@ -1808,6 +1808,27 @@ function vaAlModeloDuranteLaConfirmacion(texto, datos) {
     return linea.includes('?') || PREGUNTA.test(t) || HABLA_DE_COBRO.test(t);
 }
 
+const ENTREGA_EN_PALABRAS = {
+    LLEVAR: 'para recoger en el local',
+    DOMICILIO: 'a domicilio',
+    MESA: 'para comer en el local',
+};
+
+/**
+ * Con un pedido esperando el sí que NO es a domicilio, ¿el mensaje habla de domicilio?
+ * Devuelve `{ de, a }` o `null`. Solo pedidos (los que traen `tipo_entrega`).
+ */
+function entregaQueCambia(texto, datos) {
+    const pendiente = datos?.args?.tipo_entrega ?? null;
+    if (!pendiente || !ENTREGA_EN_PALABRAS[pendiente]) return null;
+    const t = normalizar(ultimaLinea(texto)).replace(/[¡¿!.,;:]/g, ' ').replace(/\s+/g, ' ').trim();
+    const nombrada = entregaNombrada(t);
+    // Solo hacia DOMICILIO: es el cambio que el modelo no puede rehacer en el mismo turno (le
+    // faltan dirección y teléfono), y por eso el resumen viejo se quedaba vivo. «Allá voy a
+    // consumir» o «mejor la recojo» los rehace al momento, con el pendiente en su sitio.
+    return nombrada === 'DOMICILIO' && pendiente !== 'DOMICILIO' ? { de: pendiente, a: nombrada } : null;
+}
+
 /**
  * ¿Pregunta cuántas cajas, empaques o recipientes trae? Es un dato que ningún sistema guarda.
  */
@@ -2024,6 +2045,28 @@ function crearFlujoRestaurante({
             // toca (`sin tarea` en la decisión) y el motor la conserva; el modelo puede rehacer
             // el pedido con el cambio, lo que abre una confirmación nueva.
             if (vaAlModeloDuranteLaConfirmacion(texto, conversacion.tarea_datos)) {
+                // Habla de OTRA entrega que la del resumen («¿hacen domicilio?» con un pedido
+                // «para recoger» esperando): ese resumen ya no es lo que quiere, y dejarlo vivo
+                // es dejar un «sí» que crea el pedido equivocado. Zona Burger, 2026-10-05: el
+                // bot pidió la dirección y a la vez «¿lo confirmo?»; el cliente tocó «Sí» y el
+                // domicilio quedó tomado para recoger. Se suelta la confirmación y el modelo
+                // rehace el pedido con lo que falte.
+                const cambio = entregaQueCambia(texto, conversacion.tarea_datos);
+                if (cambio) {
+                    return {
+                        ...delegar(ctx),
+                        soltarTarea: true,
+                        notaParaElModelo:
+                            '[Nota del sistema, no del cliente: había un pedido esperando el sí ' +
+                            `(${ENTREGA_EN_PALABRAS[cambio.de]}) y el cliente ahora habla de ` +
+                            `${ENTREGA_EN_PALABRAS[cambio.a]}. Esa confirmación se DESCARTÓ: no se ha ` +
+                            'enviado nada. Contesta lo que pregunta y averigua cómo lo quiere recibir; ' +
+                            'si es a domicilio pide la dirección y un número de contacto. Cuando lo ' +
+                            'tengas, vuelve a llamar la herramienta del pedido. Lo que estaba ' +
+                            `anotado: ${JSON.stringify(conversacion.tarea_datos?.args ?? {})}]`,
+                        pasos: [paso('confirmacion_soltada_por_entrega', cambio)],
+                    };
+                }
                 const { tarea: _sinTocar, ...cedido } = delegar(ctx);
                 return { ...cedido, pasos: [paso('confirmacion_pregunta_al_modelo')] };
             }
