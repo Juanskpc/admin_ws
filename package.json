@@ -125,6 +125,7 @@
     "migrate:usuario-eliminado": "node migrations/migrate_usuario_eliminado.js",
     "migrate:restaurante-cajas": "node migrations/migrate_restaurante_cajas.js",
     "migrate:restaurante-para-servir": "node migrations/migrate_restaurante_para_servir.js",
+    "migrate:restaurante-proveedores": "node migrations/migrate_restaurante_proveedores.js",
     "migrate:recarga-ia": "node migrations/migrate_recarga_ia.js"
   },
   "keywords": [],
