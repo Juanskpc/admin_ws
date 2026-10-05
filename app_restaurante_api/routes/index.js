@@ -25,6 +25,8 @@ const CartaDisenoController = require('../controllers/cartaDisenoController');
 const HorarioController    = require('../controllers/horarioController');
 const ProveedorController  = require('../controllers/proveedorController');
 const { verificarToken }   = require('../../app_core/middleware/auth');
+const Respuesta            = require('../../app_core/helpers/respuesta');
+const { paisesParaSeleccion } = require('../../app_core/helpers/paises');
 
 // ───────── Multer: imágenes de la carta (productos y categorías) ─────────
 // Se guardan en admin_ws/uploads/restaurante/menu/<id_negocio>/ y se sirven
@@ -97,6 +99,12 @@ const uploadAdjuntoCompra = multer({
 
 // Verificar token recibido desde el admin_app (validación de sesión)
 router.post('/auth/verificar-token', DashboardController.verificarTokenAcceso);
+
+// Países con indicativo telefónico. Mismo catálogo y misma respuesta que `GET /admin/paises`:
+// la lista vive en `helpers/paises.js` junto con la regla de cuántos dígitos tiene un número en
+// cada país, y copiarla al frontend la dejaría vieja el día que se añada uno. Público porque es
+// catálogo de plataforma, sin datos de nadie — igual que en la consola.
+router.get('/paises', (_req, res) => Respuesta.success(res, 'Países', paisesParaSeleccion()));
 
 // Code-exchange para login cross-origin (admin_app → restaurante_app).
 router.post('/auth/generar-codigo',
