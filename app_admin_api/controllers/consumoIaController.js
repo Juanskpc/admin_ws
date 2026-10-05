@@ -4,9 +4,16 @@ const Respuesta = require('../../app_core/helpers/respuesta');
 const Models = require('../../app_core/models/conection');
 const Audit = require('../../app_core/helpers/auditHelper');
 const Consumo = require('../services/consumoIaService');
+const Meta = require('../services/metaCostosService');
+const { trmVigente } = require('../services/trmService');
 
 /**
- * Consumo IA — cuánto se gasta en OpenAI, cuánto queda y en qué se va. Solo super admin.
+ * Terceros — lo que se les paga a los proveedores: OpenAI (IA) y Meta (WhatsApp). Solo super
+ * admin. Nació como «Consumo IA» y la ruta conserva ese nombre.
+ *
+ * OpenAI cobra en USD y Meta en COP; el total del mes se pasa a pesos con la TRM del día
+ * (`trmService`). Lo de WhatsApp sale de `metaCostosService`, que separa lo que paga EscalApp
+ * (su propia WABA) de lo que pagan los clientes conectados por Embedded Signup.
  *
  * Junta las dos fuentes que explica `consumoIaService`: el gasto **oficial** de OpenAI (todo lo
  * que cobra) y el **interno** del Ledger (solo el bot, pero repartido por negocio y modelo).
@@ -113,6 +120,67 @@ function serieCompleta(desdeSeg, hastaSeg, oficial, interno) {
 }
 
 /**
+ * Lleva un costo de Meta a pesos. Meta cobra en la moneda de la WABA (COP en todas las de hoy);
+ * si alguna cobrara en USD se convierte con la TRM, y en cualquier otra moneda no se suma: un
+ * total con monedas mezcladas es peor que uno incompleto que lo dice.
+ */
+function aPesos(valor, moneda, trm) {
+    if (!valor) return 0;
+    if (moneda === 'COP') return valor;
+    if (moneda === 'USD' && trm) return valor * trm.valor;
+    return null;
+}
+
+/** Arma la sección de WhatsApp de la respuesta: cuentas, números con su cuota y serie diaria. */
+function armarWhatsapp(consumo, { desdeVentana, hoy, inicioMes, trm }) {
+    const { cuentas, por_dia: porDia } = Meta.resumirMeta(consumo, { desdeVentana, inicioMes });
+
+    let costoEscalappMes = 0;
+    let costoEscalappPeriodo = 0;
+    let costoClientesMes = 0;
+    let sinConvertir = false;
+    for (const c of cuentas) {
+        const mes = aPesos(c.costo_mes, c.moneda, trm);
+        const periodo = aPesos(c.costo_periodo, c.moneda, trm);
+        if (mes === null || periodo === null) {
+            sinConvertir = true;
+            continue;
+        }
+        if (c.paga === 'escalapp') {
+            costoEscalappMes += mes;
+            costoEscalappPeriodo += periodo;
+        } else {
+            costoClientesMes += mes;
+        }
+    }
+
+    const serie = [];
+    for (let s = Date.parse(`${desdeVentana}T00:00:00Z`); ; s += 86_400_000) {
+        const fecha = new Date(s).toISOString().slice(0, 10);
+        if (fecha > hoy) break;
+        const d = porDia.get(fecha);
+        serie.push({
+            fecha,
+            escalapp: d?.escalapp ?? 0,
+            clientes: d?.clientes ?? 0,
+        });
+    }
+
+    return {
+        consultado_en: consumo.consultado_en,
+        cuentas,
+        serie,
+        totales: {
+            mensajes_periodo: cuentas.reduce((s, c) => s + c.mensajes_periodo, 0),
+            costo_escalapp_mes_cop: Math.round(costoEscalappMes),
+            costo_escalapp_periodo_cop: Math.round(costoEscalappPeriodo),
+            costo_clientes_mes_cop: Math.round(costoClientesMes),
+            moneda_sin_convertir: sinConvertir,
+        },
+    };
+}
+
+/**
  * GET /admin/consumo-ia?dias=7|30|90&forzar=true
  *
  * `forzar=true` se salta la caché de 10 minutos (botón «Actualizar»).
@@ -143,13 +211,44 @@ async function resumen(req, res) {
             partida ? Consumo.inicioDiaUtc(partida.fecha) : Infinity
         );
 
+        // Meta corta los días en hora de Colombia; su ventana se calcula aparte.
+        const hoyBogotaSeg = Meta.inicioDiaBogota(ahora);
+        const desdeVentanaMetaSeg = hoyBogotaSeg - (dias - 1) * Consumo.SEG_DIA;
+        const inicioMesMetaSeg = Meta.inicioMesBogota(ahora);
+
+        // Los tres proveedores en paralelo; ninguno tumba a los demás si falla.
+        const [rOficial, rMeta, trm] = await Promise.all([
+            Consumo.consultarCostosOficiales(desdeSeg, { forzar }).then(
+                (v) => ({ v }),
+                (e) => ({ e })
+            ),
+            Meta.consultarConsumoMeta(Math.min(desdeVentanaMetaSeg, inicioMesMetaSeg), { forzar }).then(
+                (v) => ({ v }),
+                (e) => ({ e })
+            ),
+            trmVigente(),
+        ]);
+
         let oficial = null;
         let avisoOficial = null;
-        try {
-            oficial = await Consumo.consultarCostosOficiales(desdeSeg, { forzar });
-        } catch (e) {
-            if (!e.code) throw e;
-            avisoOficial = { code: e.code, mensaje: e.message };
+        if (rOficial.e) {
+            if (!rOficial.e.code) throw rOficial.e;
+            avisoOficial = { code: rOficial.e.code, mensaje: rOficial.e.message };
+        } else {
+            oficial = rOficial.v;
+        }
+
+        let whatsapp = null;
+        let avisoWhatsapp = null;
+        if (rMeta.e) {
+            avisoWhatsapp = { code: rMeta.e.code || 'META_ERROR', mensaje: rMeta.e.message };
+        } else {
+            whatsapp = armarWhatsapp(rMeta.v, {
+                desdeVentana: Meta.fechaBogota(desdeVentanaMetaSeg),
+                hoy: Meta.fechaBogota(hoyBogotaSeg),
+                inicioMes: Meta.fechaBogota(inicioMesMetaSeg),
+                trm,
+            });
         }
 
         const hayLedger = await hayEsquemaIntelligence();
@@ -222,6 +321,23 @@ async function resumen(req, res) {
             },
             turnos: interno.turnos,
             movimientos,
+            whatsapp,
+            aviso_whatsapp: avisoWhatsapp,
+            trm,
+            // Lo que EscalApp paga a terceros este mes, en pesos. OpenAI va por mes UTC y Meta
+            // por mes de Colombia: la diferencia son cinco horas en el borde del mes.
+            terceros: {
+                openai_mes_usd: Consumo.redondear(Consumo.sumarDesde(porDiaFuente, fechaMes)),
+                openai_mes_cop: trm
+                    ? Math.round(Consumo.sumarDesde(porDiaFuente, fechaMes) * trm.valor)
+                    : null,
+                whatsapp_mes_cop: whatsapp ? whatsapp.totales.costo_escalapp_mes_cop : null,
+                total_mes_cop:
+                    trm && whatsapp
+                        ? Math.round(Consumo.sumarDesde(porDiaFuente, fechaMes) * trm.valor) +
+                          whatsapp.totales.costo_escalapp_mes_cop
+                        : null,
+            },
         });
     } catch (error) {
         return Respuesta.error(res, `Error al consultar el consumo de IA: ${error.message}`, 500);
