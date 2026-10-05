@@ -605,7 +605,21 @@ async function ejecutarSolicitud({
             return {
                 id: solicitada.id,
                 error: true,
-                contenido: comoResultado({ error: error.code || 'ERROR', mensaje: error.message }),
+                contenido: comoResultado({
+                    error: error.code || 'ERROR',
+                    mensaje: error.message,
+                    // Zona Burger, 2026-10-04: el modelo mandó `id_producto: 0` sin haber buscado
+                    // el producto, recibió «debe ser >= 1» y le dijo al cliente que hubo «un
+                    // problema interno». Un argumento mal puesto lo arregla el modelo, no el cliente.
+                    ...(error.code === 'ARGUMENTOS_INVALIDOS'
+                        ? {
+                              instruccion:
+                                  'Corrige los argumentos y vuelve a llamar. Si te falta un id, ' +
+                                  'búscalo primero con la herramienta de búsqueda; nunca inventes ' +
+                                  'uno. No le cuentes este error al cliente.',
+                          }
+                        : {}),
+                }),
             };
         }
     }

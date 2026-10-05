@@ -185,10 +185,15 @@ function conMemoria(conversacion, extra = {}) {
  * «buenas tardes» suena a máquina (Zona Burger, 2026-10-03). Sin saludo con franja, se usa la hora.
  */
 function saludoDelCliente(texto) {
-    const t = normalizar(ultimaLinea(texto));
-    if (/buena?s? noches?/.test(t)) return '¡Buenas noches!';
-    if (/buena?s? tardes?/.test(t)) return '¡Buenas tardes!';
-    if (/buen(os)? dias?/.test(t)) return '¡Buenos días!';
+    // ⚠️ 2026-10-04: este arreglo no funcionó NUNCA en producción. Los `\b` de las expresiones
+    // se habían guardado como el carácter de retroceso (U+0008), invisible en el editor, así que
+    // ninguna casaba y a las 6 PM «buenas noches» seguía recibiendo «buenas tardes». Lo cubre
+    // `auditoria_2026_10_04.test.js`. De paso, cualquier espacio cuenta como uno (el espacio duro
+    // U+00A0 de algunos teclados tampoco casaba).
+    const t = normalizar(ultimaLinea(texto)).replace(/[\u200b-\u200d\ufeff]/g, '').replace(/\s+/g, ' ');
+    if (/\bbuena?s? noches?\b/.test(t)) return '¡Buenas noches!';
+    if (/\bbuena?s? tardes?\b/.test(t)) return '¡Buenas tardes!';
+    if (/\bbuen(os)? dias?\b/.test(t)) return '¡Buenos días!';
     return null;
 }
 
@@ -1240,9 +1245,22 @@ function seguirPedido(ctx, { solicitarConfirmacion }) {
             apertura = `Mesa ${mesa.numero}, anotado. `;
             break;
         }
-        case PASO_PEDIDO.TELEFONO:
-            conLoDicho.telefono = dicho;
+        case PASO_PEDIDO.TELEFONO: {
+            // Solo el número; lo que venga detrás es una nota para el local. Zona Burger,
+            // 2026-10-04: «3169932352 , porfa es que pago es con tarjeta» se guardó entero como
+            // teléfono, `tomar_pedido` lo rechazó por largo y el cliente leyó un error técnico.
+            const tel = leerTelefono(dicho);
+            if (tel) {
+                conLoDicho.telefono = tel;
+                const resto = dicho.replace(CELULAR_CO, ' ').replace(/^[\s,.;:-]+|[\s,.;:-]+$/g, '').trim();
+                if (resto.split(/\s+/).filter((p) => /[a-záéíóúñ]{2,}/i.test(p)).length >= 2) {
+                    conLoDicho.nota = [datos.nota, resto].filter(Boolean).join('. ');
+                }
+            } else {
+                conLoDicho.telefono = dicho;
+            }
             break;
+        }
         case PASO_PEDIDO.DIRECCION:
             // Si no se parece a una dirección se pregunta otra vez, **una sola**. A la segunda
             // se apunta lo que diga: el cliente manda sobre su propia dirección, y bloquearle
@@ -1601,6 +1619,7 @@ function reclama(texto) {
     return (
         Boolean(codigoPedido.leer(texto)) ||
         esPreguntaDeTiempo(texto) ||
+        preguntaPorSuPedido(texto) ||
         esPreguntaDeDomicilio(texto) ||
         Boolean(mediaSuelta(texto)) ||
         pago.esCancelarAmbiguo(texto) ||
@@ -1734,6 +1753,37 @@ function fraseDeDomicilio(rango) {
 
 /** Cuánto vale como «reciente» un pedido para decirle al cliente «tu pedido». */
 const HORAS_PEDIDO_RECIENTE = 6;
+
+/**
+ * ¿Pregunta por un pedido que ya hizo? («ya salió mi pedido», «se demora aún el domicilio», «ya
+ * hice el pedido»). Solo se reclama para un caso: si una persona del local atendió este chat hace
+ * poco, el pedido lo tomó ELLA (a mano, en la caja) y el asistente no lo ve.
+ *
+ * Observado en producción (2026-10-04, Zona Burger): el personal tomó dos pedidos por el chat, el
+ * plazo de reactivación devolvió la conversación al asistente y, cuando el cliente preguntó cómo
+ * iba, el bot contestó «todavía no tengo ningún pedido tuyo, ¿te lo tomo?». Uno de los dos
+ * clientes casi lo pide dos veces, y se quejó: «Sean serios de verdad».
+ */
+const PREGUNTA_POR_SU_PEDIDO = [
+    /\bya (viene|vienen|salio|sale|llega|llego|despacharon|despacho|mandaron|enviaron|esta listo|esta lista|mero)\b/,
+    /\b(hice|realice|mande|envie|pedi) (el|mi|un) (pedido|domicilio|domi)\b/,
+    /\b(como va|como vamos con|que paso con|que hubo de|y) (mi|el) (pedido|domicilio|domi)\b/,
+    /\bse demora (aun |todavia |mucho )?(el|mi) (pedido|domicilio|domi)\b/,
+    /\b(mi|el) (pedido|domicilio|domi) (ya |aun |todavia )?(viene|sale|salio|llega|esta|demora)\b/,
+];
+
+function preguntaPorSuPedido(texto) {
+    const t = normalizar(ultimaLinea(texto)).replace(/[¿?¡!.,]/g, ' ').replace(/\s+/g, ' ').trim();
+    if (!t || t.split(' ').length > MAX_PALABRAS_PREGUNTA) return false;
+    return PREGUNTA_POR_SU_PEDIDO.some((patron) => patron.test(t));
+}
+
+/** ¿Una persona del local escribió en este chat dentro de las últimas horas? */
+function personaAtendioHacePoco(conversacion, ahora) {
+    const ultima = conversacion?.humano_ultimo_en ? new Date(conversacion.humano_ultimo_en) : null;
+    if (!ultima || Number.isNaN(ultima.getTime())) return false;
+    return ahora.getTime() - ultima.getTime() <= HORAS_PEDIDO_RECIENTE * 3600 * 1000;
+}
 
 /**
  * ¿El asistente tomó un pedido en esta conversación en las últimas horas? Lo dice el Ledger:
@@ -2000,6 +2050,30 @@ function crearFlujoRestaurante({
                 };
             }
         }
+
+        // ¿Pregunta por su pedido y quien lo atendió fue una persona del local? Ese pedido lo
+        // tomó ella a mano y aquí no se ve: decir «no tengo ningún pedido tuyo» es falso. Se le
+        // devuelve a la persona. Sin persona reciente, lo de siempre (tiempo o modelo).
+        const porSuPedido = preguntaPorSuPedido(texto);
+        if (
+            !conversacion.tarea_actual &&
+            (porSuPedido || esPreguntaDeTiempo(texto)) &&
+            personaAtendioHacePoco(conversacion, ahora()) &&
+            !(await tienePedidoReciente(conversacion))
+        ) {
+            const quien = String(negocio.tratamiento || '').trim();
+            const equipo = quien && quien !== 'el negocio' ? `alguien del equipo de ${quien}` : 'alguien del equipo';
+            return {
+                pasos: [paso('pedido_de_persona_a_persona')],
+                respuestas: [`Tu pedido lo está llevando ${equipo} 🙌 Ya le dejé tu mensaje para que te cuente cómo va.`],
+                variables: conMemoria(conversacion),
+                tarea: null,
+                estado: 'handoff_humano',
+                resultado: 'handoff',
+                nivel: 'determinista',
+            };
+        }
+        if (porSuPedido && !esPreguntaDeTiempo(texto) && !conversacion.tarea_actual) return delegar(ctx);
 
         // «¿Cuánto se demora?» — se contesta con el tiempo que declaró el negocio. Va ANTES del
         // pedido a medias: ahí cualquier texto se leería como la respuesta al paso pendiente

@@ -658,7 +658,7 @@ function registrarCapacidades() {
             'mezclar el de domicilio con el de llevar), el número de Nequi si el negocio lo dio, ' +
             'cuánto vale el domicilio (un rango de precios, o por barrio si lo tiene; con rango, ' +
             'di el rango tal cual y que el valor exacto lo confirma el restaurante — nunca elijas ' +
-            'tú un valor dentro del rango), cuánto suele tardar un pedido y ' +
+            'tú un valor dentro del rango ni decidas si un barrio queda fuera de la ciudad), cuánto suele tardar un pedido y ' +
             'notas que el negocio dejó para ti. Úsala SIEMPRE antes de decir «no tengo esa ' +
             'información» cuando pregunten por pagos, Nequi, efectivo, transferencia, valor del ' +
             'domicilio, horario, si siguen atendiendo o cuánto se demoran. Ojo: en Colombia ' +
@@ -727,6 +727,14 @@ function registrarCapacidades() {
                     ? {
                           valor: rangoEnPalabras(negocio.domicilio_rango),
                           nota: negocio.domicilio_rango.nota,
+                          // 2026-10-04: el modelo decidió que San Vicente (un barrio de Pasto)
+                          // era «fuera de Pasto», le dio a un cliente frecuente el valor de fuera
+                          // y casi lo pierde. Qué queda dentro o fuera no lo sabe: no lo adivina.
+                          como_usarlo:
+                              'Con cualquier barrio, conjunto o dirección da `valor` tal cual y di que el ' +
+                              'restaurante confirma el exacto. NUNCA decidas tú si un barrio o lugar queda ' +
+                              'dentro o fuera de la ciudad: lo que diga `nota` sobre «fuera» solo aplica si ' +
+                              'el cliente mismo dice que es otro municipio o una vereda.',
                       }
                     : null,
                 domicilio_por_barrio: barrios.slice(0, 40).map((b) => ({

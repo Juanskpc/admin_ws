@@ -483,7 +483,7 @@ async function bloquear(idConversacion, { transaction }) {
         return await unaFila(
             `
             SELECT id_conversacion, id_negocio, canal, id_externo, estado,
-                   variables, tarea_actual, tarea_datos
+                   variables, tarea_actual, tarea_datos, humano_ultimo_en
               FROM intelligence.conversacion
              WHERE id_conversacion = :idConversacion
                FOR UPDATE NOWAIT;

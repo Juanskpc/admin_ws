@@ -1,0 +1,137 @@
+/**
+ * Auditoría de Zona Burger del 2026-10-04 (ver docs/auditoria-2026-10-04-zona-burger.md).
+ *
+ * Correr con:  npx jest __tests__/intelligence/auditoria_2026_10_04.test.js
+ */
+'use strict';
+
+const pago = require('../../intelligence/adapters/restaurante/pago');
+const { crearFlujoRestaurante, TAREA_PEDIDO, PASO_PEDIDO } = require('../../intelligence/adapters/restaurante/flujo');
+
+// La plantilla que el personal manda y el cliente devuelve llena (tal cual llegó hoy).
+const PLANTILLA_LLENA = [
+    '📝 Pedido: salchipapa grande la viciosa',
+    '📍 Dirección: carrera 17 bis número 23-40 centenario',
+    '👤 Nombre: Erika Arteaga',
+    '📞 Teléfono: 3126989583',
+    '💳 Medio de pago: efectivo',
+].join('\n');
+
+describe('un pedido con su forma de pago NO es una pregunta de pago', () => {
+    test('la plantilla llena del personal', () => {
+        expect(pago.esPreguntaDePago(PLANTILLA_LLENA, { hayPedido: true })).toBe(false);
+        expect(pago.pareceDatosDePedido(PLANTILLA_LLENA)).toBe(true);
+    });
+
+    test('un pedido que termina pidiendo el medio de pago', () => {
+        const t =
+            'Para un domicilio 1 hamburguesa dulce pecado y 1 hamburguesa dulcinea. Al mirador de aquine torre 4 bloque B apto 1108.\n' +
+            'Me envía el medio de pago para consignar.';
+        expect(pago.esPreguntaDePago(t, { hayPedido: true })).toBe(false);
+    });
+
+    test('«medio de pago nequi» lo dice, no lo pregunta', () => {
+        expect(pago.esPreguntaDePago('Medio de pago nequi', { hayPedido: true })).toBe(false);
+        expect(pago.esPreguntaDePago('medio de pago: efectivo', { hayPedido: true })).toBe(false);
+    });
+
+    test('las preguntas de verdad siguen contestándose', () => {
+        expect(pago.esPreguntaDePago('Cómo pago?')).toBe(true);
+        expect(pago.esPreguntaDePago('cuales son los medios de pago')).toBe(true);
+        expect(pago.esPreguntaDePago('Me das el Nequi por favor')).toBe(true);
+    });
+
+    test('«cancelar» dentro de la plantilla no pregunta anular o pagar', () => {
+        expect(pago.esCancelarAmbiguo(`${PLANTILLA_LLENA}\ncancelo en efectivo`)).toBe(false);
+        expect(pago.esCancelarAmbiguo('cancelo en efectivo')).toBe(true);
+    });
+});
+
+describe('el flujo', () => {
+    const catalogo = {
+        barrios: async () => ({ habilitado: false, barrios: [] }),
+        mesas: async () => [],
+        resolverBarrio: async () => null,
+        resolverMesa: async () => null,
+        resolverExclusiones: async () => ({ validas: [], descartadas: [] }),
+    };
+    const AHORA = new Date('2026-10-04T18:20:00-05:00');
+    const crear = ({ pedidoReciente = false, telefonoProbado = '573000000000' } = {}) =>
+        crearFlujoRestaurante({
+            tienePedidoReciente: async () => pedidoReciente,
+            contextoNegocio: {
+                obtener: async () => ({
+                    id: 6, nombre: 'ZONA BURGER', tratamiento: 'ZONA BURGER', atencion: null,
+                    tipoNegocio: 'RESTAURANTE', tiempoEstimado: { min: 40, max: 60 },
+                }),
+            },
+            identidad: { resolver: async () => ({ principal: { telefono_verificado: telefonoProbado } }) },
+            gate: {},
+            ahora: () => AHORA,
+            estadoAtencion: async () => ({ estado: 'ABIERTO' }),
+            proximaApertura: async () => null,
+            leerCarta: async () => ({ enlace: 'https://escalapp.cloud/restaurante/carta/6', productos: [] }),
+            catalogo,
+        });
+    const conv = (extra = {}) => ({
+        id_conversacion: 'c1', id_negocio: 6, canal: 'whatsapp', id_externo: '573000000000',
+        variables: { turnos: 3 }, tarea_actual: null, tarea_datos: {}, humano_ultimo_en: null, ...extra,
+    });
+    const decir = (manejar, c, texto) =>
+        manejar({ conversacion: c, mensajes: [{ contenido: texto }], turno: { id_turno: 1 }, texto });
+
+    beforeEach(() => {
+        jest.spyOn(pago, 'ultimoPedidoVivo').mockResolvedValue(null);
+        jest.spyOn(pago, 'textosDePago').mockResolvedValue({ domicilio: 'DOM', local: 'LOCAL' });
+    });
+    afterEach(() => jest.restoreAllMocks());
+
+    test('la plantilla llena no recibe el texto de pago', async () => {
+        const d = await decir(crear(), conv(), PLANTILLA_LLENA);
+        expect(d.pasos.map((p) => p.decision)).not.toContain('pago_respondido');
+    });
+
+    describe('pregunta por su pedido y lo atendió una persona', () => {
+        const haceUnRato = new Date(AHORA.getTime() - 30 * 60 * 1000);
+
+        test.each(['Ya hice el pedido', 'Se demora aún el domicilio ?', 'Ya salió mi pedido', 'Cuanto se demora el domicilio veci'])(
+            '%p vuelve a la persona, sin decir que no hay pedido',
+            async (texto) => {
+                const d = await decir(crear(), conv({ humano_ultimo_en: haceUnRato }), texto);
+                expect(d.pasos[0].decision).toBe('pedido_de_persona_a_persona');
+                expect(d.estado).toBe('handoff_humano');
+                expect(d.respuestas.join(' ')).not.toMatch(/ningún pedido/);
+            }
+        );
+
+        test('si el pedido lo tomó el asistente, el tiempo se contesta como siempre', async () => {
+            const d = await decir(crear({ pedidoReciente: true }), conv({ humano_ultimo_en: haceUnRato }), 'Cuánto se demora');
+            expect(d.pasos[0].decision).toBe('tiempo_estimado_respondido');
+        });
+
+        test('sin persona reciente, «ya salió mi pedido» lo atiende el modelo', async () => {
+            const hace8h = new Date(AHORA.getTime() - 8 * 3600 * 1000);
+            const d = await decir(crear(), conv({ humano_ultimo_en: hace8h }), 'Ya salió mi pedido');
+            expect(d.pasos[0].decision).toBe('cedido_al_modelo');
+        });
+    });
+
+    test('el teléfono con una frase detrás: solo el número, el resto a la nota', async () => {
+        const c = conv({
+            tarea_actual: TAREA_PEDIDO,
+            tarea_datos: {
+                items: [{ id_producto: 4, cantidad: 1 }], nombre: 'Loren', entrega: 'DOMICILIO',
+                direccion: 'Calle 24 # 16-92 centenario', paso: PASO_PEDIDO.TELEFONO,
+            },
+        });
+        const d = await decir(crear({ telefonoProbado: null }), c, '3169932352 , porfa es que pago es con tarjeta');
+        const args = d.tarea.datos.args;
+        expect(args.cliente_telefono).toBe('3169932352');
+        expect(args.nota).toMatch(/tarjeta/);
+    });
+
+    test('«buenas noches» con espacio duro se devuelve igual a las 6 PM', async () => {
+        const d = await decir(crear(), conv({ variables: {} }), 'Buenas noches');
+        expect(d.respuestas[0].texto).toMatch(/Buenas noches/);
+    });
+});
