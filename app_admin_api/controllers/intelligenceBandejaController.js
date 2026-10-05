@@ -1136,7 +1136,30 @@ async function pausarAsistente(req, res) {
     }
 }
 
+/**
+ * GET /admin/intelligence/bandeja/diagnostico?id_negocio=
+ *
+ * El diagnóstico a fondo de la carta (reglas + prueba del buscador del asistente). Bajo demanda:
+ * hace decenas de búsquedas, no va en la carga de la Bandeja. Lo ve quien puede arreglarlo: el
+ * administrador del negocio y el super admin (que prepara la carta antes de entregar WhatsApp).
+ */
+async function leerDiagnostico(req, res) {
+    try {
+        if (!revisar(req, res)) return;
+        const idNegocio = Number(req.query.id_negocio);
+        if (!(await esAdministradorDelNegocio(req.usuario.id_usuario, idNegocio))) {
+            return Respuesta.error(res, 'Negocio no encontrado', 404);
+        }
+        const diagnostico = await require('../services/diagnosticoAsistenteService').diagnosticar(idNegocio);
+        return Respuesta.success(res, 'Diagnóstico del asistente', diagnostico);
+    } catch (err) {
+        console.error('Error en bandeja.leerDiagnostico:', err);
+        return Respuesta.error(res, 'No se pudo hacer el diagnóstico');
+    }
+}
+
 module.exports = {
+    leerDiagnostico,
     pausarAsistente,
     leerPreparacion,
     listarConversaciones,

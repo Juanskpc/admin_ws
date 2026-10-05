@@ -904,6 +904,10 @@ router.post('/intelligence/bandeja/conversaciones/:id/desbloquear', [
 router.get('/intelligence/bandeja/preparacion', [
     query('id_negocio').isInt({ min: 1 }).withMessage('ID de negocio inválido'),
 ], IntelligenceBandejaController.leerPreparacion);
+// Diagnóstico a fondo de la carta para el asistente (bajo demanda; admin del negocio o super admin).
+router.get('/intelligence/bandeja/diagnostico', [
+    query('id_negocio').isInt({ min: 1 }).withMessage('ID de negocio inválido'),
+], IntelligenceBandejaController.leerDiagnostico);
 // Pausa de emergencia del asistente: deja de contestar a todos hasta que se reanude.
 router.post('/intelligence/bandeja/asistente-pausa', [
     body('id_negocio').isInt({ min: 1 }).withMessage('ID de negocio inválido'),
