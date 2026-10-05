@@ -264,6 +264,11 @@ async function recibir(entrada) {
         mensajeCanonico.normalizarEntrada(entrada);
     const contenido = texto;
 
+    // Pausa de emergencia del negocio (2026-10-04, Zona Burger sin papas): el mensaje se guarda y
+    // pasa a una persona, pero el asistente no contesta ni ejecuta nada. Se lee antes de abrir la
+    // transacción (ver `repositorio.asistentePausado`).
+    const pausado = await repositorio.asistentePausado(idNegocio);
+
     const t = await sequelize.transaction();
     let resultado;
     try {
@@ -294,6 +299,16 @@ async function recibir(entrada) {
             }
         );
 
+        // Con el asistente en pausa, la conversación pasa a una persona («Esperan respuesta») y este
+        // mensaje no abre turno. Al reanudar, lo que llegó en la pausa ya no se contesta: lo atendió
+        // el personal.
+        const enPausa =
+            pausado && !duplicado && !antiguo && repositorio.ESTADOS_PROCESABLES.includes(conversacion.estado);
+        if (enPausa) {
+            await repositorio.pasarAPersonaPorPausa(conversacion.id_conversacion, { transaction: t });
+            conversacion.estado = ESTADO_HANDOFF;
+        }
+
         // Un «sí» a una confirmación de pedido que ya estaba pendiente NO se pierde porque una persona
         // haya entrado a la conversación: se ejecuta y la conversación vuelve a la persona (ver
         // `repositorio.reanudarConfirmacionPendiente`). Solo con un sí claro y con la confirmación
@@ -301,6 +316,7 @@ async function recibir(entrada) {
         if (
             !duplicado &&
             !antiguo &&
+            !pausado &&
             conversacion.estado === ESTADO_HANDOFF &&
             confirmacion.pendiente(conversacion) &&
             !confirmacion.caducado(conversacion.tarea_datos) &&
@@ -337,6 +353,8 @@ async function recibir(entrada) {
                 ? 'antiguo'
                 : SIN_CONTENIDO.test(String(contenido || '').trim())
                   ? 'sin_contenido'
+                  : enPausa
+                  ? 'asistente_pausado'
                   : repositorio.ESTADOS_PROCESABLES.includes(conversacion.estado)
                   ? null
                   : conversacion.estado;

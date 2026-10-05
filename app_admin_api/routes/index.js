@@ -881,6 +881,11 @@ router.post('/intelligence/bandeja/conversaciones/:id/desbloquear', [
 router.get('/intelligence/bandeja/preparacion', [
     query('id_negocio').isInt({ min: 1 }).withMessage('ID de negocio inválido'),
 ], IntelligenceBandejaController.leerPreparacion);
+// Pausa de emergencia del asistente: deja de contestar a todos hasta que se reanude.
+router.post('/intelligence/bandeja/asistente-pausa', [
+    body('id_negocio').isInt({ min: 1 }).withMessage('ID de negocio inválido'),
+    body('pausado').isBoolean({ strict: true }).withMessage('pausado debe ser true o false'),
+], IntelligenceBandejaController.pausarAsistente);
 router.get('/intelligence/bandeja/configuracion', [
     query('id_negocio').isInt({ min: 1 }).withMessage('ID de negocio inválido'),
 ], IntelligenceBandejaController.leerConfiguracion);

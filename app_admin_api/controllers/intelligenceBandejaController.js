@@ -713,7 +713,8 @@ async function leerConfiguracion(req, res) {
         const [fila] = await Models.sequelize.query(
             `SELECT id_negocio, nombre, reactivar_asistente_min,
                     tiempo_estimado_min, tiempo_estimado_max, info_asistente,
-                    domicilio_valor_min, domicilio_valor_max, domicilio_nota
+                    domicilio_valor_min, domicilio_valor_max, domicilio_nota,
+                    asistente_pausado, asistente_pausado_en
                FROM general.gener_negocio WHERE id_negocio = :idNegocio;`,
             { replacements: { idNegocio }, ...SELECT }
         );
@@ -731,6 +732,9 @@ async function leerConfiguracion(req, res) {
             domicilio_valor_min: fila.domicilio_valor_min ?? null,
             domicilio_valor_max: fila.domicilio_valor_max ?? null,
             domicilio_nota: fila.domicilio_nota ?? null,
+            // Pausa de emergencia: el asistente no contesta a nadie hasta que se reanude.
+            asistente_pausado: fila.asistente_pausado === true,
+            asistente_pausado_en: fila.asistente_pausado_en ?? null,
             puede_editar: await esAdministradorDelNegocio(req.usuario.id_usuario, idNegocio),
         });
     } catch (err) {
@@ -1083,7 +1087,55 @@ async function leerPreparacion(req, res) {
     }
 }
 
+/**
+ * POST /admin/intelligence/bandeja/asistente-pausa   { id_negocio, pausado: boolean }
+ *
+ * Pausa de emergencia (2026-10-04: Zona Burger se quedó sin papas y pidió que el bot dejara de
+ * contestar YA). En pausa, los mensajes siguen entrando y quedan en «Esperan respuesta», pero el
+ * asistente no contesta ni ejecuta nada (ver `motor.recibir`). Al reanudar, lo que llegó durante
+ * la pausa no se contesta: lo atendió el personal. Solo un administrador del negocio (o el
+ * superadmin), y queda auditado.
+ */
+async function pausarAsistente(req, res) {
+    try {
+        if (!revisar(req, res)) return;
+        const idNegocio = Number(req.body.id_negocio);
+        const pausado = req.body.pausado === true;
+
+        if (!(await esAdministradorDelNegocio(req.usuario.id_usuario, idNegocio))) {
+            return Respuesta.error(res, 'Solo un administrador de este negocio puede pausar el asistente.', 403);
+        }
+
+        const [fila] = await Models.sequelize.query(
+            `UPDATE general.gener_negocio
+                SET asistente_pausado = :pausado,
+                    asistente_pausado_en = CASE WHEN :pausado THEN now() ELSE NULL END
+              WHERE id_negocio = :idNegocio
+          RETURNING asistente_pausado, asistente_pausado_en;`,
+            { replacements: { idNegocio, pausado }, ...SELECT }
+        );
+        if (!fila) return Respuesta.error(res, 'Negocio no encontrado', 404);
+
+        await Audit.registrarEvento({
+            modulo: 'intelligence',
+            accion: pausado ? 'asistente_pausado' : 'asistente_reanudado',
+            idUsuario: req.usuario.id_usuario,
+            idNegocio,
+            detalle: { pausado },
+        });
+
+        return Respuesta.success(res, pausado ? 'Asistente en pausa' : 'Asistente reanudado', {
+            asistente_pausado: fila.asistente_pausado === true,
+            asistente_pausado_en: fila.asistente_pausado_en ?? null,
+        });
+    } catch (err) {
+        console.error('Error en bandeja.pausarAsistente:', err);
+        return Respuesta.error(res, 'No se pudo cambiar la pausa del asistente');
+    }
+}
+
 module.exports = {
+    pausarAsistente,
     leerPreparacion,
     listarConversaciones,
     detalleConversacion,
