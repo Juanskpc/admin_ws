@@ -1,5 +1,9 @@
 # Auditoría del asistente — Zona Burger, 2026-10-04
 
+> Todo lo de este documento está **desplegado** desde la noche del 2026-10-04. Lo que vino después
+> en la misma sesión (modelo luna, búsqueda afinada, carta renombrada, pausa, cajero, diagnóstico e
+> informe) está en [`sesion-2026-10-04-zona-burger-costo-carta-diagnostico.md`](sesion-2026-10-04-zona-burger-costo-carta-diagnostico.md).
+
 Ventana: 2026-10-03 20:30 → 2026-10-04 20:06 (63 conversaciones, 34 pedidos tomados por el
 asistente, 4 `pasar_a_persona`, 24 `consultar_info_negocio` — ya funciona tras el arreglo de ayer).
 Método: `scripts/auditoria_banderas.js` y `auditoria_transcripciones.js` (solo lectura, en el VPS).

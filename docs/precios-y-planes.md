@@ -43,6 +43,12 @@ plan ([ADR-021](adr/ADR-021-features.md)). **La costura ya existe; lo que falta 
 > Las dos cosas ya son dato: el volumen está contado y los precios de Factus están sobre la mesa
 > ([`facturacion-electronica.md`](facturacion-electronica.md) §8.1 y §8.2-quater).
 
+> ⚠️ **2026-10-05 — a esta tabla le falta una fila: el costo de la IA.** Medido con Zona Burger
+> (`scripts/auditoria_costo_ia.js`): con `gpt-5.6-terra`, US$14–22 al mes —más que el plan Avanzado
+> entero—; con `gpt-5.6-luna`, en producción desde el 2026-10-04, **~US$1,5–2,5 al mes**. Es un
+> costo que crece con las conversaciones del cliente, igual que el de WhatsApp. Detalle y cómo
+> volver a medir: [`sesion-2026-10-04-zona-burger-costo-carta-diagnostico.md`](sesion-2026-10-04-zona-burger-costo-carta-diagnostico.md) §2.
+
 El costo de la facturación **no es un número, es una función de cuánto venda el cliente**. Por eso
 la tabla lleva dos columnas y no una: son los dos extremos reales de la cartera de hoy.
 
