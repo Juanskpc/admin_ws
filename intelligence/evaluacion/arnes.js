@@ -166,7 +166,10 @@ async function evaluarConversaciones({ suite: nombreSuite, manejador, gate, idNe
             id_negocio: idNegocio,
             canal: 'arnes',
             id_externo: `arnes-${caso.id}`,
-            variables: {},
+            // Lo que en producción ya se sabe de quien escribe (p. ej. el nombre del perfil de
+            // WhatsApp): sin él el modelo pregunta el nombre y un caso de pedido no llega nunca
+            // a pedir confirmación. `variables_en_todos` de la suite + `variables` del caso.
+            variables: { ...(suite.variables_en_todos || {}), ...(caso.variables || {}) },
             tarea_actual: null,
             tarea_datos: {},
             estado: 'activa',
@@ -208,6 +211,11 @@ async function evaluarConversaciones({ suite: nombreSuite, manejador, gate, idNe
             detalle: fallos.join('; ') || 'ok',
             latenciaMs,
             respuesta: texto,
+            // Qué pidió el modelo y cómo le fue: sin esto un «no pidió confirmar» no dice si el
+            // modelo no lo intentó o si la capacidad se le rechazó.
+            invocaciones: (decision.invocaciones || []).map(
+                (i) => `${i.capacidad}:${i.resultado}${i.errorCodigo ? `(${i.errorCodigo})` : ''}`
+            ),
         });
     }
 
@@ -264,4 +272,18 @@ function resumir(suite, resultados, usos) {
     };
 }
 
-module.exports = { evaluarEnrutado, evaluarConversaciones, cargarSuite, comprobar, plano, resumir };
+/**
+ * El historial de cada caso que lo trae (`historial: [{ rol: 'cliente'|'asistente', texto }]`),
+ * por el id de conversación que usa `evaluarConversaciones`. Para evaluar el turno N de una
+ * conversación real sin depender de la base (2026-10-04, comparación de modelos en restaurante).
+ */
+function historialesDe(nombreSuite) {
+    const suite = cargarSuite(nombreSuite);
+    return new Map(
+        suite.casos
+            .filter((c) => Array.isArray(c.historial) && c.historial.length > 0)
+            .map((c) => [`arnes-${nombreSuite}-${c.id}`, c.historial])
+    );
+}
+
+module.exports = { evaluarEnrutado, evaluarConversaciones, cargarSuite, comprobar, plano, resumir, historialesDe };
