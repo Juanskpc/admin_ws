@@ -816,6 +816,29 @@ router.post('/intelligence/conversaciones/:id/desbloquear', requireSuperAdmin, [
         .withMessage('El motivo es obligatorio (5 a 300 caracteres)'),
 ], IntelligenceConsolaController.desbloquearConversacion);
 
+// --- Consumo IA — Super Admin ---
+// Gasto oficial de OpenAI (con OPENAI_ADMIN_KEY), saldo estimado y gasto del bot por negocio.
+// OpenAI no expone el saldo prepagado: se reconstruye con los movimientos que se registran aquí.
+const ConsumoIaController = require('../controllers/consumoIaController');
+
+router.get('/consumo-ia', requireSuperAdmin, [
+    query('dias').optional().isIn(['7', '30', '90']).withMessage('Ventana inválida (7, 30 o 90)'),
+    query('forzar').optional().isIn(['true', 'false']).withMessage('forzar debe ser true o false'),
+], ConsumoIaController.resumen);
+
+router.post('/consumo-ia/movimientos', requireSuperAdmin, [
+    body('tipo').isIn(['SALDO', 'RECARGA']).withMessage('Tipo inválido (SALDO o RECARGA)'),
+    body('monto_usd').isFloat({ min: 0, max: 100000 })
+        .withMessage('El monto debe ser un número entre 0 y 100.000 USD'),
+    body('fecha').optional({ values: 'falsy' }).isISO8601().withMessage('Fecha inválida'),
+    body('nota').optional({ values: 'null' }).isString().isLength({ max: 200 })
+        .withMessage('La nota admite hasta 200 caracteres'),
+], ConsumoIaController.registrarMovimiento);
+
+router.delete('/consumo-ia/movimientos/:id', requireSuperAdmin, [
+    param('id').isInt({ min: 1 }).withMessage('ID de movimiento inválido'),
+], ConsumoIaController.anularMovimiento);
+
 // --- Bandeja del inquilino ---
 // Las mismas conversaciones, pero para el dueño del negocio y CON respuesta humana. No lleva
 // `requireSuperAdmin`: el alcance lo decide `alcanceDeNegocios()` dentro del controlador,
