@@ -197,3 +197,38 @@ describe('lo que no se anota como nota de cocina', () => {
         expect(confirmacion.lineasParaAnotar('sin cebolla por favor', { afirma: false })).toEqual(['sin cebolla por favor']);
     });
 });
+
+describe('buscar_producto se queda con lo que se nombró (2026-10-04)', () => {
+    const { afinarResultado } = require('../../intelligence/adapters/restaurante/index');
+    const p = (id, nombre, categoria, descripcion = '') => ({ id_producto: id, nombre, categoria, descripcion });
+    const SALCHIPAPAS = [
+        p(1, 'choripapa', 'SALCHIPAPAS', 'Papa a la francesa, chorizo'),
+        p(2, 'viciosa', 'SALCHIPAPAS', 'Tamaño pequeño. Papas a la francesa'),
+        p(3, 'viciosa mediana', 'SALCHIPAPAS', 'Papas a la francesa'),
+        p(4, 'familiar', 'SALCHIPAPAS', 'Sabor La Criollita, The House o La Viciosa'),
+    ];
+    const nombres = (r) => r.map((x) => x.nombre);
+
+    test('un nombre exacto trae solo ese producto, no todo lo que dice «papa»', () => {
+        expect(nombres(afinarResultado(SALCHIPAPAS, 'choripapa'))).toEqual(['choripapa']);
+    });
+    test('el nombre con sus tamaños, sin lo que solo lo menciona en la descripción', () => {
+        expect(nombres(afinarResultado(SALCHIPAPAS, 'viciosa'))).toEqual(['viciosa', 'viciosa mediana']);
+    });
+    test('el nombre de la categoría trae la categoría entera', () => {
+        expect(afinarResultado(SALCHIPAPAS, 'salchipapas')).toHaveLength(4);
+    });
+    test('categoría + lo que lo lleva en el nombre («hamburguesa» → las 4 y la carne de hamburguesa)', () => {
+        const r = afinarResultado(
+            [p(10, 'Discordia', 'HAMBURGUESAS'), p(11, 'Dulcinea', 'HAMBURGUESAS'), p(12, 'Carne de hamburguesa', 'ADICIONALES'), p(13, 'perro loco', 'HOT DOG', 'queso, carne de hamburguesa')],
+            'hamburguesa'
+        );
+        expect(nombres(r)).toEqual(['Discordia', 'Dulcinea', 'Carne de hamburguesa']);
+    });
+    test('si nada lo lleva en el nombre, se queda todo (la descripción es la única pista)', () => {
+        expect(afinarResultado(SALCHIPAPAS, 'francesa')).toHaveLength(4);
+    });
+    test('«pequeña» no cuenta como palabra del nombre', () => {
+        expect(nombres(afinarResultado(SALCHIPAPAS, 'viciosa pequeña'))).toEqual(['viciosa', 'viciosa mediana']);
+    });
+});

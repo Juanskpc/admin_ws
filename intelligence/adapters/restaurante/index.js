@@ -212,7 +212,11 @@ const RELLENO = new Set([
 ]);
 
 /** Tamaños que NO figuran en el nombre cuando el producto es el básico («criollita» = personal). */
-const TAMANO_BASICO = new Set(['pequena', 'pequeno', 'chica', 'chico', 'personal', 'individual', 'sencilla', 'sencillo', 'normal']);
+// Con plurales: «alitas pequeñas» no encontraba nada (2026-10-04) porque «pequenas» no estaba.
+const TAMANO_BASICO = new Set([
+    'pequena', 'pequeno', 'pequenas', 'pequenos', 'chica', 'chico', 'chicas', 'chicos', 'personal',
+    'personales', 'individual', 'individuales', 'sencilla', 'sencillo', 'sencillas', 'sencillos', 'normal',
+]);
 
 /** Marcas de tamaño que sí se escriben en el nombre de las variantes grandes. */
 const MARCA_TAMANO = /\b(mediana|mediano|grande|familiar|xl|jumbo|gigante)\b/;
@@ -307,15 +311,46 @@ async function buscarPorCategoriaYNombre(idNegocio, termino) {
     return resultado.sort((a, b) => b._afinidad - a._afinidad);
 }
 
-function producto(p) {
+function producto(p, { conDescripcion = true } = {}) {
     return {
         id_producto: p.id_producto,
         nombre: p.nombre,
         ...(p.categoria ? { categoria: p.categoria } : {}),
-        descripcion: p.descripcion || null,
+        ...(conDescripcion ? { descripcion: p.descripcion || null } : {}),
         precio: precio(p.precio),
         es_popular: Boolean(p.es_popular),
     };
+}
+
+/** Con más resultados que esto, `buscar_producto` los manda sin descripción. */
+const MAX_CON_DESCRIPCION = 3;
+
+/**
+ * Se queda con lo que el cliente NOMBRÓ, no con todo lo que lo menciona.
+ *
+ * Las tres pasadas de `buscarEnLaCarta` también buscan en las descripciones, y eso es lo que
+ * permite encontrar «empanadas de carne»; pero en Zona Burger (2026-10-04) «choripapa» traía diez
+ * productos —todas las salchipapas dicen «papa a la francesa»—, unos 870 tokens que el modelo
+ * leía en cada búsqueda. Ahora:
+ *  - si el término nombra una CATEGORÍA («hamburguesa», «gaseosa»), salen esa categoría y lo que
+ *    lo lleve en el nombre;
+ *  - si no, y hay productos que lo llevan en el NOMBRE («choripapa», «queso gratinado»), solo esos;
+ *  - si no, todo lo encontrado, como antes (ahí la descripción es la única pista).
+ * Las palabras de tamaño básico («pequeña», «personal») no cuentan: ese producto no las dice.
+ */
+function afinarResultado(productos, termino) {
+    const tokens = (texto) => normalizarTexto(texto).replace(/[^a-z0-9ñ\s]/g, ' ').split(/\s+/).filter(Boolean);
+    const exigidas = tokens(termino).filter((w) => w.length >= 3 && !RELLENO.has(w) && !TAMANO_BASICO.has(w));
+    if (exigidas.length === 0 || productos.length <= 1) return productos;
+    const cubre = (texto) => {
+        const bolsa = tokens(texto);
+        return exigidas.every((w) => bolsa.some((b) => mismaPalabra(w, b)));
+    };
+    const enNombre = (p) => cubre(p.nombre);
+    const enCategoria = (p) => Boolean(p.categoria) && cubre(p.categoria);
+    if (productos.some(enCategoria)) return productos.filter((p) => enCategoria(p) || enNombre(p));
+    if (productos.some(enNombre)) return productos.filter(enNombre);
+    return productos;
 }
 
 /**
@@ -527,9 +562,13 @@ function registrarCapacidades() {
             const productos = (await buscarEnLaCarta(idNegocio, args.termino)).filter(
                 (p) => p.visible !== false
             );
+            // Lo que se nombró, y sin descripciones si es una lista: el modelo vuelve a buscar
+            // el producto concreto si le preguntan qué trae (ver `afinarResultado`).
+            const afinados = afinarResultado(productos, args.termino).slice(0, MAX_PRODUCTOS);
+            const conDescripcion = afinados.length <= MAX_CON_DESCRIPCION;
             return {
                 termino: args.termino,
-                productos: productos.slice(0, MAX_PRODUCTOS).map(producto),
+                productos: afinados.map((p) => producto(p, { conDescripcion })),
                 // Solo cuando no hay nada que vender: así «no tenemos» y «se acabó» dejan de ser
                 // la misma respuesta (Zona Burger, 2026-10-02: la Discordia, agotada por un
                 // stock en −321, se le dijo a una clienta que «no está en la carta»).
@@ -1834,4 +1873,4 @@ function registrarFlujo({ flujos }) {
     });
 }
 
-module.exports = { VERTICAL, registrarCapacidades, registrarFlujo, estadoParaElCliente, tiempoDelPedido, mismaPalabra };
+module.exports = { VERTICAL, registrarCapacidades, registrarFlujo, estadoParaElCliente, tiempoDelPedido, mismaPalabra, afinarResultado };
