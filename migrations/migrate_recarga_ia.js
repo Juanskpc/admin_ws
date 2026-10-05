@@ -1,7 +1,7 @@
 /**
  * Migración: recargas del saldo de IA (vista «Consumo IA» del super admin).
  *
- *  - general.gener_recarga_ia
+ *  - general.gener_recarga_ia (+ gasto_dia_previo_usd, 2026-10-05)
  *
  * ## Por qué hace falta una tabla
  *
@@ -61,6 +61,26 @@ async function migrate() {
              'se reconstruye como último SALDO + RECARGAS posteriores − gasto oficial.';`,
             { transaction: t }
         );
+
+        // 2026-10-05: cuánto llevaba gastado OpenAI ese día UTC al registrar un SALDO. Sin esto
+        // se restaba el día entero, incluido lo gastado antes del registro, que el saldo que se
+        // ve en OpenAI ya tiene descontado (ver `calcularSaldo` en consumoIaService).
+        console.log('2. general.gener_recarga_ia.gasto_dia_previo_usd ...');
+        const [hay] = await Models.sequelize.query(
+            `SELECT 1 AS hay FROM information_schema.columns
+              WHERE table_schema = 'general' AND table_name = 'gener_recarga_ia'
+                AND column_name = 'gasto_dia_previo_usd';`,
+            { type: Models.sequelize.QueryTypes.SELECT, transaction: t }
+        );
+        if (!hay) {
+            await Models.sequelize.query(
+                `ALTER TABLE general.gener_recarga_ia ADD COLUMN gasto_dia_previo_usd numeric(14,6);`,
+                { transaction: t }
+            );
+            console.log('   añadida (NULL en los registros anteriores: usan la cuenta interna).');
+        } else {
+            console.log('   ya existía.');
+        }
 
         await t.commit();
         console.log('✓ Migración de recargas de IA completada.');

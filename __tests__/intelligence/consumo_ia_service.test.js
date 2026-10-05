@@ -58,6 +58,40 @@ describe('calcularSaldo', () => {
     });
 });
 
+describe('calcularSaldo — el día en que se registró el saldo', () => {
+    // Caso real del 2026-10-04: saldo US$1.36 a las 23:30 de Bogotá (04:30 UTC del 5), cuando el
+    // día UTC del 5 ya llevaba US$1.60 gastados que OpenAI tenía descontados del saldo.
+    const porDia = [
+        { fecha: '2026-10-05', usd: 1.7 },
+        { fecha: '2026-10-06', usd: 0.2 },
+    ];
+    const saldo = { tipo: 'SALDO', monto_usd: '1.36', fecha: '2026-10-05T04:30:00Z' };
+
+    test('con foto, solo resta lo gastado ese día después del registro', () => {
+        const r = Consumo.calcularSaldo([{ ...saldo, gasto_dia_previo_usd: 1.6 }], porDia);
+        expect(r.metodo_dia_partida).toBe('foto');
+        expect(r.gasto_desde_partida).toBeCloseTo(0.3, 10); // 0.1 del día + 0.2 del siguiente
+        expect(r.saldo_estimado).toBeCloseTo(1.06, 10);
+    });
+
+    test('sin foto, usa lo que anotó la cuenta interna tras la hora del registro', () => {
+        const r = Consumo.calcularSaldo([saldo], porDia, { gastoInternoTrasPartida: 0.05 });
+        expect(r.metodo_dia_partida).toBe('interno');
+        expect(r.gasto_desde_partida).toBeCloseTo(0.25, 10);
+    });
+
+    test('sin foto ni cuenta interna, resta el día completo (conservador)', () => {
+        const r = Consumo.calcularSaldo([saldo], porDia);
+        expect(r.metodo_dia_partida).toBe('dia_completo');
+        expect(r.gasto_desde_partida).toBeCloseTo(1.9, 10);
+    });
+
+    test('la foto nunca suma: si OpenAI reporta menos que la foto, ese día cuenta cero', () => {
+        const r = Consumo.calcularSaldo([{ ...saldo, gasto_dia_previo_usd: 5 }], porDia);
+        expect(r.gasto_desde_partida).toBeCloseTo(0.2, 10);
+    });
+});
+
 describe('promedioDiario y diasRestantes', () => {
     test('no cuenta el día de hoy, que va a medias', () => {
         const ahora = new Date('2026-10-08T15:00:00Z');

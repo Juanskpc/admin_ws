@@ -40,6 +40,7 @@ async function hayEsquemaIntelligence() {
 async function listarMovimientos() {
     return Models.sequelize.query(
         `SELECT r.id_recarga, r.tipo, r.monto_usd::float AS monto_usd, r.fecha, r.nota,
+                r.gasto_dia_previo_usd::float AS gasto_dia_previo_usd,
                 r.creado_en,
                 NULLIF(TRIM(CONCAT(u.primer_nombre, ' ', u.primer_apellido)), '') AS registrado_por
            FROM general.gener_recarga_ia r
@@ -261,7 +262,24 @@ async function resumen(req, res) {
         const fuente = oficial ? 'oficial' : 'interno';
         const porDiaFuente = oficial ? oficial.por_dia : interno.porDia;
 
-        const saldo = Consumo.calcularSaldo(movimientos, porDiaFuente);
+        // Un SALDO sin foto del gasto de su día (ver `calcularSaldo`) se completa con lo que el
+        // Ledger anotó después de su hora exacta, hasta el fin de ese día UTC.
+        let gastoInternoTrasPartida = null;
+        if (partida && partida.gasto_dia_previo_usd == null && hayLedger) {
+            const finDia = Consumo.inicioDiaUtc(partida.fecha) + Consumo.SEG_DIA;
+            const [fila] = await Models.sequelize.query(
+                `SELECT COALESCE(SUM(costo_usd), 0)::float AS usd
+                   FROM intelligence.costo
+                  WHERE creado_en >= :desde::timestamptz AND creado_en < to_timestamp(:hasta);`,
+                {
+                    replacements: { desde: new Date(partida.fecha).toISOString(), hasta: finDia },
+                    type: Models.sequelize.QueryTypes.SELECT,
+                }
+            );
+            gastoInternoTrasPartida = fila.usd;
+        }
+
+        const saldo = Consumo.calcularSaldo(movimientos, porDiaFuente, { gastoInternoTrasPartida });
         const promedio = Consumo.promedioDiario(porDiaFuente, 7, ahora);
         const fechaHoy = Consumo.fechaUtc(hoySeg);
         const fechaMes = Consumo.fechaUtc(inicioMesSeg);
@@ -345,6 +363,30 @@ async function resumen(req, res) {
 }
 
 /**
+ * Cuánto llevaba gastado OpenAI en el día UTC de un SALDO, en el momento de registrarlo.
+ *
+ * Solo tiene sentido si el SALDO es de hoy (UTC): la foto se toma ahora, así que para un día
+ * anterior mediría el día entero y no lo que iba a la hora escrita. En ese caso, o si OpenAI no
+ * contesta, devuelve `null` y el cálculo usa la cuenta interna para ese día.
+ *
+ * @param {string|null} fecha  `yyyy-MM-ddTHH:mm` en hora de Colombia, o null = ahora.
+ */
+async function fotoGastoDelDia(fecha) {
+    const conZona = /([zZ]|[+-]\d\d:?\d\d)$/.test(fecha || '');
+    const instante = fecha ? new Date(conZona ? fecha : `${fecha}-05:00`) : new Date();
+    if (Number.isNaN(instante.getTime())) return null;
+    const hoy = Consumo.inicioDiaUtc(new Date());
+    if (Consumo.inicioDiaUtc(instante) !== hoy) return null;
+    try {
+        const { por_dia: porDia } = await Consumo.consultarCostosOficiales(hoy, { forzar: true });
+        const usd = porDia.find((d) => d.fecha === Consumo.fechaUtc(hoy))?.usd ?? 0;
+        return usd.toFixed(6);
+    } catch {
+        return null;
+    }
+}
+
+/**
  * POST /admin/consumo-ia/movimientos
  * Body: { tipo: 'SALDO'|'RECARGA', monto_usd, fecha?, nota? }
  *
@@ -362,11 +404,15 @@ async function registrarMovimiento(req, res) {
         return Respuesta.error(res, 'Una recarga tiene que ser mayor que cero', 400);
     }
 
+    const gastoDiaPrevio = tipo === 'SALDO' ? await fotoGastoDelDia(fecha) : null;
+
     const t = await Models.sequelize.transaction();
     try {
         const [fila] = await Models.sequelize.query(
-            `INSERT INTO general.gener_recarga_ia (proveedor, tipo, monto_usd, fecha, nota, id_usuario)
-             VALUES (:proveedor, :tipo, :monto, COALESCE(:fecha::timestamp, now()), :nota, :idUsuario)
+            `INSERT INTO general.gener_recarga_ia
+                 (proveedor, tipo, monto_usd, fecha, nota, id_usuario, gasto_dia_previo_usd)
+             VALUES (:proveedor, :tipo, :monto, COALESCE(:fecha::timestamp, now()), :nota, :idUsuario,
+                     :gastoDiaPrevio)
              RETURNING id_recarga, tipo, monto_usd::float AS monto_usd, fecha, nota,
                        (fecha > now() + interval '5 minutes') AS en_el_futuro;`,
             {
@@ -377,6 +423,7 @@ async function registrarMovimiento(req, res) {
                     fecha,
                     nota: nota?.trim() || null,
                     idUsuario: req.usuario?.id_usuario ?? null,
+                    gastoDiaPrevio,
                 },
                 type: Models.sequelize.QueryTypes.SELECT,
                 transaction: t,

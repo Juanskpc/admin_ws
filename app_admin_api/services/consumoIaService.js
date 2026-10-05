@@ -21,8 +21,8 @@
  * posteriores − gasto oficial desde ese SALDO.
  *
  * OpenAI agrupa los costos por **día UTC** (el día se corta a las 7 p.m. de Colombia), así que
- * el gasto «desde el SALDO» cuenta el día UTC completo en que se registró. Eso sobrestima el
- * gasto unos centavos y deja el saldo un poco por DEBAJO del real: el error va del lado seguro.
+ * del día en que se registró el SALDO solo se resta lo gastado después del registro: ver
+ * `calcularSaldo`.
  *
  * ## Caché
  *
@@ -191,24 +191,56 @@ function promedioDiario(porDia, n = 7, ahora = new Date()) {
 /**
  * El saldo estimado a partir de los movimientos registrados y del gasto diario.
  *
- * @param {Array<{tipo:'SALDO'|'RECARGA', monto_usd:number|string, fecha:Date|string}>} movimientos
+ * ## El día en que se registró el saldo
+ *
+ * OpenAI agrupa el gasto por día UTC (de 7 p. m. a 7 p. m. en Colombia). Si el saldo se registra
+ * a las 11:30 p. m., ese día UTC ya trae cuatro horas y media de gasto que el saldo que se ve en
+ * OpenAI YA tiene descontado. Restarlo otra vez dejaba el saldo por debajo del real —le pasó al
+ * primer registro, el 2026-10-04: US$1.36 en OpenAI, la vista decía US$0.79—. Así que de ese día
+ * solo se resta lo gastado DESPUÉS del registro, por la mejor vía disponible:
+ *
+ *  1. `foto`: al registrar, se guardó cuánto llevaba gastado OpenAI ese día
+ *     (`gasto_dia_previo_usd`); se resta el total del día menos esa foto. Exacto, salvo el
+ *     retraso con que OpenAI reporta (que solo puede hacer que se reste de más: lado seguro).
+ *  2. `interno`: sin foto (saldo con fecha de otro día, o registrado antes de existir la foto),
+ *     lo que el Ledger anotó después de la hora exacta del registro. No ve el gasto fuera del bot.
+ *  3. `dia_completo`: sin ninguna de las dos, el día entero (conservador).
+ *
+ * @param {Array<{tipo:'SALDO'|'RECARGA', monto_usd, fecha, gasto_dia_previo_usd?}>} movimientos
  *        activos, en cualquier orden.
  * @param {Array<{fecha:string, usd:number}>} porDia  gasto por día UTC, que cubra desde el SALDO.
+ * @param {{ gastoInternoTrasPartida?: number|null }} [opciones]  lo que el Ledger anotó entre la
+ *        hora del SALDO y el fin de ese día UTC.
  * @returns {null | { saldo_partida, fecha_partida, recargas_posteriores, gasto_desde_partida,
- *                    saldo_estimado }}  `null` si nunca se registró un SALDO.
+ *                    saldo_estimado, metodo_dia_partida }}  `null` si nunca se registró un SALDO.
  */
-function calcularSaldo(movimientos, porDia) {
-    const saldos = movimientos
-        .filter((m) => m.tipo === 'SALDO')
-        .sort((a, b) => new Date(b.fecha) - new Date(a.fecha));
-    if (saldos.length === 0) return null;
+function calcularSaldo(movimientos, porDia, { gastoInternoTrasPartida = null } = {}) {
+    const partida = saldoDePartida(movimientos);
+    if (!partida) return null;
 
-    const partida = saldos[0];
     const fechaPartida = new Date(partida.fecha);
     const recargas = movimientos
         .filter((m) => m.tipo === 'RECARGA' && new Date(m.fecha) > fechaPartida)
         .reduce((s, m) => s + Number(m.monto_usd), 0);
-    const gasto = sumarDesde(porDia, fechaUtc(inicioDiaUtc(fechaPartida)));
+
+    const diaPartida = fechaUtc(inicioDiaUtc(fechaPartida));
+    const diaSiguiente = fechaUtc(inicioDiaUtc(fechaPartida) + SEG_DIA);
+    const totalDiaPartida = porDia.find((d) => d.fecha === diaPartida)?.usd ?? 0;
+
+    let gastoDiaPartida;
+    let metodo;
+    if (partida.gasto_dia_previo_usd != null) {
+        gastoDiaPartida = Math.max(0, totalDiaPartida - Number(partida.gasto_dia_previo_usd));
+        metodo = 'foto';
+    } else if (gastoInternoTrasPartida != null) {
+        gastoDiaPartida = Number(gastoInternoTrasPartida);
+        metodo = 'interno';
+    } else {
+        gastoDiaPartida = totalDiaPartida;
+        metodo = 'dia_completo';
+    }
+
+    const gasto = gastoDiaPartida + sumarDesde(porDia, diaSiguiente);
     const saldoPartida = Number(partida.monto_usd);
 
     return {
@@ -217,7 +249,17 @@ function calcularSaldo(movimientos, porDia) {
         recargas_posteriores: redondear(recargas, 2),
         gasto_desde_partida: redondear(gasto),
         saldo_estimado: redondear(saldoPartida + recargas - gasto),
+        metodo_dia_partida: metodo,
     };
+}
+
+/** El SALDO más reciente, o `null`. */
+function saldoDePartida(movimientos) {
+    return (
+        movimientos
+            .filter((m) => m.tipo === 'SALDO')
+            .sort((a, b) => new Date(b.fecha) - new Date(a.fecha))[0] ?? null
+    );
 }
 
 /** Días que alcanza el saldo al ritmo actual. `null` si no hay gasto con qué estimarlo. */
@@ -229,6 +271,7 @@ function diasRestantes(saldo, promedio) {
 module.exports = {
     consultarCostosOficiales,
     calcularSaldo,
+    saldoDePartida,
     promedioDiario,
     diasRestantes,
     sumarDesde,
