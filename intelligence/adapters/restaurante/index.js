@@ -1321,6 +1321,17 @@ function registrarCapacidades() {
                 e.statusCode = 400;
                 throw e;
             }
+            // Y un teléfono: sin él, el domiciliario no tiene a quién llamar en la puerta. El
+            // canal casi siempre lo prueba; cuando no (BSUID), lo tiene que decir el cliente. Lo
+            // impone la plataforma y no el modelo: con gpt-5.6-luna, 1 de cada ~12 domicilios se
+            // pedía confirmar sin número (evaluación de 2026-10-04). El error vuelve al modelo,
+            // que entonces lo pide.
+            if (esDomicilio && !telefono) {
+                const e = new Error('Para que el domiciliario te llame al llegar necesito un número de contacto.');
+                e.code = 'TELEFONO_REQUERIDO';
+                e.statusCode = 400;
+                throw e;
+            }
 
             // ── La mesa, releída de la base ───────────────────────────────────────────────
             //

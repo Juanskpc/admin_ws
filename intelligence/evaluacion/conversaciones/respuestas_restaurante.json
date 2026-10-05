@@ -1,198 +1,457 @@
 {
   "suite": "respuestas_restaurante",
   "descripcion": "Turnos REALES de Zona Burger (2026-10-03/04) que fueron al modelo, con nombres, teléfonos y direcciones cambiados. Sirve para comparar modelos (terra vs luna) en el trabajo que de verdad paga el negocio. Fixture: scripts/fixtures/dev_zona_burger_eval.js (carta pública de Zona Burger). Llama al modelo y cuesta dinero; las capacidades van en seco.",
-  "variables_en_todos": { "nombre": "Laura Gómez" },
+  "variables_en_todos": {
+    "nombre": "Laura Gómez"
+  },
   "espera_en_todos": {
-    "no_menciona": ["confírmalo con", "comunícate con", "problema interno"],
+    "no_menciona": [
+      "confírmalo con",
+      "comunícate con",
+      "problema interno"
+    ],
     "max_caracteres": 900
   },
   "casos": [
     {
       "id": "pide-salchipapa-generica",
       "mensaje": "Buenas noches, me gustaría pedir una Salchi papa",
-      "espera": { "invoca": ["buscar_producto"], "menciona_alguno": ["viciosa", "criollita", "the house"], "no_pide_confirmacion": true }
+      "espera": {
+        "invoca": [
+          "buscar_producto"
+        ],
+        "menciona_alguno": [
+          "viciosa",
+          "criollita",
+          "the house"
+        ],
+        "no_pide_confirmacion": true
+      }
     },
     {
       "id": "pedido-completo-un-mensaje",
       "mensaje": "Veci por favor una viciosa pequeña a domicilio Calle 18#35-27 barrio Mari Díaz 3001234567",
-      "espera": { "pide_confirmacion": "tomar_pedido" }
+      "espera": {
+        "pide_confirmacion": "tomar_pedido"
+      }
     },
     {
       "id": "direccion-y-telefono-tras-preguntar",
       "historial": [
-        { "rol": "cliente", "texto": "Una viciosa pequeña" },
-        { "rol": "asistente", "texto": "¿La quieres a domicilio, para recoger o para comer aquí?" },
-        { "rol": "cliente", "texto": "Domicilio" },
-        { "rol": "asistente", "texto": "Para mandártela necesito dos cositas. Puedes contestarme todo junto 👇\n📍 La dirección, con el barrio o alguna indicación para llegar\n📱 Un número de contacto, para que el domiciliario te llame al llegar" }
+        {
+          "rol": "cliente",
+          "texto": "Una viciosa pequeña"
+        },
+        {
+          "rol": "asistente",
+          "texto": "¿La quieres a domicilio, para recoger o para comer aquí?"
+        },
+        {
+          "rol": "cliente",
+          "texto": "Domicilio"
+        },
+        {
+          "rol": "asistente",
+          "texto": "Para mandártela necesito dos cositas. Puedes contestarme todo junto 👇\n📍 La dirección, con el barrio o alguna indicación para llegar\n📱 Un número de contacto, para que el domiciliario te llame al llegar"
+        }
       ],
       "mensaje": "301,123-4567 Cr19#12-62 av las americas",
-      "espera": { "pide_confirmacion": "tomar_pedido" }
+      "espera": {
+        "pide_confirmacion": "tomar_pedido"
+      }
     },
     {
       "id": "recoger-a-nombre-de",
       "historial": [
-        { "rol": "cliente", "texto": "Para pedir una salchipapa viciosa pequeña" },
-        { "rol": "asistente", "texto": "La *viciosa* pequeña vale $15.500. ¿La quieres a domicilio, para recoger o para servir aquí?" }
+        {
+          "rol": "cliente",
+          "texto": "Para pedir una salchipapa viciosa pequeña"
+        },
+        {
+          "rol": "asistente",
+          "texto": "La *viciosa* pequeña vale $15.500. ¿La quieres a domicilio, para recoger o para servir aquí?"
+        }
       ],
       "mensaje": "Para pasarla recogiendo a nombre de Sebastián",
-      "espera": { "pide_confirmacion": "tomar_pedido" }
+      "espera": {
+        "pide_confirmacion": "tomar_pedido"
+      }
     },
     {
       "id": "recoger-ya-paso",
       "historial": [
-        { "rol": "cliente", "texto": "Por favor alitas BBQ doble" },
-        { "rol": "asistente", "texto": "¿Lo quieres a domicilio, para recoger o para comer aquí?" }
+        {
+          "rol": "cliente",
+          "texto": "Por favor alitas BBQ doble"
+        },
+        {
+          "rol": "asistente",
+          "texto": "¿Lo quieres a domicilio, para recoger o para comer aquí?"
+        }
       ],
       "mensaje": "Ya paso",
-      "espera": { "pide_confirmacion": "tomar_pedido" }
+      "espera": {
+        "pide_confirmacion": "tomar_pedido"
+      }
     },
     {
       "id": "recoger-en-el-mismo-mensaje",
       "mensaje": "Me podria preparar una salchipapa la criollita yo la recojo",
-      "espera": { "pide_confirmacion": "tomar_pedido" }
+      "espera": {
+        "pide_confirmacion": "tomar_pedido"
+      }
     },
     {
       "id": "para-servir-por-precio",
       "historial": [
-        { "rol": "cliente", "texto": "Una viciosa para servir" },
-        { "rol": "asistente", "texto": "Tenemos viciosa pequeña $15.500, viciosa mediana $28.000 o viciosa GRANDE $39.000. ¿Cuál tamaño quieres para servir?" }
+        {
+          "rol": "cliente",
+          "texto": "Una viciosa para servir"
+        },
+        {
+          "rol": "asistente",
+          "texto": "Tenemos viciosa pequeña $15.500, viciosa mediana $28.000 o viciosa GRANDE $39.000. ¿Cuál tamaño quieres para servir?"
+        }
       ],
       "mensaje": "La de 28000",
-      "espera": { "pide_confirmacion": "tomar_pedido" }
+      "espera": {
+        "pide_confirmacion": "tomar_pedido"
+      }
     },
     {
       "id": "varios-productos-falta-telefono",
       "historial": [
-        { "rol": "cliente", "texto": "Para pedir un domicilio por favor" },
-        { "rol": "asistente", "texto": "Claro. ¿Qué te gustaría pedir para el domicilio?" }
+        {
+          "rol": "cliente",
+          "texto": "Para pedir un domicilio por favor"
+        },
+        {
+          "rol": "asistente",
+          "texto": "Claro. ¿Qué te gustaría pedir para el domicilio?"
+        }
       ],
       "mensaje": "Un perro smoked dog Una dulcinea Una choripapa Barrio Santa Monica Manzana E casa 124 Pago en efectivo por favor",
-      "espera": { "invoca": ["buscar_producto"], "menciona_alguno": ["número", "numero", "contacto", "celular", "teléfono"], "no_pide_confirmacion": true }
+      "espera": {
+        "invoca": [
+          "buscar_producto"
+        ],
+        "menciona_alguno": [
+          "número",
+          "numero",
+          "contacto",
+          "celular",
+          "teléfono"
+        ],
+        "no_pide_confirmacion": true
+      }
     },
     {
       "id": "falta-telefono-luego-lo-da",
       "historial": [
-        { "rol": "cliente", "texto": "Quiero una salchipapa La viciosa (grande) Cra 22B #25-28 conjunto Villa Jazmín casa 26, a nombre de Esteban. Pago por Nequi" },
-        { "rol": "asistente", "texto": "Para mandártela necesito dos cositas 👇\n📱 Un número de contacto, para que el domiciliario te llame al llegar\n🏘️ El barrio de la dirección" }
+        {
+          "rol": "cliente",
+          "texto": "Quiero una salchipapa La viciosa (grande) Cra 22B #25-28 conjunto Villa Jazmín casa 26, a nombre de Esteban. Pago por Nequi"
+        },
+        {
+          "rol": "asistente",
+          "texto": "Para mandártela necesito dos cositas 👇\n📱 Un número de contacto, para que el domiciliario te llame al llegar\n🏘️ El barrio de la dirección"
+        }
       ],
       "mensaje": "3007654321 Conjunto villa jazmín frente al Aquine alto 1",
-      "espera": { "pide_confirmacion": "tomar_pedido" }
+      "espera": {
+        "pide_confirmacion": "tomar_pedido"
+      }
     },
     {
       "id": "dos-productos-por-nombre-corto",
       "historial": [
-        { "rol": "cliente", "texto": "Por favor para pedir un domicilio" },
-        { "rol": "asistente", "texto": "Claro 😊 ¿Qué te gustaría pedir para el domicilio?" }
+        {
+          "rol": "cliente",
+          "texto": "Por favor para pedir un domicilio"
+        },
+        {
+          "rol": "asistente",
+          "texto": "Claro 😊 ¿Qué te gustaría pedir para el domicilio?"
+        }
       ],
       "mensaje": "Me regalas una salchi criollita y una salchi limón porfa",
-      "espera": { "invoca": ["buscar_producto"], "menciona_alguno": ["15.500", "17.500"], "no_pide_confirmacion": true }
+      "espera": {
+        "invoca": [
+          "buscar_producto"
+        ],
+        "menciona_alguno": [
+          "dirección",
+          "direccion",
+          "15.500",
+          "17.500"
+        ],
+        "no_pide_confirmacion": true
+      }
     },
     {
       "id": "compara-tamanos",
       "historial": [
-        { "rol": "cliente", "texto": "Me regalas una salchi criollita" },
-        { "rol": "asistente", "texto": "Claro, la *criollita* pequeña vale $15.500. ¿La quieres a domicilio, para recoger o para servir aquí?" }
+        {
+          "rol": "cliente",
+          "texto": "Me regalas una salchi criollita"
+        },
+        {
+          "rol": "asistente",
+          "texto": "Claro, la *criollita* pequeña vale $15.500. ¿La quieres a domicilio, para recoger o para servir aquí?"
+        }
       ],
       "mensaje": "La criollita de 15.500 viene bastante o es mejor la mediana?",
-      "espera": { "invoca": ["buscar_producto"], "menciona_alguno": ["28.000", "28000", "mediana"], "no_pide_confirmacion": true }
+      "espera": {
+        "invoca": [
+          "buscar_producto"
+        ],
+        "menciona_alguno": [
+          "28.000",
+          "28000",
+          "mediana"
+        ],
+        "no_pide_confirmacion": true
+      }
     },
     {
       "id": "adiciones-son-productos",
       "mensaje": "Veci para pedir un domicilio de una salchipapa la viciosa pequeña con adición de papa y queso gratinado",
-      "espera": { "invoca": ["buscar_producto"], "no_menciona": ["no me aparece", "no hay adiciones"] }
+      "espera": {
+        "invoca": [
+          "buscar_producto"
+        ],
+        "no_menciona": [
+          "no me aparece",
+          "no hay adiciones"
+        ]
+      }
     },
     {
       "id": "gaseosa-sabor-cuatro",
       "historial": [
-        { "rol": "cliente", "texto": "Una salchipapa la viciosa mediana una picada y una gaseosa personal" },
-        { "rol": "asistente", "texto": "Tengo la *viciosa mediana* y la *picada zona burguer*. Para la gaseosa personal, ¿de qué sabor la quieres?" }
+        {
+          "rol": "cliente",
+          "texto": "Una salchipapa la viciosa mediana una picada y una gaseosa personal"
+        },
+        {
+          "rol": "asistente",
+          "texto": "Tengo la *viciosa mediana* y la *picada zona burguer*. Para la gaseosa personal, ¿de qué sabor la quieres?"
+        }
       ],
       "mensaje": "Gaseosa personal sabor 4",
-      "espera": { "invoca": ["buscar_producto"], "menciona_alguno": ["cuatro"] }
+      "espera": {
+        "invoca": [
+          "buscar_producto"
+        ],
+        "menciona_alguno": [
+          "cuatro"
+        ]
+      }
     },
     {
       "id": "foto-de-producto",
       "mensaje": "Estoy interesado en la criolla mediana me puedes mandar foto de esa",
-      "espera": { "menciona_alguno": ["carta", "escalapp.cloud"], "no_menciona": ["te envío la foto", "aquí está la foto"] }
+      "espera": {
+        "menciona_alguno": [
+          "carta",
+          "escalapp.cloud"
+        ],
+        "no_menciona": [
+          "te envío la foto",
+          "aquí está la foto"
+        ]
+      }
     },
     {
       "id": "hay-atencion",
       "mensaje": "Hola veci, hay atención?",
-      "espera": { "invoca": ["consultar_info_negocio"], "no_pide_confirmacion": true }
+      "espera": {
+        "invoca": [
+          "consultar_info_negocio"
+        ],
+        "no_pide_confirmacion": true
+      }
     },
     {
       "id": "domicilio-incluido",
       "mensaje": "El domicilio cuesta o viene incluido en el precio?",
-      "espera": { "invoca": ["consultar_info_negocio"], "menciona_alguno": ["7.000", "9.000"] }
+      "espera": {
+        "invoca": [
+          "consultar_info_negocio"
+        ],
+        "menciona_alguno": [
+          "7.000",
+          "9.000"
+        ]
+      }
     },
     {
       "id": "pago-fisico-o-transferencia",
       "mensaje": "El pago es físico o por transferencia?",
-      "espera": { "invoca": ["consultar_info_negocio"], "menciona_alguno": ["transferencia"] }
+      "espera": {
+        "invoca": [
+          "consultar_info_negocio"
+        ],
+        "menciona_alguno": [
+          "transferencia"
+        ]
+      }
     },
     {
       "id": "barrio-no-es-fuera-de-la-ciudad",
       "historial": [
-        { "rol": "cliente", "texto": "Hola buenas noches hay domicilios" },
-        { "rol": "asistente", "texto": "¡Buenas noches! Sí, estamos haciendo domicilios 🛵 El valor está entre *$7.000 y $9.000*; el restaurante confirma el valor exacto según la dirección." }
+        {
+          "rol": "cliente",
+          "texto": "Hola buenas noches hay domicilios"
+        },
+        {
+          "rol": "asistente",
+          "texto": "¡Buenas noches! Sí, estamos haciendo domicilios 🛵 El valor está entre *$7.000 y $9.000*; el restaurante confirma el valor exacto según la dirección."
+        }
       ],
       "mensaje": "San Vicente",
-      "espera": { "no_menciona": ["10.000", "fuera de pasto", "fuera de la ciudad"] }
+      "espera": {
+        "no_menciona": [
+          "10.000",
+          "fuera de pasto",
+          "fuera de la ciudad"
+        ]
+      }
     },
     {
       "id": "cajas-no-inventa",
       "historial": [
-        { "rol": "cliente", "texto": "The house familiar de 60.000 para recoger" },
-        { "rol": "asistente", "texto": "¡Listo! Tu pedido quedó tomado. El número es ORD-7721 — guárdalo para consultar cómo va." }
+        {
+          "rol": "cliente",
+          "texto": "The house familiar de 60.000 para recoger"
+        },
+        {
+          "rol": "asistente",
+          "texto": "¡Listo! Tu pedido quedó tomado. El número es ORD-7721 — guárdalo para consultar cómo va."
+        }
       ],
       "mensaje": "Cuantas cajas vienen",
-      "espera": { "invoca": ["pasar_a_persona"], "no_menciona": ["una caja", "una sola caja", "dos cajas"] }
+      "espera": {
+        "invoca": [
+          "pasar_a_persona"
+        ],
+        "no_menciona": [
+          "una caja",
+          "una sola caja",
+          "dos cajas"
+        ]
+      }
     },
     {
       "id": "empleo-a-persona",
       "mensaje": "Hola buena noche para preguntar del trabajo de mesas por favor",
-      "espera": { "invoca": ["pasar_a_persona"], "no_menciona": ["te escribimos", "te contactamos", "para mañana"] }
+      "espera": {
+        "invoca": [
+          "pasar_a_persona"
+        ],
+        "no_menciona": [
+          "te escribimos",
+          "te contactamos",
+          "para mañana"
+        ]
+      }
     },
     {
       "id": "combo-no-inventa",
       "historial": [
-        { "rol": "cliente", "texto": "Perro loco a domicilio" },
-        { "rol": "asistente", "texto": "El *perro loco* vale $14.000. Para mandártelo necesito la dirección con el barrio y un número de contacto 👇" }
+        {
+          "rol": "cliente",
+          "texto": "Perro loco a domicilio"
+        },
+        {
+          "rol": "asistente",
+          "texto": "El *perro loco* vale $14.000. Para mandártelo necesito la dirección con el barrio y un número de contacto 👇"
+        }
       ],
       "mensaje": "Lo tienes en combo?",
-      "espera": { "no_menciona": ["el combo incluye", "sí tenemos combo", "combo con gaseosa"], "no_pide_confirmacion": true }
+      "espera": {
+        "no_menciona": [
+          "el combo incluye",
+          "sí tenemos combo",
+          "combo con gaseosa"
+        ],
+        "no_pide_confirmacion": true
+      }
     },
     {
       "id": "salsas-no-inventa",
       "historial": [
-        { "rol": "cliente", "texto": "Una salchipapa mediana porfa, la Viciosa, a domicilio Cra 34 # 7-59 Torres de la Castellana 3009998877" },
-        { "rol": "asistente", "texto": "¡Listo! Tu pedido quedó tomado. El número es ORD-7714 — guárdalo para consultar cómo va." }
+        {
+          "rol": "cliente",
+          "texto": "Una salchipapa mediana porfa, la Viciosa, a domicilio Cra 34 # 7-59 Torres de la Castellana 3009998877"
+        },
+        {
+          "rol": "asistente",
+          "texto": "¡Listo! Tu pedido quedó tomado. El número es ORD-7714 — guárdalo para consultar cómo va."
+        }
       ],
       "mensaje": "Disculpa, que salsas trae???",
-      "espera": { "invoca": ["buscar_producto"], "no_menciona": ["salsa de ajo, salsa rosada", "mayonesa de ajo"] }
+      "espera": {
+        "invoca": [
+          "buscar_producto"
+        ],
+        "no_menciona": [
+          "salsa de ajo, salsa rosada",
+          "mayonesa de ajo"
+        ]
+      }
     },
     {
       "id": "producto-que-no-existe",
       "mensaje": "Me envia es tan amable una salchibarril mediana",
-      "espera": { "invoca": ["buscar_producto"], "no_pide_confirmacion": true }
+      "espera": {
+        "invoca": [
+          "buscar_producto"
+        ],
+        "no_pide_confirmacion": true
+      }
     },
     {
       "id": "estado-repreguntado-no-cuenta-minutos",
       "historial": [
-        { "rol": "cliente", "texto": "Veci que pena ya vienen??" },
-        { "rol": "asistente", "texto": "Veci, el pedido fue recibido por el restaurante y está dentro del tiempo estimado de *40 a 60 minutos*." }
+        {
+          "rol": "cliente",
+          "texto": "Veci que pena ya vienen??"
+        },
+        {
+          "rol": "asistente",
+          "texto": "Veci, el pedido fue recibido por el restaurante y está dentro del tiempo estimado de *40 a 60 minutos*."
+        }
       ],
       "mensaje": "Pues ya son los 60 minutos que me dijeron se demora aún más?",
-      "espera": { "no_menciona": ["va en", "minutos desde que", "dentro del tiempo"] }
+      "espera": {
+        "no_menciona": [
+          "va en",
+          "minutos desde que",
+          "dentro del tiempo"
+        ]
+      }
     },
     {
       "id": "tenedores-no-promete",
       "historial": [
-        { "rol": "cliente", "texto": "Muchas gracias. Más o menos en qué tiempo estaría llegando?" },
-        { "rol": "asistente", "texto": "Aproximadamente entre *40 y 60 minutos* 🛵" }
+        {
+          "rol": "cliente",
+          "texto": "Muchas gracias. Más o menos en qué tiempo estaría llegando?"
+        },
+        {
+          "rol": "asistente",
+          "texto": "Aproximadamente entre *40 y 60 minutos* 🛵"
+        }
       ],
       "mensaje": "Que pena molestar porfavor que no se olviden de enviarnos los tenedores porfa",
-      "espera": { "no_menciona": ["ya los enviamos", "ya van en camino", "listo, van los tenedores"] }
+      "espera": {
+        "no_menciona": [
+          "ya los enviamos",
+          "ya van en camino",
+          "listo, van los tenedores"
+        ]
+      }
     }
   ]
 }
