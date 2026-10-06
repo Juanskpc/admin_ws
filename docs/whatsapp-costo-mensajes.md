@@ -113,9 +113,13 @@ camino de pasarse **con tiempo para hacer algo**.
 
 ## 5. Lo que queda por decidir
 
-1. **La tarifa de Colombia.** La asignación es la misma para todos, pero el precio del mensaje 1.001
-   depende del mercado del destinatario y hay que leerlo del *rate card* de Meta (en COP desde abril
-   de 2026). Sin ese número no se puede poner precio al exceso en el plan del inquilino.
+1. ~~**La tarifa de Colombia.**~~ **Resuelto el 2026-10-05: US$0,0008 por mensaje** (dato del dueño,
+   del *rate card* de Meta; falta verlo confirmado en el primer cobro real de `/admin/terceros`).
+   Con el volumen medido de Zona Burger —~7.000 mensajes del asistente al mes, 6.000 cobrables— son
+   **~US$4,80 ≈ $20.000 COP al mes**, unos **$3,3 por mensaje**. A ese precio el exceso no necesita
+   precio propio en el plan, y recortar mensajes deja de ser prioridad frente a no perder pedidos.
+   Desglose por clase de mensaje y cómo se midió:
+   [`sesion-2026-10-05-auditoria-en-vivo-zona-burger.md`](sesion-2026-10-05-auditoria-en-vivo-zona-burger.md) §4 y §5.
 2. **¿Quién paga el exceso?** Hoy el inquilino conecta su propio número, así que el exceso lo factura
    Meta a su cuenta y nosotros solo avisamos. Si algún día algún inquilino sale por un número
    nuestro, eso cambia y hay que decidirlo antes, no después.

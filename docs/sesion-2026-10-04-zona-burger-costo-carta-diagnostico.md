@@ -9,6 +9,10 @@ coinciden y los árboles están limpios. Para el detalle de cada hallazgo de la 
 > en el panel `1736903`, `9f82bb7`, `0b08900`). No son de esta sesión, pero viajaron en los mismos
 > despliegues: producción los tiene.
 
+> **Continúa en [`sesion-2026-10-05-auditoria-en-vivo-zona-burger.md`](sesion-2026-10-05-auditoria-en-vivo-zona-burger.md)**:
+> la auditoría de la primera noche con luna (pendiente 1 de §6), el prompt `sistema.v15` y el costo
+> de Meta ya con tarifa.
+
 ## 1. Lo que cambió, en el orden en que importa
 
 | Qué | Dónde | Commit |
