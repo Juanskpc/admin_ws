@@ -66,7 +66,8 @@ function esCancelarAmbiguo(texto) {
 const PREGUNTA_PAGO = [
     /\b(como|donde|a donde|por donde|con que|en que|a que) (pago|pagar|puedo pagar|se paga|pagamos|le pago|te pago|transfiero|puedo transferir|consigno)\b/,
     /\b(formas?|medios?|metodos?|opciones) de pago\b/,
-    /\b(me )?(das|da|regalas|regala|pasas|pasa|compartes|comparte|envias|envia|mandas|manda|dices|dice) (el |la |tu |su )?(nequi|numero|llave|cuenta|bre ?b|daviplata)\b/,
+    // Con el plural: «Por favor me regalan Nequi para cancelar» recibía «¿anular o pagar?» (2026-10-05).
+    /\b(me )?(das|da|dan|regalas|regala|regalan|pasas|pasa|pasan|compartes|comparte|comparten|envias|envia|envian|mandas|manda|mandan|dices|dice|dicen) (el |la |tu |su )?(nequi|numero|llave|cuenta|bre ?b|daviplata)\b/,
     /\b(cual es|cual seria|cual) (el |la |tu |su )?(nequi|numero|llave|cuenta|bre ?b)\b/,
     /\b(a que|a cual) (numero|cuenta|nequi|llave)\b/,
     /\b(aceptan|reciben|manejan|tienen) (nequi|daviplata|transferencia|transferencias|efectivo|tarjeta|datafono|bre ?b)\b/,

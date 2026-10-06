@@ -200,14 +200,13 @@ function noTraeLoPedido(productos, termino) {
         .filter((w) => w.length >= 3 && !RELLENO.has(w))
         .sort((a, b) => b.length - a.length)[0];
     if (!ancla) return false;
-    // «salchilimon» SÍ es «Salchi-limón»: el nombre se mira también palabra por palabra, con la
-    // misma tolerancia que la búsqueda (2026-10-05).
+    // «salchilimon» SÍ es «Salchi-limón»: el nombre se mira también sin guiones ni espacios. Y
+    // nada más laxo que eso: con la tolerancia de `mismaPalabra`, «salchibarril» (agotada) casaba
+    // con «Salchi-limón» por el prefijo, no se miraban los agotados y el modelo anotó la
+    // Salchi-limón en su lugar (2026-10-05, 18:49).
     return !productos.some((p) => {
         const nombre = normalizarTexto(p.nombre);
-        return (
-            nombre.includes(ancla) ||
-            nombre.replace(/[^a-z0-9ñ\s]/g, ' ').split(/\s+/).some((b) => b && mismaPalabra(ancla, b))
-        );
+        return nombre.includes(ancla) || nombre.replace(/[^a-z0-9ñ]/g, '').includes(ancla);
     });
 }
 

@@ -25,6 +25,10 @@ const CARTA = [
     { id_producto: 62, nombre: 'Salchi-limón mediana (pareja)', descripcion: 'Tamaño pareja. Papa bañada en limón.', precio: 29000, visible: true },
     { id_producto: 30, nombre: 'Criollita pequeña', descripcion: 'Papa, chorizo y maduro.', precio: 15500, visible: true },
 ];
+/** Está en la carta, pero hoy no se vende. */
+const AGOTADOS = [
+    { id_producto: 84, nombre: 'Salchibarril personal', descripcion: 'Papa con pollo y cerdo.', precio: 23000, visible: true },
+];
 const sinTildes = (t) =>
     String(t || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim();
 
@@ -39,9 +43,9 @@ beforeAll(() => {
     };
     cartaService.getCartaPublicaCompleta = async () => [{ nombre: 'SALCHIPAPAS', productos: CARTA }];
     // La semántica del servicio real: la frase entera contra el nombre o contra la descripción.
-    cartaService.buscarProductos = async (idNegocio, termino) => {
+    cartaService.buscarProductos = async (idNegocio, termino, opciones = {}) => {
         const t = sinTildes(termino);
-        return CARTA.filter((p) => sinTildes(p.nombre).includes(t) || sinTildes(p.descripcion).includes(t));
+        return [...CARTA, ...(opciones.includeDisabled ? AGOTADOS : [])].filter((p) => sinTildes(p.nombre).includes(t) || sinTildes(p.descripcion).includes(t));
     };
     adaptador.registrarCapacidades();
 });
@@ -71,6 +75,13 @@ describe('buscar_producto: el plato existe, el tamaño no', () => {
         expect(r.agotados_ahora).toBeUndefined();
     });
 
+    test('«salchibarril» (agotada) NO es la Salchi-limón: sale en agotados_ahora', async () => {
+        // La regresión de las 18:49: la tolerancia de más escondió los agotados y el modelo
+        // anotó una Salchi-limón mediana donde el cliente pidió salchibarril.
+        const r = await buscar('salchibarril');
+        expect(r.agotados_ahora).toEqual(['Salchibarril personal']);
+    });
+
     test('un tamaño que sí existe no avisa de nada', async () => {
         const r = await buscar('salchilimon mediana');
         expect(nombres(r)).toEqual(['Salchi-limón mediana (pareja)']);
@@ -81,6 +92,12 @@ describe('buscar_producto: el plato existe, el tamaño no', () => {
         const r = await buscar('pizza grande');
         expect(r.productos).toEqual([]);
         expect(r.tamano_que_no_hay).toBeUndefined();
+    });
+});
+
+describe('pedir el Nequi «para cancelar» es pagar, no anular', () => {
+    test('EL CASO: «Por favor me regalan Nequi para cancelar»', () => {
+        expect(pago.esPreguntaDePago('Por favor me regalan Nequi para cancelar', { hayPedido: true })).toBe(true);
     });
 });
 
