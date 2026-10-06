@@ -152,6 +152,25 @@ function esAlgunComando(texto) {
 }
 
 /**
+ * ¿Este mensaje puede ser la PRIMERA parte de algo que el cliente sigue escribiendo?
+ *
+ * WhatsApp no avisa de que alguien está escribiendo, así que se adivina por la forma: lo que ya
+ * está completo se contesta enseguida —un comando, un sí o un no, el toque de un botón, el pedido
+ * que arma la carta digital (`#P6-…`), una foto, un saludo— y el texto libre espera un poco más
+ * (`cola.js`, `debounceTextoMs`) por si llega el resto.
+ */
+function puedeSeguirEscribiendo(texto) {
+    const crudo = String(texto || '').trim();
+    if (!crudo) return false;
+    if (esAlgunComando(crudo) || esAfirmacion(crudo) || esSaludo(crudo)) return false;
+    if (/#p\d+-/i.test(crudo)) return false; // el pedido de la carta digital llega entero
+    if (/^\[[a-z_]+\]$/i.test(crudo)) return false; // [image], [audio]…
+    if (/^[a-z0-9]+(_[a-z0-9]+)+$/i.test(crudo)) return false; // el id de un botón
+    if (/^[\d\s+.-]{7,}$/.test(crudo)) return false; // un teléfono suelto: es el dato que se le pidió
+    return true;
+}
+
+/**
  * Un saludo, escrito como lo escribe la gente.
  *
  * ## Por qué no basta con la lista de `COMANDO.MENU`
@@ -221,6 +240,7 @@ module.exports = {
     ultimaLinea,
     esComando,
     esAlgunComando,
+    puedeSeguirEscribiendo,
     esAfirmacion,
     esAfirmacionConEntrega,
     esSaludo,

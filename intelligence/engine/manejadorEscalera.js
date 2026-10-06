@@ -582,10 +582,28 @@ function sinNadaQueDecir(decision) {
  * tarea: entonces ya dijo lo que tocaba.
  */
 function conSiPendiente(decision, ctx) {
-    if (!confirmacion.pendiente(ctx.conversacion)) return decision;
+    const datos = confirmacion.pendiente(ctx.conversacion);
+    if (!datos) return decision;
     if (decision.tarea !== undefined || decision.estado || decision.resultado === 'handoff') return decision;
+
+    // El modelo terminó con una PREGUNTA suya («¿Cuáles dos sabores prefieres?»): pegarle
+    // «¿Lo confirmo? sí o no» son dos preguntas a la vez, y el «sí» que llega no se sabe a cuál
+    // contesta. Zona Burger, 2026-10-05: ese «sí» creó el pedido sin los hervidos por los que el
+    // cliente estaba preguntando. No se recuerda el sí en este turno y se marca el pendiente:
+    // el flujo no ejecuta con el siguiente «sí», vuelve a enseñar el resumen.
+    const ultima = (decision.respuestas || []).slice(-1)[0];
+    const textoUltima = String(typeof ultima === 'string' ? ultima : ultima?.texto || '').trim();
+    if (/\?[^\p{L}\p{N}]*$/u.test(textoUltima)) {
+        return {
+            ...decision,
+            tarea: { nombre: confirmacion.TAREA, datos: { ...datos, pregunta_abierta: true } },
+        };
+    }
     return {
         ...decision,
+        ...(datos.pregunta_abierta
+            ? { tarea: { nombre: confirmacion.TAREA, datos: { ...datos, pregunta_abierta: false } } }
+            : {}),
         respuestas: [
             ...(decision.respuestas || []),
             {

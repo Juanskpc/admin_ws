@@ -68,7 +68,7 @@ const EVENTO_ESCALADA = 'conversacion.escalada.v1';
 // Para decidir si un mensaje del cliente reabre «Esperan respuesta» (solo cortesía → no).
 const cortesia = require('./cortesia');
 const confirmacion = require('./confirmacion');
-const { esAfirmacionConEntrega } = require('./texto');
+const { esAfirmacionConEntrega, puedeSeguirEscribiendo } = require('./texto');
 
 /**
  * Avisos del canal que no son un mensaje del cliente: que borró uno (`[revoke]`) o que reaccionó
@@ -388,7 +388,11 @@ async function recibir(entrada) {
     }
 
     if (despertar && !resultado.duplicado && !resultado.sin_turno_motivo) {
-        obtenerCola().despertar(resultado.id_conversacion);
+        obtenerCola().despertar(
+            resultado.id_conversacion,
+            {},
+            { puedeSeguir: puedeSeguirEscribiendo(contenido) }
+        );
     }
     return resultado;
 }

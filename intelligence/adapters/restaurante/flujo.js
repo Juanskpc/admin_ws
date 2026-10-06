@@ -2008,6 +2008,38 @@ function crearFlujoRestaurante({
         // `delegar`: turno sin respuesta, silencio, y un pedido que nunca se creó. Nadie lo vio
         // porque hasta hoy ninguna confirmación de restaurante llegó a abrirse.
         if (confirmacion.pendiente(conversacion)) {
+            // Lo último que dijo el asistente fue una pregunta SUYA (la escalera lo marca con
+            // `pregunta_abierta`): lo que llega ahora contesta esa pregunta, no la confirmación.
+            // Un «sí» no ejecuta nada —se enseña el resumen otra vez, para que el sí sea a ESO—
+            // y cualquier otra cosa la lee el modelo, que es quien preguntó. Un «no» sigue
+            // siendo un no. Zona Burger, 2026-10-05: «¿Cuáles dos sabores prefieres?» → «si» →
+            // pedido tomado sin los hervidos.
+            const esNo = esComando(texto, COMANDO.NO) || esComando(texto, COMANDO.CANCELAR);
+            if (conversacion.tarea_datos?.pregunta_abierta && !esNo) {
+                const datos = { ...conversacion.tarea_datos, pregunta_abierta: false };
+                if (esAfirmacionConEntrega(texto, datos.args?.tipo_entrega)) {
+                    return {
+                        pasos: [paso('confirmacion_si_ambiguo', { capacidad: datos.capacidad })],
+                        respuestas: [
+                            {
+                                texto: `${await confirmacion.textoDePregunta(datos.capacidad, datos.args, {
+                                    idNegocio: conversacion.id_negocio ?? null,
+                                })} Respóndeme sí o no.`,
+                                opciones: [
+                                    { id: 'si', etiqueta: 'Sí, confirmo' },
+                                    { id: 'no', etiqueta: 'No' },
+                                ],
+                            },
+                        ],
+                        variables: conMemoria(conversacion),
+                        tarea: { nombre: confirmacion.TAREA, datos },
+                        resultado: 'resuelto',
+                        nivel: 'determinista',
+                    };
+                }
+                const { tarea: _sinTocar, ...cedido } = delegar(ctx);
+                return { ...cedido, pasos: [paso('confirmacion_respuesta_al_modelo')] };
+            }
             // «¿Vale 7.000 el domicilio?» o «¿cuánto se demora?» mientras se le pide el sí: son
             // preguntas razonables ANTES de confirmar. Se contestan y se vuelve a pedir el sí, sin
             // gastar la repregunta (el cliente no se desvió: está decidiendo). Antes se le repetía

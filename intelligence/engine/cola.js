@@ -58,6 +58,18 @@ const CONFIG = {
     /** Techo absoluto desde el primer mensaje del grupo. Ver el comentario de arriba. */
     debounceMaxMs: numeroDeEntorno('CONVERSACION_DEBOUNCE_MAX_MS', 10000),
     /**
+     * Espera cuando el mensaje es texto libre y el cliente puede seguir escribiendo (ver
+     * `texto.puedeSeguirEscribiendo`). WhatsApp no avisa de que alguien «está escribiendo», así
+     * que lo único que se puede hacer es esperar un poco más. Zona Burger, 2026-10-05: «Esa viene
+     * con queso mor» y, 6 s después, «A domicilio»; con 2,5 s el bot ya había contestado lo
+     * primero y pasado la conversación a una persona. Cada respuesta de más es un mensaje que
+     * Meta cobra y un turno de modelo. **0 = apagado** (se usa `debounceMs`), que es el valor
+     * por defecto: se enciende por entorno, y ADR-014 (2-4 s) sigue valiendo para lo demás.
+     */
+    debounceTextoMs: numeroDeEntorno('CONVERSACION_DEBOUNCE_TEXTO_MS', 0),
+    /** Techo desde el primer mensaje cuando se espera con `debounceTextoMs`. */
+    debounceTextoMaxMs: numeroDeEntorno('CONVERSACION_DEBOUNCE_TEXTO_MAX_MS', 20000),
+    /**
      * Turnos simultáneos (de conversaciones distintas). Cada uno retiene una conexión del
      * pool durante todo el turno, porque el lock es pesimista; con `pool.max = 10` en
      * `conection.js`, pasar de 4 es empezar a competir con el tráfico HTTP del backend.
@@ -123,7 +135,7 @@ class ColaParticionada extends EventEmitter {
      * @param {string} clave
      * @param {Object} [contexto] — se fusiona con lo que ya hubiera para esta clave.
      */
-    despertar(clave, contexto = {}) {
+    despertar(clave, contexto = {}, { puedeSeguir = false } = {}) {
         if (this.detenida) return;
 
         const entrada = this._entrada(clave);
@@ -142,8 +154,14 @@ class ColaParticionada extends EventEmitter {
         const ahora = Date.now();
         if (!entrada.temporizador) entrada.primeraLlegada = ahora;
 
-        const restanteHastaElTecho = entrada.primeraLlegada + this.config.debounceMaxMs - ahora;
-        const espera = Math.max(0, Math.min(this.config.debounceMs, restanteHastaElTecho));
+        // Manda el ÚLTIMO mensaje: un «sí» tras una frase a medias se atiende con la espera corta.
+        const larga = puedeSeguir && this.config.debounceTextoMs > this.config.debounceMs;
+        const base = larga ? this.config.debounceTextoMs : this.config.debounceMs;
+        const techo = larga
+            ? Math.max(this.config.debounceTextoMaxMs, this.config.debounceMaxMs)
+            : this.config.debounceMaxMs;
+        const restanteHastaElTecho = entrada.primeraLlegada + techo - ahora;
+        const espera = Math.max(0, Math.min(base, restanteHastaElTecho));
 
         if (entrada.temporizador) clearTimeout(entrada.temporizador);
         // Sin `unref()`, a diferencia del temporizador del relay del outbox: aquel es un

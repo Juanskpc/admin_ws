@@ -484,7 +484,15 @@ function crearManejadorLlm({
         // conversación en `handoff_humano` —y el motor deja de contestar en ese estado— el
         // escalado es real y ese motivo desaparece.
         function decisionDeHandoff(pasosAcumulados, invocacionesAcumuladas) {
-            return handoff.decision(
+            // En un restaurante el modelo solo atiende con el local ABIERTO (cerrado contesta el
+            // flujo, sin modelo), así que «no tengo a nadie disponible… te contestan en el
+            // transcurso del día» es falso: salió dos veces en plena hora fuerte con el local
+            // contestando 30 s después (Zona Burger, 2026-10-05). Ahí se dice lo mismo que
+            // cuando el modelo pide una persona. El resto de verticales conserva la frase de
+            // ADR-023, que existe para la barbería a las once de la noche.
+            const decidir =
+                negocio?.tipoNegocio === 'RESTAURANTE' ? handoff.decisionAPersona : handoff.decision;
+            return decidir(
                 {
                     pasos: pasosAcumulados,
                     invocaciones: invocacionesAcumuladas,
