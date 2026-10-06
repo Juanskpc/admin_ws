@@ -105,20 +105,20 @@ describe('tomar_pedido: «para recoger» no se supone', () => {
     const falta = (args, cliente, asistente = []) =>
         registry.obtener('tomar_pedido').confirmacion.falta({ args, cliente, asistente });
 
-    test('EL CASO: nadie habló de cómo lo recibe → vuelve al modelo para que pregunte', () => {
-        const r = falta({ tipo_entrega: 'LLEVAR' }, ['Hola', 'Me puedes dar tres salchipapa viciosa 15500']);
+    test('EL CASO: nadie habló de cómo lo recibe → vuelve al modelo para que pregunte', async () => {
+        const r = await falta({ tipo_entrega: 'LLEVAR' }, ['Hola', 'Me puedes dar tres salchipapa viciosa 15500']);
         expect(r.codigo).toBe('ENTREGA_SIN_DECIR');
     });
 
     test.each(['yo la recojo', 'Ya paso por ella', 'para llevar porfa', 'voy por él', 'la recogemos en el local'])(
         'el cliente dijo %p → pasa',
-        (frase) => {
-            expect(falta({ tipo_entrega: 'LLEVAR' }, ['una criollita', frase])).toBeNull();
+        async (frase) => {
+            expect(await falta({ tipo_entrega: 'LLEVAR' }, ['una criollita', frase])).toBeNull();
         }
     );
 
-    test('si ya se le preguntó (o ya vio un resumen «para recogerlo»), pasa', () => {
-        const r = falta(
+    test('si ya se le preguntó (o ya vio un resumen «para recogerlo»), pasa', async () => {
+        const r = await falta(
             { tipo_entrega: 'LLEVAR' },
             ['una criollita', 'la segunda'],
             ['¿La quieres a domicilio, para recoger o para comer aquí?']
@@ -126,15 +126,94 @@ describe('tomar_pedido: «para recoger» no se supone', () => {
         expect(r).toBeNull();
     });
 
-    test('un domicilio, o un pedido de quien ya está en una mesa, no pasan por aquí', () => {
-        expect(falta({ tipo_entrega: 'DOMICILIO' }, ['una criollita'])).toBeNull();
-        expect(falta({ tipo_entrega: 'MESA', id_mesa: 4 }, ['una criollita'])).toBeNull();
+    test('un domicilio, o un pedido de quien ya está en una mesa, no pasan por aquí', async () => {
+        expect(await falta({ tipo_entrega: 'DOMICILIO' }, ['una criollita'])).toBeNull();
+        expect(await falta({ tipo_entrega: 'MESA', id_mesa: 4 }, ['una criollita'])).toBeNull();
     });
 
-    test('«para servir» sin mesa tampoco se supone', () => {
-        expect(falta({ tipo_entrega: 'MESA' }, ['Me puede regalar una criolla mediana']).codigo).toBe('ENTREGA_SIN_DECIR');
-        expect(falta({ tipo_entrega: 'MESA' }, ['una criollita', 'para servir'])).toBeNull();
-        expect(falta({ tipo_entrega: 'MESA' }, ['una criollita', 'ya vamos para allá'])).toBeNull();
+    test('«para servir» sin mesa tampoco se supone', async () => {
+        expect((await falta({ tipo_entrega: 'MESA' }, ['Me puede regalar una criolla mediana'])).codigo).toBe('ENTREGA_SIN_DECIR');
+        expect(await falta({ tipo_entrega: 'MESA' }, ['una criollita', 'para servir'])).toBeNull();
+        expect(await falta({ tipo_entrega: 'MESA' }, ['una criollita', 'ya vamos para allá'])).toBeNull();
+    });
+});
+
+describe('tomar_pedido: cambiar un pedido ya tomado no crea otro', () => {
+    const Models = require('../../app_core/models/conection');
+    const DOMICILIO = { tipo_entrega: 'DOMICILIO', direccion: 'Clínica Palermo', cliente_telefono: '3147274829' };
+    const TOMADO = { rol: 'asistente', texto: '¡Listo! Tu pedido quedó tomado. El número es ORD-7789 — guárdalo para consultar cómo va.' };
+    const falta = (hilo, idConversacion = 'c1') =>
+        registry.obtener('tomar_pedido').confirmacion.falta({ args: DOMICILIO, hilo, idConversacion });
+    /** Lo que diría el Ledger: ¿este chat tomó un pedido hace poco? */
+    const ledger = (hay) => jest.spyOn(Models.sequelize, 'query').mockResolvedValue(hay ? [{ hay: 1 }] : []);
+
+    afterEach(() => jest.restoreAllMocks());
+
+    test('EL CASO: «solo salsa de piña y tomate, menos la BBQ» tras el pedido → no se crea otro', async () => {
+        ledger(true);
+        const r = await falta([
+            { rol: 'cliente', texto: 'si' },
+            TOMADO,
+            { rol: 'cliente', texto: 'Ok' },
+            { rol: 'cliente', texto: 'Solo salsa de piña y tomate menos la salsa Barbie quio' },
+        ]);
+        expect(r.codigo).toBe('YA_HAY_PEDIDO');
+        expect(r.mensaje).toContain('ORD-7789');
+        expect(r.mensaje).toContain('pasar_a_persona');
+    });
+
+    test.each(['Me regalas otra criollita aparte', 'quiero hacer otro pedido', 'también quiero una gaseosa'])(
+        'si pide otro (%p), pasa',
+        async (frase) => {
+            ledger(true);
+            expect(await falta([TOMADO, { rol: 'cliente', texto: frase }])).toBeNull();
+        }
+    );
+
+    test('si el asistente ya preguntó si es un pedido nuevo y dijo que sí, pasa', async () => {
+        ledger(true);
+        const r = await falta([
+            TOMADO,
+            { rol: 'cliente', texto: 'una dulcinea para mi hermano' },
+            { rol: 'asistente', texto: '¿Es un pedido nuevo, aparte del anterior?' },
+            { rol: 'cliente', texto: 'si' },
+        ]);
+        expect(r).toBeNull();
+    });
+
+    test('sin pedido reciente en el Ledger no se mira nada (el de ayer no cuenta)', async () => {
+        ledger(false);
+        expect(await falta([TOMADO, { rol: 'cliente', texto: 'una viciosa pequeña' }])).toBeNull();
+    });
+
+    test('si el Ledger no se puede leer, no se bloquea la venta', async () => {
+        jest.spyOn(Models.sequelize, 'query').mockRejectedValue(new Error('sin base'));
+        jest.spyOn(console, 'warn').mockImplementation(() => {});
+        expect(await falta([TOMADO, { rol: 'cliente', texto: 'sin salsa' }])).toBeNull();
+    });
+
+    test('sin conversación (el arnés, un test) no consulta', async () => {
+        const espia = ledger(true);
+        expect(await falta([TOMADO, { rol: 'cliente', texto: 'sin salsa' }], null)).toBeNull();
+        expect(espia).not.toHaveBeenCalled();
+    });
+});
+
+describe('«que me regalen…» pide, no pregunta', () => {
+    const texto = require('../../intelligence/engine/texto');
+    const N = (t) => texto.normalizar(t).replace(/[¡¿!.,;:]/g, ' ').replace(/\s+/g, ' ').trim();
+
+    test.each(['Que me regalen salsa de ajo porfis', 'que sea sin cebolla', 'Que venga bien caliente', 'que no le pongan BBQ'])(
+        '%p va a la nota del pedido',
+        (frase) => {
+            expect(texto.esPeticionConQue(N(frase))).toBe(true);
+            expect(confirmacion.lineasParaAnotar(frase, { afirma: false })).toEqual([frase]);
+        }
+    );
+
+    test.each(['Que sabores tienen', 'que trae la viciosa', 'qué vale el domicilio'])('%p sigue siendo una pregunta', (frase) => {
+        expect(texto.esPeticionConQue(N(frase))).toBe(false);
+        expect(confirmacion.lineasParaAnotar(frase, { afirma: false })).toEqual([]);
     });
 });
 

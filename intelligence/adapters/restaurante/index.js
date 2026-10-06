@@ -213,6 +213,75 @@ function noTraeLoPedido(productos, termino) {
 /** El cliente habló de recoger, pasar o ir al local (sobre texto sin tildes). */
 const HABLA_DE_RECOGER = /\b(recog\w*|recoj\w*|llevar|llevo|llevarl[oa]s?|paso|pasar|pasare|pasamos|voy|vamos|retir\w*|busc\w*|local|alla|caigo)\b|~m=r\b/;
 
+/** El asistente acaba de decir que el pedido quedó hecho (las tres frases de `hecho`). */
+const PEDIDO_TOMADO = /pedido quedo tomado|pedido quedo para servir|lo sume a la cuenta/;
+
+/** El cliente pide OTRO pedido, o el asistente ya le preguntó si es uno nuevo. */
+const QUIERE_OTRO_PEDIDO = /\b(otr[oa]s?|nuevo pedido|pedido nuevo|aparte|adicional|de nuevo|tambien quiero|tambien me|ademas)\b/;
+
+/** Cuánto dura «este chat ya tiene un pedido»: lo que tarda en salir de cocina. */
+const HORAS_PEDIDO_YA_TOMADO = 2;
+
+/**
+ * ¿Se está por crear un SEGUNDO pedido donde el cliente solo quería cambiar el primero?
+ *
+ * Zona Burger, 2026-10-05, 21:25: con el pedido ORD-7789 ya tomado, la clienta escribió «solo
+ * salsa de piña y tomate, menos la BBQ». El asistente no puede editar un pedido hecho, así que
+ * llamó otra vez a `tomar_pedido` y le enseñó la confirmación de un pedido NUEVO igual; con un
+ * «sí» a cocina le entraban dos.
+ *
+ * Que hay un pedido lo dice el Ledger (`tomar_pedido` ok de este chat en las últimas horas), no
+ * el texto. Se deja pasar cuando, después de ese pedido, el cliente habla de «otro» o el
+ * asistente ya le preguntó si es uno nuevo. Ante cualquier fallo, `null`: no se bloquea una
+ * venta por no poder leer el Ledger.
+ */
+async function pedidoQueYaSeTomo({ hilo = [], idConversacion = null }) {
+    if (!idConversacion) return null;
+    try {
+        const [fila] = await Models.sequelize.query(
+            `SELECT 1 AS hay FROM intelligence.invocacion_capacidad
+              WHERE id_conversacion = :c AND capacidad = 'tomar_pedido'
+                AND resultado = 'ok' AND NOT dry_run
+                AND creado_en >= now() - (:horas * interval '1 hour')
+              LIMIT 1;`,
+            {
+                replacements: { c: idConversacion, horas: HORAS_PEDIDO_YA_TOMADO },
+                type: Models.sequelize.QueryTypes.SELECT,
+                logging: false,
+            }
+        );
+        if (!fila) return null;
+    } catch (error) {
+        console.warn(`[tomar_pedido] no se pudo saber si ya hay un pedido: ${error.message}`);
+        return null;
+    }
+
+    // Lo dicho DESPUÉS del «pedido tomado» (o todo el hilo, si esa frase ya quedó atrás).
+    let desde = -1;
+    hilo.forEach((t, i) => {
+        if (t.rol !== 'cliente' && PEDIDO_TOMADO.test(normalizarTexto(t.texto))) desde = i;
+    });
+    const despues = hilo.slice(desde + 1);
+    const numero = desde >= 0 ? (String(hilo[desde].texto).match(/ORD-\d+/) || [])[0] : null;
+    const pideOtro = despues.some(
+        (t) =>
+            (t.rol === 'cliente' && QUIERE_OTRO_PEDIDO.test(normalizarTexto(t.texto))) ||
+            (t.rol !== 'cliente' && /pedido nuevo/.test(normalizarTexto(t.texto)))
+    );
+    if (pideOtro) return null;
+
+    const cual = numero ? `el pedido ${numero}` : 'un pedido';
+    return {
+        codigo: 'YA_HAY_PEDIDO',
+        mensaje:
+            `En esta conversación ya se tomó ${cual}: NO crees otro. Si el cliente quiere CAMBIAR ` +
+            'algo de ese pedido (salsas, una nota, la dirección, quitar algo), llama a ' +
+            'pasar_a_persona: tú no puedes editarlo. Si quiere AÑADIR productos, usa ' +
+            'agregar_items_pedido con ese número. Solo si de verdad pide otro pedido aparte, ' +
+            'pregúntale «¿es un pedido nuevo, aparte del anterior?» y vuelve a llamar cuando diga que sí.',
+    };
+}
+
 /** El cliente habló de comer en el local («para servir», «vamos para allá»). */
 const HABLA_DE_COMER_AQUI = /\b(servir\w*|comer|comemos|consum\w*|mesa|aqui|alla|local|sentad\w*|voy|vamos|llego|llegamos)\b/;
 
@@ -1161,7 +1230,11 @@ function registrarCapacidades() {
             // recoger —ni el cliente lo dijo ni se le preguntó—, se le devuelve para que pregunte
             // (Zona Burger, 2026-10-05: un domicilio quedó tomado para recoger). Solo LLEVAR: es
             // lo que el modelo elige cuando no sabe; un domicilio ya exige dirección y teléfono.
-            falta: ({ args, cliente = [], asistente = [] }) => {
+            falta: async ({ args, cliente = [], asistente = [], hilo = [], idConversacion = null }) => {
+                // Antes que nada: ¿este chat ya tomó un pedido hace poco y el cliente solo quiere
+                // cambiarle algo? Ver `pedidoQueYaSeTomo`.
+                const repetido = await pedidoQueYaSeTomo({ hilo, idConversacion });
+                if (repetido) return repetido;
                 // «Para servir» sin mesa tampoco se supone: cerrado el paso a LLEVAR, el modelo
                 // probó con MESA en una de cada cuatro rondas de evaluación (2026-10-05).
                 const paraServir = args?.tipo_entrega === 'MESA' && !args?.id_mesa;

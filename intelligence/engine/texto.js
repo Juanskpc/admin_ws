@@ -152,6 +152,19 @@ function esAlgunComando(texto) {
 }
 
 /**
+ * «Que me regalen salsa de ajo», «que sea sin cebolla», «que venga bien caliente»: empieza por
+ * «que» pero PIDE, no pregunta. Sobre texto normalizado (sin tildes ni signos).
+ *
+ * Zona Burger, 2026-10-05: con el pedido esperando el sí, «Que me regalen salsa de ajo porfis»
+ * se leyó como pregunta, se pasó a una persona y el pedido salió sin la salsa en la nota.
+ */
+const PETICION_CON_QUE =
+    /^que (por favor |porfa |porfis )?(me |nos |le |les |se )?(lo |la |los |las )?(regal|envi|mand|pong|ech|agreg|anad|traig|den\b|sea|venga|vaya|no |lleve|tenga|quede|incluy|empaqu|salga)/;
+function esPeticionConQue(textoNormalizado) {
+    return PETICION_CON_QUE.test(String(textoNormalizado || ''));
+}
+
+/**
  * ¿Este mensaje puede ser la PRIMERA parte de algo que el cliente sigue escribiendo?
  *
  * WhatsApp no avisa de que alguien está escribiendo, así que se adivina por la forma: lo que ya
@@ -251,6 +264,7 @@ module.exports = {
     esComando,
     esAlgunComando,
     puedeSeguirEscribiendo,
+    esPeticionConQue,
     esAfirmacion,
     esAfirmacionConEntrega,
     esSaludo,

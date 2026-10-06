@@ -428,6 +428,9 @@ function crearManejadorLlm({
                             texto,
                         ],
                         asistente: historial.filter((t) => t.rol !== 'cliente').map((t) => t.texto),
+                        // Lo mismo en orden, para saber qué se dijo DESPUÉS de qué.
+                        hilo: [...historial, { rol: 'cliente', texto }],
+                        idConversacion: conversacion.id_conversacion ?? null,
                     },
                 });
 
@@ -586,8 +589,9 @@ async function ejecutarSolicitud({
         // lo que de verdad se ha dicho en el chat, que es lo que los argumentos no cuentan. El
         // error vuelve al modelo, que entonces pregunta. Zona Burger, 2026-10-05: «me puedes dar
         // tres salchipapas» salió a confirmar «para recoger» sin que nadie lo hubiera dicho.
+        // Puede ser asíncrona: la de los pedidos mira en el Ledger si este chat ya tomó uno.
         const falta = conversado
-            ? registry.obtener(solicitada.capacidad)?.confirmacion?.falta?.({
+            ? await registry.obtener(solicitada.capacidad)?.confirmacion?.falta?.({
                   args: solicitada.argumentos,
                   ...conversado,
               })

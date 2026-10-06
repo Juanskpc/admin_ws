@@ -40,6 +40,7 @@ const {
     esSaludo,
     saludoPorLaHora,
     esAfirmacionConEntrega,
+    esPeticionConQue,
 } = require('../../engine/texto');
 const codigoPedido = require('./codigoPedido');
 const confirmacion = require('../../engine/confirmacion');
@@ -1805,7 +1806,8 @@ function vaAlModeloDuranteLaConfirmacion(texto, datos) {
     if (PIDE_CAMBIO.test(t)) return true;
     const nombrada = entregaNombrada(t);
     if (nombrada && entregaPendiente && nombrada !== entregaPendiente) return true;
-    return linea.includes('?') || PREGUNTA.test(t) || HABLA_DE_COBRO.test(t);
+    // «Que me regalen salsa de ajo» empieza como pregunta y es un añadido: va a la nota.
+    return linea.includes('?') || (PREGUNTA.test(t) && !esPeticionConQue(t)) || HABLA_DE_COBRO.test(t);
 }
 
 const ENTREGA_EN_PALABRAS = {

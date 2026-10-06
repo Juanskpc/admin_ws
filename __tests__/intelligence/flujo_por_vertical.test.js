@@ -676,7 +676,7 @@ describe('el flujo lleva el pedido del menú hasta el final, sin modelo', () => 
     it('con todo lo que hace falta PREGUNTA, y no ha creado nada todavía', async () => {
         // ADR-010: el modelo —y aquí el guion— puede proponer; solo el cliente dispara. Sin el
         // sí no se ha tocado el Gate ni una vez.
-        const [, , , , quinto] = await conversar(
+        const [, , , cuarto, quinto] = await conversar(
             DEL_MENU,
             'Nicolás Pantoja',
             'domicilio',
@@ -684,7 +684,10 @@ describe('el flujo lleva el pedido del menú hasta el final, sin modelo', () => 
             'Efectivo'
         );
 
-        expect(texto(quinto)).toMatch(/¿Confirmo tu pedido de 3 productos a nombre de Nicolás Pantoja/);
+        expect(texto(cuarto)).toMatch(/¿Confirmo tu pedido de 3 productos a nombre de Nicolás Pantoja/);
+        // «Efectivo» no es sí ni no: desde el 2026-10-05 se repregunta corto, sin repetir el
+        // resumen que está justo arriba.
+        expect(texto(quinto)).toMatch(/¿Confirmo lo de arriba\?/);
         expect(gate.llamadas).toHaveLength(0);
     });
 
