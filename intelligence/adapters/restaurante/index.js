@@ -213,6 +213,9 @@ function noTraeLoPedido(productos, termino) {
 /** El cliente habló de recoger, pasar o ir al local (sobre texto sin tildes). */
 const HABLA_DE_RECOGER = /\b(recog\w*|recoj\w*|llevar|llevo|llevarl[oa]s?|paso|pasar|pasare|pasamos|voy|vamos|retir\w*|busc\w*|local|alla|caigo)\b|~m=r\b/;
 
+/** El cliente habló de comer en el local («para servir», «vamos para allá»). */
+const HABLA_DE_COMER_AQUI = /\b(servir\w*|comer|comemos|consum\w*|mesa|aqui|alla|local|sentad\w*|voy|vamos|llego|llegamos)\b/;
+
 /** Palabras de tamaño que el cliente puede pedir y que la carta puede no tener para ese plato. */
 const PIDE_TAMANO = /^(mediana|mediano|medianas|medianos|grande|grandes|familiar|familiares|xl|jumbo|gigante|gigantes)$/;
 
@@ -350,7 +353,10 @@ function producto(p, { conDescripcion = true } = {}) {
 }
 
 /** Con más resultados que esto, `buscar_producto` los manda sin descripción. */
-const MAX_CON_DESCRIPCION = 3;
+// Cuatro y no tres (2026-10-05): un plato con sus cuatro tamaños —pequeña, mediana, grande y
+// familiar— llegaba sin descripción, y a «¿la viciosa trae tocineta?» el modelo contestaba que
+// la descripción no lo decía. No la había recibido.
+const MAX_CON_DESCRIPCION = 4;
 
 /**
  * Se queda con lo que el cliente NOMBRÓ, no con todo lo que lo menciona.
@@ -1156,8 +1162,12 @@ function registrarCapacidades() {
             // (Zona Burger, 2026-10-05: un domicilio quedó tomado para recoger). Solo LLEVAR: es
             // lo que el modelo elige cuando no sabe; un domicilio ya exige dirección y teléfono.
             falta: ({ args, cliente = [], asistente = [] }) => {
-                if (args?.tipo_entrega !== 'LLEVAR') return null;
-                const loDijo = cliente.some((t) => HABLA_DE_RECOGER.test(normalizarTexto(t)));
+                // «Para servir» sin mesa tampoco se supone: cerrado el paso a LLEVAR, el modelo
+                // probó con MESA en una de cada cuatro rondas de evaluación (2026-10-05).
+                const paraServir = args?.tipo_entrega === 'MESA' && !args?.id_mesa;
+                if (args?.tipo_entrega !== 'LLEVAR' && !paraServir) return null;
+                const dicho = paraServir ? HABLA_DE_COMER_AQUI : HABLA_DE_RECOGER;
+                const loDijo = cliente.some((t) => dicho.test(normalizarTexto(t)));
                 const sePregunto = asistente.some((t) => /recog/.test(normalizarTexto(t)));
                 if (loDijo || sePregunto) return null;
                 return {

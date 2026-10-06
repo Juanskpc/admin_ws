@@ -126,9 +126,15 @@ describe('tomar_pedido: «para recoger» no se supone', () => {
         expect(r).toBeNull();
     });
 
-    test('un domicilio o un pedido en mesa no pasan por aquí', () => {
+    test('un domicilio, o un pedido de quien ya está en una mesa, no pasan por aquí', () => {
         expect(falta({ tipo_entrega: 'DOMICILIO' }, ['una criollita'])).toBeNull();
-        expect(falta({ tipo_entrega: 'MESA' }, ['una criollita'])).toBeNull();
+        expect(falta({ tipo_entrega: 'MESA', id_mesa: 4 }, ['una criollita'])).toBeNull();
+    });
+
+    test('«para servir» sin mesa tampoco se supone', () => {
+        expect(falta({ tipo_entrega: 'MESA' }, ['Me puede regalar una criolla mediana']).codigo).toBe('ENTREGA_SIN_DECIR');
+        expect(falta({ tipo_entrega: 'MESA' }, ['una criollita', 'para servir'])).toBeNull();
+        expect(falta({ tipo_entrega: 'MESA' }, ['una criollita', 'ya vamos para allá'])).toBeNull();
     });
 });
 

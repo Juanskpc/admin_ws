@@ -196,7 +196,11 @@ function puedeSeguirEscribiendo(texto) {
  * y el mensaje se iba al modelo en vez de abrir la bienvenida.
  */
 const PALABRA_DE_SALUDO =
-    /^(?:h+o+l+a*s?|o+l+a+s?|h+o+l+i+s?|b+u+e+n+[oa]*s?|d+i+a+s?|t+a+r+d+e+s?|n+o+c+h+e+s?|h+e+y+|e+y+|epa|ola|alo+|hi|hello|saludo?s?|que|q|k|mas|tal|dice|buenass?)$/;
+    /^(?:h+o+l+a*s?|o+l+a+s?|h+o+l+i+s?|b+u+e+n+[oa]*s?|d+i+a+s?|t+a+r+d+e+s?|n+o+c+h+e+s?|h+e+y+|e+y+|epa|ola|alo+|hi|hello|saludo?s?|que|q|k|mas|tal|dice|buenass?|veci|vecin[oa]s?|vecinit[oa]s?|amig[oa]s?|senor|senora|senorita|sr|sra|caballero|joven|parce|como|esta|estas|estan|muy)$/;
+
+/** Palabras que acompañan a un saludo pero solas no lo son: «veci», «amiga», «cómo está». */
+const SOLO_ACOMPANA =
+    /^(?:veci|vecin[oa]s?|vecinit[oa]s?|amig[oa]s?|senor|senora|senorita|sr|sra|caballero|joven|parce|como|esta|estas|estan|muy)$/;
 
 function esSaludo(texto) {
     const palabras = normalizar(ultimaLinea(texto))
@@ -207,8 +211,14 @@ function esSaludo(texto) {
 
     // Un saludo es corto. El tope no es estético: sin él, una frase larga hecha solo de
     // muletillas reconocidas acabaría abriendo la bienvenida en medio de una conversación.
-    if (palabras.length === 0 || palabras.length > 4) return false;
-    return palabras.every((p) => PALABRA_DE_SALUDO.test(p));
+    //
+    // Seis y no cuatro desde el 2026-10-05: «Hola buenas noches veci, ¿cómo está?» es un saludo
+    // y se iba al modelo, que contestaba «¡Muy bien, gracias!» sin la carta. Con los vocativos
+    // («veci», «amiga», «señor») y el «¿cómo está?» pasa igual que con el resto: todas las
+    // palabras tienen que ser de saludar, y solo de vocativos no hay saludo («veci» a secas).
+    if (palabras.length === 0 || palabras.length > 6) return false;
+    if (!palabras.every((p) => PALABRA_DE_SALUDO.test(p))) return false;
+    return palabras.some((p) => !SOLO_ACOMPANA.test(p));
 }
 
 /**

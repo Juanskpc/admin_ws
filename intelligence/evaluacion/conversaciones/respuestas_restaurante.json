@@ -503,6 +503,34 @@
       }
     },
     {
+      "id": "ingrediente-que-es-adicion",
+      "historial": [
+        { "rol": "cliente", "texto": "Salchipapa la viciosa porfavor mediana" },
+        { "rol": "asistente", "texto": "La *Viciosa mediana* vale $28.000. ¿La quieres a domicilio, para recoger o para comer aquí?" }
+      ],
+      "mensaje": "Esa viene con queso mor",
+      "espera": {
+        "invoca": ["buscar_producto"],
+        "no_invoca": ["pasar_a_persona"],
+        "menciona_alguno": ["queso gratinado"],
+        "no_pide_confirmacion": true
+      }
+    },
+    {
+      "id": "ingrediente-que-si-trae",
+      "historial": [
+        { "rol": "cliente", "texto": "Buenas, una pregunta" },
+        { "rol": "asistente", "texto": "Claro 😊 ¿En qué te ayudo?" }
+      ],
+      "mensaje": "la viciosa trae tocineta?",
+      "espera": {
+        "invoca": ["buscar_producto"],
+        "no_invoca": ["pasar_a_persona"],
+        "menciona_alguno": ["sí", "si ", "trae", "lleva"],
+        "no_pide_confirmacion": true
+      }
+    },
+    {
       "id": "dos-productos-sin-decir-como-los-recibe",
       "historial": [
         { "rol": "cliente", "texto": "Buenas tardes" },
