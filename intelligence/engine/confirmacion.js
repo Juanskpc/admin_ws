@@ -351,13 +351,13 @@ async function resolver(ctx, { gate, registry = registryReal, ahora = () => new 
             pasos: [paso('confirmacion_repreguntada', { capacidad: datos.capacidad, media: esMedia })],
             respuestas: [
                 {
+                    // Corta también cuando no es una foto (2026-10-05): el resumen está justo
+                    // arriba y nada cambió —si algo cambia, se anota y ahí sí se enseña entero—.
+                    // Repetirlo palabra por palabra a un «Personal» era el bot atascado otra vez.
                     texto: esMedia
                         ? 'No puedo ver fotos ni audios por aquí 🙏 Todavía no he enviado nada: ' +
                           '¿confirmo lo de arriba? Respóndeme sí o no.'
-                        : `${await textoDePregunta(datos.capacidad, datos.args, {
-                              registry,
-                              idNegocio: ctx.conversacion?.id_negocio ?? null,
-                          })} Respóndeme sí o no.`,
+                        : 'Todavía no he enviado nada 🙏 ¿Confirmo lo de arriba? Respóndeme sí o no.',
                     opciones: opcionesSiNo(),
                 },
             ],
