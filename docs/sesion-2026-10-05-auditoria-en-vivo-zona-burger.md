@@ -179,3 +179,19 @@ Pendientes nuevos:
 - «Veci, ¿se demora?» con el pedido a punto de pasarse del estimado debería ir a una persona.
 - Noche de domicilios de más de una hora: el asistente siguió prometiendo 40–60 min. El negocio
   puede subir el tiempo de entrega en «Configuración del asistente» cuando esté saturado.
+
+## 10. Cierre (auditoría de las 23:44)
+
+De 21:25 al cierre (22:50): 10 conversaciones, 1 pedido del asistente (correcto), ningún error
+nuevo suyo. El duplicado de ORD-7789 **no llegó a crearse**: la confirmación caducó sin un «sí».
+Con el local cerrado contestó el flujo, sin modelo.
+
+- Detalle a pulir: esa confirmación caducó con la conversación ya en manos de una persona, y a
+  «Ya llegan» —la clienta preguntando por su domicilio— el bot contestó «Pasó un rato y no me
+  confirmaste, así que no hice nada». Una confirmación que caduca en `handoff_humano` debería
+  cerrarse en silencio.
+- `YA_HAY_PEDIDO` y `esPeticionConQue` (22:13) no llegaron a ejercitarse en un chat real: a auditar
+  mañana, junto con `pregunta_abierta` y `sistema.v15` con ingredientes.
+- **Lo que dominó la noche fue del negocio, no del asistente:** domicilios de 1 h 30 a 2 h, dos
+  pedidos entregados cambiados por el domiciliario, uno con salsas que se pidió sin ellas, y al
+  menos siete clientes reclamando («qué mal servicio»). El asistente los pasó a una persona.
