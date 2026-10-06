@@ -154,3 +154,28 @@ mes de Meta—. La prioridad es que el asistente acierte, no que hable menos.
 - Solo la espera: quitar `CONVERSACION_DEBOUNCE_TEXTO_MS` del `.env` + reiniciar.
 - Solo el prompt: `PROMPT_SISTEMA = 'sistema.v14'` en `model/promptBuilder.js`.
 - Solo las vueltas: quitar `LLM_MAX_VUELTAS`.
+
+## 9. Añadido tras la auditoría de las 21:25 (`ef40bdd`, en producción 22:13)
+
+Segunda auditoría de la noche (19:10–21:25, 21 conversaciones, 10 pedidos del asistente, ninguno
+equivocado). Se vieron funcionando en chats reales `ENTREGA_SIN_DECIR`, la espera a quien escribe
+por partes, los agotados, `tamano_que_no_hay` y el saludo con «veci». Dos arreglos más:
+
+- **Cambiar un pedido ya tomado no crea otro (`YA_HAY_PEDIDO`).** Con ORD-7789 tomado, «solo salsa
+  de piña y tomate, menos la BBQ» hizo que el modelo llamara otra vez a `tomar_pedido`: un «sí» y a
+  cocina le entraban dos. Ahora `confirmacion.falta` —que pasó a ser **asíncrona** y recibe `hilo`
+  (el chat en orden) e `idConversacion`— mira en el Ledger si este chat tomó un pedido en las
+  últimas 2 h; si es así y el cliente no habla de «otro», el error vuelve al modelo: cambios →
+  `pasar_a_persona`, añadidos → `agregar_items_pedido`.
+- **«Que me regalen salsa de ajo» va a la nota.** Empezar por «que» lo hacía pregunta; se pasó a una
+  persona y el pedido salió sin la salsa. `texto.esPeticionConQue`.
+
+Pendientes nuevos:
+
+- **Tiempo estimado distinto para recoger y para domicilio** (decidido, sin hacer: campo nuevo en la
+  configuración). A «¿en cuánto puedo pasar?» el asistente dijo «40 a 60 minutos» —el del
+  domicilio— y el cajero tuvo que aclarar «no es tanto, es la IA».
+- Un «sí»/«no» suelto después de «pedido tomado» (toque tardío de un botón) va al modelo.
+- «Veci, ¿se demora?» con el pedido a punto de pasarse del estimado debería ir a una persona.
+- Noche de domicilios de más de una hora: el asistente siguió prometiendo 40–60 min. El negocio
+  puede subir el tiempo de entrega en «Configuración del asistente» cuando esté saturado.
