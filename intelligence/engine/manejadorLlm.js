@@ -431,6 +431,9 @@ function crearManejadorLlm({
                         // Lo mismo en orden, para saber qué se dijo DESPUÉS de qué.
                         hilo: [...historial, { rol: 'cliente', texto }],
                         idConversacion: conversacion.id_conversacion ?? null,
+                        // Para reconocer un pedido que el negocio ya le tomó A MANO a este cliente.
+                        idNegocio,
+                        telefono: quien.principal?.telefono_verificado ?? null,
                     },
                 });
 

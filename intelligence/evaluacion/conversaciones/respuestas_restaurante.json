@@ -541,6 +541,20 @@
         "menciona_alguno": ["domicilio", "recoger"],
         "no_pide_confirmacion": true
       }
+    },
+    {
+      "id": "domicilio-sin-direccion-todavia",
+      "historial": [
+        { "rol": "cliente", "texto": "Quiero una salchipapa la viciosa mediana y una gaseosa" },
+        { "rol": "asistente", "texto": "¿Las quieres para recoger, a domicilio o para comer aquí?" },
+        { "rol": "cliente", "texto": "A domicilio" },
+        { "rol": "asistente", "texto": "Para mandártelo necesito dos cositas 👇\n📍 La dirección, con el barrio o alguna indicación para llegar\n📱 Un número de contacto, para que el domiciliario te llame al llegar" }
+      ],
+      "mensaje": "Si por favor esa, la viciosa mediana no más",
+      "espera": {
+        "menciona_alguno": ["dirección", "direccion"],
+        "no_pide_confirmacion": true
+      }
     }
   ]
 }

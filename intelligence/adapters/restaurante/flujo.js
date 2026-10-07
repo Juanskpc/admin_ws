@@ -1792,6 +1792,28 @@ const PREGUNTA = /^(cuanto|cuantos|cuanta|que|cual|cuales|como|donde|cuando|tien
 const HABLA_DE_COBRO = /\b(cobran|cobra|cobro|cobraron|valor|precio|cuesta|vale|combo|promo|promocion|descuento)\b/;
 
 /**
+ * Con un pedido esperando el sí, ¿el mensaje AÑADE un producto? «Y una salchilimon», «Una viciosa
+ * mediana», «Mas 2 jugos de maracuya», «Adición de costilla». Eso no es una nota de cocina: es
+ * otra línea del pedido, con su precio, y solo el modelo puede buscarla en la carta y rehacer el
+ * resumen. Zona Burger, 2026-10-06: cuatro chats donde el añadido acabó en la nota con el total
+ * sin tocar; uno de $16.000 era en realidad de $45.000 y lo terminó el cajero a mano.
+ *
+ * No lo es lo que empieza por un número y sigue con una seña de la dirección («3 piso», «2
+ * cuadras abajo»): eso sí va a la nota, que es lo que lee el domiciliario.
+ */
+const CANTIDAD = '(?:un|una|unos|unas|dos|tres|cuatro|cinco|seis|\\d{1,2})';
+const SENA_DE_DIRECCION = '(?:pisos?|aptos?|apartamentos?|casas?|torres?|manzanas?|etapas?|bloques?|cuadras?|calles?|minutos?|horas?|veces|momento|momentico|segundo|ratico|rato)\\b';
+const ANADE_PRODUCTO = new RegExp(
+    `^(?:(?:y|mas|tambien|ademas)\\s+)?${CANTIDAD}\\s+(?!${SENA_DE_DIRECCION})[a-zñ]{3,}` +
+        `|^(?:y|mas|tambien|ademas)\\s+(?:la|el|las|los)\\s+[a-zñ]{3,}` +
+        '|\\badicion(?:es|al|ales)?\\b'
+);
+function anadeProducto(texto) {
+    const t = normalizar(ultimaLinea(texto)).replace(/[¡¿!.,;:]/g, ' ').replace(/\s+/g, ' ').trim();
+    return ANADE_PRODUCTO.test(t);
+}
+
+/**
  * Con un pedido esperando el sí, ¿este mensaje es una pregunta o un cambio que tiene que contestar
  * el modelo? No lo es un sí, un no, «a nombre de…» ni lo que se anota (una nota de cocina).
  */
@@ -1803,7 +1825,7 @@ function vaAlModeloDuranteLaConfirmacion(texto, datos) {
     if (/\b(a nombre de|me llamo|mi nombre es)\b/.test(t)) return false;
     const entregaPendiente = datos?.args?.tipo_entrega ?? null;
     if (esAfirmacionConEntrega(texto, entregaPendiente) && !PIDE_CAMBIO.test(t)) return false;
-    if (PIDE_CAMBIO.test(t)) return true;
+    if (PIDE_CAMBIO.test(t) || anadeProducto(texto)) return true;
     const nombrada = entregaNombrada(t);
     if (nombrada && entregaPendiente && nombrada !== entregaPendiente) return true;
     // «Que me regalen salsa de ajo» empieza como pregunta y es un añadido: va a la nota.
@@ -2410,6 +2432,7 @@ module.exports = {
     // Expuestos para las pruebas, como `tareaCaducada` en la escalera: son las dos piezas de
     // producto que conviene poder ejercitar sin montar una conversación entera.
     pareceDireccion,
+    anadeProducto,
     // Lo usa también la pregunta de confirmación (`index.js`). Va desde aquí y no copiado allá
     // porque «cómo se le escribe un precio a un cliente» es una decisión, y dos copias divergen.
     enPesos,

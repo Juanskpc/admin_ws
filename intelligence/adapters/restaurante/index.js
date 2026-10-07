@@ -235,8 +235,32 @@ const HORAS_PEDIDO_YA_TOMADO = 2;
  * asistente ya le preguntó si es uno nuevo. Ante cualquier fallo, `null`: no se bloquea una
  * venta por no poder leer el Ledger.
  */
-async function pedidoQueYaSeTomo({ hilo = [], idConversacion = null }) {
-    if (!idConversacion) return null;
+async function pedidoQueYaSeTomo({ hilo = [], idConversacion = null, idNegocio = null, telefonos = [] }) {
+    // Si este chat no tomó ningún pedido, queda mirar si el negocio se lo tomó A MANO. Ver
+    // `pedidoTomadoAMano`. Ese pedido no dejó «pedido tomado» en el chat, así que lo que cuenta
+    // como «pide otro» es todo lo que haya en el hilo.
+    const tomadoAMano = async () => {
+        const aMano = await pedidoTomadoAMano({ idNegocio, telefonos });
+        if (!aMano) return null;
+        const pideOtro = hilo.some(
+            (t) =>
+                (t.rol === 'cliente' && QUIERE_OTRO_PEDIDO.test(normalizarTexto(t.texto))) ||
+                (t.rol !== 'cliente' && /pedido nuevo/.test(normalizarTexto(t.texto)))
+        );
+        if (!pideOtro) {
+            return {
+                codigo: 'YA_HAY_PEDIDO',
+                mensaje:
+                    `El restaurante ya le tomó a este cliente el pedido ${aMano} hace poco, por fuera ` +
+                    'de ti: NO crees otro. Lo que el cliente escribe ahora seguramente es sobre ESE ' +
+                    'pedido (la dirección, una indicación, una pregunta): llama a pasar_a_persona. ' +
+                    'Solo si de verdad pide otro pedido aparte, pregúntale «¿es un pedido nuevo, ' +
+                    'aparte del anterior?» y vuelve a llamar cuando diga que sí.',
+            };
+        }
+        return null;
+    };
+    if (!idConversacion) return tomadoAMano();
     try {
         const [fila] = await Models.sequelize.query(
             `SELECT 1 AS hay FROM intelligence.invocacion_capacidad
@@ -250,7 +274,7 @@ async function pedidoQueYaSeTomo({ hilo = [], idConversacion = null }) {
                 logging: false,
             }
         );
-        if (!fila) return null;
+        if (!fila) return tomadoAMano();
     } catch (error) {
         console.warn(`[tomar_pedido] no se pudo saber si ya hay un pedido: ${error.message}`);
         return null;
@@ -281,6 +305,58 @@ async function pedidoQueYaSeTomo({ hilo = [], idConversacion = null }) {
             'pregúntale «¿es un pedido nuevo, aparte del anterior?» y vuelve a llamar cuando diga que sí.',
     };
 }
+
+/**
+ * El número de un pedido vivo que el negocio le tomó A MANO a este cliente en las últimas horas,
+ * o `null`. Se reconoce por el teléfono de contacto (los últimos 10 dígitos), que es lo único que
+ * une un pedido hecho en caja con un chat.
+ *
+ * Zona Burger, 2026-10-06, 18:47: el cajero tomó el domicilio a mano (ORD-7803); a los 25 minutos
+ * el asistente volvió, el cliente escribió «habitación 404» y el modelo armó el mismo pedido otra
+ * vez. Un «dale» después había dos domicilios iguales, con dos domiciliarios. El Ledger no lo
+ * veía: ese pedido no lo tomó el asistente. Ante cualquier fallo, `null`.
+ */
+async function pedidoTomadoAMano({ idNegocio = null, telefonos = [] }) {
+    const finales = [
+        ...new Set(
+            telefonos
+                .map((t) => String(t || '').replace(/\D/g, '').slice(-10))
+                .filter((t) => t.length === 10)
+        ),
+    ];
+    if (!idNegocio || finales.length === 0) return null;
+    try {
+        const [fila] = await Models.sequelize.query(
+            `SELECT o.numero_orden
+               FROM restaurante.pedid_orden o
+              WHERE o.id_negocio = :idNegocio
+                AND o.estado <> 'CANCELADA'
+                AND o.tipo_pedido IN ('DOMICILIO', 'LLEVAR')
+                AND o.fecha_creacion >= (now() AT TIME ZONE 'America/Bogota') - (:horas * interval '1 hour')
+                AND right(regexp_replace(coalesce(o.contacto_telefono, ''), '\\D', '', 'g'), 10) IN (:finales)
+              ORDER BY o.fecha_creacion DESC
+              LIMIT 1;`,
+            {
+                replacements: { idNegocio, horas: HORAS_PEDIDO_YA_TOMADO, finales },
+                type: Models.sequelize.QueryTypes.SELECT,
+                logging: false,
+            }
+        );
+        return fila?.numero_orden ?? null;
+    } catch (error) {
+        console.warn(`[tomar_pedido] no se pudo saber si hay un pedido tomado a mano: ${error.message}`);
+        return null;
+    }
+}
+
+/**
+ * Lo que el modelo escribe cuando NO tiene el dato y aun así tiene que llenar el campo. Zona
+ * Burger, 2026-10-06: un domicilio salió a nombre de «Cliente» y con dirección «pendiente»; el
+ * local consiguió la dirección a mano y el cliente esperó más de una hora. Sobre texto
+ * normalizado y entero: «Hotel Nova, habitación por confirmar» sí es una dirección.
+ */
+const DIRECCION_DE_RELLENO = /^(la )?(pendiente|por confirmar|por definir|por indicar|por verificar|sin direccion|sin definir|no aplica|no indica|no tiene|no se|n\/?a|ninguna|desconocida?|direccion|domicilio|a domicilio|ubicacion|ubicacion en tiempo real|maps|[\W_]*)$/;
+const NOMBRE_DE_RELLENO = /^(el |la )?(cliente|clienta|usuario|usuaria|pendiente|por confirmar|sin nombre|anonimo|anonima|desconocid[oa]|n\/?a|whatsapp)$/;
 
 /** El cliente habló de comer en el local («para servir», «vamos para allá»). */
 const HABLA_DE_COMER_AQUI = /\b(servir\w*|comer|comemos|consum\w*|mesa|aqui|alla|local|sentad\w*|voy|vamos|llego|llegamos)\b/;
@@ -1230,11 +1306,47 @@ function registrarCapacidades() {
             // recoger —ni el cliente lo dijo ni se le preguntó—, se le devuelve para que pregunte
             // (Zona Burger, 2026-10-05: un domicilio quedó tomado para recoger). Solo LLEVAR: es
             // lo que el modelo elige cuando no sabe; un domicilio ya exige dirección y teléfono.
-            falta: async ({ args, cliente = [], asistente = [], hilo = [], idConversacion = null }) => {
-                // Antes que nada: ¿este chat ya tomó un pedido hace poco y el cliente solo quiere
-                // cambiarle algo? Ver `pedidoQueYaSeTomo`.
-                const repetido = await pedidoQueYaSeTomo({ hilo, idConversacion });
+            falta: async ({
+                args,
+                cliente = [],
+                asistente = [],
+                hilo = [],
+                idConversacion = null,
+                idNegocio = null,
+                telefono = null,
+            }) => {
+                // Antes que nada: ¿este chat ya tomó un pedido hace poco —o se lo tomó el negocio
+                // a mano— y el cliente solo quiere cambiarle algo? Ver `pedidoQueYaSeTomo`.
+                const repetido = await pedidoQueYaSeTomo({
+                    hilo,
+                    idConversacion,
+                    idNegocio,
+                    telefonos: [telefono, args?.cliente_telefono],
+                });
                 if (repetido) return repetido;
+                // Ni la dirección ni el nombre se rellenan: si el modelo no los tiene, pregunta.
+                if (
+                    args?.tipo_entrega === 'DOMICILIO' &&
+                    args?.direccion != null &&
+                    DIRECCION_DE_RELLENO.test(normalizarTexto(args.direccion).trim())
+                ) {
+                    return {
+                        codigo: 'DIRECCION_REQUERIDA',
+                        mensaje:
+                            'Eso no es una dirección: el cliente todavía no la ha dicho. No la ' +
+                            'rellenes tú: pídele la dirección, con el barrio o una indicación para ' +
+                            'llegar, y vuelve a llamar cuando la tengas. No le cuentes este error.',
+                    };
+                }
+                if (NOMBRE_DE_RELLENO.test(normalizarTexto(args?.cliente_nombre ?? '').trim())) {
+                    return {
+                        codigo: 'NOMBRE_REQUERIDO',
+                        mensaje:
+                            'No sabes cómo se llama el cliente. No pongas «cliente»: pregúntale a ' +
+                            'nombre de quién queda el pedido y vuelve a llamar con lo que conteste. ' +
+                            'No le cuentes este error.',
+                    };
+                }
                 // «Para servir» sin mesa tampoco se supone: cerrado el paso a LLEVAR, el modelo
                 // probó con MESA en una de cada cuatro rondas de evaluación (2026-10-05).
                 const paraServir = args?.tipo_entrega === 'MESA' && !args?.id_mesa;
