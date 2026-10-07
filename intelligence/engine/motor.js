@@ -55,6 +55,9 @@ const { ESTADO_HANDOFF } = require('./handoff');
 // El asistente puede dejar constancia de que alguien lo está usando para nada. No bloquea a
 // nadie ni cambia el estado de la conversación: ver la cabecera del módulo.
 const reporteAutomatico = require('./reporteAutomatico');
+// Que el asistente no le conteste sin fin a otro bot. Mira la conversación entera, que es lo
+// que ningún flujo ve: ver la cabecera del módulo.
+const cortacircuito = require('./cortacircuito');
 
 const sequelize = Models.sequelize;
 
@@ -624,6 +627,31 @@ async function decidir({ conversacion, mensajes, turno, transaction }) {
                 aviso?.cancelar();
             }
 
+            // ¿Esto es un bucle con otro bot? Se mira ANTES de escribir nada: lo que el
+            // cortacircuito quita es la respuesta, y una respuesta ya encolada sale. Lo demás
+            // que decidió el manejador (pasos, invocaciones, memoria) se guarda igual, porque
+            // ocurrió. Ver `cortacircuito.js`.
+            const corte = await cortacircuito.evaluar({
+                conversacion,
+                mensajes,
+                respuestas: decision.respuestas,
+                transaction: savepoint,
+            });
+            if (corte) {
+                console.warn(
+                    `[cortacircuito] negocio ${conversacion.id_negocio}, conversación ` +
+                        `${String(conversacion.id_conversacion).slice(-6)}: ${corte.regla}` +
+                        `${corte.pasar_a_persona ? ' — pasa a una persona' : ' — el asistente se calla'}`
+                );
+                decision = {
+                    ...decision,
+                    respuestas: [],
+                    pasos: [...(decision.pasos || []), { tipo: 'regla', decision: 'bucle_cortado', motivo: corte }],
+                    resultado: corte.pasar_a_persona ? 'handoff' : 'sin_respuesta',
+                    ...(corte.pasar_a_persona ? { estado: ESTADO_HANDOFF } : {}),
+                };
+            }
+
             let secuencia = 0;
 
             // Se registra si llegó a encenderse, no si se armó: ADR-022 pide que el
@@ -740,6 +768,9 @@ async function decidir({ conversacion, mensajes, turno, transaction }) {
             );
 
             await avisarSiSeEscalo({ conversacion, estadoNuevo, transaction: savepoint });
+            if (corte?.pasar_a_persona) {
+                await cortacircuito.asentarCorte({ conversacion, corte, transaction: savepoint });
+            }
 
             if (decision.nivel) salida.nivel = decision.nivel;
             // Compatibilidad: un manejador puede devolver sus costos en vez de empujarlos.
