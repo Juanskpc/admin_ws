@@ -92,7 +92,7 @@ const n = (v, d = 4) => Number(Number(v || 0).toFixed(d));
             const r = await consultarCostosOficiales(desde, { forzar: true });
             console.log('=== OpenAI (oficial): por concepto ===');
             console.table(r.por_concepto.map((f) => ({ concepto: f.concepto, usd: n(f.usd) })));
-            console.log('=== OpenAI (oficial): por día (UTC) ===');
+            console.log('=== OpenAI (oficial): por día (hora de Colombia) ===');
             console.table(r.por_dia.map((f) => ({ fecha: f.fecha, usd: n(f.usd) })));
         } catch (error) {
             console.log('No se pudo leer el costo oficial:', error.message);

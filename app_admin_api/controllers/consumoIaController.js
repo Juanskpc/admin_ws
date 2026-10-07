@@ -20,8 +20,8 @@ const { trmVigente } = require('../services/trmService');
  * Si OpenAI no contesta, la pantalla sigue en pie con la fuente interna y lo dice: una vista de
  * gasto que se cae justo cuando OpenAI falla es la que no sirve el día que importa.
  *
- * Los días van en **UTC**, como los cuenta OpenAI, también en la fuente interna: así las dos
- * barras del mismo día son comparables. El día se corta a las 7 p.m. de Colombia.
+ * Los días van en **hora de Colombia** en las dos fuentes, igual que los de Meta: OpenAI los
+ * entrega en UTC y `consumoIaService` los reparte por hora para traerlos al día de aquí.
  *
  * Como la Consola de Intelligence, lee `intelligence.costo` con SQL y no importa `intelligence/`.
  */
@@ -58,7 +58,7 @@ async function gastoInterno(desdeSeg, desdeRangoSeg) {
 
     const [porDia, porNegocio, porModelo, [turnos]] = await Promise.all([
         q(
-            `SELECT to_char((creado_en AT TIME ZONE 'UTC')::date, 'YYYY-MM-DD') AS fecha,
+            `SELECT to_char((creado_en AT TIME ZONE 'America/Bogota')::date, 'YYYY-MM-DD') AS fecha,
                     SUM(costo_usd)::float AS usd
                FROM intelligence.costo
               WHERE creado_en >= to_timestamp(:desde)
@@ -110,7 +110,7 @@ function serieCompleta(desdeSeg, hastaSeg, oficial, interno) {
     const mapaInterno = new Map(interno.map((d) => [d.fecha, d.usd]));
     const serie = [];
     for (let s = desdeSeg; s <= hastaSeg; s += Consumo.SEG_DIA) {
-        const fecha = Consumo.fechaUtc(s);
+        const fecha = Consumo.fechaBogota(s);
         serie.push({
             fecha,
             oficial: mapaOficial ? Consumo.redondear(mapaOficial.get(fecha) || 0) : null,
@@ -195,9 +195,9 @@ async function resumen(req, res) {
         const forzar = req.query.forzar === 'true';
 
         const ahora = new Date();
-        const hoySeg = Consumo.inicioDiaUtc(ahora);
+        const hoySeg = Consumo.inicioDiaBogota(ahora);
         const desdeRangoSeg = hoySeg - (dias - 1) * Consumo.SEG_DIA; // la ventana incluye hoy
-        const inicioMesSeg = Date.UTC(ahora.getUTCFullYear(), ahora.getUTCMonth(), 1) / 1000;
+        const inicioMesSeg = Consumo.inicioMesBogota(ahora);
         const desdePromedioSeg = hoySeg - 7 * Consumo.SEG_DIA;
 
         const movimientos = await listarMovimientos();
@@ -209,10 +209,10 @@ async function resumen(req, res) {
             desdeRangoSeg,
             inicioMesSeg,
             desdePromedioSeg,
-            partida ? Consumo.inicioDiaUtc(partida.fecha) : Infinity
+            partida ? Consumo.inicioDiaBogota(partida.fecha) : Infinity
         );
 
-        // Meta corta los días en hora de Colombia; su ventana se calcula aparte.
+        // Meta ya corta los días en hora de Colombia; su ventana es la misma.
         const hoyBogotaSeg = Meta.inicioDiaBogota(ahora);
         const desdeVentanaMetaSeg = hoyBogotaSeg - (dias - 1) * Consumo.SEG_DIA;
         const inicioMesMetaSeg = Meta.inicioMesBogota(ahora);
@@ -262,11 +262,13 @@ async function resumen(req, res) {
         const fuente = oficial ? 'oficial' : 'interno';
         const porDiaFuente = oficial ? oficial.por_dia : interno.porDia;
 
-        // Un SALDO sin foto del gasto de su día (ver `calcularSaldo`) se completa con lo que el
-        // Ledger anotó después de su hora exacta, hasta el fin de ese día UTC.
+        // Con el gasto oficial por hora, el saldo se resta desde la hora exacta del registro.
+        // Sin él (OpenAI no contestó, o no dio el uso por hora), un SALDO sin foto del gasto de
+        // su día se completa con lo que el Ledger anotó después de su hora, hasta el fin del día.
+        const porHora = oficial && oficial.reparto === 'por_hora' ? oficial.por_hora : null;
         let gastoInternoTrasPartida = null;
-        if (partida && partida.gasto_dia_previo_usd == null && hayLedger) {
-            const finDia = Consumo.inicioDiaUtc(partida.fecha) + Consumo.SEG_DIA;
+        if (!porHora && partida && partida.gasto_dia_previo_usd == null && hayLedger) {
+            const finDia = Consumo.inicioDiaBogota(partida.fecha) + Consumo.SEG_DIA;
             const [fila] = await Models.sequelize.query(
                 `SELECT COALESCE(SUM(costo_usd), 0)::float AS usd
                    FROM intelligence.costo
@@ -279,11 +281,14 @@ async function resumen(req, res) {
             gastoInternoTrasPartida = fila.usd;
         }
 
-        const saldo = Consumo.calcularSaldo(movimientos, porDiaFuente, { gastoInternoTrasPartida });
+        const saldo = Consumo.calcularSaldo(movimientos, porDiaFuente, {
+            porHora,
+            gastoInternoTrasPartida,
+        });
         const promedio = Consumo.promedioDiario(porDiaFuente, 7, ahora);
-        const fechaHoy = Consumo.fechaUtc(hoySeg);
-        const fechaMes = Consumo.fechaUtc(inicioMesSeg);
-        const fechaRango = Consumo.fechaUtc(desdeRangoSeg);
+        const fechaHoy = Consumo.fechaBogota(hoySeg);
+        const fechaMes = Consumo.fechaBogota(inicioMesSeg);
+        const fechaRango = Consumo.fechaBogota(desdeRangoSeg);
 
         const totalInternoRango = Consumo.sumarDesde(interno.porDia, fechaRango);
         const conversacionesConIa = interno.porNegocio.reduce((s, n) => s + n.conversaciones, 0);
@@ -292,6 +297,8 @@ async function resumen(req, res) {
             periodo: { dias, desde: fechaRango, hasta: fechaHoy },
             fuente_saldo: fuente,
             aviso_oficial: avisoOficial,
+            // 'aproximado' = OpenAI no dio el uso por hora y los días siguen cortados en UTC.
+            reparto_dias: oficial ? oficial.reparto : null,
             consultado_en: oficial?.consultado_en ?? null,
             saldo: saldo && {
                 ...saldo,
@@ -342,8 +349,7 @@ async function resumen(req, res) {
             whatsapp,
             aviso_whatsapp: avisoWhatsapp,
             trm,
-            // Lo que EscalApp paga a terceros este mes, en pesos. OpenAI va por mes UTC y Meta
-            // por mes de Colombia: la diferencia son cinco horas en el borde del mes.
+            // Lo que EscalApp paga a terceros este mes (de Colombia, en las dos fuentes), en pesos.
             terceros: {
                 openai_mes_usd: Consumo.redondear(Consumo.sumarDesde(porDiaFuente, fechaMes)),
                 openai_mes_cop: trm
@@ -363,9 +369,10 @@ async function resumen(req, res) {
 }
 
 /**
- * Cuánto llevaba gastado OpenAI en el día UTC de un SALDO, en el momento de registrarlo.
+ * Cuánto llevaba gastado OpenAI en el día (de Colombia) de un SALDO, en el momento de
+ * registrarlo. Es el respaldo de `calcularSaldo` para cuando no hay gasto por hora.
  *
- * Solo tiene sentido si el SALDO es de hoy (UTC): la foto se toma ahora, así que para un día
+ * Solo tiene sentido si el SALDO es de hoy: la foto se toma ahora, así que para un día
  * anterior mediría el día entero y no lo que iba a la hora escrita. En ese caso, o si OpenAI no
  * contesta, devuelve `null` y el cálculo usa la cuenta interna para ese día.
  *
@@ -375,11 +382,11 @@ async function fotoGastoDelDia(fecha) {
     const conZona = /([zZ]|[+-]\d\d:?\d\d)$/.test(fecha || '');
     const instante = fecha ? new Date(conZona ? fecha : `${fecha}-05:00`) : new Date();
     if (Number.isNaN(instante.getTime())) return null;
-    const hoy = Consumo.inicioDiaUtc(new Date());
-    if (Consumo.inicioDiaUtc(instante) !== hoy) return null;
+    const hoy = Consumo.inicioDiaBogota(new Date());
+    if (Consumo.inicioDiaBogota(instante) !== hoy) return null;
     try {
         const { por_dia: porDia } = await Consumo.consultarCostosOficiales(hoy, { forzar: true });
-        const usd = porDia.find((d) => d.fecha === Consumo.fechaUtc(hoy))?.usd ?? 0;
+        const usd = porDia.find((d) => d.fecha === Consumo.fechaBogota(hoy))?.usd ?? 0;
         return usd.toFixed(6);
     } catch {
         return null;
