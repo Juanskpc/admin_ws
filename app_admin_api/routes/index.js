@@ -576,6 +576,34 @@ router.get('/cobranza/mi-suscripcion', [
 
 router.get('/cobranza/mis-cobros', CobranzaController.getMisCobros);
 
+// El historial: los pagos YA HECHOS de los negocios que administra, y el comprobante de cada uno.
+// Sin `requireSuperAdmin` (es del cliente) y con el dueño comprobado contra la base en el
+// controlador, igual que al pagar.
+router.get('/cobranza/mis-pagos', [
+    query('id_negocio').optional().isInt({ min: 1 }).withMessage('id_negocio inválido'),
+], CobranzaController.getMisPagos);
+
+router.get('/cobranza/facturas/:id/comprobante', [
+    param('id').isInt({ min: 1 }).withMessage('ID de factura inválido'),
+], CobranzaController.getComprobante);
+
+// Manda el comprobante por correo. Lleva límite propio porque aquí **el acierto es lo caro**: cada
+// 200 gasta cuota de envío de la cuenta de correo, así que se cuenta todo y no solo los fallos
+// (mismo razonamiento que `forgot-password`, ver app_core/middleware/limites.js).
+const limiteComprobante = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 10,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { success: false, message: 'Has enviado varios comprobantes seguidos. Espera unos minutos.' },
+});
+
+router.post('/cobranza/facturas/:id/comprobante/enviar', limiteComprobante, [
+    param('id').isInt({ min: 1 }).withMessage('ID de factura inválido'),
+    body('email').optional({ values: 'falsy' }).trim().isEmail().isLength({ max: 255 })
+        .withMessage('Correo inválido'),
+], CobranzaController.enviarComprobante);
+
 // Lo que el negocio tiene contratado, en solo lectura, para el administrador del propio negocio.
 router.get('/cobranza/mi-plan', [
     query('id_negocio').isInt({ min: 1 }).withMessage('id_negocio inválido'),

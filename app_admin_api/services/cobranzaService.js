@@ -1304,6 +1304,56 @@ async function cobrosDeUsuario(idUsuario, { incluirSinSuscripcion = false } = {}
 }
 
 /**
+ * Los pagos YA HECHOS de los negocios que administra el usuario — el historial de «Mis pagos».
+ *
+ * ## Qué se le muestra al cliente y qué no
+ *
+ * `comision_pasarela`, `retencion_declarada` y `neto_recibido` **no salen de aquí**. Son nuestra
+ * conciliación (`docs/obligaciones-escalapp.md` §3): al cliente no le incumbe cuánto se queda la
+ * pasarela, y enseñárselo solo invita a preguntar por qué pagó 27.999 y «solo llegaron» 26.283.
+ *
+ * Solo `estado = 'pagada'`. Una `fallida` es un intento, no un pago, y una `anulada` se perdonó:
+ * ninguna de las dos es un comprobante que alguien pueda presentar.
+ *
+ * @param {number} idUsuario
+ * @param {object} [opciones]
+ * @param {number|null} [opciones.idNegocio] Un solo negocio (el de la pestaña). Se cruza con los
+ *        que ADMINISTRA: el id viaja en la query y creerle sería enseñar los pagos de otro cliente.
+ * @param {number} [opciones.limite=120] Techo de filas. Un negocio paga doce veces al año: con 120
+ *        caben diez años y aun así la consulta no puede crecer sin fin.
+ */
+async function pagosDeUsuario(idUsuario, { idNegocio = null, limite = 120 } = {}) {
+    const administrados = await negociosQueAdministra(idUsuario);
+    const ids = idNegocio ? administrados.filter((id) => id === Number(idNegocio)) : administrados;
+    if (!ids.length) return [];
+
+    const filas = await sequelize.query(
+        `SELECT f.id_factura, f.referencia, f.id_negocio, n.nombre AS negocio,
+                f.tipo, f.periodo_inicio, f.periodo_fin, f.total, f.moneda,
+                f.fecha_pago, f.pasarela, f.medio_pago_texto,
+                f.numero_factura, f.cufe, p.nombre AS plan
+           FROM cobranza.cob_factura f
+           JOIN general.gener_negocio n    ON n.id_negocio = f.id_negocio
+           LEFT JOIN general.gener_plan p  ON p.id_plan = f.id_plan
+          WHERE f.id_negocio IN (:ids)
+            AND f.estado = 'pagada'
+          ORDER BY f.fecha_pago DESC NULLS LAST, f.id_factura DESC
+          LIMIT :limite;`,
+        { replacements: { ids, limite }, type: sequelize.QueryTypes.SELECT }
+    );
+
+    const pagos = [];
+    for (const f of filas) {
+        pagos.push({
+            ...f,
+            total: Number(f.total),
+            lineas: await Dao.listarDetalleFactura(f.id_factura),
+        });
+    }
+    return pagos;
+}
+
+/**
  * Inicia el pago de una factura con la pasarela que eligió el cliente.
  *
  * ⚠️ **Nunca debita un medio guardado**: siempre abre checkout. Esta función la llaman el portal
@@ -2375,6 +2425,7 @@ module.exports = {
     cobrarFactura,
     anularFactura,
     cobrosDeUsuario,
+    pagosDeUsuario,
     negociosQueAdministra,
     usuarioAdministraNegocio,
     iniciarPago,
