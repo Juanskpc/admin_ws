@@ -974,6 +974,11 @@ router.put('/intelligence/bandeja/configuracion', [
         .withMessage('El valor máximo del domicilio debe ser un número de pesos válido'),
     body('domicilio_nota').optional({ values: 'null' }).isString().isLength({ max: 200 })
         .withMessage('La nota del domicilio admite hasta 200 caracteres'),
+    // Tiempo de un pedido PARA RECOGER, aparte del de entrega a domicilio. null lo borra.
+    body('tiempo_recoger_min').optional({ values: 'null' }).isInt({ min: 1, max: 600 })
+        .withMessage('El tiempo para recoger debe estar entre 1 y 600 minutos'),
+    body('tiempo_recoger_max').optional({ values: 'null' }).isInt({ min: 1, max: 600 })
+        .withMessage('El tiempo máximo para recoger debe estar entre 1 y 600 minutos'),
     // ¿El asistente deja de ofrecer lo que no tiene insumos, aunque caja no controle inventario?
     body('asistente_mira_stock').optional().isBoolean({ strict: true })
         .withMessage('asistente_mira_stock debe ser true o false'),

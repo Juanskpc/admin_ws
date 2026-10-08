@@ -312,6 +312,118 @@ function contestoComoLoRecibe(enCurso, paraServir) {
     });
 }
 
+/**
+ * ¿El modelo eligió «para recoger» (o «para servir» sin mesa) sin que el cliente lo dijera?
+ *
+ * «Para recoger» no se supone. Si el modelo lo pone y en el chat nadie ha hablado de recoger, se
+ * le devuelve para que pregunte (Zona Burger, 2026-10-05: un domicilio quedó tomado para
+ * recoger). «Para servir» sin mesa tampoco: cerrado el paso a LLEVAR, el modelo probó con MESA en
+ * una de cada cuatro rondas de evaluación. Un domicilio ya exige dirección y teléfono.
+ *
+ * Con el chat en orden se mira solo el pedido en curso, y que se le haya preguntado no basta:
+ * tiene que haber contestado (`pedidoEnCurso`, `contestoComoLoRecibe`). Sin el orden —quien
+ * llama sin `hilo`— como antes.
+ */
+function entregaSinDecir({ args, cliente = [], asistente = [], hilo = [] }) {
+    const paraServir = args?.tipo_entrega === 'MESA' && !args?.id_mesa;
+    if (args?.tipo_entrega !== 'LLEVAR' && !paraServir) return false;
+    const dicho = paraServir ? HABLA_DE_COMER_AQUI : HABLA_DE_RECOGER;
+    if (hilo.length > 0) {
+        const enCurso = pedidoEnCurso(hilo);
+        const loDijoAhora = enCurso.some((m) => m.rol === 'cliente' && dicho.test(normalizarTexto(m.texto)));
+        return !(loDijoAhora || contestoComoLoRecibe(enCurso, paraServir));
+    }
+    const loDijo = cliente.some((t) => dicho.test(normalizarTexto(t)));
+    const sePregunto = asistente.some((t) => /recog/.test(normalizarTexto(t)));
+    return !(loDijo || sePregunto);
+}
+
+/**
+ * El error que vuelve al modelo cuando le faltan datos que solo puede dar el cliente, o `null`.
+ *
+ * Con una sola falta, su código de siempre. Con varias, `FALTAN_DATOS` y la orden de pedirlas
+ * TODAS en un mensaje, con la frase hecha: un modelo al que se le dice «falta el nombre» pregunta
+ * el nombre, y al turno siguiente descubre que también faltaba la entrega.
+ */
+function loQueFalta({ entrega, direccion, nombre }) {
+    const cierre = 'No le cuentes este error.';
+    if (entrega) {
+        // Sin saber cómo lo recibe no se sabe qué más pedir: se pregunta eso y, de una vez, lo
+        // que hará falta según lo que conteste.
+        const paraElLocal = nombre
+            ? '🏃 *Para recoger o comer aquí*: dime a nombre de quién.'
+            : '🏃 *Para recoger o comer aquí*: con eso me basta.';
+        return {
+            codigo: nombre ? 'FALTAN_DATOS' : 'ENTREGA_SIN_DECIR',
+            mensaje:
+                'El cliente no ha dicho cómo quiere recibir el pedido' +
+                (nombre ? ' ni a nombre de quién queda' : '') +
+                '. No lo elijas tú. Pregúntaselo en UN solo mensaje que pida de una vez lo que ' +
+                'hará falta según conteste, así: «¿Cómo lo quieres? 🛵 *A domicilio*: mándame la ' +
+                `dirección con el barrio y un teléfono. ${paraElLocal}» ` +
+                `Vuelve a llamar con lo que conteste. ${cierre}`,
+        };
+    }
+    if (direccion && nombre) {
+        return {
+            codigo: 'FALTAN_DATOS',
+            mensaje:
+                'El cliente todavía no ha dicho la dirección ni a nombre de quién queda el pedido. ' +
+                'No los rellenes tú. Pídele las dos cosas en UN solo mensaje —la dirección con el ' +
+                'barrio o una indicación para llegar, y el nombre— y vuelve a llamar cuando las ' +
+                `tengas. ${cierre}`,
+        };
+    }
+    if (direccion) {
+        return {
+            codigo: 'DIRECCION_REQUERIDA',
+            mensaje:
+                'Eso no es una dirección: el cliente todavía no la ha dicho. No la ' +
+                'rellenes tú: pídele la dirección, con el barrio o una indicación para ' +
+                `llegar, y vuelve a llamar cuando la tengas. ${cierre}`,
+        };
+    }
+    if (nombre) {
+        return {
+            codigo: 'NOMBRE_REQUERIDO',
+            mensaje:
+                'No sabes cómo se llama el cliente. No pongas «cliente»: pregúntale a ' +
+                `nombre de quién queda el pedido y vuelve a llamar con lo que conteste. ${cierre}`,
+        };
+    }
+    return null;
+}
+
+/** «20 a 40 minutos» / «unos 20 minutos», o `null` si el negocio no ha dicho ese tiempo. */
+function minutosEnPalabras(tiempo) {
+    const min = Number(tiempo?.min);
+    if (!Number.isInteger(min) || min < 1) return null;
+    const max = Number(tiempo?.max);
+    return Number.isInteger(max) && max > min ? `${min} a ${max} minutos` : `unos ${min} minutos`;
+}
+
+/**
+ * La línea del resumen que dice cuánto falta, según cómo lo recibe: el tiempo de recoger para
+ * quien pasa por el local (o el estimado de siempre si el negocio no lo ha dicho aparte) y el
+ * estimado para un domicilio. `null` si no hay ningún tiempo configurado: no se inventa.
+ */
+async function lineaDeTiempo(idNegocio, tipoEntrega) {
+    try {
+        const negocio = await contextoNegocio.obtener(idNegocio);
+        const enElLocal = tipoEntrega !== 'DOMICILIO';
+        const cuanto = minutosEnPalabras(
+            enElLocal ? negocio?.tiempoRecoger || negocio?.tiempoEstimado : negocio?.tiempoEstimado
+        );
+        if (!cuanto) return null;
+        const rango = cuanto.startsWith('unos') ? cuanto : `unos ${cuanto}`;
+        return enElLocal
+            ? `⏱️ Estará listo en ${rango}, contados desde que confirmes.`
+            : `⏱️ Te llega en ${rango}, contados desde que confirmes.`;
+    } catch (_) {
+        return null;
+    }
+}
+
 /** El cliente habló de recoger, pasar o ir al local (sobre texto sin tildes). */
 const HABLA_DE_RECOGER = /\b(recog\w*|recoj\w*|llevar|llevo|llevarl[oa]s?|paso|pasar|pasare|pasamos|voy|vamos|retir\w*|busc\w*|local|alla|caigo)\b|~m=r\b/;
 
@@ -688,6 +800,7 @@ async function leerFichaDelNegocio(idNegocio, transaction) {
         return {
             tiempo_estimado_min: fila?.tiempo_estimado_min ?? null,
             tiempo_estimado_max: fila?.tiempo_estimado_max ?? null,
+            tiempo_recoger: await contextoNegocio.leerTiempoRecoger(idNegocio, transaction),
             info_asistente: String(fila?.info_asistente || '').trim() || null,
             domicilio_rango: await leerDomicilioRango(idNegocio, transaction),
         };
@@ -1091,6 +1204,17 @@ function registrarCapacidades() {
                 })),
                 tiempo_estimado_min: negocio.tiempo_estimado_min,
                 tiempo_estimado_max: negocio.tiempo_estimado_max,
+                // El de arriba es el de un DOMICILIO. Para recoger o comer en el local, este.
+                ...(negocio.tiempo_recoger
+                    ? {
+                          tiempo_para_recoger_min: negocio.tiempo_recoger.min,
+                          tiempo_para_recoger_max: negocio.tiempo_recoger.max,
+                          como_usar_los_tiempos:
+                              '`tiempo_estimado` es para pedidos a domicilio; `tiempo_para_recoger` para ' +
+                              'los que el cliente recoge o come en el local. Di el que corresponda a ' +
+                              'cómo lo va a recibir; si aún no lo sabes, di los dos en una frase.',
+                      }
+                    : {}),
                 notas_del_negocio: negocio.info_asistente,
             };
         },
@@ -1368,6 +1492,12 @@ function registrarCapacidades() {
                         ? aviso.replace('puede variar por el empaque', 'puede variar si cambias algo')
                         : aviso;
 
+                    // Cuánto falta, dicho ANTES del «sí»: es lo que el cliente pregunta justo
+                    // después («¿cuánto se demora?», en una de cada tres conversaciones del
+                    // 2026-10-07) y es parte de lo que está aceptando. No con una mesa ya
+                    // asignada: quien está sentado no espera un «estará en…».
+                    const cuanto = enMesa && args.id_mesa ? null : await lineaDeTiempo(idNegocio, args.tipo_entrega);
+
                     return [
                         cabecera,
                         '',
@@ -1378,6 +1508,7 @@ function registrarCapacidades() {
                         ...(nota ? [`📝 _Nota: ${nota}_`] : []),
                         '',
                         `*Total: ${enPesos(total)}*`,
+                        ...(cuanto ? [cuanto] : []),
                         avisoFinal,
                     ].join('\n');
                 } catch (error) {
@@ -1421,55 +1552,19 @@ function registrarCapacidades() {
                     telefonos: [telefono, args?.cliente_telefono],
                 });
                 if (repetido) return repetido;
-                // Ni la dirección ni el nombre se rellenan: si el modelo no los tiene, pregunta.
-                if (
-                    args?.tipo_entrega === 'DOMICILIO' &&
-                    args?.direccion != null &&
-                    DIRECCION_DE_RELLENO.test(normalizarTexto(args.direccion).trim())
-                ) {
-                    return {
-                        codigo: 'DIRECCION_REQUERIDA',
-                        mensaje:
-                            'Eso no es una dirección: el cliente todavía no la ha dicho. No la ' +
-                            'rellenes tú: pídele la dirección, con el barrio o una indicación para ' +
-                            'llegar, y vuelve a llamar cuando la tengas. No le cuentes este error.',
-                    };
-                }
-                if (NOMBRE_DE_RELLENO.test(normalizarTexto(args?.cliente_nombre ?? '').trim())) {
-                    return {
-                        codigo: 'NOMBRE_REQUERIDO',
-                        mensaje:
-                            'No sabes cómo se llama el cliente. No pongas «cliente»: pregúntale a ' +
-                            'nombre de quién queda el pedido y vuelve a llamar con lo que conteste. ' +
-                            'No le cuentes este error.',
-                    };
-                }
-                // «Para servir» sin mesa tampoco se supone: cerrado el paso a LLEVAR, el modelo
-                // probó con MESA en una de cada cuatro rondas de evaluación (2026-10-05).
-                const paraServir = args?.tipo_entrega === 'MESA' && !args?.id_mesa;
-                if (args?.tipo_entrega !== 'LLEVAR' && !paraServir) return null;
-                const dicho = paraServir ? HABLA_DE_COMER_AQUI : HABLA_DE_RECOGER;
-                // Con el chat en orden se mira solo el pedido en curso, y que se le haya
-                // preguntado no basta: tiene que haber contestado (ver `pedidoEnCurso` y
-                // `contestoComoLoRecibe`). Sin el orden —quien llama sin `hilo`— como antes.
-                if (hilo.length > 0) {
-                    const enCurso = pedidoEnCurso(hilo);
-                    const loDijoAhora = enCurso.some(
-                        (m) => m.rol === 'cliente' && dicho.test(normalizarTexto(m.texto))
-                    );
-                    if (loDijoAhora || contestoComoLoRecibe(enCurso, paraServir)) return null;
-                } else {
-                    const loDijo = cliente.some((t) => dicho.test(normalizarTexto(t)));
-                    const sePregunto = asistente.some((t) => /recog/.test(normalizarTexto(t)));
-                    if (loDijo || sePregunto) return null;
-                }
-                return {
-                    codigo: 'ENTREGA_SIN_DECIR',
-                    mensaje:
-                        'El cliente no ha dicho cómo quiere recibir el pedido. No lo elijas tú: ' +
-                        'pregúntale si es a domicilio, para recoger o para comer en el local, y ' +
-                        'vuelve a llamar con lo que conteste. No le cuentes este error.',
-                };
+                // Ni la dirección, ni el nombre, ni cómo lo recibe se rellenan: si el modelo no
+                // los tiene, pregunta. Y si le falta más de una cosa, las pregunta JUNTAS: antes
+                // cada falta volvía sola y eran dos turnos («¿a nombre de quién?», y luego «¿para
+                // recoger, a domicilio…?») para lo que cabe en un mensaje. Zona Burger,
+                // 2026-10-07: siete mensajes para una salchipapa para recoger.
+                return loQueFalta({
+                    entrega: entregaSinDecir({ args, cliente, asistente, hilo }),
+                    direccion:
+                        args?.tipo_entrega === 'DOMICILIO' &&
+                        args?.direccion != null &&
+                        DIRECCION_DE_RELLENO.test(normalizarTexto(args.direccion).trim()),
+                    nombre: NOMBRE_DE_RELLENO.test(normalizarTexto(args?.cliente_nombre ?? '').trim()),
+                });
             },
             hecho: ({ resultado }) =>
                 resultado.suma_a_cuenta

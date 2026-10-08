@@ -1694,6 +1694,41 @@ function fraseDeTiempo(tiempo, { hayPedido = true, ofrecerTomarlo = false } = {}
 }
 
 /**
+ * Qué tiempo aplica según cómo se recibe el pedido: el de recoger para quien pasa por el local
+ * (o el estimado de siempre si el negocio no lo ha dicho aparte) y el estimado —cocina más
+ * camino— para un domicilio. Sin saber cómo lo recibe, el estimado.
+ */
+function tiempoPara(negocio, tipoEntrega) {
+    const enElLocal = tipoEntrega === 'LLEVAR' || tipoEntrega === 'MESA';
+    return enElLocal ? negocio?.tiempoRecoger || negocio?.tiempoEstimado : negocio?.tiempoEstimado;
+}
+
+function minutosEnPalabras(tiempo) {
+    const min = Number(tiempo?.min);
+    if (!Number.isInteger(min) || min < 1) return null;
+    const max = Number(tiempo?.max);
+    return Number.isInteger(max) && max > min ? `*${min} a ${max} minutos*` : `unos *${min} minutos*`;
+}
+
+/**
+ * «¿Cuánto se demora?» de quien todavía no tiene pedido ni ha dicho cómo lo recibe: los dos
+ * tiempos en una frase, cuando el negocio declaró el de recoger aparte. Decirle «40 a 60
+ * minutos» —el del domicilio— a quien iba a pasar por el local es espantarlo (Zona Burger,
+ * 2026-10-07: pedidos para recoger listos en 9 y 23 minutos). `null` si no hay dos tiempos.
+ */
+function fraseDeLosDosTiempos(negocio, { ofrecerTomarlo = false } = {}) {
+    const recoger = minutosEnPalabras(negocio?.tiempoRecoger);
+    const domicilio = minutosEnPalabras(negocio?.tiempoEstimado);
+    if (!recoger || !domicilio) return null;
+    const frase =
+        `Para recoger, ${recoger} ⏱️; a domicilio, ${domicilio}. ` +
+        'Se cuentan desde que se confirma el pedido.';
+    return ofrecerTomarlo
+        ? `${frase}\nTodavía no tengo ningún pedido tuyo: si quieres, te lo tomo por aquí 😊`
+        : frase;
+}
+
+/**
  * «¿Cuánto vale el domicilio?» — se contesta con el RANGO que declaró el negocio.
  *
  * Desde 2026-10-02: cargar el precio barrio por barrio era tedioso y el negocio prefirió decir un
@@ -2144,7 +2179,9 @@ function crearFlujoRestaurante({
             const respuestaPrevia = esPreguntaDeDomicilio(texto)
                 ? fraseDeDomicilio(negocio.domicilioRango)
                 : esPreguntaDeTiempo(texto)
-                  ? fraseDeTiempo(negocio.tiempoEstimado, { hayPedido: false })
+                  ? fraseDeTiempo(tiempoPara(negocio, conversacion.tarea_datos?.args?.tipo_entrega), {
+                        hayPedido: false,
+                    })
                   : null;
             if (respuestaPrevia) {
                 return {
@@ -2376,10 +2413,44 @@ function crearFlujoRestaurante({
             // verdad; si no, se avisa de que aún no hay ninguno y se ofrece tomarlo.
             const armando = conversacion.tarea_actual === TAREA_PEDIDO;
             const hayPedido = !armando && (await tienePedidoReciente(conversacion));
-            const frase = fraseDeTiempo(negocio.tiempoEstimado, {
-                hayPedido,
-                ofrecerTomarlo: !armando && !hayPedido,
-            });
+            // Contesta cómo lo recibe Y pregunta el tiempo, sin pedido todavía: «Me confirmas en
+            // cuánto está, yo paso a recogerla». Contestarle solo el tiempo era no oírle la
+            // mitad: se le dijo «todavía no tengo ningún pedido tuyo» y tuvo que repetirlo entero
+            // (Zona Burger, 2026-10-07). Lo sigue el modelo, que lleva el hilo, con el tiempo en
+            // la mano para decirlo en el mismo mensaje.
+            const entregaDicha = entregaNombrada(
+                normalizar(ultimaLinea(texto)).replace(/[¡¿!?.,;:]/g, ' ').replace(/\s+/g, ' ').trim()
+            );
+            if (!armando && !hayPedido && entregaDicha) {
+                const cuanto = minutosEnPalabras(tiempoPara(negocio, entregaDicha));
+                return {
+                    ...delegar(ctx),
+                    notaParaElModelo:
+                        '[Nota del sistema, no del cliente: en este mensaje el cliente dice cómo ' +
+                        `recibe el pedido (${ENTREGA_EN_PALABRAS[entregaDicha]}) y además pregunta ` +
+                        'cuánto tarda. ' +
+                        (cuanto
+                            ? `El tiempo para esa entrega es ${cuanto.replace(/\*/g, '')}, contado desde que se confirma. `
+                            : '') +
+                        'Toma su respuesta: si ya tienes todo lo del pedido, llama la herramienta ' +
+                        'del pedido ahora (el resumen ya dice el tiempo); si te falta algo, pídeselo ' +
+                        'y dile el tiempo en la misma frase. No le digas que no tiene ningún pedido.]',
+                    pasos: [paso('tiempo_con_entrega_al_modelo', { entrega: entregaDicha })],
+                };
+            }
+            // Con pedido, el tiempo de cómo lo recibe ESE pedido; armándolo, el de lo que lleva
+            // dicho; sin nada, los dos tiempos si el negocio los separó.
+            const tipoDelPedido = hayPedido
+                ? (await pago.ultimoPedidoVivo(conversacion))?.tipo_pedido ?? null
+                : armando
+                  ? datosDelPedido(conversacion)?.entrega ?? null
+                  : null;
+            const frase =
+                (!armando && !hayPedido && fraseDeLosDosTiempos(negocio, { ofrecerTomarlo: true })) ||
+                fraseDeTiempo(tiempoPara(negocio, tipoDelPedido), {
+                    hayPedido,
+                    ofrecerTomarlo: !armando && !hayPedido,
+                });
             if (frase && armando) {
                 // Se contesta Y se retoma lo que faltaba, sin tocar la tarea ni el contador de
                 // repreguntas: el cliente preguntó algo razonable, no se equivocó.

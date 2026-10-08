@@ -717,7 +717,8 @@ async function leerConfiguracion(req, res) {
                     tiempo_estimado_min, tiempo_estimado_max, info_asistente,
                     domicilio_valor_min, domicilio_valor_max, domicilio_nota,
                     asistente_pausado, asistente_pausado_en,
-                    asistente_mira_stock, controla_inventario
+                    asistente_mira_stock, controla_inventario,
+                    tiempo_recoger_min, tiempo_recoger_max
                FROM general.gener_negocio WHERE id_negocio = :idNegocio;`,
             { replacements: { idNegocio }, ...SELECT }
         );
@@ -729,6 +730,9 @@ async function leerConfiguracion(req, res) {
             // Lo que el asistente contesta a «¿cuánto se demora?». null = sin configurar.
             tiempo_estimado_min: fila.tiempo_estimado_min,
             tiempo_estimado_max: fila.tiempo_estimado_max,
+            // El de un pedido PARA RECOGER, que no lleva camino. null = vale el de arriba.
+            tiempo_recoger_min: fila.tiempo_recoger_min ?? null,
+            tiempo_recoger_max: fila.tiempo_recoger_max ?? null,
             // Lo que el asistente le dice al cliente sobre pagos, domicilio, etc. null = nada.
             info_asistente: fila.info_asistente ?? null,
             // Cuánto vale el domicilio, como rango («entre $7.000 y $9.000») + una nota corta.
@@ -782,7 +786,10 @@ async function guardarConfiguracion(req, res) {
             req.body.domicilio_nota !== undefined;
         // ¿El asistente tiene en cuenta el inventario aunque caja no lo controle? (2026-10-07)
         const traeStock = req.body.asistente_mira_stock !== undefined;
-        if (!traeReactivacion && !traeTiempo && !traeInfo && !traeDomicilio && !traeStock) {
+        // El tiempo de un pedido para recoger, aparte del de entrega (2026-10-07).
+        const traeRecoger =
+            req.body.tiempo_recoger_min !== undefined || req.body.tiempo_recoger_max !== undefined;
+        if (!traeReactivacion && !traeTiempo && !traeInfo && !traeDomicilio && !traeStock && !traeRecoger) {
             return Respuesta.error(res, 'No hay nada que guardar', 400);
         }
 
@@ -799,7 +806,8 @@ async function guardarConfiguracion(req, res) {
 
         const [antes] = await Models.sequelize.query(
             `SELECT reactivar_asistente_min, tiempo_estimado_min, tiempo_estimado_max, info_asistente,
-                    domicilio_valor_min, domicilio_valor_max, domicilio_nota, asistente_mira_stock
+                    domicilio_valor_min, domicilio_valor_max, domicilio_nota, asistente_mira_stock,
+                    tiempo_recoger_min, tiempo_recoger_max
                FROM general.gener_negocio WHERE id_negocio = :idNegocio;`,
             { replacements: { idNegocio }, ...SELECT }
         );
@@ -863,6 +871,19 @@ async function guardarConfiguracion(req, res) {
             Object.assign(replacements, { domicilioMin, domicilioMax, domicilioNota });
         }
 
+        let recogerMin = antes.tiempo_recoger_min ?? null;
+        let recogerMax = antes.tiempo_recoger_max ?? null;
+        if (traeRecoger) {
+            // Igual que el tiempo de entrega: sin mínimo no hay máximo.
+            recogerMin = nulo(req.body.tiempo_recoger_min);
+            recogerMax = recogerMin === null ? null : nulo(req.body.tiempo_recoger_max);
+            if (recogerMax !== null && recogerMax < recogerMin) {
+                return Respuesta.error(res, 'El tiempo máximo para recoger no puede ser menor que el mínimo', 400);
+            }
+            cambios.push('tiempo_recoger_min = :recogerMin', 'tiempo_recoger_max = :recogerMax');
+            Object.assign(replacements, { recogerMin, recogerMax });
+        }
+
         let miraStock = antes.asistente_mira_stock === true;
         if (traeStock) {
             miraStock = req.body.asistente_mira_stock === true;
@@ -874,6 +895,19 @@ async function guardarConfiguracion(req, res) {
             `UPDATE general.gener_negocio SET ${cambios.join(', ')} WHERE id_negocio = :idNegocio;`,
             { replacements }
         );
+
+        if (traeRecoger) {
+            await Audit.registrarEvento({
+                modulo: 'intelligence',
+                accion: 'tiempo_recoger_configurado',
+                idUsuario: req.usuario.id_usuario,
+                idNegocio,
+                detalle: {
+                    antes: { min: antes.tiempo_recoger_min ?? null, max: antes.tiempo_recoger_max ?? null },
+                    despues: { min: recogerMin, max: recogerMax },
+                },
+            });
+        }
 
         if (traeStock) {
             await Audit.registrarEvento({
@@ -938,8 +972,15 @@ async function guardarConfiguracion(req, res) {
             });
         }
 
-        const soloStock = traeStock && !traeDomicilio && !traeInfo && !traeTiempo && !traeReactivacion;
-        const mensaje = soloStock
+        const soloRecoger =
+            traeRecoger && !traeStock && !traeDomicilio && !traeInfo && !traeTiempo && !traeReactivacion;
+        const soloStock =
+            traeStock && !traeRecoger && !traeDomicilio && !traeInfo && !traeTiempo && !traeReactivacion;
+        const mensaje = soloRecoger
+            ? (recogerMin === null
+                ? 'Para recoger, el asistente dirá el mismo tiempo que para la entrega'
+                : 'Tiempo para recoger guardado')
+            : soloStock
             ? (miraStock
                 ? 'El asistente tendrá en cuenta el inventario'
                 : 'El asistente ya no tendrá en cuenta el inventario')
@@ -967,6 +1008,8 @@ async function guardarConfiguracion(req, res) {
             domicilio_valor_max: domicilioMax,
             domicilio_nota: domicilioNota,
             asistente_mira_stock: miraStock,
+            tiempo_recoger_min: recogerMin,
+            tiempo_recoger_max: recogerMax,
         });
     } catch (err) {
         console.error('Error en bandeja.guardarConfiguracion:', err);
