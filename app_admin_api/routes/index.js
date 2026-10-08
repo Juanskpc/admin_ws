@@ -946,6 +946,9 @@ router.put('/intelligence/bandeja/configuracion', [
         .withMessage('El valor máximo del domicilio debe ser un número de pesos válido'),
     body('domicilio_nota').optional({ values: 'null' }).isString().isLength({ max: 200 })
         .withMessage('La nota del domicilio admite hasta 200 caracteres'),
+    // ¿El asistente deja de ofrecer lo que no tiene insumos, aunque caja no controle inventario?
+    body('asistente_mira_stock').optional().isBoolean({ strict: true })
+        .withMessage('asistente_mira_stock debe ser true o false'),
 ], IntelligenceBandejaController.guardarConfiguracion);
 
 module.exports = router;

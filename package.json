@@ -95,6 +95,7 @@
     "migrate:intelligence-info-negocio": "node migrations/migrate_intelligence_info_negocio_restaurante.js",
     "migrate:negocio-texto-pago": "node migrations/migrate_negocio_texto_pago.js",
     "migrate:negocio-asistente-pausa": "node migrations/migrate_negocio_asistente_pausa.js",
+    "migrate:negocio-asistente-stock": "node migrations/migrate_negocio_asistente_mira_stock.js",
     "migrate:intelligence-reportes": "node migrations/migrate_intelligence_reportes.js",
     "migrate:restaurante-pago-domicilio": "node migrations/migrate_restaurante_pago_domicilio.js",
     "migrate:restaurante-metodo-pago-domicilio": "node migrations/migrate_restaurante_metodo_pago_domicilio.js",

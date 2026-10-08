@@ -555,6 +555,34 @@
         "menciona_alguno": ["dirección", "direccion"],
         "no_pide_confirmacion": true
       }
+    },
+    {
+      "id": "sigue-dictando-sin-decir-como-lo-recibe",
+      "historial": [
+        { "rol": "cliente", "texto": "Holaaa" },
+        { "rol": "asistente", "texto": "👋 ¡Buenas noches! Te saluda *ZONA BURGER*. Aquí tienes la carta completa, con fotos y precios. O si prefieres, dime por aquí qué se te antoja y yo te lo anoto." },
+        { "rol": "cliente", "texto": "1 salchi-limon personal" },
+        { "rol": "asistente", "texto": "¿La quieres a domicilio, para recoger o para comer aquí?" }
+      ],
+      "mensaje": "1 salchi-limon media",
+      "espera": {
+        "menciona_alguno": ["domicilio", "recoger"],
+        "no_pide_confirmacion": true
+      }
+    },
+    {
+      "id": "recoger-de-otro-dia-no-cuenta",
+      "historial": [
+        { "rol": "cliente", "texto": "Dos salchilimon personales, para recoger, ya vamos" },
+        { "rol": "asistente", "texto": "¡Listo! Tu pedido quedó tomado. El número es ORD-7600 — guárdalo para consultar cómo va." },
+        { "rol": "cliente", "texto": "Buena veci" },
+        { "rol": "asistente", "texto": "👋 ¡Buenas noches! Te saluda *ZONA BURGER*. Aquí tienes la carta completa, con fotos y precios. O si prefieres, dime por aquí qué se te antoja y yo te lo anoto." }
+      ],
+      "mensaje": "Una salchilimon personal porfiss",
+      "espera": {
+        "menciona_alguno": ["domicilio", "recoger"],
+        "no_pide_confirmacion": true
+      }
     }
   ]
 }

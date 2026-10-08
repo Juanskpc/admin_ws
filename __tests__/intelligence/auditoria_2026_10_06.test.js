@@ -129,6 +129,7 @@ describe('tomar_pedido: ni la dirección ni el nombre se rellenan', () => {
             await falta({
                 args: { tipo_entrega: 'LLEVAR', cliente_nombre: 'Juan Pablo' },
                 cliente: ['una salchilimon', 'para recoger'],
+                hilo: [{ rol: 'cliente', texto: 'una salchilimon' }, { rol: 'cliente', texto: 'para recoger' }],
             })
         ).toBeNull();
     });
@@ -137,6 +138,7 @@ describe('tomar_pedido: ni la dirección ni el nombre se rellenan', () => {
         const r = await falta({
             args: { tipo_entrega: 'LLEVAR', direccion: 'pendiente', cliente_nombre: 'Juan Pablo' },
             cliente: ['para recoger'],
+            hilo: [{ rol: 'cliente', texto: 'para recoger' }],
         });
         expect(r).toBeNull();
     });

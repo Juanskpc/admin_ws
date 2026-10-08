@@ -1569,7 +1569,11 @@ function delegar(ctx) {
  */
 async function cartaDe(idNegocio) {
     const cartaService = require('../../../app_restaurante_api/services/cartaService');
-    const categorias = await cartaService.getCartaPublica(idNegocio);
+    // La carta que enseña el asistente sigue SU decisión sobre el inventario, no la de caja.
+    const stock = await cartaService
+        .asistenteMiraStock(idNegocio)
+        .then((miraStock) => ({ miraStock }), () => ({}));
+    const categorias = await cartaService.getCartaPublica(idNegocio, stock);
 
     const todos = [];
     for (const c of categorias) {
@@ -1847,10 +1851,42 @@ function entregaQueCambia(texto, datos) {
     if (!pendiente || !ENTREGA_EN_PALABRAS[pendiente]) return null;
     const t = normalizar(ultimaLinea(texto)).replace(/[¡¿!.,;:]/g, ' ').replace(/\s+/g, ' ').trim();
     const nombrada = entregaNombrada(t);
-    // Solo hacia DOMICILIO: es el cambio que el modelo no puede rehacer en el mismo turno (le
-    // faltan dirección y teléfono), y por eso el resumen viejo se quedaba vivo. «Allá voy a
-    // consumir» o «mejor la recojo» los rehace al momento, con el pendiente en su sitio.
-    return nombrada === 'DOMICILIO' && pendiente !== 'DOMICILIO' ? { de: pendiente, a: nombrada } : null;
+    // Cualquier entrega distinta de la del resumen, no solo hacia DOMICILIO. Hasta el 2026-10-07
+    // «mejor la recojo» dejaba el pendiente en su sitio, contando con que el modelo rehiciera el
+    // pedido en el mismo turno; con un domicilio esperando, «¿o me queda cerca para ir a
+    // recoger?» se contestó («sí, puedes pasar; habría que cambiarlo»), el resumen siguió vivo y
+    // el «sí» siguiente tomó el domicilio que el cliente ya no quería (ORD-7877).
+    return nombrada && nombrada !== pendiente ? { de: pendiente, a: nombrada } : null;
+}
+
+/**
+ * ¿Alguien del local escribió en este chat DESPUÉS de que se enseñara el resumen que espera el sí?
+ *
+ * Entonces el «sí» que llega puede ser para esa persona y no para el resumen. Zona Burger,
+ * 2026-10-07: la clienta pidió que le llevaran el pedido, el cajero contestó «cobrarían el domi»,
+ * ella dijo «sí» y el asistente tomó el pedido «para recoger» (ORD-7876); la noche anterior, lo
+ * mismo creó un domicilio con dirección «pendiente» y repitió uno que ya estaba despachado.
+ */
+function personaEscribioTrasElResumen(conversacion, datos) {
+    const persona = Date.parse(conversacion?.humano_ultimo_en || '');
+    const resumen = Date.parse(datos?.preguntado_en || '');
+    return Number.isFinite(persona) && Number.isFinite(resumen) && persona > resumen;
+}
+
+/**
+ * Lo que se le recuerda al modelo cuando el cliente añade o cambia algo con un resumen esperando
+ * el sí: sin esto rehacía el pedido SOLO con lo nuevo. Zona Burger, 2026-10-07: el cliente dictó
+ * tres productos en tres mensajes, cada resumen traía solo el último y tuvo que escribirlos
+ * todos otra vez (ORD-7878).
+ */
+function notaDeLoAnotado(datos) {
+    return (
+        '[Nota del sistema, no del cliente: hay un pedido esperando el sí, con esto anotado: ' +
+        `${JSON.stringify(datos?.args ?? {})}. Si el cliente AÑADE un producto, vuelve a llamar la ` +
+        'herramienta del pedido con TODO lo que ya estaba anotado MÁS lo nuevo, no solo con lo ' +
+        'nuevo. Quita o cambia algo de lo anotado únicamente si lo pide. Conserva la entrega, la ' +
+        'dirección, el nombre y el teléfono que ya había.]'
+    );
 }
 
 /**
@@ -2039,6 +2075,43 @@ function crearFlujoRestaurante({
             // siendo un no. Zona Burger, 2026-10-05: «¿Cuáles dos sabores prefieres?» → «si» →
             // pedido tomado sin los hervidos.
             const esNo = esComando(texto, COMANDO.NO) || esComando(texto, COMANDO.CANCELAR);
+            // Una persona del local escribió después del resumen: este «sí» puede ser para ella.
+            // No se ejecuta a ciegas —se enseña el resumen otra vez, para que el sí sea a ESO— y
+            // el reloj del resumen se pone en hora, así el siguiente «sí» ya cuenta. No se suelta
+            // la confirmación: los cajeros también le piden al cliente que confirme con el botón.
+            const esperando = conversacion.tarea_datos || {};
+            if (
+                personaEscribioTrasElResumen(conversacion, esperando) &&
+                esAfirmacionConEntrega(texto, esperando.args?.tipo_entrega)
+            ) {
+                const datos = {
+                    ...esperando,
+                    pregunta_abierta: false,
+                    preguntado_en: ahora().toISOString(),
+                };
+                return {
+                    pasos: [paso('confirmacion_si_tras_persona', { capacidad: datos.capacidad })],
+                    respuestas: [
+                        {
+                            texto:
+                                'Para no enviar algo distinto de lo que hablaste con el equipo, ' +
+                                `te lo muestro otra vez 👇\n\n${await confirmacion.textoDePregunta(
+                                    datos.capacidad,
+                                    datos.args,
+                                    { idNegocio: conversacion.id_negocio ?? null }
+                                )} Respóndeme sí o no.`,
+                            opciones: [
+                                { id: 'si', etiqueta: 'Sí, confirmo' },
+                                { id: 'no', etiqueta: 'No' },
+                            ],
+                        },
+                    ],
+                    variables: conMemoria(conversacion),
+                    tarea: { nombre: confirmacion.TAREA, datos },
+                    resultado: 'resuelto',
+                    nivel: 'determinista',
+                };
+            }
             if (conversacion.tarea_datos?.pregunta_abierta && !esNo) {
                 const datos = { ...conversacion.tarea_datos, pregunta_abierta: false };
                 if (esAfirmacionConEntrega(texto, datos.args?.tipo_entrega)) {
@@ -2102,7 +2175,8 @@ function crearFlujoRestaurante({
             // el pedido con el cambio, lo que abre una confirmación nueva.
             if (vaAlModeloDuranteLaConfirmacion(texto, conversacion.tarea_datos)) {
                 // Habla de OTRA entrega que la del resumen («¿hacen domicilio?» con un pedido
-                // «para recoger» esperando): ese resumen ya no es lo que quiere, y dejarlo vivo
+                // «para recoger» esperando, o «¿me queda cerca para ir a recoger?» con un
+                // domicilio): ese resumen ya no es lo que quiere, y dejarlo vivo
                 // es dejar un «sí» que crea el pedido equivocado. Zona Burger, 2026-10-05: el
                 // bot pidió la dirección y a la vez «¿lo confirmo?»; el cliente tocó «Sí» y el
                 // domicilio quedó tomado para recoger. Se suelta la confirmación y el modelo
@@ -2124,7 +2198,11 @@ function crearFlujoRestaurante({
                     };
                 }
                 const { tarea: _sinTocar, ...cedido } = delegar(ctx);
-                return { ...cedido, pasos: [paso('confirmacion_pregunta_al_modelo')] };
+                return {
+                    ...cedido,
+                    notaParaElModelo: notaDeLoAnotado(conversacion.tarea_datos),
+                    pasos: [paso('confirmacion_pregunta_al_modelo')],
+                };
             }
             await conIdentidad(ctx);
             const decision = await confirmacion.resolver(ctx, { gate });

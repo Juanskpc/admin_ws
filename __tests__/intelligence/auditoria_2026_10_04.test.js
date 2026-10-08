@@ -177,13 +177,21 @@ describe('el flujo', () => {
             ['¿Lo tienes en combo?', 'DOMICILIO'],
             ['El domicilio siempre me cobran 6 mil', 'DOMICILIO'],
             ['Si. Cambios', 'DOMICILIO'],
-            ['No necesito empaque allá voy a consumir', 'LLEVAR'],
             ['que salsas trae', 'LLEVAR'],
         ])('%p lo contesta el modelo y el pedido sigue esperando', async (texto, tipo) => {
             const d = await decir(crear(), pendiente(tipo), texto);
             expect(d.pasos[0].decision).toBe('confirmacion_pregunta_al_modelo');
             expect(d.respuestas).toEqual([]);
             expect('tarea' in d).toBe(false); // el motor conserva la confirmación
+        });
+
+        // Desde el 2026-10-07 nombrar OTRA entrega que la del resumen lo suelta siempre, no solo
+        // hacia domicilio: el modelo rehace el pedido y el «sí» viejo ya no puede tomar el que no era.
+        test('«No necesito empaque allá voy a consumir» con uno para recoger → se suelta y lo rehace el modelo', async () => {
+            const d = await decir(crear(), pendiente('LLEVAR'), 'No necesito empaque allá voy a consumir');
+            expect(d.pasos[0].decision).toBe('confirmacion_soltada_por_entrega');
+            expect(d.pasos[0].motivo).toMatchObject({ de: 'LLEVAR', a: 'MESA' });
+            expect(d.soltarTarea).toBe(true);
         });
     });
 });

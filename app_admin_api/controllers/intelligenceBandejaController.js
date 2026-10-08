@@ -716,7 +716,8 @@ async function leerConfiguracion(req, res) {
             `SELECT id_negocio, nombre, reactivar_asistente_min,
                     tiempo_estimado_min, tiempo_estimado_max, info_asistente,
                     domicilio_valor_min, domicilio_valor_max, domicilio_nota,
-                    asistente_pausado, asistente_pausado_en
+                    asistente_pausado, asistente_pausado_en,
+                    asistente_mira_stock, controla_inventario
                FROM general.gener_negocio WHERE id_negocio = :idNegocio;`,
             { replacements: { idNegocio }, ...SELECT }
         );
@@ -737,6 +738,10 @@ async function leerConfiguracion(req, res) {
             // Pausa de emergencia: el asistente no contesta a nadie hasta que se reanude.
             asistente_pausado: fila.asistente_pausado === true,
             asistente_pausado_en: fila.asistente_pausado_en ?? null,
+            // ¿El asistente deja de ofrecer lo que no tiene insumos? Decisión propia, aparte
+            // del control de inventario de caja (que viaja solo para que la pantalla avise).
+            asistente_mira_stock: fila.asistente_mira_stock === true,
+            controla_inventario: fila.controla_inventario !== false,
             puede_editar: await esAdministradorDelNegocio(req.usuario.id_usuario, idNegocio),
         });
     } catch (err) {
@@ -748,7 +753,8 @@ async function leerConfiguracion(req, res) {
 /**
  * PUT /admin/intelligence/bandeja/configuracion
  *   { id_negocio, reactivar_asistente_min?, tiempo_estimado_min?, tiempo_estimado_max?,
- *     info_asistente?, domicilio_valor_min?, domicilio_valor_max?, domicilio_nota? }
+ *     info_asistente?, domicilio_valor_min?, domicilio_valor_max?, domicilio_nota?,
+ *     asistente_mira_stock? }
  *   (cada ajuste es independiente; el tiempo estimado es lo que el asistente contesta a
  *   «¿cuánto se demora?», y null lo borra)
  *
@@ -774,7 +780,9 @@ async function guardarConfiguracion(req, res) {
             req.body.domicilio_valor_min !== undefined ||
             req.body.domicilio_valor_max !== undefined ||
             req.body.domicilio_nota !== undefined;
-        if (!traeReactivacion && !traeTiempo && !traeInfo && !traeDomicilio) {
+        // ¿El asistente tiene en cuenta el inventario aunque caja no lo controle? (2026-10-07)
+        const traeStock = req.body.asistente_mira_stock !== undefined;
+        if (!traeReactivacion && !traeTiempo && !traeInfo && !traeDomicilio && !traeStock) {
             return Respuesta.error(res, 'No hay nada que guardar', 400);
         }
 
@@ -791,7 +799,7 @@ async function guardarConfiguracion(req, res) {
 
         const [antes] = await Models.sequelize.query(
             `SELECT reactivar_asistente_min, tiempo_estimado_min, tiempo_estimado_max, info_asistente,
-                    domicilio_valor_min, domicilio_valor_max, domicilio_nota
+                    domicilio_valor_min, domicilio_valor_max, domicilio_nota, asistente_mira_stock
                FROM general.gener_negocio WHERE id_negocio = :idNegocio;`,
             { replacements: { idNegocio }, ...SELECT }
         );
@@ -855,10 +863,27 @@ async function guardarConfiguracion(req, res) {
             Object.assign(replacements, { domicilioMin, domicilioMax, domicilioNota });
         }
 
+        let miraStock = antes.asistente_mira_stock === true;
+        if (traeStock) {
+            miraStock = req.body.asistente_mira_stock === true;
+            cambios.push('asistente_mira_stock = :miraStock');
+            replacements.miraStock = miraStock;
+        }
+
         await Models.sequelize.query(
             `UPDATE general.gener_negocio SET ${cambios.join(', ')} WHERE id_negocio = :idNegocio;`,
             { replacements }
         );
+
+        if (traeStock) {
+            await Audit.registrarEvento({
+                modulo: 'intelligence',
+                accion: 'asistente_mira_stock_configurado',
+                idUsuario: req.usuario.id_usuario,
+                idNegocio,
+                detalle: { antes: antes.asistente_mira_stock === true, despues: miraStock },
+            });
+        }
 
         if (traeReactivacion) {
             await Audit.registrarEvento({
@@ -913,7 +938,12 @@ async function guardarConfiguracion(req, res) {
             });
         }
 
-        const mensaje = traeDomicilio && !traeInfo && !traeTiempo && !traeReactivacion
+        const soloStock = traeStock && !traeDomicilio && !traeInfo && !traeTiempo && !traeReactivacion;
+        const mensaje = soloStock
+            ? (miraStock
+                ? 'El asistente tendrá en cuenta el inventario'
+                : 'El asistente ya no tendrá en cuenta el inventario')
+            : traeDomicilio && !traeInfo && !traeTiempo && !traeReactivacion
             ? (domicilioMin === null && !domicilioNota
                 ? 'El asistente ya no dirá el valor del domicilio'
                 : 'Valor del domicilio guardado')
@@ -936,6 +966,7 @@ async function guardarConfiguracion(req, res) {
             domicilio_valor_min: domicilioMin,
             domicilio_valor_max: domicilioMax,
             domicilio_nota: domicilioNota,
+            asistente_mira_stock: miraStock,
         });
     } catch (err) {
         console.error('Error en bandeja.guardarConfiguracion:', err);

@@ -385,15 +385,18 @@ function crearManejadorEscalera({
                     // nota que le deja el flujo— y la tarea se cierra aunque él no abra otra.
                     const soltar = decision.soltarTarea === true;
                     if (soltar) cesion.motivo.tarea_soltada = true;
+                    // La nota del flujo viaja con o sin soltar: con el pendiente en su
+                    // sitio le recuerda al modelo qué había anotado (2026-10-07).
+                    const conNota = decision.notaParaElModelo
+                        ? `${ctx.texto}\n\n${decision.notaParaElModelo}`
+                        : ctx.texto;
                     const ctxModelo = soltar
                         ? {
                               ...ctx,
                               conversacion: { ...ctx.conversacion, tarea_actual: null, tarea_datos: {} },
-                              texto: decision.notaParaElModelo
-                                  ? `${ctx.texto}\n\n${decision.notaParaElModelo}`
-                                  : ctx.texto,
+                              texto: conNota,
                           }
-                        : ctx;
+                        : { ...ctx, texto: conNota };
                     const contestado = await llm(ctxModelo);
                     const delModelo =
                         soltar && contestado && contestado.tarea === undefined

@@ -88,6 +88,22 @@ function normalizarTexto(texto) {
 }
 
 /**
+ * Con qué opción lee la carta el asistente: `{ miraStock }` según lo que el negocio decidió en
+ * los ajustes del asistente (`cartaService.asistenteMiraStock`), que es aparte del control de
+ * inventario de caja. Si no se puede leer, `{}`: la carta decide como siempre.
+ */
+async function opcionDeStock(idNegocio) {
+    try {
+        return { miraStock: await cartaService.asistenteMiraStock(idNegocio) };
+    } catch (_) {
+        return {};
+    }
+}
+
+/** El nombre sin espacios, guiones ni tildes: «Salchi-limón» y «salchilimon» son lo mismo. */
+const pegado = (t) => normalizarTexto(t).replace(/[^a-z0-9ñ]/g, '');
+
+/**
  * Busca en la carta, y si la frase entera no casa, lo intenta por palabras.
  *
  * ## El fallo que obliga a la segunda pasada
@@ -117,7 +133,8 @@ function normalizarTexto(texto) {
  * aquí sería cambiarle el comportamiento a una pantalla que nadie ha pedido tocar (ADR-009).
  */
 async function buscarEnLaCarta(idNegocio, termino) {
-    const directa = await cartaService.buscarProductos(idNegocio, termino);
+    const stock = await opcionDeStock(idNegocio);
+    const directa = await cartaService.buscarProductos(idNegocio, termino, stock);
 
     const palabras = normalizarTexto(termino)
         .split(/\s+/)
@@ -126,7 +143,7 @@ async function buscarEnLaCarta(idNegocio, termino) {
     let segunda = [];
     if (palabras.length >= 2) {
         const ancla = palabras.slice().sort((a, b) => b.length - a.length)[0];
-        const candidatos = await cartaService.buscarProductos(idNegocio, ancla);
+        const candidatos = await cartaService.buscarProductos(idNegocio, ancla, stock);
 
         segunda = candidatos.filter((c) => {
             const donde = normalizarTexto(`${c.nombre} ${c.descripcion || ''}`);
@@ -168,24 +185,61 @@ async function agotadosQueCoinciden(idNegocio, termino) {
             .split(/\s+/)
             .filter((w) => w.length >= 3 && !RELLENO.has(w))
             .slice(0, 4);
+        const stock = await opcionDeStock(idNegocio);
         const agotados = new Map();
-        for (const t of [termino, ...palabras]) {
+        /** Lo que casa con `t` y hoy no se vende; `cumple` afina sobre el nombre. */
+        const mirar = async (t, cumple = () => true) => {
             const [todos, vendibles] = await Promise.all([
                 cartaService.buscarProductos(idNegocio, t, { includeDisabled: true }),
-                cartaService.buscarProductos(idNegocio, t),
+                cartaService.buscarProductos(idNegocio, t, stock),
             ]);
             // Agotado = está en la vista completa y NO en la que se puede vender ahora.
             const seVende = new Set(vendibles.map((p) => p.id_producto));
             for (const p of todos) {
-                if (p.visible !== false && !seVende.has(p.id_producto)) agotados.set(p.id_producto, p.nombre);
+                if (p.visible !== false && !seVende.has(p.id_producto) && cumple(p)) {
+                    agotados.set(p.id_producto, p.nombre);
+                }
             }
+        };
+        for (const t of [termino, ...palabras]) {
+            await mirar(t);
             if (t === termino && agotados.size > 0) break;
+        }
+        // «salchilimon» no está, letra por letra, dentro de «Salchi-limón», y el servicio
+        // compara así. Zona Burger, 2026-10-07: el negocio desactivó la Salchi-limón y a
+        // «¿tienes disponible salchilimon?» se le contestó dos veces «no encuentro Salchilimon
+        // en la carta». Se trae lo que empieza igual y se compara el nombre pegado.
+        if (agotados.size === 0) {
+            for (const w of palabras.filter((p) => p.length >= 5)) {
+                await mirar(w.slice(0, 4), (p) => pegado(p.nombre).includes(pegado(w)));
+            }
         }
         return [...agotados.values()].slice(0, MAX_PRODUCTOS);
     } catch (error) {
         console.warn(`[buscar_producto] no se pudieron leer los agotados: ${error.message}`);
         return [];
     }
+}
+
+/**
+ * Lo que `buscar_producto` añade cuando lo pedido existe pero hoy no se vende: los nombres y
+ * cómo decirlo. La frase va aquí, pegada al dato, para que el modelo no improvise un «no
+ * encuentro» (pedido del dueño, 2026-10-07: «agotado por hoy», amable y corto).
+ */
+async function conAgotados(idNegocio, termino, productos, terminoUsado) {
+    if (!noTraeLoPedido(productos, terminoUsado)) return {};
+    const agotados = (await agotadosQueCoinciden(idNegocio, termino)).filter(
+        (nombre) => !productos.some((p) => p.nombre === nombre)
+    );
+    if (agotados.length === 0) return { agotados_ahora: agotados };
+    return {
+        agotados_ahora: agotados,
+        nota_agotado:
+            'Lo que pidió SÍ está en la carta, pero hoy se agotó. Díselo corto y amable, por ' +
+            'ejemplo: «Hoy se nos agotó la *Salchi-limón* 🙏 ¿Te provoca otra cosa?». Si son ' +
+            'varios tamaños del mismo plato, nómbralo una sola vez. Nunca digas «no encuentro», ' +
+            '«no me aparece» ni «no está en la carta».',
+    };
 }
 
 /**
@@ -207,6 +261,54 @@ function noTraeLoPedido(productos, termino) {
     return !productos.some((p) => {
         const nombre = normalizarTexto(p.nombre);
         return nombre.includes(ancla) || nombre.replace(/[^a-z0-9ñ]/g, '').includes(ancla);
+    });
+}
+
+/**
+ * Dónde empieza el pedido de AHORA dentro del chat: después del último «pedido tomado», del
+ * último saludo con la carta o de la última cancelación.
+ *
+ * El historial son los últimos mensajes de la conversación, y la conversación de WhatsApp no se
+ * acaba nunca: un «para recoger» de hace cinco días seguía contando. Zona Burger, 2026-10-07:
+ * a «una salchilimón personal» se le armó el pedido «para recoger» sin preguntar, porque la
+ * clienta lo había dicho el 2 de octubre; esta vez lo quería a domicilio (ORD-7876).
+ */
+const FRONTERA_DE_PEDIDO = /tu pedido quedo (tomado|para servir)|lo sume a la cuenta de tu mesa|te saluda \*|tu pedido fue cancelado/;
+function pedidoEnCurso(hilo) {
+    let desde = 0;
+    hilo.forEach((m, i) => {
+        if (m.rol !== 'cliente' && FRONTERA_DE_PEDIDO.test(normalizarTexto(m.texto))) desde = i + 1;
+    });
+    return hilo.slice(desde);
+}
+
+/** Lo que NO contesta a «¿a domicilio, para recoger o para comer aquí?»: otro producto, o un sí. */
+const SIGUE_PIDIENDO = /^(?:(?:y|mas|tambien|ademas)\s+)?(?:\d+|un|una|unas|unos|dos|tres|cuatro|cinco|media)\s+[a-zñ]{3,}/;
+const SI_SUELTO = /^(si|sip|sii+|claro|ok|okay|dale|listo|bueno|vale|de una|por favor|porfa)(\s+(si|claro|por favor|porfa|gracias|senor|senora|veci))*$/;
+
+/**
+ * ¿Se le preguntó cómo lo recibe Y contestó? O ya vio un resumen con esa misma entrega, que es
+ * lo que hay cuando solo añade un producto o corrige el nombre.
+ *
+ * Antes bastaba con que el asistente hubiera preguntado. Zona Burger, 2026-10-07: el cliente
+ * siguió dictando productos sin contestar, el modelo eligió «para servir» y se le reservó una
+ * mesa a un domicilio (ORD-7878). Un «sí» a una pregunta de tres opciones tampoco contesta
+ * (2026-10-06: «¿para recoger, a domicilio o para comer aquí?» → «Si» → para recoger).
+ */
+function contestoComoLoRecibe(enCurso, paraServir) {
+    const resumen = paraServir ? /confirmo tu pedido.*para servirlo/ : /confirmo tu pedido.*para recogerlo/;
+    let pregunta = -1;
+    for (let i = 0; i < enCurso.length; i++) {
+        if (enCurso[i].rol === 'cliente') continue;
+        const t = normalizarTexto(enCurso[i].texto);
+        if (resumen.test(t)) return true;
+        if (/recog/.test(t) && String(enCurso[i].texto).includes('?')) pregunta = i;
+    }
+    if (pregunta < 0) return false;
+    return enCurso.slice(pregunta + 1).some((m) => {
+        if (m.rol !== 'cliente') return false;
+        const t = normalizarTexto(m.texto).replace(/[^a-z0-9ñ\s]/g, ' ').replace(/\s+/g, ' ').trim();
+        return t.length > 0 && !SIGUE_PIDIENDO.test(t) && !SI_SUELTO.test(t);
     });
 }
 
@@ -456,7 +558,7 @@ async function buscarPorCategoriaYNombre(idNegocio, termino) {
     const exigidas = palabras.filter((w) => !TAMANO_BASICO.has(w));
     if (exigidas.length === 0) return [];
 
-    const categorias = await cartaService.getCartaPublicaCompleta(idNegocio);
+    const categorias = await cartaService.getCartaPublicaCompleta(idNegocio, await opcionDeStock(idNegocio));
     const encontrados = [];
     for (const cat of categorias || []) {
         const palabrasCategoria = normalizarTexto(cat.nombre).split(/\s+/);
@@ -655,7 +757,7 @@ function registrarCapacidades() {
             // sigue disponible, con id_categoria, para cuando el cliente SÍ pregunta por una
             // parte concreta.
             if (!args.id_categoria) {
-                const carta = await cartaService.getCartaPublica(idNegocio);
+                const carta = await cartaService.getCartaPublica(idNegocio, await opcionDeStock(idNegocio));
 
                 const categorias = carta
                     .map((c) => ({
@@ -700,7 +802,8 @@ function registrarCapacidades() {
 
             const productos = await cartaService.getProductosPublicosByCategoria(
                 idNegocio,
-                args.id_categoria
+                args.id_categoria,
+                await opcionDeStock(idNegocio)
             );
             return {
                 id_categoria: args.id_categoria,
@@ -779,13 +882,7 @@ function registrarCapacidades() {
                 // Solo cuando no hay nada que vender: así «no tenemos» y «se acabó» dejan de ser
                 // la misma respuesta (Zona Burger, 2026-10-02: la Discordia, agotada por un
                 // stock en −321, se le dijo a una clienta que «no está en la carta»).
-                ...(noTraeLoPedido(productos, terminoUsado)
-                    ? {
-                          agotados_ahora: (await agotadosQueCoinciden(idNegocio, args.termino)).filter(
-                              (nombre) => !productos.some((p) => p.nombre === nombre)
-                          ),
-                      }
-                    : {}),
+                ...(await conAgotados(idNegocio, args.termino, productos, terminoUsado)),
             };
         },
     });
@@ -1352,9 +1449,20 @@ function registrarCapacidades() {
                 const paraServir = args?.tipo_entrega === 'MESA' && !args?.id_mesa;
                 if (args?.tipo_entrega !== 'LLEVAR' && !paraServir) return null;
                 const dicho = paraServir ? HABLA_DE_COMER_AQUI : HABLA_DE_RECOGER;
-                const loDijo = cliente.some((t) => dicho.test(normalizarTexto(t)));
-                const sePregunto = asistente.some((t) => /recog/.test(normalizarTexto(t)));
-                if (loDijo || sePregunto) return null;
+                // Con el chat en orden se mira solo el pedido en curso, y que se le haya
+                // preguntado no basta: tiene que haber contestado (ver `pedidoEnCurso` y
+                // `contestoComoLoRecibe`). Sin el orden —quien llama sin `hilo`— como antes.
+                if (hilo.length > 0) {
+                    const enCurso = pedidoEnCurso(hilo);
+                    const loDijoAhora = enCurso.some(
+                        (m) => m.rol === 'cliente' && dicho.test(normalizarTexto(m.texto))
+                    );
+                    if (loDijoAhora || contestoComoLoRecibe(enCurso, paraServir)) return null;
+                } else {
+                    const loDijo = cliente.some((t) => dicho.test(normalizarTexto(t)));
+                    const sePregunto = asistente.some((t) => /recog/.test(normalizarTexto(t)));
+                    if (loDijo || sePregunto) return null;
+                }
                 return {
                     codigo: 'ENTREGA_SIN_DECIR',
                     mensaje:
