@@ -224,3 +224,80 @@ describe('la señal «whatsapp» al crear un pedido del bot', () => {
         expect(avisos.length).toBe(0);
     });
 });
+
+// ── El cliente cambia un pedido ya confirmado (2026-10-07) ───────────────────────────────────
+// Zona Burger, ORD-7888: confirmado a $31.500; quince minutos después el cliente pidió «otras
+// alitas» por WhatsApp, el asistente las agregó y el pedido quedó en $47.000 sin que la tarjeta
+// de Despacho —ya confirmada— dijera nada.
+describe('estadoDeConfirmacion: la regla', () => {
+    const antes = new Date('2026-10-07T20:41:00');
+    const despues = new Date('2026-10-07T20:55:00');
+    const estado = (deWhatsapp, confirmadoEn, cambioClienteEn) =>
+        pedidoService.estadoDeConfirmacion({ deWhatsapp, confirmadoEn, cambioClienteEn });
+
+    it('del bot y sin confirmar: pendiente, y no es «un cambio» aunque ya le hayan agregado algo', () => {
+        expect(estado(true, null, null)).toEqual({ pendiente: true, cambio: false });
+        expect(estado(true, null, despues)).toEqual({ pendiente: true, cambio: false });
+    });
+
+    it('EL CASO: confirmado y el cliente le agrega algo después → cambio por confirmar', () => {
+        expect(estado(true, antes, despues)).toEqual({ pendiente: true, cambio: true });
+    });
+
+    it('confirmado DESPUÉS del cambio: ya no hay nada pendiente', () => {
+        expect(estado(true, despues, antes)).toEqual({ pendiente: false, cambio: false });
+    });
+
+    it('lo tomó una persona y el cliente le agregó algo por WhatsApp: también hay un cambio que ver', () => {
+        expect(estado(false, null, despues)).toEqual({ pendiente: true, cambio: true });
+        expect(estado(false, null, null)).toEqual({ pendiente: false, cambio: false });
+    });
+});
+
+describe('un cambio del cliente vuelve a pedir confirmación en Despacho', () => {
+    const marcarCambio = (id) =>
+        sequelize.query(
+            `UPDATE restaurante.pedid_orden SET cambio_cliente_en = now() + interval '1 minute' WHERE id_orden = :o;`,
+            { replacements: { o: id } }
+        );
+
+    it('confirmado → el cliente lo cambia → pendiente otra vez, como cambio; confirmar lo cierra', async () => {
+        // Confirmado hace un minuto: el cambio de abajo tiene que caer DESPUÉS.
+        const id = await crearOrden('ORD-9911', idUsuarioAsistente, new Date(Date.now() - 60_000));
+        expect((await delDespacho(id)).pendiente_confirmar).toBe(false);
+
+        await marcarCambio(id);
+        const cambiada = await delDespacho(id);
+        expect(cambiada.pendiente_confirmar).toBe(true);
+        expect(cambiada.cambio_por_confirmar).toBe(true);
+
+        // El cambio se «hizo» un minuto en el futuro: confirmar tiene que quedar después de él.
+        await sequelize.query(
+            `UPDATE restaurante.pedid_orden SET cambio_cliente_en = now() - interval '1 second' WHERE id_orden = :o;`,
+            { replacements: { o: id } }
+        );
+        const r = await pedidoService.confirmarPedidoAsistente({ idNegocio, idOrden: id, idUsuario: idUsuarioPersona });
+        expect(r.ya_confirmado).toBe(false);
+        const vista = await delDespacho(id);
+        expect(vista.pendiente_confirmar).toBe(false);
+        expect(vista.cambio_por_confirmar).toBe(false);
+    });
+
+    it('una orden que tomó una persona y el cliente cambió por WhatsApp también se puede confirmar', async () => {
+        const id = await crearOrden('ORD-9912', idUsuarioPersona);
+        await sequelize.query(
+            `UPDATE restaurante.pedid_orden SET cambio_cliente_en = now() - interval '1 second' WHERE id_orden = :o;`,
+            { replacements: { o: id } }
+        );
+        const antes = (await pedidoService.getOrdenesDespacho({ idNegocio, idUsuario: idUsuarioPersona }))
+            .find((o) => o.id_orden === id);
+        expect(antes.de_whatsapp).toBe(false);
+        expect(antes.cambio_por_confirmar).toBe(true);
+
+        const r = await pedidoService.confirmarPedidoAsistente({ idNegocio, idOrden: id, idUsuario: idUsuarioPersona });
+        expect(r.ya_confirmado).toBe(false);
+        const despues = (await pedidoService.getOrdenesDespacho({ idNegocio, idUsuario: idUsuarioPersona }))
+            .find((o) => o.id_orden === id);
+        expect(despues.pendiente_confirmar).toBe(false);
+    });
+});

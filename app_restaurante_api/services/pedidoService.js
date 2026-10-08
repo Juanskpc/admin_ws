@@ -869,6 +869,14 @@ async function agregarItemsPorCliente(
     // decisión que `tomar_pedido`, que tampoco pregunta impuesto.
     await recalcularTotalesOrden({ idOrden, porcentajeImpuesto: 0, transaction });
 
+    // El cliente cambió un pedido que el negocio pudo haber confirmado ya: Despacho vuelve a
+    // pedir que alguien lo mire (`estadoDeConfirmacion`). Zona Burger, 2026-10-07: ORD-7888 pasó
+    // de $31.500 a $47.000 quince minutos después de confirmado, sin que nada lo señalara.
+    await Models.PedidOrden.update(
+        { cambio_cliente_en: new Date() },
+        { where: { id_orden: idOrden, id_negocio: idNegocio }, transaction }
+    );
+
     avisarTrasCommit(transaction, idNegocio, TEMAS.PEDIDOS, TEMAS.MESAS, TEMAS.COCINA);
     return getOrdenById(idOrden, { transaction });
 }
@@ -1139,7 +1147,20 @@ async function getOrdenesDespacho({ idNegocio, idUsuario }) {
         // Sin confirmar = lo tomó el bot y nadie del negocio lo ha dado por visto. Se deduce y no
         // se guarda (ver `migrate_restaurante_confirmacion_asistente.js`); en una orden que tomó
         // una persona no significa nada, por eso depende de `de_whatsapp`.
-        plano.pendiente_confirmar = plano.de_whatsapp && !plano.confirmado_en;
+        //
+        // Desde 2026-10-07 también vuelve a estar pendiente cuando el cliente CAMBIA el pedido
+        // por WhatsApp después de confirmado (`cambio_cliente_en`), y eso sí puede pasarle a una
+        // orden que tomó una persona. `cambio_por_confirmar` le dice a la pantalla cuál de los
+        // dos casos es. Sin el asistente habilitado no hay nada de esto.
+        const confirmacion = asistenteHabilitado
+            ? estadoDeConfirmacion({
+                  deWhatsapp: plano.de_whatsapp,
+                  confirmadoEn: plano.confirmado_en,
+                  cambioClienteEn: plano.cambio_cliente_en,
+              })
+            : { pendiente: false, cambio: false };
+        plano.pendiente_confirmar = confirmacion.pendiente;
+        plano.cambio_por_confirmar = confirmacion.cambio;
         return plano;
     });
 
@@ -2190,6 +2211,25 @@ async function cerrarOrden(idOrden, { idUsuario, idMetodoPago, pagos, idCuenta =
 }
 
 /**
+ * ¿Hay algo en esta orden que una persona del negocio todavía no ha dado por visto?
+ *
+ *  - `pendiente`: sale el botón de confirmar en Despacho.
+ *  - `cambio`: lo que falta por ver NO es el pedido entero sino un cambio del cliente —el
+ *    negocio ya lo había confirmado (o lo tomó una persona) y después el cliente le agregó algo
+ *    por WhatsApp—. La pantalla lo dice con otras palabras («Confirmar cambio»).
+ *
+ * Un pedido del asistente que nadie ha confirmado es `pendiente` sin `cambio`, aunque el cliente
+ * ya le haya agregado algo: lo que falta por ver es todo.
+ */
+function estadoDeConfirmacion({ deWhatsapp, confirmadoEn, cambioClienteEn }) {
+    const confirmado = confirmadoEn ? new Date(confirmadoEn).getTime() : null;
+    const cambiado = cambioClienteEn ? new Date(cambioClienteEn).getTime() : null;
+    const nuevoSinVer = Boolean(deWhatsapp) && confirmado === null;
+    const cambio = !nuevoSinVer && cambiado !== null && (confirmado === null || cambiado > confirmado);
+    return { pendiente: nuevoSinVer || cambio, cambio };
+}
+
+/**
  * Una persona del negocio confirma un pedido que tomó el asistente de WhatsApp.
  *
  * «Confirmar» aquí es **dar por visto**: el pedido ya existe, ya está en la caja y ya lo ve
@@ -2217,7 +2257,15 @@ async function confirmarPedidoAsistente({ idNegocio, idOrden, idUsuario }) {
         }
 
         const idAsistente = await usuarioAsistenteDao.buscar(idNegocio, { transaction: t });
-        if (idAsistente == null || orden.id_usuario !== idAsistente) {
+        const deWhatsapp = idAsistente != null && orden.id_usuario === idAsistente;
+        // Un cambio que el cliente hizo por WhatsApp también se confirma, y eso le puede pasar a
+        // una orden que tomó una persona: ahí sí hay algo que dar por visto.
+        const { pendiente, cambio } = estadoDeConfirmacion({
+            deWhatsapp,
+            confirmadoEn: orden.confirmado_en,
+            cambioClienteEn: orden.cambio_cliente_en,
+        });
+        if (!deWhatsapp && !cambio) {
             const e = new Error('Este pedido lo tomó una persona del negocio, no hay nada que confirmar.');
             e.code = 'PEDIDO_NO_ES_DE_WHATSAPP'; e.statusCode = 409;
             throw e;
@@ -2227,7 +2275,7 @@ async function confirmarPedidoAsistente({ idNegocio, idOrden, idUsuario }) {
             e.code = 'ORDEN_NO_ABIERTA'; e.statusCode = 409;
             throw e;
         }
-        if (orden.confirmado_en) {
+        if (!pendiente) {
             return { id_orden: orden.id_orden, confirmado_en: orden.confirmado_en, ya_confirmado: true };
         }
 
@@ -2241,6 +2289,7 @@ async function confirmarPedidoAsistente({ idNegocio, idOrden, idUsuario }) {
 
 module.exports = {
     crearOrden,
+    estadoDeConfirmacion,
     confirmarPedidoAsistente,
     agregarItemsOrden,
     agregarItemsPorCliente,

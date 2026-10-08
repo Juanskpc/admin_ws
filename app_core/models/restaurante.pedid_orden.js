@@ -63,6 +63,10 @@ module.exports = (sequelize, DataTypes) => {
         // tomó el asistente de WhatsApp (ahí NULL = «pendiente de confirmar»); en las demás se
         // queda nulo y no se lee. Ver `migrate_restaurante_confirmacion_asistente.js`.
         confirmado_en:       { type: DataTypes.DATE, allowNull: true },
+        // Cuándo el cliente cambió la orden por el asistente de WhatsApp por última vez (hoy:
+        // agregarle productos). Si es posterior a `confirmado_en`, Despacho vuelve a pedir que
+        // alguien lo confirme. Ver `migrate_restaurante_cambio_cliente.js`.
+        cambio_cliente_en:   { type: DataTypes.DATE, allowNull: true },
     }, {
         tableName: 'pedid_orden',
         schema: 'restaurante',
