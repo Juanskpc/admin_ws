@@ -291,6 +291,10 @@ app.use(errorHandler);
             const cobranzaScheduler = require('./app_admin_api/services/cobranzaScheduler');
             cobranzaScheduler.iniciar();
 
+            // Reintentos y reconciliación de facturación electrónica. Sin negocios configurados no
+            // hace nada; se apaga con FE_WORKER_ENABLED=false.
+            require('./app_core/facturacion/emisionScheduler').iniciar();
+
             // Importación de calendarios de Airbnb/Booking para alojamientos (cada 15 min). Sin
             // calendarios configurados no hace nada; se apaga con RESERVA_ICAL_ENABLED=false.
             require('./app_reserva_api/services/estancia/icalService').iniciar();

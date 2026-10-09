@@ -1,0 +1,607 @@
+'use strict';
+/**
+ * El servicio de emisión: convierte un pedido cobrado en un documento fiscal, lo envía al
+ * proveedor y lo reintenta hasta que quede aceptado o haga falta una persona.
+ * R4.3 de `docs/plan-fe-restaurante.md`.
+ *
+ * ## La regla que manda sobre todas las demás (D4)
+ *
+ * **La venta nunca espera ni falla por la facturación.** Todo esto ocurre después del commit del
+ * cobro, en transacciones propias, y `alCobrarPedido` —lo único que llama la vertical— no lanza
+ * jamás. Si aquí se rompe algo, el documento queda en `ERROR` o, en el peor caso, ni se crea: la
+ * reconciliación recoge luego los pedidos cobrados que se quedaron sin documento.
+ *
+ * ## Por qué reintentar no duplica
+ *
+ * El documento se crea una sola vez por pedido (`uq_fedoc_origen`) y guarda su
+ * `codigo_referencia`. Factus devuelve el mismo documento si se le repite una referencia
+ * (comprobado en el sandbox, §5 del plan), así que reintentar con la misma es seguro. Solo se
+ * cambia cuando el documento fue **rechazado** y se corrige: esa referencia quedó gastada.
+ *
+ * ## Una emisión a la vez por negocio (D14)
+ *
+ * En Factus una factura pendiente bloquea las siguientes de la misma cuenta. El reclamo del
+ * documento es atómico en la base y, además, las emisiones de un mismo negocio se encadenan en
+ * memoria.
+ */
+const crypto = require('crypto');
+
+const Models = require('../models/conection');
+const datosFiscales = require('./datosFiscales');
+const configuracionDao = require('./configuracionDao');
+const origenRestaurante = require('./origenes/restaurante');
+const { construirFactura } = require('./construirFactura');
+const { normalizarComprador } = require('./comprador');
+const { CONSUMIDOR_FINAL, topeConsumidorFinal } = require('./constantes');
+const { getProveedor } = require('./proveedores');
+
+const sequelize = Models.sequelize;
+const SELECT = sequelize.QueryTypes.SELECT;
+
+/** Minutos hasta el siguiente intento, según cuántos van. Después del último, espera a una persona. */
+const BACKOFF_MIN = [1, 5, 15, 60, 360];
+const ORIGEN = { vertical: 'RESTAURANTE', tipo: 'PEDIDO' };
+
+function fallo(mensaje, code, statusCode) {
+    const e = new Error(mensaje);
+    e.code = code;
+    e.statusCode = statusCode;
+    return e;
+}
+
+const json = (v) => JSON.stringify(v ?? null);
+
+async function leerDocumento(idDocumento, transaction) {
+    const filas = await sequelize.query(
+        `SELECT * FROM facturacion.fe_documento WHERE id_documento = :idDocumento;`,
+        { replacements: { idDocumento }, transaction, type: SELECT }
+    );
+    return filas[0] || null;
+}
+
+async function leerLineas(idDocumento) {
+    const filas = await sequelize.query(
+        `SELECT * FROM facturacion.fe_documento_linea WHERE id_documento = :idDocumento ORDER BY orden;`,
+        { replacements: { idDocumento }, type: SELECT }
+    );
+    // numeric llega como texto; el adaptador espera números.
+    return filas.map((l) => ({
+        ...l,
+        cantidad: Number(l.cantidad),
+        precio_neto: Number(l.precio_neto),
+        tarifa_impuesto: Number(l.tarifa_impuesto),
+    }));
+}
+
+/** UPDATE de un documento con los campos dados; devuelve la fila. */
+async function actualizarDocumento(idDocumento, campos, transaction) {
+    const asignaciones = Object.keys(campos).map((c) =>
+        ['adquiriente', 'payload', 'respuesta', 'avisos', 'pagos'].includes(c) ? `${c} = :${c}::jsonb` : `${c} = :${c}`
+    );
+    const filas = await sequelize.query(
+        `UPDATE facturacion.fe_documento SET ${asignaciones.join(', ')}, actualizado_en = now()
+          WHERE id_documento = :idDocumento RETURNING *;`,
+        { replacements: { idDocumento, ...campos }, transaction, type: SELECT }
+    );
+    return filas[0] || null;
+}
+
+function referenciaNueva(idNegocio, idOrden, ambiente) {
+    // En PRUEBAS todas las bases de desarrollo emiten contra la MISMA cuenta del sandbox, y como
+    // Factus devuelve el documento existente cuando se repite una referencia, el pedido 10 de una
+    // base recibiría sin error la factura del pedido 10 de otra. El sufijo lo impide. En
+    // producción cada negocio tiene su cuenta y la referencia es legible tal cual.
+    if (ambiente === 'PRUEBAS') return `EAP${idNegocio}-FV-${idOrden}-${crypto.randomBytes(4).toString('hex')}`;
+    return `EA${idNegocio}-FV-${idOrden}`;
+}
+
+// ─── a) Crear el documento ─────────────────────────────────────────────────────────────────
+
+async function buscarPorPedido(idNegocio, idOrden, transaction) {
+    const filas = await sequelize.query(
+        `SELECT * FROM facturacion.fe_documento
+          WHERE id_negocio = :idNegocio AND origen_vertical = :vertical AND origen_tipo = :tipo
+            AND origen_id = :origenId AND tipo = 'FV';`,
+        { replacements: { idNegocio, ...ORIGEN, origenId: String(idOrden) }, transaction, type: SELECT }
+    );
+    return filas[0] || null;
+}
+
+/**
+ * Crea el documento de un pedido cobrado, si el negocio factura. Idempotente (D5): llamarlo dos
+ * veces para el mismo pedido devuelve el mismo documento.
+ *
+ * @returns {Promise<object|null>} la fila de `fe_documento`, o `null` si no hay nada que facturar.
+ */
+async function crearDocumentoPedido({ idOrden, comprador = null, idUsuario = null }) {
+    // Lo primero y lo más barato: casi ningún negocio factura, y a esos el cobro no les puede
+    // costar más que esta consulta.
+    const activos = await sequelize.query(
+        `SELECT o.id_negocio
+           FROM restaurante.pedid_orden o
+           JOIN facturacion.fe_configuracion c ON c.id_negocio = o.id_negocio
+          WHERE o.id_orden = :idOrden AND c.estado IN (:estados);`,
+        { replacements: { idOrden, estados: configuracionDao.ESTADOS_QUE_EMITEN }, type: SELECT }
+    );
+    if (activos.length === 0) return null;
+
+    const pedido = await origenRestaurante.leerPedido(idOrden);
+    if (!pedido || !pedido.cobrado || pedido.anulado) return null;
+
+    const { facturar, config } = await configuracionDao.debeFacturar(pedido.id_negocio);
+    if (!facturar) return null;
+
+    const existente = await buscarPorPedido(pedido.id_negocio, idOrden);
+    if (existente) {
+        if (existente.estado === 'PENDIENTE_DATOS' && comprador) {
+            return completarComprador(existente.id_documento, comprador);
+        }
+        return existente;
+    }
+
+    // Un comprador mal escrito no puede convertirse en «consumidor final» por descarte: el
+    // documento espera a que la caja lo corrija.
+    let adquiriente = CONSUMIDOR_FINAL;
+    let errorComprador = null;
+    try {
+        adquiriente = normalizarComprador(comprador) ?? CONSUMIDOR_FINAL;
+    } catch (err) {
+        if (err.code !== 'FE_COMPRADOR_INVALIDO') throw err;
+        errorComprador = err.message;
+    }
+
+    let calculo = null;
+    let errorCalculo = null;
+    try {
+        calculo = construirFactura({
+            items: pedido.items,
+            domicilio: pedido.valor_domicilio,
+            impuestoDomicilio: pedido.impuestoDomicilio,
+            descuento: pedido.descuento,
+            totalPedido: pedido.total,
+            pagos: pedido.pagos,
+        });
+    } catch (err) {
+        // Se crea igual, en ERROR, para que aparezca en la pestaña Facturas y alguien lo vea.
+        errorCalculo = err.message;
+    }
+
+    let estado = 'EN_COLA';
+    if (errorCalculo) estado = 'ERROR';
+    else if (errorComprador) estado = 'PENDIENTE_DATOS';
+    else if (adquiriente.consumidor_final && calculo.total > topeConsumidorFinal()) estado = 'PENDIENTE_DATOS'; // D10
+
+    const emisor = await datosFiscales.obtener(pedido.id_negocio);
+
+    return sequelize.transaction(async (t) => {
+        const insertadas = await sequelize.query(
+            `INSERT INTO facturacion.fe_documento
+                 (id_negocio, tipo, estado, ambiente, proveedor, origen_vertical, origen_tipo, origen_id,
+                  origen_referencia, codigo_referencia, emisor, adquiriente, pagos,
+                  subtotal, total_impuestos, total, ajuste_redondeo, ultimo_error, creado_por)
+             VALUES (:idNegocio, 'FV', :estado, :ambiente, :proveedor, :vertical, :tipo, :origenId,
+                     :origenReferencia, :codigoReferencia, :emisor::jsonb, :adquiriente::jsonb, :pagos::jsonb,
+                     :subtotal, :totalImpuestos, :total, :ajuste, :ultimoError, :idUsuario)
+             ON CONFLICT ON CONSTRAINT uq_fedoc_origen DO NOTHING
+             RETURNING *;`,
+            {
+                replacements: {
+                    idNegocio: pedido.id_negocio,
+                    estado,
+                    ambiente: config.ambiente,
+                    proveedor: config.proveedor,
+                    ...ORIGEN,
+                    origenId: String(idOrden),
+                    origenReferencia: pedido.numero_orden,
+                    codigoReferencia: referenciaNueva(pedido.id_negocio, idOrden, config.ambiente),
+                    emisor: json(emisor),
+                    adquiriente: json(adquiriente),
+                    pagos: json(calculo?.pagos ?? []),
+                    subtotal: calculo?.subtotal ?? 0,
+                    totalImpuestos: calculo?.total_impuestos ?? 0,
+                    total: calculo?.total ?? pedido.total,
+                    ajuste: calculo?.ajuste_redondeo ?? 0,
+                    ultimoError: errorCalculo || errorComprador,
+                    idUsuario,
+                },
+                transaction: t,
+                type: SELECT,
+            }
+        );
+        // Sin fila: otro proceso lo creó entre la comprobación y el INSERT. Es el mismo documento.
+        if (insertadas.length === 0) return buscarPorPedido(pedido.id_negocio, idOrden, t);
+
+        const doc = insertadas[0];
+        for (const l of calculo?.lineas ?? []) {
+            await sequelize.query(
+                `INSERT INTO facturacion.fe_documento_linea
+                     (id_documento, id_negocio, orden, codigo, descripcion, cantidad, precio_bruto, precio_neto,
+                      codigo_impuesto, tarifa_impuesto, base, impuesto, total, unidad_medida, es_domicilio)
+                 VALUES (:idDocumento, :idNegocio, :orden, :codigo, :descripcion, :cantidad, :precio_bruto,
+                         :precio_neto, :codigo_impuesto, :tarifa_impuesto, :base, :impuesto, :total,
+                         :unidad_medida, :es_domicilio);`,
+                {
+                    replacements: {
+                        idDocumento: doc.id_documento,
+                        idNegocio: pedido.id_negocio,
+                        orden: l.orden,
+                        codigo: String(l.codigo).slice(0, 50),
+                        descripcion: String(l.descripcion).slice(0, 300),
+                        cantidad: l.cantidad,
+                        precio_bruto: l.precio_bruto,
+                        precio_neto: l.precio_neto,
+                        codigo_impuesto: l.codigo_impuesto,
+                        tarifa_impuesto: l.tarifa_impuesto,
+                        base: l.base,
+                        impuesto: l.impuesto,
+                        total: l.total,
+                        unidad_medida: l.unidad_medida,
+                        es_domicilio: Boolean(l.es_domicilio),
+                    },
+                    transaction: t,
+                }
+            );
+        }
+        return doc;
+    });
+}
+
+// ─── b) Procesar ───────────────────────────────────────────────────────────────────────────
+
+/** id_negocio → la promesa de la última emisión encolada de ese negocio. */
+const candados = new Map();
+
+function enSerie(idNegocio, tarea) {
+    const anterior = candados.get(idNegocio) || Promise.resolve();
+    const esta = anterior.catch(() => {}).then(tarea);
+    candados.set(idNegocio, esta);
+    // Sin esto el mapa crecería con cada negocio que haya emitido alguna vez.
+    const limpiar = () => candados.get(idNegocio) === esta && candados.delete(idNegocio);
+    esta.then(limpiar, limpiar);
+    return esta;
+}
+
+function proximoIntento(intentos) {
+    const minutos = BACKOFF_MIN[intentos - 1];
+    return minutos === undefined ? null : new Date(Date.now() + minutos * 60000);
+}
+
+async function registrarIntento(doc, r, duracionMs) {
+    await sequelize.query(
+        `INSERT INTO facturacion.fe_intento
+             (id_documento, id_negocio, duracion_ms, http_status, resultado, mensaje, respuesta)
+         VALUES (:idDocumento, :idNegocio, :duracionMs, :httpStatus, :resultado, :mensaje, :respuesta::jsonb);`,
+        {
+            replacements: {
+                idDocumento: doc.id_documento,
+                idNegocio: doc.id_negocio,
+                duracionMs,
+                httpStatus: r.httpStatus ?? null,
+                resultado: r.resultado,
+                mensaje: r.mensaje ?? null,
+                respuesta: json(r.respuesta),
+            },
+        }
+    );
+}
+
+function aceptar(doc, r) {
+    return actualizarDocumento(doc.id_documento, {
+        estado: 'ACEPTADO',
+        numero: r.numero,
+        cufe: r.cufe,
+        fecha_validacion: r.fechaValidacion,
+        url_publica: r.urlPublica,
+        url_qr: r.urlQr,
+        // En una consulta por referencia no hay payload: se conserva el que hubiera.
+        payload: json(r.payload ?? doc.payload),
+        respuesta: json(r.respuesta),
+        avisos: json(r.avisos),
+        proximo_intento_en: null,
+        ultimo_error: null,
+    });
+}
+
+async function emitirReclamado(doc) {
+    const proveedor = getProveedor(doc.proveedor);
+    const [credenciales, config, rango, lineas] = await Promise.all([
+        configuracionDao.obtenerCredenciales(doc.id_negocio),
+        configuracionDao.obtener(doc.id_negocio),
+        configuracionDao.rangoEnUso(doc.id_negocio, 'FV'),
+        leerLineas(doc.id_documento),
+    ]);
+    if (!rango) throw fallo('El negocio no tiene un rango de numeración en uso.', 'FE_SIN_RANGO', 409);
+    if (lineas.length === 0) {
+        throw fallo(doc.ultimo_error || 'El documento no tiene líneas que facturar.', 'FE_SIN_LINEAS', 409);
+    }
+    const base = { credenciales, ambiente: doc.ambiente };
+
+    // Si ya se intentó antes, puede que Factus lo tenga y solo nos faltara la respuesta.
+    if (doc.intentos > 1) {
+        const inicio = Date.now();
+        const previo = await proveedor.consultarPorReferencia({ ...base, codigoReferencia: doc.codigo_referencia });
+        if (previo?.resultado === 'ACEPTADO') {
+            await registrarIntento(doc, previo, Date.now() - inicio);
+            return aceptar(doc, previo);
+        }
+    }
+
+    const inicio = Date.now();
+    const r = await proveedor.emitirFactura({
+        ...base,
+        documento: doc,
+        lineas,
+        idRango: rango.id_rango_proveedor,
+        enviarCorreo: config.enviar_correo,
+    });
+    await registrarIntento(doc, r, Date.now() - inicio);
+
+    switch (r.resultado) {
+        case 'ACEPTADO': {
+            const aceptado = await aceptar(doc, r);
+            // La copia propia del PDF y el XML no puede retrasar ni tumbar la respuesta.
+            archivar(doc.id_documento).catch((err) =>
+                console.error('[facturacion] archivar', doc.id_documento, err.message)
+            );
+            return aceptado;
+        }
+        case 'RECHAZADO': {
+            const rechazado = await actualizarDocumento(doc.id_documento, {
+                estado: 'RECHAZADO',
+                payload: json(r.payload),
+                respuesta: json(r.respuesta),
+                avisos: json(r.avisos),
+                proximo_intento_en: null,
+                ultimo_error: r.rechazos.map((x) => x.mensaje).join(' ') || r.mensaje,
+            });
+            // Una rechazada que se queda en Factus bloquea las siguientes del negocio.
+            await proveedor
+                .eliminarPendiente({ ...base, codigoReferencia: doc.codigo_referencia })
+                .catch((err) => console.error('[facturacion] eliminarPendiente', doc.codigo_referencia, err.message));
+            return rechazado;
+        }
+        case 'ERROR_CREDENCIALES':
+            // Reintentar solo no arregla una contraseña: espera a una persona.
+            return actualizarDocumento(doc.id_documento, {
+                estado: 'ERROR',
+                proximo_intento_en: null,
+                ultimo_error: r.mensaje,
+            });
+        default:
+            // PENDIENTE_DIAN, ERROR_RED, ERROR_PROVEEDOR, BLOQUEADO_PENDIENTE: se reintenta con
+            // los MISMOS datos y la misma referencia.
+            return actualizarDocumento(doc.id_documento, {
+                estado: 'ERROR',
+                proximo_intento_en: proximoIntento(doc.intentos),
+                ultimo_error: r.mensaje,
+            });
+    }
+}
+
+/**
+ * Envía un documento en cola. Si otro proceso ya lo tiene, o todavía no le toca, no hace nada.
+ *
+ * @returns {Promise<object|null>} la fila como quedó.
+ */
+async function procesarDocumento(idDocumento, { forzar = false } = {}) {
+    const actual = await leerDocumento(idDocumento);
+    if (!actual) return null;
+
+    return enSerie(actual.id_negocio, async () => {
+        const reclamados = await sequelize.query(
+            `UPDATE facturacion.fe_documento
+                SET estado = 'ENVIANDO', intentos = intentos + 1, actualizado_en = now()
+              WHERE id_documento = :idDocumento
+                AND estado IN ('EN_COLA','ERROR')
+                AND (:forzar OR proximo_intento_en IS NULL OR proximo_intento_en <= now())
+             RETURNING *;`,
+            { replacements: { idDocumento, forzar }, type: SELECT }
+        );
+        const doc = reclamados[0];
+        if (!doc) return leerDocumento(idDocumento);
+
+        try {
+            return await emitirReclamado(doc);
+        } catch (err) {
+            // Pase lo que pase, nunca se queda en ENVIANDO.
+            console.error('[facturacion] procesarDocumento', idDocumento, err.message);
+            return actualizarDocumento(idDocumento, {
+                estado: 'ERROR',
+                // Un error nuestro (sin credenciales, sin rango, sin líneas) no se arregla
+                // esperando: se queda hasta que alguien lo resuelva y pulse «Reintentar».
+                proximo_intento_en: String(err.code || '').startsWith('FE_') ? null : proximoIntento(doc.intentos),
+                ultimo_error: err.message,
+            });
+        }
+    });
+}
+
+// ─── c) Archivar ───────────────────────────────────────────────────────────────────────────
+
+/** Guarda nuestra copia del PDF y el XML (D13): Factus no conserva nada si la cuenta se elimina. */
+async function archivar(idDocumento) {
+    const doc = await leerDocumento(idDocumento);
+    if (!doc || doc.estado !== 'ACEPTADO' || !doc.numero) return;
+    const credenciales = await configuracionDao.obtenerCredenciales(doc.id_negocio);
+    const proveedor = getProveedor(doc.proveedor);
+    const yaEstan = await sequelize.query(
+        `SELECT tipo FROM facturacion.fe_documento_archivo WHERE id_documento = :idDocumento;`,
+        { replacements: { idDocumento }, type: SELECT }
+    );
+    for (const tipo of ['PDF', 'XML']) {
+        if (yaEstan.some((a) => a.tipo === tipo)) continue;
+        const contenido = await proveedor.descargarArchivo({
+            credenciales,
+            ambiente: doc.ambiente,
+            numero: doc.numero,
+            tipo,
+            documento: doc.tipo,
+        });
+        await sequelize.query(
+            `INSERT INTO facturacion.fe_documento_archivo (id_documento, tipo, contenido, bytes, sha256)
+             VALUES (:idDocumento, :tipo, :contenido, :bytes, :sha256)
+             ON CONFLICT (id_documento, tipo) DO NOTHING;`,
+            {
+                replacements: {
+                    idDocumento,
+                    tipo,
+                    contenido,
+                    bytes: contenido.length,
+                    sha256: crypto.createHash('sha256').update(contenido).digest('hex'),
+                },
+            }
+        );
+    }
+}
+
+// ─── d) Lo que llama la vertical ───────────────────────────────────────────────────────────
+
+function resumen(doc) {
+    let mensaje = 'La factura se está procesando';
+    if (doc.estado === 'ACEPTADO') mensaje = `Factura ${doc.numero} enviada`;
+    else if (doc.estado === 'PENDIENTE_DATOS') {
+        mensaje = doc.ultimo_error || 'Faltan los datos del comprador (el total supera 5 UVT)';
+    } else if (doc.estado === 'RECHAZADO') mensaje = 'La factura fue rechazada y hay que corregirla';
+    return {
+        id_documento: doc.id_documento,
+        estado: doc.estado,
+        numero: doc.numero,
+        url_publica: doc.url_publica,
+        mensaje,
+    };
+}
+
+/**
+ * El gancho del cobro. **Nunca lanza** y espera como mucho `FE_ESPERA_MS`: si Factus tarda más,
+ * el documento sigue su camino y la caja lo ve después.
+ *
+ * @returns {Promise<{id_documento, estado, numero, url_publica, mensaje}|null>} `null` si este
+ *          negocio no factura (lo normal) o si algo falló antes de crear el documento.
+ */
+async function alCobrarPedido({ idOrden, comprador = null, idUsuario = null }) {
+    try {
+        const doc = await crearDocumentoPedido({ idOrden, comprador, idUsuario });
+        if (!doc) return null;
+        if (doc.estado !== 'EN_COLA') return resumen(doc);
+        const espera = Number(process.env.FE_ESPERA_MS || 5000);
+        let reloj;
+        const final = await Promise.race([
+            procesarDocumento(doc.id_documento, { forzar: true }),
+            new Promise((r) => {
+                reloj = setTimeout(() => r(null), espera);
+            }),
+        ]);
+        clearTimeout(reloj);
+        return resumen(final || doc); // si no alcanzó, sigue en proceso: se verá luego
+    } catch (err) {
+        console.error('[facturacion] alCobrarPedido', idOrden, err.message);
+        return null;
+    }
+}
+
+// ─── e), f) Lo que hace una persona desde la caja ──────────────────────────────────────────
+
+/** Pone (o corrige) el comprador de un documento que lo espera o que fue rechazado. */
+async function completarComprador(idDocumento, comprador) {
+    const doc = await leerDocumento(idDocumento);
+    if (!doc) throw fallo('El documento no existe.', 'FE_DOCUMENTO_NO_ENCONTRADO', 404);
+    if (!['PENDIENTE_DATOS', 'RECHAZADO'].includes(doc.estado)) {
+        throw fallo('Este documento ya no se puede corregir.', 'FE_DOCUMENTO_NO_EDITABLE', 409);
+    }
+    const adquiriente = normalizarComprador(comprador);
+    if (!adquiriente) throw fallo('Faltan los datos del comprador.', 'FE_COMPRADOR_INVALIDO', 422);
+    return actualizarDocumento(idDocumento, {
+        adquiriente: json(adquiriente),
+        estado: 'EN_COLA',
+        proximo_intento_en: null,
+        ultimo_error: null,
+        // La referencia de un rechazado quedó gastada en Factus: repetirla sería repetir el
+        // mismo intento que ya falló.
+        codigo_referencia: doc.estado === 'RECHAZADO' ? `${doc.codigo_referencia}-r${doc.intentos}` : doc.codigo_referencia,
+    });
+}
+
+/** «Reintentar» de la pestaña Facturas. */
+async function reintentar(idDocumento) {
+    const doc = await leerDocumento(idDocumento);
+    if (!doc) throw fallo('El documento no existe.', 'FE_DOCUMENTO_NO_ENCONTRADO', 404);
+    if (!['ERROR', 'RECHAZADO'].includes(doc.estado)) {
+        throw fallo('Este documento no está para reintentar.', 'FE_DOCUMENTO_NO_EDITABLE', 409);
+    }
+    await actualizarDocumento(idDocumento, {
+        estado: 'EN_COLA',
+        proximo_intento_en: null,
+        codigo_referencia: doc.estado === 'RECHAZADO' ? `${doc.codigo_referencia}-r${doc.intentos}` : doc.codigo_referencia,
+    });
+    return procesarDocumento(idDocumento, { forzar: true });
+}
+
+// ─── g), h) Lo que hace el proceso de fondo ────────────────────────────────────────────────
+
+/**
+ * Pedidos cobrados que se quedaron sin documento (el proceso se reinició justo después del
+ * commit, o el gancho falló). Es la red de D4.
+ *
+ * `fecha_creacion` es `timestamp` en hora de Bogotá y `activado_en` es `timestamptz`: la
+ * comparación es correcta porque la sesión de Postgres está en `America/Bogota`. No «arreglarlo».
+ */
+async function reconciliar() {
+    const huerfanos = await sequelize.query(
+        `SELECT o.id_orden
+           FROM restaurante.pedid_orden o
+           JOIN facturacion.fe_configuracion c
+             ON c.id_negocio = o.id_negocio AND c.estado IN ('EN_PRUEBAS','ACTIVO')
+          WHERE (o.estado_pago = 'pagado' OR (o.estado = 'CERRADA' AND o.id_caja IS NOT NULL))
+            AND o.estado NOT IN ('CANCELADA','ANULADA')
+            AND o.fecha_creacion >= c.activado_en
+            AND o.fecha_creacion >= now() - interval '72 hours'
+            AND o.fecha_creacion <= now() - interval '2 minutes'
+            AND NOT EXISTS (
+                SELECT 1 FROM facturacion.fe_documento d
+                 WHERE d.id_negocio = o.id_negocio AND d.origen_vertical = 'RESTAURANTE'
+                   AND d.origen_tipo = 'PEDIDO' AND d.origen_id = o.id_orden::text AND d.tipo = 'FV')
+          LIMIT 50;`,
+        { type: SELECT }
+    );
+    let creados = 0;
+    for (const { id_orden: idOrden } of huerfanos) {
+        try {
+            if (await crearDocumentoPedido({ idOrden, comprador: null })) creados += 1;
+        } catch (err) {
+            console.error('[facturacion] reconciliar', idOrden, err.message);
+        }
+    }
+    return creados;
+}
+
+/** Un ciclo de reintentos: suelta los atascados y envía, en serie, lo que ya toca. */
+async function procesarPendientes() {
+    // Un ENVIANDO de hace cinco minutos es un proceso que murió a mitad: vuelve a la cola.
+    await sequelize.query(
+        `UPDATE facturacion.fe_documento SET estado = 'EN_COLA', actualizado_en = now()
+          WHERE estado = 'ENVIANDO' AND actualizado_en < now() - interval '5 minutes';`
+    );
+    // Un ERROR sin fecha de reintento espera a una persona; un EN_COLA sin fecha, no.
+    const pendientes = await sequelize.query(
+        `SELECT id_documento FROM facturacion.fe_documento
+          WHERE (estado = 'EN_COLA' AND (proximo_intento_en IS NULL OR proximo_intento_en <= now()))
+             OR (estado = 'ERROR' AND proximo_intento_en <= now())
+          ORDER BY creado_en
+          LIMIT 20;`,
+        { type: SELECT }
+    );
+    for (const { id_documento: idDocumento } of pendientes) await procesarDocumento(idDocumento);
+    return pendientes.length;
+}
+
+module.exports = {
+    crearDocumentoPedido,
+    procesarDocumento,
+    archivar,
+    alCobrarPedido,
+    completarComprador,
+    reintentar,
+    reconciliar,
+    procesarPendientes,
+    resumen,
+};
