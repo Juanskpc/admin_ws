@@ -146,41 +146,45 @@ RADIAN, nómina electrónica, y el cobro comercial de la feature (qué plan la i
 
 Marca ✅ al terminar, con fecha y hash corto del commit.
 
+> **Todo lo marcado ✅ está en la rama `feature/facturacion-emision`** de los tres repos
+> (`admin_ws`, `admin_app-v21`, `restaurante_app`), commiteado por fases y **sin subir ni
+> desplegar**. Quedan R11.2 (espera una decisión) y R12.1 (el despliegue, que lo hace una persona).
+
 | ID | Tarea | Depende de | Estado |
 |---|---|---|---|
-| **R0.1** | Script de sondeo contra el sandbox | — | ✅ 2026-10-08 (sin commit) |
-| **R0.2** | Ejecutar el sondeo y registrar resultados en §5 | R0.1 | ✅ 2026-10-08 (sin commit) |
-| **R1.1** | Migración `migrate:facturacion-emision` | — | ✅ 2026-10-08 (sin commit) |
-| **R1.2** | Pruebas de la migración (inmutabilidad y unicidad) | R1.1 | ✅ 2026-10-08 (sin commit) |
-| **R2.1** | Puerto de proveedores + registro | — | ✅ 2026-10-08 (sin commit) |
-| **R2.2** | Adaptador Factus: token, llamada HTTP y clasificación | R2.1 | ✅ 2026-10-08 (sin commit) |
-| **R2.3** | Adaptador Factus: traducir documento → JSON de Factus | R2.2, R0.2 | ✅ 2026-10-08 (sin commit) |
-| **R2.4** | Pruebas del adaptador (fetch simulado) | R2.3 | ✅ 2026-10-08 (sin commit) |
-| **R3.1** | Constantes (UVT, códigos) y validación del comprador | — | ✅ 2026-10-08 (sin commit) |
-| **R3.2** | `construirFactura`: cálculo puro de líneas y totales | R3.1 | ✅ 2026-10-08 (sin commit) |
-| **R3.3** | Pruebas de `construirFactura` | R3.2 | ✅ 2026-10-08 (sin commit) |
-| **R4.1** | `configuracionDao` + `debeFacturar` | R1.1 | ✅ 2026-10-08 (sin commit) |
-| **R4.2** | Origen restaurante: leer el pedido para facturarlo | R1.1 | ✅ 2026-10-08 (sin commit) |
-| **R4.3** | `emisionService`: encolar, emitir, archivar | R2.4, R3.3, R4.1, R4.2 | ✅ 2026-10-08 (sin commit) |
-| **R4.4** | `emisionScheduler`: reintentos y reconciliación | R4.3 | ✅ 2026-10-08 (sin commit) |
-| **R4.5** | Script `fe_configurar_sandbox.js` (preparar un negocio de desarrollo) | R4.1 | ✅ 2026-10-08 (sin commit) |
-| **R4.6** | Pruebas de `emisionService` (proveedor simulado) | R4.3 | ✅ 2026-10-08 (sin commit) |
-| **R5.1** | Gancho en `marcarPagado` y `cerrarOrden` | R4.3 | ✅ 2026-10-08 (sin commit) |
-| **R5.2** | Validadores del campo `factura` en las rutas de cobro | R5.1 | ✅ 2026-10-08 (sin commit) |
-| **R5.3** | Prueba de punta a punta contra el sandbox | R5.2, R4.5 | ✅ 2026-10-08 (sin commit) |
-| **R6.1** | API super admin: configuración de Factus por negocio | R4.1, R2.4 | ⬜ |
-| **R6.2** | Pantalla super admin en `admin_app-v21` | R6.1 | ⬜ |
-| **R7.1** | Campos fiscales del producto (API de carta) | R1.1 | ⬜ |
-| **R7.2** | Código DIAN del método de pago (API) | R1.1 | ⬜ |
-| **R7.3** | API restaurante `GET /facturacion/estado` | R4.1 | ⬜ |
-| **R7.4** | Frontend: campos fiscales en carta y métodos de pago | R7.1, R7.2 | ⬜ |
-| **R8.1** | Frontend: `FacturacionService` + componente «Factura a nombre de» | R7.3 | ⬜ |
-| **R8.2** | Frontend: enviar `factura` desde Pedidos, Mesas y Despacho | R8.1, R5.2 | ⬜ |
-| **R9.1** | API restaurante: listar, ver PDF, reintentar, completar comprador | R4.3 | ⬜ |
-| **R9.2** | Frontend: pestaña «Facturas» en Caja | R9.1 | ⬜ |
-| **R10.1** | Nota crédito al anular un pedido cobrado | R4.3, R0.2 | ⬜ |
-| **R11.1** | Alertas de rango y vigencia | R6.1 | ⬜ |
-| **R11.2** | Número, CUFE y QR en el comprobante impreso | R8.2 | ⬜ |
+| **R0.1** | Script de sondeo contra el sandbox | — | ✅ 2026-10-08 |
+| **R0.2** | Ejecutar el sondeo y registrar resultados en §5 | R0.1 | ✅ 2026-10-08 |
+| **R1.1** | Migración `migrate:facturacion-emision` | — | ✅ 2026-10-08 |
+| **R1.2** | Pruebas de la migración (inmutabilidad y unicidad) | R1.1 | ✅ 2026-10-08 |
+| **R2.1** | Puerto de proveedores + registro | — | ✅ 2026-10-08 |
+| **R2.2** | Adaptador Factus: token, llamada HTTP y clasificación | R2.1 | ✅ 2026-10-08 |
+| **R2.3** | Adaptador Factus: traducir documento → JSON de Factus | R2.2, R0.2 | ✅ 2026-10-08 |
+| **R2.4** | Pruebas del adaptador (fetch simulado) | R2.3 | ✅ 2026-10-08 |
+| **R3.1** | Constantes (UVT, códigos) y validación del comprador | — | ✅ 2026-10-08 |
+| **R3.2** | `construirFactura`: cálculo puro de líneas y totales | R3.1 | ✅ 2026-10-08 |
+| **R3.3** | Pruebas de `construirFactura` | R3.2 | ✅ 2026-10-08 |
+| **R4.1** | `configuracionDao` + `debeFacturar` | R1.1 | ✅ 2026-10-08 |
+| **R4.2** | Origen restaurante: leer el pedido para facturarlo | R1.1 | ✅ 2026-10-08 |
+| **R4.3** | `emisionService`: encolar, emitir, archivar | R2.4, R3.3, R4.1, R4.2 | ✅ 2026-10-08 |
+| **R4.4** | `emisionScheduler`: reintentos y reconciliación | R4.3 | ✅ 2026-10-08 |
+| **R4.5** | Script `fe_configurar_sandbox.js` (preparar un negocio de desarrollo) | R4.1 | ✅ 2026-10-08 |
+| **R4.6** | Pruebas de `emisionService` (proveedor simulado) | R4.3 | ✅ 2026-10-08 |
+| **R5.1** | Gancho en `marcarPagado` y `cerrarOrden` | R4.3 | ✅ 2026-10-08 |
+| **R5.2** | Validadores del campo `factura` en las rutas de cobro | R5.1 | ✅ 2026-10-08 |
+| **R5.3** | Prueba de punta a punta contra el sandbox | R5.2, R4.5 | ✅ 2026-10-08 |
+| **R6.1** | API super admin: configuración de Factus por negocio | R4.1, R2.4 | ✅ 2026-10-08 |
+| **R6.2** | Pantalla super admin en `admin_app-v21` | R6.1 | ✅ 2026-10-08 |
+| **R7.1** | Campos fiscales del producto (API de carta) | R1.1 | ✅ 2026-10-08 |
+| **R7.2** | Código DIAN del método de pago (API) | R1.1 | ✅ 2026-10-08 |
+| **R7.3** | API restaurante `GET /facturacion/estado` | R4.1 | ✅ 2026-10-08 |
+| **R7.4** | Frontend: campos fiscales en carta y métodos de pago | R7.1, R7.2 | ✅ 2026-10-08 |
+| **R8.1** | Frontend: `FacturacionService` + componente «Factura a nombre de» | R7.3 | ✅ 2026-10-08 |
+| **R8.2** | Frontend: enviar `factura` desde Pedidos, Mesas y Despacho | R8.1, R5.2 | ✅ 2026-10-08 |
+| **R9.1** | API restaurante: listar, ver PDF, reintentar, completar comprador | R4.3 | ✅ 2026-10-08 |
+| **R9.2** | Frontend: pestaña «Facturas» en Caja | R9.1 | ✅ 2026-10-08 |
+| **R10.1** | Nota crédito al anular un pedido cobrado | R4.3, R0.2 | ✅ 2026-10-08 |
+| **R11.1** | Alertas de rango y vigencia | R6.1 | ✅ 2026-10-08 |
+| **R11.2** | Número, CUFE y QR en el comprobante impreso | R8.2 | ⏸ espera decisión (ver §7) |
 | **R12.1** | Documentación y despliegue | todo lo anterior | ⬜ |
 
 Tareas que se pueden hacer **en paralelo** desde el inicio: R0.1, R1.1, R2.1, R3.1.
@@ -1539,10 +1543,14 @@ salto de línea permitido) y un QR de `url_qr`. Para el QR, **pregunta antes** q
    y el trigger de inmutabilidad.
 4. **Despliegue** (lo hace una persona, no el modelo; déjalo escrito como lista):
    1. Respaldo de la base de producción.
-   2. `npm run migrate:facturacion` (si no se aplicó nunca en producción — compruébalo antes con
-      `psql`: `\dt general.gener_negocio_fiscal`) y `npm run migrate:facturacion-emision`.
-   3. `git pull` + `npm install --omit=dev` + `sudo systemctl restart escalapp-api`; comprobar
-      `git log --oneline -1` y `journalctl`.
+   2. `git pull` + `npm install --omit=dev`; comprobar `git log --oneline -1`. **Todavía sin
+      reiniciar.**
+   3. `npm run migrate:facturacion-emision` (y `npm run migrate:facturacion` si no se aplicó nunca
+      en producción — compruébalo antes con `psql`: `\dt general.gener_negocio_fiscal`).
+      ⚠️ **La migración va ANTES del reinicio, no después:** el modelo `rest_metodo_pago` ya pide la
+      columna `codigo_medio_pago_dian`, y sin ella **toda** consulta de formas de pago falla — o
+      sea, no se podría cobrar en ningún restaurante. Después, `sudo systemctl restart
+      escalapp-api` y `journalctl`.
    4. Build y subida de `restaurante_app` y `admin_app-v21` según CLAUDE.md (admin NO renombra
       `index.csr.html`).
    5. Nada cambia para ningún cliente hasta que un super admin configure uno. Verificar con un
@@ -1642,6 +1650,68 @@ servidor para todo lo que se custodia cifrado por negocio, no una clave de Whats
 negocio. ⚠️ Cada PC de desarrollo tiene la suya, así que **las credenciales que un dev guarda en la
 base compartida el otro no las puede descifrar**: para emitir desde el otro PC hay que volver a
 correr `fe_configurar_sandbox.js` allí (o compartir la clave de desarrollo).
+
+### 2026-10-08 (madrugada del 9) — R6 a R11
+
+**Hecho y commiteado** en `feature/facturacion-emision`: R6.1, R6.2, R7.1–R7.4, R8.1, R8.2, R9.1,
+R9.2, R10.1 y R11.1. Backend: 130 pruebas de facturación en verde; restaurante 233/235 (las mismas
+dos de datos locales). `restaurante_app`: 359 pruebas en verde y build de producción correcto.
+`admin_app-v21`: las 9 del componente nuevo en verde y build correcto; **3 archivos de prueba
+fallan igual que antes de estos cambios** (`app.spec`, `admin.service.spec`,
+`admin-dashboard.component.spec`: comprobado con `git stash`).
+
+**⚠️ Ninguna pantalla se ha visto en un navegador.** Compilan y sus pruebas pasan, pero el aspecto
+—sobre todo «Factura a nombre de» dentro del cobro de Mesas, que es un panel estrecho, y la tabla
+de Facturas en un teléfono— está por mirar.
+
+**Probado contra el sandbox real:** las rutas nuevas por HTTP con el backend en el puerto 3011
+(el super admin configura, prueba la conexión, sincroniza y ve lo asociado en la DIAN; un admin de
+negocio recibe **403** en las siete; pedir el PDF de otro negocio da **404**), completar el
+comprador de una factura que lo esperaba (`SETP990024156`) y la nota crédito de una anulación
+(`CRTE871`, que anula `SETP990024154`).
+
+**No probado:** `POST …/rangos` (crear un rango) contra el sandbox: crearía un rango de verdad en
+la cuenta de pruebas que comparten todos. Está cubierto con `fetch` simulado y con el cuerpo que
+ya funcionó en Orbita. La anulación desde la pantalla de Caja tampoco: el usuario 1 no tiene el
+permiso `caja_eliminar_pedido`, así que el gancho se llamó directamente (el pedido `FE-E2E-A`
+del negocio 17 quedó con nota crédito pero **sin anular en caja**: es un dato de prueba incoherente).
+
+**Lo que se añadió sobre el plan:**
+
+- **Crear el rango en el proveedor** (`GET …/rangos/dian`, `POST …/rangos`), que el plan no tenía
+  y sin lo cual un alta no se termina (aprendido en Orbita). En la pantalla va plegado dentro de
+  «Numeración», con un botón que rellena el formulario con lo que la DIAN tiene asociado.
+- `GET /restaurante/facturacion/estado` devuelve además `medios_pago`, `impuestos` y
+  `alertas`: así la carta y Configuración no llevan esas listas quemadas.
+- `resumen()` incluye `tipo`, `cufe` y `url_qr` (lo necesitará R11.2).
+
+**Desviaciones:**
+
+- **La pestaña Facturas completa los datos en una fila desplegable, no en un modal.** Usa el mismo
+  `DatosFacturaComponent` del cobro, con `[siempre]="true"` (sin interruptor).
+- **`PagoSeleccion` lleva `factura` y además `facturaValida`.** `valido` ya incluye la factura,
+  como pedía el plan, pero las pantallas necesitaban saber QUÉ falla para no decir «elige una
+  forma de pago» a quien ya la eligió: `avisoFacturaIncompleta()`.
+- **El cobro directo desde la tarjeta de Despacho** (`seleccionGuardada`) no pregunta «a nombre de
+  quién»: sale a consumidor final, y si supera el tope queda en `PENDIENTE_DATOS` para completarlo
+  en Caja.
+- **La unidad de medida no se pregunta en la carta**: Factus solo acepta `94` y el adaptador la
+  fuerza. Un campo de texto libre ahí solo serviría para escribir algo que no vale.
+- **El tipo de pago para la factura se guarda al elegirlo** en la lista de formas de pago, sin
+  entrar a editar. La forma de pago «Cuenta / Tiquetera» no lo pregunta (siempre «otro», D19).
+- `listarRangos`/`consultarPorReferencia` para notas crédito: no hizo falta; una nota que falla se
+  reenvía con su misma referencia.
+- `alAnularPedido` espera `FE_ESPERA_ANULAR_MS` (10 s por defecto) si el documento está
+  `ENVIANDO`. No está en `.env.example` a propósito: solo existe para que las pruebas no esperen.
+
+**⏸ R11.2 (número, CUFE y QR en el comprobante impreso) — espera dos decisiones del usuario:**
+
+1. **Qué librería de QR usar** (el plan prohíbe añadir dependencias sin preguntar).
+   `sst_ws` de Orbita ya usa `qrcode`.
+2. **El orden en Pedidos y Mesas:** hoy se pregunta «¿imprimir?» y se imprime **antes** de cobrar,
+   así que al imprimir todavía no hay factura. Para que el tiquete lleve el CUFE habría que
+   imprimir después de la respuesta del cobro — es decir, esperar los segundos de la DIAN antes
+   de que salga el papel. Es un cambio en cómo trabaja el cajero, no un detalle de código.
 
 ### 2026-10-08 (noche) — R4 y R5
 
