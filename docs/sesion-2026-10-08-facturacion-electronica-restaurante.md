@@ -54,8 +54,11 @@ para ningún cliente hasta que el super admin configure uno. Faltan el QR en el 
 ## 3. Cómo seguir (en este orden)
 
 1. **R11.2 — QR y CUFE en el tiquete impreso.** Librería decidida el 2026-10-09: **`qrcode`**. Ese
-   día se hizo la base (rama `feature/tiquete-diseno` en `admin_ws` y `restaurante_app`, sin
-   desplegar): pestaña **Configuración → Tiquete**, donde el negocio arma su tiquete común y el de
+   día se hizo la base y **se desplegó a producción el 2026-10-09 a las 16:35** (`admin_ws`
+   `05aff29`, `restaurante_app` `e24d930`, ambos en `master`; respaldos `db_2026-10-09_1634.dump` y
+   `web_restaurante_20261009_1635.tgz` en `/home/escalapp/backups/`; migración aplicada en
+   producción, compartida y local). **`main` de `restaurante_app` quedó en `11d9c0b`, detrás de
+   `master`**: Juan David tiene que mezclar `master` en `main`. Pestaña **Configuración → Tiquete**, donde el negocio arma su tiquete común y el de
    factura electrónica con vista previa al lado. Lo que exige la DIAN (emisor, número, resolución,
    CUFE, QR, comprador, impuestos, forma de pago) no es opción: sale siempre. Tabla
    `restaurante.tiquete_diseno` (`npm run migrate:restaurante-tiquete-diseno`), API
@@ -65,6 +68,14 @@ para ningún cliente hasta que el super admin configure uno. Faltan el QR en el 
    imprime la factura: la propuesta del usuario es que, con factura electrónica, salgan **dos**
    tiquetes —el común para cocina y la factura para el cliente—, y eso obliga a imprimir la
    factura **después** del cobro, cuando ya hay CUFE.
+
+   **Nada del proveedor se le muestra a nadie** (decisión del 2026-10-09): «Ver en línea» del
+   correo y de Caja → Facturas abre la consulta de la DIAN por CUFE (`urlConsultaDian` en
+   `app_core/facturacion/constantes.js`), no `url_publica`, que es una página de Factus. El PDF de
+   Factus no trae su marca: lo que sale de Factus en el sandbox (logo, «FACTUS V2», NIT 1000789002-2)
+   es la empresa de pruebas a cuyo nombre se factura allí. El logo del PDF real lo pone Factus con
+   el que le mande cada cliente al activarse (no hay API para cambiarlo). El negocio 17 de la
+   compartida tiene el logo de EscalApp, pero el archivo solo existe en el PC donde se subió.
 2. **Revisar en pantalla lo que no se vio:** la tarjeta «Qué cobros se facturan» del panel, el
    impuesto en la carta, el tipo de pago en Configuración y la vista de teléfono de Pedidos.
 3. **Primer cliente real:** alta en el panel de aliados de Factus (paquete individual), credenciales
