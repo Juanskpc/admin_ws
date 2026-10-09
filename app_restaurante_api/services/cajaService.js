@@ -1283,6 +1283,9 @@ async function anularOrdenCobrada({ idNegocio, idOrden, idUsuario }) {
 
         await t.commit();
         avisar(idNegocio, TEMAS.CAJA, TEMAS.PEDIDOS, TEMAS.MESAS, TEMAS.CLIENTES);
+        // Si el pedido tenía factura electrónica, se anula (o se emite su nota crédito). No se
+        // espera: no lanza, y la anulación de caja no depende de lo que conteste la DIAN.
+        require('../../app_core/facturacion').alAnularPedido({ idOrden, idUsuario });
         return {
             id_orden: idOrden,
             numero_orden: numeroOrden,

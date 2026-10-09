@@ -86,13 +86,13 @@ async function actualizarDocumento(idDocumento, campos, transaction) {
     return filas[0] || null;
 }
 
-function referenciaNueva(idNegocio, idOrden, ambiente) {
+function referenciaNueva(idNegocio, idOrden, ambiente, tipo = 'FV') {
     // En PRUEBAS todas las bases de desarrollo emiten contra la MISMA cuenta del sandbox, y como
     // Factus devuelve el documento existente cuando se repite una referencia, el pedido 10 de una
     // base recibiría sin error la factura del pedido 10 de otra. El sufijo lo impide. En
     // producción cada negocio tiene su cuenta y la referencia es legible tal cual.
-    if (ambiente === 'PRUEBAS') return `EAP${idNegocio}-FV-${idOrden}-${crypto.randomBytes(4).toString('hex')}`;
-    return `EA${idNegocio}-FV-${idOrden}`;
+    if (ambiente === 'PRUEBAS') return `EAP${idNegocio}-${tipo}-${idOrden}-${crypto.randomBytes(4).toString('hex')}`;
+    return `EA${idNegocio}-${tipo}-${idOrden}`;
 }
 
 // ─── a) Crear el documento ─────────────────────────────────────────────────────────────────
@@ -304,20 +304,30 @@ function aceptar(doc, r) {
 
 async function emitirReclamado(doc) {
     const proveedor = getProveedor(doc.proveedor);
+    const esNota = doc.tipo === 'NC';
     const [credenciales, config, rango, lineas] = await Promise.all([
         configuracionDao.obtenerCredenciales(doc.id_negocio),
         configuracionDao.obtener(doc.id_negocio),
-        configuracionDao.rangoEnUso(doc.id_negocio, 'FV'),
+        configuracionDao.rangoEnUso(doc.id_negocio, doc.tipo),
         leerLineas(doc.id_documento),
     ]);
-    if (!rango) throw fallo('El negocio no tiene un rango de numeración en uso.', 'FE_SIN_RANGO', 409);
+    if (!rango) {
+        throw fallo(
+            esNota
+                ? 'El negocio no tiene un rango de notas crédito en uso: no se puede anular la factura.'
+                : 'El negocio no tiene un rango de numeración en uso.',
+            'FE_SIN_RANGO',
+            409
+        );
+    }
     if (lineas.length === 0) {
         throw fallo(doc.ultimo_error || 'El documento no tiene líneas que facturar.', 'FE_SIN_LINEAS', 409);
     }
     const base = { credenciales, ambiente: doc.ambiente };
 
-    // Si ya se intentó antes, puede que Factus lo tenga y solo nos faltara la respuesta.
-    if (doc.intentos > 1) {
+    // Si ya se intentó antes, puede que Factus lo tenga y solo nos faltara la respuesta. (La
+    // búsqueda por referencia es de facturas; una nota crédito se reenvía con su misma referencia.)
+    if (doc.intentos > 1 && !esNota) {
         const inicio = Date.now();
         const previo = await proveedor.consultarPorReferencia({ ...base, codigoReferencia: doc.codigo_referencia });
         if (previo?.resultado === 'ACEPTADO') {
@@ -326,19 +336,28 @@ async function emitirReclamado(doc) {
         }
     }
 
-    const inicio = Date.now();
-    const r = await proveedor.emitirFactura({
+    const envio = {
         ...base,
         documento: doc,
         lineas,
         idRango: rango.id_rango_proveedor,
         enviarCorreo: config.enviar_correo,
-    });
+    };
+    if (esNota) {
+        const factura = await leerDocumento(doc.id_documento_referencia);
+        if (!factura?.numero) throw fallo('La factura que anula esta nota no tiene número.', 'FE_SIN_FACTURA', 409);
+        envio.facturaReferencia = { numero: factura.numero };
+    }
+    const inicio = Date.now();
+    const r = esNota ? await proveedor.emitirNotaCredito(envio) : await proveedor.emitirFactura(envio);
     await registrarIntento(doc, r, Date.now() - inicio);
 
     switch (r.resultado) {
         case 'ACEPTADO': {
             const aceptado = await aceptar(doc, r);
+            await configuracionDao
+                .anotarConsecutivo(rango.id_resolucion, r.numero)
+                .catch((err) => console.error('[facturacion] anotarConsecutivo', err.message));
             // La copia propia del PDF y el XML no puede retrasar ni tumbar la respuesta.
             archivar(doc.id_documento).catch((err) =>
                 console.error('[facturacion] archivar', doc.id_documento, err.message)
@@ -354,10 +373,12 @@ async function emitirReclamado(doc) {
                 proximo_intento_en: null,
                 ultimo_error: r.rechazos.map((x) => x.mensaje).join(' ') || r.mensaje,
             });
-            // Una rechazada que se queda en Factus bloquea las siguientes del negocio.
-            await proveedor
-                .eliminarPendiente({ ...base, codigoReferencia: doc.codigo_referencia })
-                .catch((err) => console.error('[facturacion] eliminarPendiente', doc.codigo_referencia, err.message));
+            // Una factura rechazada que se queda en Factus bloquea las siguientes del negocio.
+            if (!esNota) {
+                await proveedor
+                    .eliminarPendiente({ ...base, codigoReferencia: doc.codigo_referencia })
+                    .catch((err) => console.error('[facturacion] eliminarPendiente', doc.codigo_referencia, err.message));
+            }
             return rechazado;
         }
         case 'ERROR_CREDENCIALES':
@@ -458,15 +479,20 @@ async function archivar(idDocumento) {
 
 function resumen(doc) {
     let mensaje = 'La factura se está procesando';
-    if (doc.estado === 'ACEPTADO') mensaje = `Factura ${doc.numero} enviada`;
+    if (doc.estado === 'ACEPTADO') {
+        mensaje = doc.tipo === 'NC' ? `Nota crédito ${doc.numero} enviada` : `Factura ${doc.numero} enviada`;
+    } else if (doc.estado === 'ANULADO') mensaje = 'La factura se anuló antes de enviarse';
     else if (doc.estado === 'PENDIENTE_DATOS') {
         mensaje = doc.ultimo_error || 'Faltan los datos del comprador (el total supera 5 UVT)';
     } else if (doc.estado === 'RECHAZADO') mensaje = 'La factura fue rechazada y hay que corregirla';
     return {
         id_documento: doc.id_documento,
         estado: doc.estado,
+        tipo: doc.tipo,
         numero: doc.numero,
+        cufe: doc.cufe,
         url_publica: doc.url_publica,
+        url_qr: doc.url_qr,
         mensaje,
     };
 }
@@ -497,6 +523,145 @@ async function alCobrarPedido({ idOrden, comprador = null, idUsuario = null }) {
         console.error('[facturacion] alCobrarPedido', idOrden, err.message);
         return null;
     }
+}
+
+// ─── Anular (D17) ──────────────────────────────────────────────────────────────────────────
+
+const ANULABLES_SIN_NOTA = ['PENDIENTE_DATOS', 'EN_COLA', 'ERROR', 'RECHAZADO'];
+
+/** Crea la nota crédito que anula por completo una factura aceptada. Idempotente por pedido. */
+async function crearNotaCredito(factura, idUsuario) {
+    return sequelize.transaction(async (t) => {
+        const insertadas = await sequelize.query(
+            `INSERT INTO facturacion.fe_documento
+                 (id_negocio, tipo, estado, ambiente, proveedor, origen_vertical, origen_tipo, origen_id,
+                  origen_referencia, id_documento_referencia, codigo_referencia, emisor, adquiriente, pagos,
+                  subtotal, total_impuestos, total, ajuste_redondeo, creado_por)
+             SELECT id_negocio, 'NC', 'EN_COLA', ambiente, proveedor, origen_vertical, origen_tipo, origen_id,
+                    origen_referencia, id_documento, :codigoReferencia, emisor, adquiriente, pagos,
+                    subtotal, total_impuestos, total, ajuste_redondeo, :idUsuario
+               FROM facturacion.fe_documento WHERE id_documento = :idFactura
+             ON CONFLICT ON CONSTRAINT uq_fedoc_origen DO NOTHING
+             RETURNING *;`,
+            {
+                replacements: {
+                    idFactura: factura.id_documento,
+                    idUsuario,
+                    codigoReferencia: referenciaNueva(factura.id_negocio, factura.origen_id, factura.ambiente, 'NC'),
+                },
+                transaction: t,
+                type: SELECT,
+            }
+        );
+        if (insertadas.length === 0) {
+            const [ya] = await sequelize.query(
+                `SELECT * FROM facturacion.fe_documento WHERE id_documento_referencia = :idFactura AND tipo = 'NC';`,
+                { replacements: { idFactura: factura.id_documento }, transaction: t, type: SELECT }
+            );
+            return ya;
+        }
+        await sequelize.query(
+            `INSERT INTO facturacion.fe_documento_linea
+                 (id_documento, id_negocio, orden, codigo, descripcion, cantidad, precio_bruto, precio_neto,
+                  codigo_impuesto, tarifa_impuesto, base, impuesto, total, unidad_medida, es_domicilio)
+             SELECT :idNota, id_negocio, orden, codigo, descripcion, cantidad, precio_bruto, precio_neto,
+                    codigo_impuesto, tarifa_impuesto, base, impuesto, total, unidad_medida, es_domicilio
+               FROM facturacion.fe_documento_linea WHERE id_documento = :idFactura;`,
+            { replacements: { idNota: insertadas[0].id_documento, idFactura: factura.id_documento }, transaction: t }
+        );
+        return insertadas[0];
+    });
+}
+
+/**
+ * El gancho de la anulación de un pedido cobrado. **Nunca lanza.**
+ *
+ * Una factura que todavía no salió se anula sin más; una ya aceptada por la DIAN no se puede
+ * tocar, así que se emite una nota crédito por el total.
+ */
+async function alAnularPedido({ idOrden, idUsuario = null }) {
+    try {
+        const [factura] = await sequelize.query(
+            `SELECT * FROM facturacion.fe_documento
+              WHERE origen_vertical = :vertical AND origen_tipo = :tipo AND origen_id = :origenId AND tipo = 'FV';`,
+            { replacements: { ...ORIGEN, origenId: String(idOrden) }, type: SELECT }
+        );
+        if (!factura) return null;
+
+        const anular = () =>
+            sequelize.query(
+                `UPDATE facturacion.fe_documento
+                    SET estado = 'ANULADO', proximo_intento_en = NULL, actualizado_en = now()
+                  WHERE id_documento = :id AND estado IN (:estados) RETURNING *;`,
+                { replacements: { id: factura.id_documento, estados: ANULABLES_SIN_NOTA }, type: SELECT }
+            );
+        let [anulada] = await anular();
+        if (anulada) return resumen(anulada);
+
+        let actual = await leerDocumento(factura.id_documento);
+        if (actual.estado === 'ENVIANDO') {
+            // Justo lo tiene el proceso de fondo: se le da tiempo a terminar y se mira otra vez.
+            await new Promise((r) => setTimeout(r, Number(process.env.FE_ESPERA_ANULAR_MS || 10000)));
+            [anulada] = await anular();
+            if (anulada) return resumen(anulada);
+            actual = await leerDocumento(factura.id_documento);
+        }
+        if (actual.estado !== 'ACEPTADO') return resumen(actual);
+
+        const nota = await crearNotaCredito(actual, idUsuario);
+        const final = nota.estado === 'EN_COLA' ? await procesarDocumento(nota.id_documento, { forzar: true }) : nota;
+        return resumen(final);
+    } catch (err) {
+        console.error('[facturacion] alAnularPedido', idOrden, err.message);
+        return null;
+    }
+}
+
+// ─── Lo que lee la pestaña «Facturas» ──────────────────────────────────────────────────────
+
+/** Los documentos de un negocio, del más reciente al más antiguo (máx. 200). */
+async function listar(idNegocio, { desde = null, hasta = null, estado = null } = {}) {
+    return sequelize.query(
+        `SELECT d.id_documento, d.tipo, d.estado, d.numero, d.origen_referencia, d.total, d.creado_en,
+                d.ultimo_error, d.url_publica, d.cufe, d.intentos,
+                COALESCE(d.adquiriente->>'razon_social', d.adquiriente->>'nombres') AS comprador,
+                COALESCE((d.adquiriente->>'consumidor_final')::boolean, false) AS consumidor_final,
+                f.numero AS numero_factura_anulada
+           FROM facturacion.fe_documento d
+           LEFT JOIN facturacion.fe_documento f ON f.id_documento = d.id_documento_referencia
+          WHERE d.id_negocio = :idNegocio
+            AND (CAST(:desde AS date) IS NULL OR d.creado_en >= CAST(:desde AS date))
+            AND (CAST(:hasta AS date) IS NULL OR d.creado_en < CAST(:hasta AS date) + 1)
+            AND (CAST(:estado AS text) IS NULL OR d.estado = :estado)
+          ORDER BY d.creado_en DESC
+          LIMIT 200;`,
+        { replacements: { idNegocio, desde, hasta, estado }, type: SELECT }
+    );
+}
+
+/** Un documento, solo si es de ese negocio. `null` tanto si no existe como si es de otro. */
+async function obtenerDeNegocio(idDocumento, idNegocio) {
+    const filas = await sequelize.query(
+        `SELECT * FROM facturacion.fe_documento WHERE id_documento = :idDocumento AND id_negocio = :idNegocio;`,
+        { replacements: { idDocumento, idNegocio }, type: SELECT }
+    );
+    return filas[0] || null;
+}
+
+/** El PDF o el XML guardado; si todavía no está, intenta traerlo una vez. */
+async function obtenerArchivo(idDocumento, tipo = 'PDF') {
+    const leer = () =>
+        sequelize.query(
+            `SELECT contenido FROM facturacion.fe_documento_archivo WHERE id_documento = :idDocumento AND tipo = :tipo;`,
+            { replacements: { idDocumento, tipo }, type: SELECT }
+        );
+    let [archivo] = await leer();
+    if (!archivo) {
+        await archivar(idDocumento).catch((err) => console.error('[facturacion] archivar', idDocumento, err.message));
+        [archivo] = await leer();
+    }
+    if (!archivo) throw fallo('El archivo de este documento todavía no está disponible.', 'FE_ARCHIVO_NO_DISPONIBLE', 404);
+    return archivo.contenido;
 }
 
 // ─── e), f) Lo que hace una persona desde la caja ──────────────────────────────────────────
@@ -599,6 +764,10 @@ module.exports = {
     procesarDocumento,
     archivar,
     alCobrarPedido,
+    alAnularPedido,
+    listar,
+    obtenerDeNegocio,
+    obtenerArchivo,
     completarComprador,
     reintentar,
     reconciliar,

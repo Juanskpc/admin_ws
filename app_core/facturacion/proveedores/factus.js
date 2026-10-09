@@ -35,6 +35,8 @@ const UNIDADES_CONFIRMADAS = new Set(['94']);
 
 /** Cómo nombra Factus el documento de cada rango (es un texto, no un código). */
 const TIPO_DE_RANGO = { 'factura de venta': 'FV', 'nota crédito': 'NC' };
+/** …y con qué código hay que pedírselo al crearlo (tabla de referencia de Factus). */
+const CODIGO_DE_RANGO = { FV: '21', NC: '22' };
 
 const RUTAS = {
     FV: { emitir: '/v2/bills/validate', ver: '/v2/bills', eliminar: '/v2/bills/destroy/reference' },
@@ -412,6 +414,48 @@ async function listarRangos({ credenciales, ambiente }) {
         }));
 }
 
+/**
+ * Lo que la DIAN tiene asociado al software de este negocio. Es el paso previo a crear el rango:
+ * el cliente asocia el prefijo en el portal de la DIAN y aquí se ve si ya aparece.
+ */
+async function listarRangosDian({ credenciales, ambiente }) {
+    const r = await llamar({ credenciales, ambiente, metodo: 'GET', ruta: '/v2/numbering-ranges/dian' });
+    if (r.status !== 200) throw fallo(`Factus respondió HTTP ${r.status ?? 'sin respuesta'}.`, 'FE_PROVEEDOR_ERROR', 502);
+    const d = r.cuerpo?.data;
+    return (Array.isArray(d) ? d : d?.data || []).map((x) => ({
+        prefijo: x.prefix ?? null,
+        resolucion: x.resolution_number != null ? String(x.resolution_number) : null,
+        desde: x.from ?? null,
+        hasta: x.to ?? null,
+        vigenciaDesde: x.start_date ?? null,
+        vigenciaHasta: x.end_date ?? null,
+    }));
+}
+
+/**
+ * Crea el rango en Factus. **Factus no lo toma solo** de la DIAN: hasta que alguien lo crea por
+ * aquí, `listarRangos` no lo devuelve y no se puede emitir (aprendido en Orbita, 2026-10-07).
+ *
+ * La factura lleva la resolución que autorizó la DIAN; la nota crédito no tiene resolución y solo
+ * necesita prefijo y número de inicio.
+ */
+async function crearRango({ credenciales, ambiente, tipoDocumento, prefijo, resolucion = null, actual }) {
+    const json = { document: CODIGO_DE_RANGO[tipoDocumento], prefix: prefijo, current: String(actual) };
+    if (!json.document) throw fallo(`Tipo de rango inválido: ${tipoDocumento}`, 'FE_RANGO_INVALIDO', 422);
+    if (resolucion) json.resolution_number = String(resolucion);
+    const r = await llamar({ credenciales, ambiente, metodo: 'POST', ruta: '/v2/numbering-ranges', json });
+    if (r.status === null || r.status >= 400) {
+        const detalle = erroresDeValidacion(r.cuerpo).map((x) => x.mensaje).join(' ') || r.cuerpo?.message || '';
+        throw fallo(
+            `Factus no creó el rango (HTTP ${r.status ?? 'sin respuesta'}). ${detalle}`.trim(),
+            'FE_RANGO_NO_CREADO',
+            [400, 409, 422].includes(r.status) ? 422 : 502
+        );
+    }
+    const x = r.cuerpo?.data ?? {};
+    return { id: Number(x.id), prefijo: x.prefix ?? prefijo, actual: x.current ?? actual };
+}
+
 async function emitirFactura(args) {
     const payload = traducirFactura(args);
     const r = await llamar({ ...args, metodo: 'POST', ruta: RUTAS.FV.emitir, json: payload });
@@ -486,6 +530,8 @@ module.exports = {
     codigo: 'FACTUS',
     probarConexion,
     listarRangos,
+    listarRangosDian,
+    crearRango,
     emitirFactura,
     emitirNotaCredito,
     consultarPorReferencia,

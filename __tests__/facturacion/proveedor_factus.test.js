@@ -346,6 +346,44 @@ describe('lo demás del puerto', () => {
         });
     });
 
+    test('crearRango: la factura lleva resolución y la nota crédito no', async () => {
+        global.fetch.mockImplementation(async (url) =>
+            String(url).endsWith('/oauth/token') ? token() : respuesta(201, { data: { id: 3021, prefix: 'FE', current: 1001 } })
+        );
+        const base = { credenciales: CREDENCIALES, ambiente: 'PRUEBAS' };
+        const creado = await factus.crearRango({ ...base, tipoDocumento: 'FV', prefijo: 'FE', resolucion: '18764116756455', actual: 1001 });
+        expect(creado).toEqual({ id: 3021, prefijo: 'FE', actual: 1001 });
+        await factus.crearRango({ ...base, tipoDocumento: 'NC', prefijo: 'NC', actual: 90 });
+
+        const cuerpos = global.fetch.mock.calls
+            .filter(([url]) => String(url).endsWith('/v2/numbering-ranges'))
+            .map(([, opciones]) => JSON.parse(opciones.body));
+        expect(cuerpos).toEqual([
+            { document: '21', prefix: 'FE', current: '1001', resolution_number: '18764116756455' },
+            { document: '22', prefix: 'NC', current: '90' },
+        ]);
+    });
+
+    test('crearRango: si Factus no lo crea, el error dice por qué', async () => {
+        global.fetch
+            .mockResolvedValueOnce(token())
+            .mockResolvedValueOnce(respuesta(422, { data: { errors: { prefix: ['El prefijo no está asociado en la DIAN.'] } } }));
+        await expect(
+            factus.crearRango({ credenciales: CREDENCIALES, ambiente: 'PRUEBAS', tipoDocumento: 'FV', prefijo: 'XX', resolucion: '1', actual: 1 })
+        ).rejects.toMatchObject({ code: 'FE_RANGO_NO_CREADO', statusCode: 422, message: expect.stringMatching(/no está asociado/) });
+    });
+
+    test('listarRangosDian traduce lo que la DIAN tiene asociado', async () => {
+        global.fetch.mockResolvedValueOnce(token()).mockResolvedValueOnce(
+            respuesta(200, {
+                data: [{ prefix: 'FE', resolution_number: 18764116756455, from: 1001, to: 1500, start_date: '2026-10-06', end_date: '2028-10-06' }],
+            })
+        );
+        expect(await factus.listarRangosDian({ credenciales: CREDENCIALES, ambiente: 'PRUEBAS' })).toEqual([
+            { prefijo: 'FE', resolucion: '18764116756455', desde: 1001, hasta: 1500, vigenciaDesde: '2026-10-06', vigenciaHasta: '2028-10-06' },
+        ]);
+    });
+
     test('el registro conoce a FACTUS y a nadie más', () => {
         expect(getProveedor('FACTUS')).toBe(factus);
         expect(() => getProveedor('OTRO')).toThrow(expect.objectContaining({ code: 'FE_PROVEEDOR_DESCONOCIDO' }));

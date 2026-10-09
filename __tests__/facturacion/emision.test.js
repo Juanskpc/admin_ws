@@ -21,6 +21,7 @@ jest.mock('../../app_core/facturacion/proveedores', () => {
     const adaptador = {
         codigo: 'FACTUS',
         emitirFactura: jest.fn(),
+        emitirNotaCredito: jest.fn(),
         consultarPorReferencia: jest.fn(),
         eliminarPendiente: jest.fn(),
         descargarArchivo: jest.fn(),
@@ -66,10 +67,11 @@ async function crearPedido({ precio = 20000, estadoPago = 'pagado', estado = 'CE
     return o.id_orden;
 }
 
-const documentoDe = async (idOrden) =>
-    (await q(`SELECT * FROM facturacion.fe_documento WHERE id_negocio = :idNegocio AND origen_id = :id;`, {
+const documentoDe = async (idOrden, tipo = 'FV') =>
+    (await q(`SELECT * FROM facturacion.fe_documento WHERE id_negocio = :idNegocio AND origen_id = :id AND tipo = :tipo;`, {
         idNegocio,
         id: String(idOrden),
+        tipo,
     }))[0];
 
 const aceptado = (numero = 'SETP1') => ({
@@ -121,10 +123,11 @@ beforeAll(async () => {
 
     await configuracionDao.guardar(idNegocio, { credenciales: CREDENCIALES });
     const rangos = await configuracionDao.guardarRangos(idNegocio, [
-        { id: 389, tipoDocumento: 'FV', prefijo: 'SETP', vencido: false },
+        { id: 389, tipoDocumento: 'FV', prefijo: 'SETP', desde: 990000000, hasta: 995000000, actual: 990000010, vencido: false },
+        { id: 1776, tipoDocumento: 'NC', prefijo: 'CRTE', vencido: false },
         { id: 2058, tipoDocumento: null, prefijo: 'SEDS', vencido: false },
     ]);
-    await configuracionDao.usarRango(idNegocio, rangos[0].id_resolucion);
+    for (const r of rangos) await configuracionDao.usarRango(idNegocio, r.id_resolucion);
     await configuracionDao.cambiarEstado(idNegocio, 'EN_PRUEBAS', idUsuario);
 });
 
@@ -161,6 +164,7 @@ afterAll(async () => {
 beforeEach(() => {
     jest.clearAllMocks();
     adaptador.emitirFactura.mockResolvedValue(aceptado());
+    adaptador.emitirNotaCredito.mockResolvedValue(aceptado('CRTE1'));
     adaptador.consultarPorReferencia.mockResolvedValue(null);
     adaptador.eliminarPendiente.mockResolvedValue();
     adaptador.descargarArchivo.mockImplementation(async ({ tipo }) => Buffer.from(`contenido ${tipo}`));
@@ -179,7 +183,10 @@ describe('la configuración del negocio', () => {
 
     test('un rango que no es factura ni nota crédito no se copia', async () => {
         const rangos = await configuracionDao.listarRangos(idNegocio);
-        expect(rangos.map((r) => r.id_rango_proveedor)).toEqual([389]);
+        expect(rangos.map((r) => [r.id_rango_proveedor, r.tipo_documento, r.en_uso])).toEqual([
+            [389, 'FV', true],
+            [1776, 'NC', true],
+        ]);
     });
 
     test('un impuesto que no está en el catálogo no se guarda', async () => {
@@ -398,6 +405,110 @@ describe('reintentos y reconciliación', () => {
         expect((await documentoDe(huerfano)).estado).toBe('EN_COLA');
         expect(await documentoDe(reciente)).toBeUndefined();
         expect(adaptador.emitirFactura).not.toHaveBeenCalled();
+    });
+});
+
+describe('anular un pedido cobrado', () => {
+    const { alAnularPedido } = require('../../app_core/facturacion');
+
+    test('si la factura todavía no salió, se anula sin llamar al proveedor', async () => {
+        const idOrden = await crearPedido({ precio: 300000 }); // queda esperando datos
+        await alCobrarPedido({ idOrden });
+        const r = await alAnularPedido({ idOrden, idUsuario });
+        expect(r.estado).toBe('ANULADO');
+        expect((await documentoDe(idOrden)).estado).toBe('ANULADO');
+        expect(adaptador.emitirFactura).not.toHaveBeenCalled();
+        expect(adaptador.emitirNotaCredito).not.toHaveBeenCalled();
+    });
+
+    test('si ya fue aceptada, se emite una nota crédito por el total que la referencia', async () => {
+        adaptador.emitirFactura.mockResolvedValue(aceptado('SETP-A-ANULAR'));
+        const idOrden = await crearPedido();
+        await alCobrarPedido({ idOrden });
+        const r = await alAnularPedido({ idOrden, idUsuario });
+        expect(r).toMatchObject({ tipo: 'NC', estado: 'ACEPTADO', numero: 'CRTE1', mensaje: 'Nota crédito CRTE1 enviada' });
+
+        const factura = await documentoDe(idOrden);
+        const nota = await documentoDe(idOrden, 'NC');
+        expect(factura.estado).toBe('ACEPTADO'); // la factura aceptada no se toca
+        expect(nota.id_documento_referencia).toBe(factura.id_documento);
+        expect(Number(nota.total)).toBe(Number(factura.total));
+        expect(nota.codigo_referencia).toMatch(new RegExp(`^EAP${idNegocio}-NC-${idOrden}-`));
+
+        const envio = adaptador.emitirNotaCredito.mock.calls[0][0];
+        expect(envio.facturaReferencia).toEqual({ numero: 'SETP-A-ANULAR' });
+        expect(envio.idRango).toBe(1776);
+        expect(envio.lineas).toHaveLength(1);
+    });
+
+    test('anular dos veces no emite dos notas', async () => {
+        const idOrden = await crearPedido();
+        await alCobrarPedido({ idOrden });
+        await alAnularPedido({ idOrden });
+        await alAnularPedido({ idOrden });
+        expect(adaptador.emitirNotaCredito).toHaveBeenCalledTimes(1);
+    });
+
+    test('un pedido sin factura no hace nada', async () => {
+        const idOrden = await crearPedido({ estadoPago: 'pendiente_pago', estado: 'ABIERTA' });
+        expect(await alAnularPedido({ idOrden })).toBeNull();
+    });
+});
+
+describe('lo que ve la caja', () => {
+    test('la lista trae los documentos del negocio, y solo los suyos', async () => {
+        const idOrden = await crearPedido();
+        await alCobrarPedido({ idOrden });
+        const lista = await emision.listar(idNegocio, { estado: 'ACEPTADO' });
+        expect(lista.length).toBeGreaterThan(0);
+        expect(lista[0]).toMatchObject({ estado: 'ACEPTADO', consumidor_final: true });
+        expect(await emision.listar(idNegocio, { desde: '2099-01-01' })).toEqual([]);
+        expect(await emision.listar(-1)).toEqual([]);
+    });
+
+    test('un documento no se puede pedir desde otro negocio', async () => {
+        const idOrden = await crearPedido();
+        await alCobrarPedido({ idOrden });
+        const doc = await documentoDe(idOrden);
+        expect(await emision.obtenerDeNegocio(doc.id_documento, idNegocio)).not.toBeNull();
+        expect(await emision.obtenerDeNegocio(doc.id_documento, idNegocio + 1)).toBeNull();
+    });
+
+    test('el PDF se trae del proveedor si todavía no estaba guardado', async () => {
+        adaptador.descargarArchivo.mockImplementation(async ({ tipo }) => Buffer.from(`%${tipo} de prueba`));
+        const idOrden = await crearPedido();
+        await alCobrarPedido({ idOrden });
+        const doc = await documentoDe(idOrden);
+        const pdf = await emision.obtenerArchivo(doc.id_documento, 'PDF');
+        expect(pdf.toString()).toBe('%PDF de prueba');
+    });
+
+    test('cada factura aceptada anota hasta dónde va el rango', async () => {
+        adaptador.emitirFactura.mockResolvedValue(aceptado('SETP990000123'));
+        const idOrden = await crearPedido();
+        await alCobrarPedido({ idOrden });
+        const rango = await configuracionDao.rangoEnUso(idNegocio, 'FV');
+        expect(Number(rango.consecutivo_actual)).toBe(990000123);
+    });
+
+    test('avisa cuando el rango se acaba o la resolución vence', async () => {
+        expect(await configuracionDao.alertasDe(idNegocio)).toEqual([]);
+        await q(
+            `UPDATE facturacion.fe_resolucion
+                SET rango_desde = 1, rango_hasta = 1000, consecutivo_actual = 950, vigencia_hasta = CURRENT_DATE + 10
+              WHERE id_negocio = :idNegocio AND tipo_documento = 'FV' RETURNING 1;`,
+            { idNegocio }
+        );
+        const alertas = await configuracionDao.alertasDe(idNegocio);
+        expect(alertas).toHaveLength(2);
+        expect(alertas.join(' ')).toMatch(/vence el \d{2}\/\d{2}\/\d{4}/);
+        expect(alertas.join(' ')).toMatch(/Quedan 50 números/);
+        await q(
+            `UPDATE facturacion.fe_resolucion
+                SET rango_desde = NULL, rango_hasta = NULL, vigencia_hasta = NULL
+              WHERE id_negocio = :idNegocio AND tipo_documento = 'FV' RETURNING 1;`,
+            { idNegocio }
+        );
     });
 });
 

@@ -26,6 +26,7 @@ const EstadisticasController = require('../controllers/estadisticasController');
 const FichaPersonaController = require('../controllers/fichaPersonaController');
 const AuditoriaController = require('../controllers/auditoriaController');
 const DatosFiscalesController = require('../controllers/datosFiscalesController');
+const FeConfiguracionController = require('../controllers/feConfiguracionController');
 const CanalWhatsappController = require('../controllers/canalWhatsappController');
 const CobranzaController = require('../controllers/cobranzaController');
 const AdquirirController = require('../controllers/adquirirController');
@@ -440,6 +441,59 @@ router.put(
     ],
     DatosFiscalesController.putDeclaracion
 );
+
+// ── Emisión de facturación electrónica (FE-2) ──
+// Solo super admin: aquí entran las credenciales del proveedor de CADA negocio y se decide con qué
+// rango y en qué ambiente emite. El inquilino llena su ficha fiscal (arriba); esto no lo ve.
+const FE = '/negocios/:id_negocio/facturacion-electronica';
+const credencialValidator = (campo) =>
+    body(`credenciales.${campo}`).if(body('credenciales').exists({ values: 'null' }))
+        .isString().trim().isLength({ min: 1, max: 255 }).withMessage(`Falta ${campo}`);
+
+router.get(FE, requireSuperAdmin, idNegocioValidator, FeConfiguracionController.getConfiguracion);
+
+router.put(FE, requireSuperAdmin, [
+    ...idNegocioValidator,
+    body('ambiente').optional().isIn(['PRUEBAS', 'PRODUCCION']).withMessage('Ambiente inválido'),
+    body('credenciales').optional({ nullable: true }).isObject().withMessage('Credenciales inválidas'),
+    credencialValidator('client_id'),
+    credencialValidator('client_secret'),
+    credencialValidator('username'),
+    credencialValidator('password'),
+    body('impuesto_defecto_codigo').optional().isString().isLength({ min: 2, max: 4 }),
+    body('impuesto_defecto_tarifa').optional().isFloat({ min: 0, max: 100 }),
+    body('impuesto_domicilio_codigo').optional().isString().isLength({ min: 2, max: 4 }),
+    body('impuesto_domicilio_tarifa').optional().isFloat({ min: 0, max: 100 }),
+    body('enviar_correo').optional().isBoolean(),
+], FeConfiguracionController.putConfiguracion);
+
+router.post(`${FE}/probar`, requireSuperAdmin, idNegocioValidator, FeConfiguracionController.probarConexion);
+
+router.post(`${FE}/rangos/sincronizar`, requireSuperAdmin, idNegocioValidator, FeConfiguracionController.sincronizarRangos);
+
+// Lo que la DIAN tiene asociado al software del negocio, y crear el rango en el proveedor: el
+// proveedor no lo toma solo, así que sin este paso un alta no se puede terminar.
+router.get(`${FE}/rangos/dian`, requireSuperAdmin, idNegocioValidator, FeConfiguracionController.rangosDian);
+
+router.post(`${FE}/rangos`, requireSuperAdmin, [
+    ...idNegocioValidator,
+    body('tipo_documento').isIn(['FV', 'NC']).withMessage('Tipo de rango inválido'),
+    body('prefijo').isString().trim().isLength({ min: 1, max: 10 }).withMessage('Prefijo inválido'),
+    body('actual').isInt({ min: 1 }).withMessage('El número de inicio debe ser un entero positivo'),
+    // La factura lleva la resolución que autorizó la DIAN; la nota crédito no tiene.
+    body('resolucion').if(body('tipo_documento').equals('FV'))
+        .isString().trim().isLength({ min: 5, max: 40 }).withMessage('Falta el número de resolución'),
+], FeConfiguracionController.crearRango);
+
+router.put(`${FE}/rangos/:id_resolucion/usar`, requireSuperAdmin, [
+    ...idNegocioValidator,
+    param('id_resolucion').isUUID().withMessage('Rango inválido'),
+], FeConfiguracionController.usarRango);
+
+router.patch(`${FE}/estado`, requireSuperAdmin, [
+    ...idNegocioValidator,
+    body('estado').isIn(['EN_PRUEBAS', 'ACTIVO', 'SUSPENDIDO']).withMessage('Estado inválido'),
+], FeConfiguracionController.cambiarEstado);
 
 // --- Canal de WhatsApp propio (F8-D, Embedded Signup — Opción B del panel) ---
 //

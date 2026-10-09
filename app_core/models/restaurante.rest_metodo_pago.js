@@ -8,6 +8,9 @@ module.exports = (sequelize, DataTypes) => {
     // cobro que ese dinero NO entra al cajón hoy y que hay que descontarlo de la cuenta del
     // cliente. Hay como mucho una por negocio y la siembra migrate:restaurante-cuentas.
     es_cuenta:      { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+    // Medio de pago DIAN con el que sale en la factura electrónica (10 efectivo, 47 transferencia,
+    // 48/49 tarjeta, ZZZ otro). NULL = «otro». Solo importa si el negocio factura.
+    codigo_medio_pago_dian: { type: DataTypes.STRING(3), allowNull: true },
     fecha_creacion: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
   }, {
     tableName: 'rest_metodo_pago', schema: 'restaurante', timestamps: false,

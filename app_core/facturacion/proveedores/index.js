@@ -6,6 +6,10 @@
  *   codigo: string                                   'FACTUS'
  *   probarConexion({ credenciales, ambiente })       → { nit, dv, razon_social }
  *   listarRangos({ credenciales, ambiente })         → [RangoProveedor]
+ *   listarRangosDian({ credenciales, ambiente })     → [{ prefijo, resolucion, desde, hasta,
+ *                                                         vigenciaDesde, vigenciaHasta }]
+ *   crearRango({ credenciales, ambiente, tipoDocumento: 'FV'|'NC', prefijo, resolucion, actual })
+ *                                                    → { id, prefijo, actual }
  *   emitirFactura({ credenciales, ambiente, documento, lineas, idRango, enviarCorreo })
  *                                                    → ResultadoEmision
  *   consultarPorReferencia({ credenciales, ambiente, codigoReferencia })

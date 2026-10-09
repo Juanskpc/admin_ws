@@ -15,6 +15,11 @@ module.exports = (sequelize, DataTypes) => {
         // Empaque que el asistente suma en pedidos para llevar / domicilio (ver empaqueService).
         id_producto_empaque: { type: DataTypes.INTEGER, allowNull: true },
         cantidad_empaque:    { type: DataTypes.SMALLINT, allowNull: false, defaultValue: 1 },
+        // Datos fiscales (FE-1). Todos opcionales: NULL = el impuesto por defecto del negocio.
+        codigo_impuesto:    { type: DataTypes.STRING(4), allowNull: true },
+        tarifa_impuesto:    { type: DataTypes.DECIMAL(5, 2), allowNull: true },
+        unidad_medida_dian: { type: DataTypes.STRING(10), allowNull: true },
+        codigo_producto:    { type: DataTypes.STRING(50), allowNull: true },
         fecha_creacion: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
     }, {
         tableName: 'carta_producto',

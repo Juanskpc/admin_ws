@@ -195,6 +195,61 @@ async function usarRango(idNegocio, idResolucion, { transaction } = {}) {
     return transaction ? hacer(transaction) : sequelize.transaction(hacer);
 }
 
+/** Tras un documento aceptado, anota hasta dónde va el rango (para avisar cuando se acaba). */
+async function anotarConsecutivo(idResolucion, numero, { transaction } = {}) {
+    // El número trae el prefijo delante (SETP990024154): solo interesa la parte numérica.
+    const digitos = /(\d+)$/.exec(String(numero || ''))?.[1];
+    if (!digitos) return;
+    await sequelize.query(
+        `UPDATE facturacion.fe_resolucion
+            SET consecutivo_actual = GREATEST(COALESCE(consecutivo_actual, 0), :n)
+          WHERE id_resolucion = :idResolucion;`,
+        { replacements: { idResolucion, n: Number(digitos) }, transaction }
+    );
+}
+
+/**
+ * Avisos sobre los rangos en uso, redactados para enseñárselos a una persona: el rango se acaba,
+ * la resolución vence pronto o ya venció. Lista vacía = todo en orden.
+ */
+async function alertasDe(idNegocio, { transaction } = {}) {
+    const rangos = await sequelize.query(
+        `SELECT tipo_documento, prefijo, rango_desde, rango_hasta, consecutivo_actual, vencida,
+                to_char(vigencia_hasta, 'DD/MM/YYYY') AS vence,
+                (vigencia_hasta - CURRENT_DATE) AS dias
+           FROM facturacion.fe_resolucion WHERE id_negocio = :idNegocio AND en_uso;`,
+        { replacements: { idNegocio }, transaction, type: SELECT }
+    );
+    const alertas = [];
+    for (const r of rangos) {
+        const cual = r.tipo_documento === 'NC' ? 'de notas crédito' : 'de facturas';
+        if (r.vencida || (r.dias !== null && Number(r.dias) < 0)) {
+            alertas.push(`La resolución ${cual} (${r.prefijo ?? 'sin prefijo'}) está vencida.`);
+        } else if (r.dias !== null && Number(r.dias) < 30) {
+            alertas.push(`La resolución ${cual} vence el ${r.vence}.`);
+        }
+        const [desde, hasta, actual] = [r.rango_desde, r.rango_hasta, r.consecutivo_actual].map((x) =>
+            x === null ? null : Number(x)
+        );
+        if (desde !== null && hasta !== null && actual !== null && hasta >= desde) {
+            const quedan = hasta - actual;
+            if (quedan / (hasta - desde + 1) < 0.1) {
+                alertas.push(`Quedan ${Math.max(quedan, 0).toLocaleString('es-CO')} números en el rango ${cual}.`);
+            }
+        }
+    }
+    return alertas;
+}
+
+/** Los negocios que emiten hoy (para las tareas de fondo). */
+async function negociosActivos() {
+    const filas = await sequelize.query(
+        `SELECT id_negocio FROM facturacion.fe_configuracion WHERE estado IN (:estados);`,
+        { replacements: { estados: ESTADOS_QUE_EMITEN }, type: SELECT }
+    );
+    return filas.map((f) => f.id_negocio);
+}
+
 /**
  * Cambia el estado. Para empezar a emitir (EN_PRUEBAS o ACTIVO) tiene que estar todo: si falta
  * algo, el error dice qué.
@@ -250,5 +305,8 @@ module.exports = {
     listarRangos,
     guardarRangos,
     usarRango,
+    anotarConsecutivo,
+    alertasDe,
+    negociosActivos,
     debeFacturar,
 };

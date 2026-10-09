@@ -264,7 +264,7 @@ async function getProductosAdmin(req, res) {
 /** POST /restaurante/carta/admin/productos */
 async function crearProducto(req, res) {
     try {
-        const { id_negocio, id_categoria, nombre, descripcion, precio, icono, imagen_url, es_popular, disponible, visible, ingredientes, id_producto_empaque, cantidad_empaque } = req.body;
+        const { id_negocio, id_categoria, nombre, descripcion, precio, icono, imagen_url, es_popular, disponible, visible, ingredientes, id_producto_empaque, cantidad_empaque, codigo_impuesto, tarifa_impuesto, unidad_medida_dian, codigo_producto } = req.body;
         if (!id_negocio || !id_categoria || !nombre?.trim() || precio === undefined) {
             return Respuesta.error(res, 'id_negocio, id_categoria, nombre y precio son requeridos', 400);
         }
@@ -273,11 +273,13 @@ async function crearProducto(req, res) {
             id_negocio, id_categoria, nombre: nombre.trim(), descripcion,
             precio, icono, imagen_url, es_popular, disponible, visible, ingredientes,
             id_producto_empaque, cantidad_empaque,
+            codigo_impuesto, tarifa_impuesto, unidad_medida_dian, codigo_producto,
         });
         return Respuesta.success(res, 'Producto creado', { id_producto: prod.id_producto }, 201);
     } catch (err) {
         console.error('[CartaAdmin] Error crearProducto:', err.message);
         if (err.code === 'EMPAQUE_INVALIDO') return Respuesta.error(res, err.message, 400);
+        if (err.code === 'FE_IMPUESTO_INVALIDO') return Respuesta.error(res, err.message, 422, { code: err.code });
         return Respuesta.error(res, 'Error al crear producto.');
     }
 }
@@ -293,6 +295,7 @@ async function editarProducto(req, res) {
     } catch (err) {
         console.error('[CartaAdmin] Error editarProducto:', err.message);
         if (err.code === 'EMPAQUE_INVALIDO') return Respuesta.error(res, err.message, 400);
+        if (err.code === 'FE_IMPUESTO_INVALIDO') return Respuesta.error(res, err.message, 422, { code: err.code });
         return Respuesta.error(res, err.message || 'Error al editar producto.');
     }
 }

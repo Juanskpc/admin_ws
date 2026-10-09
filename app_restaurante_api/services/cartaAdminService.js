@@ -348,9 +348,42 @@ async function validarEmpaque({ idNegocio, idProducto = null, idEmpaque, cantida
 }
 
 /** Crea un producto con sus ingredientes. */
-async function crearProducto({ id_negocio, id_categoria, nombre, descripcion, precio, icono, imagen_url, es_popular, disponible, visible, ingredientes, id_producto_empaque, cantidad_empaque }) {
+/**
+ * El impuesto de un producto va en pareja (código + tarifa) y tiene que estar en el catálogo:
+ * un «INC al 19 %» no existe, y con él la DIAN rechazaría cada factura que lo lleve.
+ * `undefined` en los dos = no tocar; `null` en el código = quitarlo (usa el del negocio).
+ */
+async function validarImpuesto({ codigo_impuesto, tarifa_impuesto }, t) {
+    if (codigo_impuesto === undefined && tarifa_impuesto === undefined) return undefined;
+    if (codigo_impuesto === null || codigo_impuesto === '') return { codigo_impuesto: null, tarifa_impuesto: null };
+    const invalido = (mensaje) => {
+        const e = new Error(mensaje);
+        e.code = 'FE_IMPUESTO_INVALIDO';
+        e.statusCode = 422;
+        return e;
+    };
+    if (codigo_impuesto === undefined || tarifa_impuesto === undefined || tarifa_impuesto === null) {
+        throw invalido('El impuesto del producto va con su tarifa: faltó uno de los dos.');
+    }
+    const [existe] = await Models.sequelize.query(
+        `SELECT 1 FROM facturacion.fe_impuesto
+          WHERE codigo = :codigo AND tarifa = :tarifa AND estado = 'A' LIMIT 1;`,
+        {
+            replacements: { codigo: String(codigo_impuesto), tarifa: Number(tarifa_impuesto) },
+            transaction: t,
+            type: Models.sequelize.QueryTypes.SELECT,
+        }
+    );
+    if (!existe) throw invalido(`El impuesto ${codigo_impuesto} con tarifa ${tarifa_impuesto}% no existe.`);
+    return { codigo_impuesto: String(codigo_impuesto), tarifa_impuesto: Number(tarifa_impuesto) };
+}
+
+const textoONull = (v) => (v === null || v === undefined || String(v).trim() === '' ? null : String(v).trim());
+
+async function crearProducto({ id_negocio, id_categoria, nombre, descripcion, precio, icono, imagen_url, es_popular, disponible, visible, ingredientes, id_producto_empaque, cantidad_empaque, codigo_impuesto, tarifa_impuesto, unidad_medida_dian, codigo_producto }) {
     const t = await Models.sequelize.transaction();
     try {
+        const impuesto = await validarImpuesto({ codigo_impuesto, tarifa_impuesto }, t);
         const empaque = await validarEmpaque(
             { idNegocio: id_negocio, idEmpaque: id_producto_empaque ?? null, cantidad: cantidad_empaque },
             t
@@ -368,6 +401,10 @@ async function crearProducto({ id_negocio, id_categoria, nombre, descripcion, pr
             visible: visible !== undefined ? visible : true,
             id_producto_empaque: empaque.id,
             cantidad_empaque: empaque.cantidad,
+            codigo_impuesto: impuesto?.codigo_impuesto ?? null,
+            tarifa_impuesto: impuesto?.tarifa_impuesto ?? null,
+            unidad_medida_dian: textoONull(unidad_medida_dian),
+            codigo_producto: textoONull(codigo_producto),
         }, { transaction: t });
 
         if (Array.isArray(ingredientes) && ingredientes.length > 0) {
@@ -384,11 +421,14 @@ async function crearProducto({ id_negocio, id_categoria, nombre, descripcion, pr
 }
 
 /** Edita un producto y sincroniza su lista de ingredientes. */
-async function editarProducto(idProducto, { id_categoria, nombre, descripcion, precio, icono, imagen_url, es_popular, disponible, visible, ingredientes, id_producto_empaque, cantidad_empaque }) {
+async function editarProducto(idProducto, { id_categoria, nombre, descripcion, precio, icono, imagen_url, es_popular, disponible, visible, ingredientes, id_producto_empaque, cantidad_empaque, codigo_impuesto, tarifa_impuesto, unidad_medida_dian, codigo_producto }) {
     const t = await Models.sequelize.transaction();
     try {
         const prod = await Models.CartaProducto.findByPk(idProducto);
         if (!prod) throw new Error('Producto no encontrado');
+
+        // `undefined` = la edición no habla de impuestos (la de la imagen, por ejemplo): no se tocan.
+        const impuesto = await validarImpuesto({ codigo_impuesto, tarifa_impuesto }, t);
 
         // `undefined` = no tocar el empaque (las ediciones que no lo mandan, como la de la imagen,
         // no deben borrarlo); `null` = quitarlo.
@@ -417,6 +457,10 @@ async function editarProducto(idProducto, { id_categoria, nombre, descripcion, p
             visible:      visible      !== undefined ? visible      : prod.visible,
             id_producto_empaque: empaque.id,
             cantidad_empaque:    empaque.cantidad,
+            codigo_impuesto:    impuesto ? impuesto.codigo_impuesto : prod.codigo_impuesto,
+            tarifa_impuesto:    impuesto ? impuesto.tarifa_impuesto : prod.tarifa_impuesto,
+            unidad_medida_dian: unidad_medida_dian !== undefined ? textoONull(unidad_medida_dian) : prod.unidad_medida_dian,
+            codigo_producto:    codigo_producto    !== undefined ? textoONull(codigo_producto)    : prod.codigo_producto,
         }, { transaction: t });
 
         // Sync ingredientes: actualiza existentes, reactiva eliminados lógicos,

@@ -9,22 +9,29 @@ async function listar(idNegocio, soloActivos = true) {
     });
 }
 
-async function crear({ idNegocio, nombre }) {
+async function crear({ idNegocio, nombre, codigoMedioPagoDian = null }) {
     const trimmed = String(nombre || '').trim();
     if (!trimmed) {
         const e = new Error('Nombre requerido'); e.statusCode = 422; throw e;
     }
-    return Models.RestMetodoPago.create({ id_negocio: idNegocio, nombre: trimmed, estado: 'A' });
+    return Models.RestMetodoPago.create({
+        id_negocio: idNegocio, nombre: trimmed, estado: 'A',
+        codigo_medio_pago_dian: codigoMedioPagoDian || null,
+    });
 }
 
-async function actualizar({ idMetodo, idNegocio, nombre }) {
+async function actualizar({ idMetodo, idNegocio, nombre, codigoMedioPagoDian }) {
     const m = await Models.RestMetodoPago.findOne({ where: { id_metodo_pago: idMetodo, id_negocio: idNegocio } });
     if (!m) return null;
     const trimmed = String(nombre || '').trim();
     if (!trimmed) {
         const e = new Error('Nombre requerido'); e.statusCode = 422; throw e;
     }
-    return m.update({ nombre: trimmed });
+    // `undefined` = quien edita no habla del tipo para la factura: se deja como está.
+    return m.update({
+        nombre: trimmed,
+        ...(codigoMedioPagoDian !== undefined ? { codigo_medio_pago_dian: codigoMedioPagoDian || null } : {}),
+    });
 }
 
 /**

@@ -24,6 +24,7 @@ const MetodoPagoController = require('../controllers/metodoPagoController');
 const CartaDisenoController = require('../controllers/cartaDisenoController');
 const HorarioController    = require('../controllers/horarioController');
 const ProveedorController  = require('../controllers/proveedorController');
+const FacturacionController = require('../controllers/facturacionController');
 const { verificarToken }   = require('../../app_core/middleware/auth');
 const Respuesta            = require('../../app_core/helpers/respuesta');
 const { paisesParaSeleccion } = require('../../app_core/helpers/paises');
@@ -871,20 +872,65 @@ router.get('/metodos-pago', [
 	query('id_negocio').isInt({ min: 1 }),
 ], MetodoPagoController.listar);
 
+// Tipo de pago para la factura electrónica (la lista de `MEDIOS_PAGO_DIAN`). Opcional.
+const medioPagoDianValidator = body('codigo_medio_pago_dian').optional({ nullable: true })
+	.isIn(['10', '47', '48', '49', 'ZZZ']).withMessage('Tipo de pago para la factura inválido');
+
 router.post('/metodos-pago', [
 	body('id_negocio').isInt({ min: 1 }),
 	body('nombre').trim().notEmpty().isLength({ min: 1, max: 80 }),
+	medioPagoDianValidator,
 ], MetodoPagoController.crear);
 
 router.put('/metodos-pago/:id', [
 	param('id').isInt({ min: 1 }),
 	body('id_negocio').isInt({ min: 1 }),
 	body('nombre').trim().notEmpty().isLength({ min: 1, max: 80 }),
+	medioPagoDianValidator,
 ], MetodoPagoController.actualizar);
 
 router.patch('/metodos-pago/:id/inactivar', [
 	param('id').isInt({ min: 1 }),
 	query('id_negocio').isInt({ min: 1 }),
 ], MetodoPagoController.inactivar);
+
+// --- Facturación electrónica ---
+// El restaurante no configura nada aquí (eso es del super admin): solo ve si está activa y sus
+// documentos. Sin facturación activa, `/estado` responde `activa: false` y la lista sale vacía.
+router.get('/facturacion/estado', [
+	query('id_negocio').isInt({ min: 1 }),
+], FacturacionController.getEstado);
+
+router.get('/facturacion/documentos', [
+	query('id_negocio').isInt({ min: 1 }),
+	query('desde').optional({ values: 'falsy' }).isISO8601(),
+	query('hasta').optional({ values: 'falsy' }).isISO8601(),
+	query('estado').optional({ values: 'falsy' })
+		.isIn(['PENDIENTE_DATOS', 'EN_COLA', 'ENVIANDO', 'ACEPTADO', 'RECHAZADO', 'ERROR', 'ANULADO']),
+], FacturacionController.listarDocumentos);
+
+router.get('/facturacion/documentos/:id/pdf', [
+	param('id').isUUID(),
+	query('id_negocio').isInt({ min: 1 }),
+], FacturacionController.getPdf);
+
+router.post('/facturacion/documentos/:id/reintentar', [
+	param('id').isUUID(),
+	body('id_negocio').isInt({ min: 1 }),
+], FacturacionController.reintentar);
+
+router.put('/facturacion/documentos/:id/comprador', [
+	param('id').isUUID(),
+	body('id_negocio').isInt({ min: 1 }),
+	body('tipo_persona').isIn(['1', '2']),
+	body('tipo_documento').isIn(['13', '22', '31', '41']),
+	body('numero_documento').isString().trim().isLength({ min: 3, max: 20 }),
+	body('dv').optional({ nullable: true }).isString().matches(/^[0-9]$/),
+	body('razon_social').optional({ nullable: true }).isString().isLength({ max: 255 }),
+	body('nombres').optional({ nullable: true }).isString().isLength({ max: 255 }),
+	body('correo').optional({ nullable: true, values: 'falsy' }).isEmail(),
+	body('telefono').optional({ nullable: true }).isString().isLength({ max: 30 }),
+	body('direccion').optional({ nullable: true }).isString().isLength({ max: 255 }),
+], FacturacionController.completarComprador);
 
 module.exports = router;
