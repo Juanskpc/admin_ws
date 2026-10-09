@@ -931,6 +931,92 @@ router.delete('/consumo-ia/movimientos/:id', requireSuperAdmin, [
     param('id').isInt({ min: 1 }).withMessage('ID de movimiento inválido'),
 ], ConsumoIaController.anularMovimiento);
 
+// --- Cartera: el libro de caja de EscalApp (docs/cartera.md) ---
+// Solo super admin: son las cuentas de la empresa, no de un inquilino. Las mensualidades pagadas
+// y las recargas de OpenAI entran solas al consultar; lo demás se anota a mano.
+const CarteraController = require('../controllers/carteraController');
+
+const rangoCartera = [
+    query('desde').optional({ values: 'falsy' }).isISO8601().withMessage('Fecha inicial inválida (YYYY-MM-DD)'),
+    query('hasta').optional({ values: 'falsy' }).isISO8601().withMessage('Fecha final inválida (YYYY-MM-DD)'),
+];
+const filtrosCartera = [
+    ...rangoCartera,
+    query('tipo').optional({ values: 'falsy' }).isIn(['ingreso', 'egreso', 'transferencia']).withMessage('Tipo inválido'),
+    query('id_categoria').optional({ values: 'falsy' }).isInt({ min: 1 }).withMessage('Categoría inválida'),
+    query('id_cuenta').optional({ values: 'falsy' }).isInt({ min: 1 }).withMessage('Cuenta inválida'),
+    query('origen').optional({ values: 'falsy' }).isIn(['manual', 'cobranza', 'recarga_ia']).withMessage('Origen inválido'),
+    query('q').optional().isString().trim().isLength({ max: 120 }).withMessage('Búsqueda inválida'),
+    query('anulados').optional().isIn(['true', 'false']).withMessage('anulados debe ser true o false'),
+];
+const importe = (campo) => body(campo).optional({ values: 'null' }).isFloat({ min: 0, max: 1e11 })
+    .withMessage(`${campo} debe ser un número positivo`);
+const movimientoCartera = (crear) => [
+    (crear ? body('tipo') : body('tipo').optional())
+        .isIn(['ingreso', 'egreso', 'transferencia']).withMessage('Tipo inválido'),
+    body('fecha').optional({ values: 'falsy' }).isISO8601().withMessage('Fecha inválida (YYYY-MM-DD)'),
+    (crear ? body('id_cuenta') : body('id_cuenta').optional()).isInt({ min: 1 }).withMessage('Cuenta inválida'),
+    body('id_cuenta_destino').optional({ values: 'null' }).isInt({ min: 1 }).withMessage('Cuenta de destino inválida'),
+    body('id_categoria').optional({ values: 'null' }).isInt({ min: 1 }).withMessage('Categoría inválida'),
+    body('id_negocio').optional({ values: 'null' }).isInt({ min: 1 }).withMessage('Negocio inválido'),
+    body('tercero').optional({ values: 'null' }).isString().isLength({ max: 120 }).withMessage('Tercero demasiado largo'),
+    body('descripcion').optional({ values: 'null' }).isString().isLength({ max: 300 }).withMessage('Descripción demasiado larga'),
+    body('soporte').optional({ values: 'null' }).isString().isLength({ max: 80 }).withMessage('Soporte demasiado largo'),
+    body('moneda').optional().isString().isLength({ min: 3, max: 3 }).withMessage('Moneda inválida (ISO 4217)'),
+    (crear ? body('monto') : body('monto').optional()).isFloat({ gt: 0, max: 1e11 }).withMessage('El monto debe ser mayor que cero'),
+    body('tasa_cop').optional({ values: 'null' }).isFloat({ gt: 0, max: 1e7 }).withMessage('Tasa inválida'),
+    importe('comision'), importe('iva_comision'), importe('retencion'), importe('iva'), importe('gmf'),
+    body('exento_gmf').optional().isBoolean().withMessage('exento_gmf debe ser booleano'),
+];
+const cuentaCartera = (crear) => [
+    (crear ? body('nombre') : body('nombre').optional()).isString().trim().isLength({ min: 2, max: 80 })
+        .withMessage('El nombre debe tener entre 2 y 80 caracteres'),
+    body('tipo').optional().isIn(['banco', 'pasarela', 'billetera', 'efectivo', 'tarjeta']).withMessage('Tipo de cuenta inválido'),
+    body('moneda').optional().isString().isLength({ min: 3, max: 3 }).withMessage('Moneda inválida'),
+    body('aplica_gmf').optional().isBoolean().withMessage('aplica_gmf debe ser booleano'),
+    body('saldo_inicial').optional().isFloat({ min: -1e11, max: 1e11 }).withMessage('Saldo inicial inválido'),
+    body('fecha_saldo').optional({ values: 'null' }).isISO8601().withMessage('Fecha de saldo inválida'),
+    body('nota').optional({ values: 'null' }).isString().isLength({ max: 300 }).withMessage('Nota demasiado larga'),
+    body('estado').optional().isIn(['A', 'I']).withMessage('Estado inválido'),
+];
+
+router.get('/cartera/catalogos', requireSuperAdmin, CarteraController.getCatalogos);
+router.get('/cartera/resumen', requireSuperAdmin, rangoCartera, CarteraController.getResumen);
+router.get('/cartera/movimientos', requireSuperAdmin, filtrosCartera, CarteraController.getMovimientos);
+router.get('/cartera/exportar', requireSuperAdmin, filtrosCartera, CarteraController.exportar);
+router.post('/cartera/movimientos', requireSuperAdmin, movimientoCartera(true), CarteraController.crearMovimiento);
+router.put('/cartera/movimientos/:id', requireSuperAdmin, [
+    param('id').isInt({ min: 1 }).withMessage('ID de movimiento inválido'),
+    ...movimientoCartera(false),
+], CarteraController.actualizarMovimiento);
+router.post('/cartera/movimientos/:id/anular', requireSuperAdmin, [
+    param('id').isInt({ min: 1 }).withMessage('ID de movimiento inválido'),
+    body('motivo').isString().trim().isLength({ min: 3, max: 300 }).withMessage('El motivo es obligatorio'),
+], CarteraController.anularMovimiento);
+router.post('/cartera/cuentas', requireSuperAdmin, cuentaCartera(true), CarteraController.crearCuenta);
+router.put('/cartera/cuentas/:id', requireSuperAdmin, [
+    param('id').isInt({ min: 1 }).withMessage('ID de cuenta inválido'),
+    ...cuentaCartera(false),
+], CarteraController.actualizarCuenta);
+router.post('/cartera/categorias', requireSuperAdmin, [
+    body('nombre').isString().trim().isLength({ min: 2, max: 80 }).withMessage('El nombre debe tener entre 2 y 80 caracteres'),
+    body('tipo').isIn(['ingreso', 'egreso']).withMessage('Tipo inválido (ingreso o egreso)'),
+], CarteraController.crearCategoria);
+router.put('/cartera/categorias/:id', requireSuperAdmin, [
+    param('id').isInt({ min: 1 }).withMessage('ID de categoría inválido'),
+    body('nombre').optional().isString().trim().isLength({ min: 2, max: 80 }).withMessage('Nombre inválido'),
+    body('estado').optional().isIn(['A', 'I']).withMessage('Estado inválido'),
+], CarteraController.actualizarCategoria);
+router.put('/cartera/tarifas/:pasarela', requireSuperAdmin, [
+    param('pasarela').isString().isLength({ min: 2, max: 20 }).withMessage('Pasarela inválida'),
+    body('porcentaje').isFloat({ min: 0, max: 99 }).withMessage('Porcentaje inválido'),
+    body('fijo').isFloat({ min: 0, max: 1e7 }).withMessage('Valor fijo inválido'),
+    body('fijo_moneda').optional().isIn(['COP', 'USD']).withMessage('Moneda del fijo inválida'),
+    body('iva_pct').isFloat({ min: 0, max: 99 }).withMessage('IVA inválido'),
+    body('retencion_pct').optional().isFloat({ min: 0, max: 99 }).withMessage('Retención inválida'),
+    body('nota').optional({ values: 'null' }).isString().isLength({ max: 300 }).withMessage('Nota demasiado larga'),
+], CarteraController.actualizarTarifa);
+
 // --- Bandeja del inquilino ---
 // Las mismas conversaciones, pero para el dueño del negocio y CON respuesta humana. No lleva
 // `requireSuperAdmin`: el alcance lo decide `alcanceDeNegocios()` dentro del controlador,
