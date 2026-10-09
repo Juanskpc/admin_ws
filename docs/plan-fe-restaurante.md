@@ -1654,20 +1654,23 @@ correr `fe_configurar_sandbox.js` allí (o compartir la clave de desarrollo).
 
 ### 2026-10-09 (tarde) — El correo lo manda EscalApp, y la factura viaja con el pedido
 
-- **El correo al comprador lo envía EscalApp** (decisión del usuario):   corre al aceptarse el documento, después de archivar el PDF y el XML, con   (el diseño del comprobante de pago, con el color y el logo del negocio). A Factus se le manda
-  siempre . Una sola vez por documento:  se
+- **El correo al comprador lo envía EscalApp** (decisión del usuario): `emisionService.enviarCorreo`
+  corre al aceptarse el documento, después de archivar el PDF y el XML, con `correoFactura.js`
+  (el diseño del comprobante de pago, con el color y el logo del negocio). A Factus se le manda
+  siempre `send_email: false`. Una sola vez por documento: `fe_documento.correo_enviado_en` se
   reclama de forma atómica y se suelta si el envío falla. En PRUEBAS el correo sale rotulado como
-  ejemplo. Probado de punta a punta:  llegó a escalappsystem@gmail.com.
-- **La factura pedida al tomar el pedido se guarda con él** (,
-  jsonb, añadida por ; en la local y en la compartida). Viaja en
-   y en  ( = no se toca,  = se quitó), igual que
-  . Al cobrar: si el cuerpo trae  (aunque sea ) manda eso; si no la
-  trae, se usa la guardada. Las pantallas mandan la clave siempre que el negocio factura, así que
-  desmarcarla en el cobro sí la quita. Mesas y Despacho abren con ella marcada
-  ( del selector) y el cobro directo desde la tarjeta de Despacho también la usa.
-- **La ventana de la factura esconde el modal de atrás** en Mesas y Despacho (, para
+  ejemplo. Probado de punta a punta: `SETP990024207` llegó a escalappsystem@gmail.com.
+- **La factura pedida al tomar el pedido se guarda con él**
+  (`restaurante.pedid_orden.factura_solicitada`, jsonb, añadida por `migrate:facturacion-emision`;
+  en la local y en la compartida). Viaja en `POST /pedidos` y en `agregar-items` (`undefined` = no
+  se toca, `null` = se quitó), igual que `id_cuenta`. Al cobrar: si el cuerpo trae `factura`
+  (aunque sea `null`) manda eso; si no la trae, se usa la guardada. Las pantallas mandan la clave
+  siempre que el negocio factura, así que desmarcarla en el cobro sí la quita. Mesas y Despacho
+  abren con ella marcada (`facturaInicial` del selector) y el cobro directo desde la tarjeta de
+  Despacho también la usa.
+- **La ventana de la factura esconde el modal de atrás** en Mesas y Despacho (`visibility`, para
   que no se desmonte nada) y lo devuelve al cerrarse.
-- Cláusulas 5–7 nuevas en  §7: qué se factura lo decide el
+- Cláusulas 5–7 nuevas en `docs/legal/terminos-y-condiciones.md` §7: qué se factura lo decide el
   cliente, los datos del comprador los registra él, y el envío del correo.
 
 ### 2026-10-09 — Facturar solo lo que se pide, y el interruptor con ventana (D20)
