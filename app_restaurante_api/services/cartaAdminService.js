@@ -301,6 +301,8 @@ async function getProductosAdmin(idNegocio, idCategoria) {
             'id_producto', 'id_categoria', 'nombre', 'descripcion',
             'precio', 'imagen_url', 'icono', 'es_popular', 'disponible', 'visible',
             'id_producto_empaque', 'cantidad_empaque',
+            // Datos fiscales: la pantalla de carta los enseña solo si el negocio factura.
+            'codigo_impuesto', 'tarifa_impuesto', 'unidad_medida_dian', 'codigo_producto',
         ],
         include: [{
             model: Models.CartaProductoIngred,

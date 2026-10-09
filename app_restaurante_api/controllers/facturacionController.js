@@ -55,9 +55,10 @@ async function exigirDocumento(idDocumento, idNegocio) {
 }
 
 const getEstado = manejar('getEstado', async (req, res, idNegocio) => {
-    const [decision, ficha] = await Promise.all([
+    const [decision, ficha, catalogos] = await Promise.all([
         configuracionDao.debeFacturar(idNegocio),
         datosFiscales.obtener(idNegocio),
+        datosFiscales.catalogos(),
     ]);
     return Respuesta.success(res, 'Estado de la facturación electrónica', {
         activa: decision.facturar,
@@ -66,6 +67,8 @@ const getEstado = manejar('getEstado', async (req, res, idNegocio) => {
         tope_identificacion: topeConsumidorFinal(),
         motivo: decision.motivo,
         medios_pago: MEDIOS_PAGO_DIAN,
+        // Los impuestos que se le pueden poner a un producto de la carta.
+        impuestos: catalogos.impuestos.map((i) => ({ codigo: i.codigo, nombre: i.nombre, tarifa: Number(i.tarifa) })),
         // Solo tiene sentido avisar de los rangos a quien ya emite.
         alertas: decision.facturar ? await configuracionDao.alertasDe(idNegocio) : [],
     });
