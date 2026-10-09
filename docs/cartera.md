@@ -74,8 +74,12 @@ Pruebas: `npx jest __tests__/cartera/` (sin base) · `admin_app-v21`:
 
 ## Pendiente / abierto
 
-1. **Producción**: correr `npm run migrate:cartera` en el VPS (tras backup) y desplegar backend +
-   admin. En la compartida ya está (2026-10-09).
+1. ~~Producción~~ **Desplegada el 2026-10-09 ~18:27** (backend `bc671ec`, admin `7816005`).
+   Respaldos previos en el VPS: `backups/db_2026-10-09_1826.dump` y
+   `backups/web_admin_20261009_1827.tgz` (el admin anterior). Al abrirla por primera vez entraron
+   3 mensualidades y 1 recarga de OpenAI; **una mensualidad en CLP (Chile) quedó «sin tasa»**: no
+   suma hasta que se le ponga la tasa en Movimientos. Revertir: `git checkout 05aff29` +
+   restart (el esquema `cartera` puede quedarse, nadie más lo lee) y descomprimir el tgz del admin.
 2. **Fijar el saldo inicial** de cada cuenta con el extracto, o los saldos no cuadran con el banco.
 3. **Contadora**: si Wompi/dLocal nos practican retenciones, si la venta a Chile es exportación, y
    si la cuenta de Bancolombia está marcada exenta de 4x1000.
