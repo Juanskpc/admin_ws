@@ -42,6 +42,11 @@ proyecto después de semanas, **lee este documento primero** y sigue por donde d
 
 ## 4-0. POR DÓNDE SE SIGUE (cierre del 2026-08-29)
 
+> **2026-10-09 — Facturación electrónica del restaurante EN PRODUCCIÓN.** Punto de entrada:
+> [`sesion-2026-10-08-facturacion-electronica-restaurante.md`](sesion-2026-10-08-facturacion-electronica-restaurante.md)
+> (qué hace, cómo probarlo, cómo seguir, trampas). Nada cambia para ningún cliente hasta que el
+> super admin configure uno en `/admin/facturacion` → «Emisión».
+
 > Esta sección es lo primero que hay que leer al retomar. Las de más abajo son historia de fases
 > ya cerradas y se conservan porque explican **por qué** las cosas están como están.
 

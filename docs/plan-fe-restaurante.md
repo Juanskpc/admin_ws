@@ -186,7 +186,7 @@ Marca ✅ al terminar, con fecha y hash corto del commit.
 | **R10.1** | Nota crédito al anular un pedido cobrado | R4.3, R0.2 | ✅ 2026-10-08 |
 | **R11.1** | Alertas de rango y vigencia | R6.1 | ✅ 2026-10-08 |
 | **R11.2** | Número, CUFE y QR en el comprobante impreso | R8.2 | ⏸ espera decisión (ver §7) |
-| **R12.1** | Documentación y despliegue | todo lo anterior | ✅ 2026-10-09 (desplegado; falta la viñeta de CLAUDE.md) |
+| **R12.1** | Documentación y despliegue | todo lo anterior | ✅ 2026-10-09 (desplegado y documentado) |
 
 Tareas que se pueden hacer **en paralelo** desde el inicio: R0.1, R1.1, R2.1, R3.1.
 
