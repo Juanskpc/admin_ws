@@ -112,6 +112,26 @@ Cuando el Cliente active la facturación electrónica:
 4. EscalApp **no asesora** sobre qué impuesto corresponde a cada producto, ni sobre el régimen
    del Cliente. Esa decisión es del Cliente y de su contador.
 
+<!-- CLÁUSULA 2-bis (2026-10-09). La plataforma permite facturar solo algunos cobros: el cajero
+     marca «Factura electrónica» en el cobro (anónima o con los datos del comprador), y solo si el
+     negocio lo pide se factura todo. Ver docs/plan-fe-restaurante.md D20. -->
+
+5. **Qué ventas se facturan lo decide el Cliente.** Por defecto la plataforma emite factura
+   electrónica **solo en los cobros en que el Cliente o su personal la solicitan**, ya sea a
+   consumidor final o a nombre del comprador; el Cliente puede pedir que se facturen todos sus
+   cobros. Esta opción es una herramienta y **no modifica las obligaciones del Cliente**: si la ley
+   le exige expedir factura o documento equivalente por una venta, es responsabilidad exclusiva
+   del Cliente hacerlo, y las consecuencias de no facturar una venta que debía facturarse
+   —incluidas sanciones de la DIAN— corren por su cuenta.
+6. **Los datos del comprador los registra el Cliente.** La identificación, el nombre y el correo
+   del comprador los ingresa el Cliente o su personal en el momento del cobro; EscalApp no los
+   verifica. Por encima del valor que la normativa fija para identificar al comprador, la
+   plataforma exigirá esos datos antes de transmitir el documento.
+7. **Envío del documento al comprador.** Cuando el comprador suministra un correo, EscalApp le
+   envía la factura (PDF y XML) en nombre del Cliente y con su marca. La entrega depende de
+   servicios de correo de terceros; EscalApp no garantiza su recepción y el documento queda siempre
+   disponible para el Cliente en la plataforma.
+
 ## 8. Uso aceptable
 
 El Cliente no podrá: usar la plataforma para fines ilícitos; intentar acceder a datos de otros

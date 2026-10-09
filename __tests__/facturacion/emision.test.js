@@ -29,7 +29,10 @@ jest.mock('../../app_core/facturacion/proveedores', () => {
     return { getProveedor: () => adaptador, adaptador };
 });
 
+jest.mock('../../app_admin_api/services/mailService', () => ({ sendHtmlEmail: jest.fn(async () => true) }));
+
 const db = require('../../app_core/models/conection');
+const MailService = require('../../app_admin_api/services/mailService');
 const { adaptador } = require('../../app_core/facturacion/proveedores');
 const configuracionDao = require('../../app_core/facturacion/configuracionDao');
 const emision = require('../../app_core/facturacion/emisionService');
@@ -505,6 +508,44 @@ describe('anular un pedido cobrado', () => {
     test('un pedido sin factura no hace nada', async () => {
         const idOrden = await crearPedido({ estadoPago: 'pendiente_pago', estado: 'ABIERTA' });
         expect(await alAnularPedido({ idOrden })).toBeNull();
+    });
+});
+
+describe('el correo al comprador lo manda EscalApp', () => {
+    const conCorreo = { tipo_persona: '2', tipo_documento: '13', numero_documento: '1000000009', nombres: 'Ana Pérez', correo: 'ana@correo.co' };
+
+    test('al aceptarse, se le manda solo y una vez, con el PDF, el XML y la marca del negocio', async () => {
+        MailService.sendHtmlEmail.mockClear();
+        const idOrden = await crearPedido();
+        await alCobrarPedido({ idOrden, comprador: conCorreo });
+        await esperar(400); // el correo sale en segundo plano, después de archivar
+        const doc = await documentoDe(idOrden);
+        expect(await emision.enviarCorreo(doc.id_documento)).toBe(false); // ya se mandó
+        expect(MailService.sendHtmlEmail).toHaveBeenCalledTimes(1);
+        const correo = MailService.sendHtmlEmail.mock.calls[0][0];
+        expect(correo.to).toBe('ana@correo.co');
+        expect(correo.attachments.map((a) => a.filename)).toEqual(['SETP1.pdf', 'SETP1.xml']);
+        expect(correo.html).toContain('TEST FE-2 emisión (borrar)');
+        expect((await documentoDe(idOrden)).correo_enviado_en).not.toBeNull();
+    });
+
+    test('sin correo del comprador no se manda nada', async () => {
+        const idOrden = await crearPedido();
+        await alCobrarPedido({ idOrden });
+        MailService.sendHtmlEmail.mockClear();
+        expect(await emision.enviarCorreo((await documentoDe(idOrden)).id_documento)).toBe(false);
+        expect(MailService.sendHtmlEmail).not.toHaveBeenCalled();
+    });
+
+    test('si el envío falla, queda libre para reintentarlo', async () => {
+        const idOrden = await crearPedido();
+        await alCobrarPedido({ idOrden, comprador: conCorreo });
+        const doc = await documentoDe(idOrden);
+        await q('UPDATE facturacion.fe_documento SET correo_enviado_en = NULL WHERE id_documento = :id RETURNING 1;', { id: doc.id_documento });
+        MailService.sendHtmlEmail.mockRejectedValueOnce(new Error('SMTP caído'));
+        expect(await emision.enviarCorreo(doc.id_documento)).toBe(false);
+        expect((await documentoDe(idOrden)).correo_enviado_en).toBeNull();
+        expect(await emision.enviarCorreo(doc.id_documento)).toBe(true);
     });
 });
 

@@ -41,6 +41,9 @@ module.exports = (sequelize, DataTypes) => {
         // que descuenta el saldo. Sin esto, elegir el cliente en el POS se perdía al ir a
         // cobrar la mesa desde otra pantalla.
         id_cuenta:      { type: DataTypes.INTEGER, allowNull: true },
+        // Factura electrónica pedida al tomar el pedido: `{ consumidor_final: true }` (anónima)
+        // o los datos del cliente. NULL = no se pidió. Se usa al cobrar si el cobro no dice otra cosa.
+        factura_solicitada: { type: DataTypes.JSONB, allowNull: true },
         tipo_pedido:    { type: DataTypes.STRING(20), defaultValue: 'MESA' },
         contacto_nombre:     DataTypes.STRING(160),
         contacto_telefono:   DataTypes.STRING(40),

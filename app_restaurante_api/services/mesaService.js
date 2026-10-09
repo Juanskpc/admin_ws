@@ -101,7 +101,7 @@ async function getMesasDashboard(idNegocio) {
             as: 'ordenes',
             where: { estado: 'ABIERTA' },
             required: false,
-            attributes: ['id_orden', 'numero_orden', 'total', 'fecha_creacion', 'estado_cocina', 'id_metodo_pago', 'id_cuenta', 'nota', 'descuento', 'estado_pago', 'para_servir', 'contacto_nombre'],
+            attributes: ['id_orden', 'numero_orden', 'total', 'fecha_creacion', 'estado_cocina', 'id_metodo_pago', 'id_cuenta', 'factura_solicitada', 'nota', 'descuento', 'estado_pago', 'para_servir', 'contacto_nombre'],
             include: [{
                 model: Models.PedidDetalle,
                 as: 'detalles',
@@ -193,6 +193,8 @@ async function getMesasDashboard(idNegocio) {
                 // De quién es la tiquetera, elegida al tomar el pedido. Viaja para que el
                 // cobro de la mesa no vuelva a preguntar lo que el cajero ya dijo.
                 id_cuenta: ordenActiva.id_cuenta ?? null,
+                // La factura pedida al tomar el pedido: el cobro de la mesa abre con ella.
+                factura_solicitada: ordenActiva.factura_solicitada ?? null,
                 pagos: (ordenActiva.pagos ?? []).map((p) => ({
                     id_metodo_pago: p.id_metodo_pago,
                     valor: Number(p.valor ?? 0),

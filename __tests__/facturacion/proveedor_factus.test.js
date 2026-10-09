@@ -255,7 +255,8 @@ describe('traducirFactura', () => {
             legal_organization_code: '1',
             email: 'compras@empresa.co',
         });
-        expect(f.send_email).toBe(true);
+        // El correo lo manda EscalApp, nunca el proveedor: si no, el cliente recibiría dos.
+        expect(f.send_email).toBe(false);
     });
 
     test('con correo pero con el envío apagado en el negocio, no se envía', () => {

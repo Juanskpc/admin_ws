@@ -130,6 +130,8 @@ CREATE TABLE IF NOT EXISTS facturacion.fe_documento (
     intentos              integer NOT NULL DEFAULT 0,
     proximo_intento_en    timestamptz,
     ultimo_error          text,
+    -- Cuándo le mandó EscalApp el correo al comprador (NULL = todavía no, o no tenía correo)
+    correo_enviado_en     timestamptz,
     -- Evidencia
     payload               jsonb,
     respuesta             jsonb,
@@ -274,6 +276,25 @@ async function migrate() {
             await Models.sequelize.query(
                 `ALTER TABLE facturacion.fe_configuracion
                    ADD COLUMN facturar_todo boolean NOT NULL DEFAULT false;`,
+                { transaction: t }
+            );
+        }
+
+        console.log('1c. facturacion.fe_documento.correo_enviado_en...');
+        if (!(await existeColumna('facturacion', 'fe_documento', 'correo_enviado_en', t))) {
+            await Models.sequelize.query(
+                `ALTER TABLE facturacion.fe_documento ADD COLUMN correo_enviado_en timestamptz;`,
+                { transaction: t }
+            );
+        }
+
+        // La factura que el cajero pidió al TOMAR el pedido. Igual que la forma de pago y la
+        // cuenta del cliente: es una intención que viaja con el pedido para que Mesas o Despacho
+        // la encuentren al cobrar. No emite nada por sí sola.
+        console.log('1d. restaurante.pedid_orden.factura_solicitada...');
+        if (!(await existeColumna('restaurante', 'pedid_orden', 'factura_solicitada', t))) {
+            await Models.sequelize.query(
+                `ALTER TABLE restaurante.pedid_orden ADD COLUMN factura_solicitada jsonb;`,
                 { transaction: t }
             );
         }

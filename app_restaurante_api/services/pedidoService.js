@@ -483,7 +483,7 @@ async function recalcularTotalesOrden({ idOrden, porcentajeImpuesto = 0, valorDo
  * @param {number} params.porcentajeImpuesto — ej: 0.19
  */
 async function crearOrden({
-    idNegocio, idMetodoPago = null, idCuenta = null, pagos = null, idUsuario, idMesa, nota, items, porcentajeImpuesto = 0, permitirStockNegativo = false,
+    idNegocio, idMetodoPago = null, idCuenta = null, pagos = null, factura = null, idUsuario, idMesa, nota, items, porcentajeImpuesto = 0, permitirStockNegativo = false,
     // En qué caja (rubro) va el pedido. Opcional: con una sola caja —o una sola asignada al
     // usuario— se resuelve sola y el POS no pregunta nada. Con varias sin elegir, el servicio
     // devuelve PUNTO_CAJA_REQUERIDO con la lista para que el POS muestre el selector.
@@ -612,6 +612,8 @@ async function crearOrden({
             // cobrar desde Mesas o Despacho no vuelva a preguntar de quién es la tiquetera.
             // Nada se descuenta hasta el cobro.
             id_cuenta: idCuenta || null,
+            // La factura electrónica pedida al tomarlo: se emite al cobrar, no ahora.
+            factura_solicitada: factura || null,
             tipo_pedido: tipoPedido,
             valor_domicilio: domicilio,
             descuento: rebaja,
@@ -678,6 +680,8 @@ async function agregarItemsOrden({
     idMetodoPago = null,
     idCuenta = null,
     pagos = null,
+    // undefined = no se habla de la factura (se conserva); null = se quitó.
+    factura,
     nota,
     items,
     porcentajeImpuesto = 0,
@@ -735,6 +739,9 @@ async function agregarItemsOrden({
         }
         if (idCuenta !== undefined && idCuenta !== null) {
             patchOrden.id_cuenta = idCuenta;
+        }
+        if (factura !== undefined) {
+            patchOrden.factura_solicitada = factura || null;
         }
         if (Object.keys(patchOrden).length > 0) {
             await orden.update(patchOrden, { transaction: t });
@@ -1625,7 +1632,7 @@ function adjuntarFactura(orden, factura) {
  *
  * Acepta pago simple (`idMetodoPago`) o Multipago (`pagos: [{id_metodo_pago, valor}]`).
  */
-async function marcarPagado(idOrden, { idMetodoPago, pagos, origenCobro = 'CAJA', idCuenta = null, idUsuario = null, factura = null } = {}) {
+async function marcarPagado(idOrden, { idMetodoPago, pagos, origenCobro = 'CAJA', idCuenta = null, idUsuario = null, factura } = {}) {
     const t = await Models.sequelize.transaction();
     try {
         const orden = await Models.PedidOrden.findByPk(idOrden, {
@@ -1753,7 +1760,7 @@ async function marcarPagado(idOrden, { idMetodoPago, pagos, origenCobro = 'CAJA'
         await t.commit();
         // `null` para el negocio que no factura, que es casi todos.
         adjuntarFactura(orden, await facturacion.alCobrarPedido({
-            idOrden: orden.id_orden, comprador: factura, idUsuario,
+            idOrden: orden.id_orden, comprador: factura !== undefined ? factura : orden.factura_solicitada, idUsuario,
         }));
         return orden;
     } catch (err) {
@@ -2092,7 +2099,7 @@ function sequelizeInicioDeHoy() {
  * @param {number} idOrden
  * @param {{ idUsuario: number }} ctx — usuario que ejecuta el cobro
  */
-async function cerrarOrden(idOrden, { idUsuario, idMetodoPago, pagos, idCuenta = null, factura = null } = {}) {
+async function cerrarOrden(idOrden, { idUsuario, idMetodoPago, pagos, idCuenta = null, factura } = {}) {
     const t = await Models.sequelize.transaction();
     try {
         const orden = await Models.PedidOrden.findOne({
@@ -2221,7 +2228,7 @@ async function cerrarOrden(idOrden, { idUsuario, idMetodoPago, pagos, idCuenta =
         if (resultado) {
             // Si el pedido ya se había cobrado en Despacho, esto devuelve la factura que ya tiene.
             adjuntarFactura(resultado, await facturacion.alCobrarPedido({
-                idOrden, comprador: factura, idUsuario,
+                idOrden, comprador: factura !== undefined ? factura : resultado.factura_solicitada, idUsuario,
             }));
         }
         return resultado;

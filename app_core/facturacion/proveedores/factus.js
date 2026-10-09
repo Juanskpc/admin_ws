@@ -346,13 +346,15 @@ function traducirPagos(pagos) {
     }));
 }
 
-function traducirFactura({ documento, lineas, idRango, enviarCorreo }) {
+function traducirFactura({ documento, lineas, idRango }) {
     return {
         reference_code: documento.codigo_referencia,
         document: '01', // factura electrónica de venta (D1)
         operation_type: '10', // estándar
         numbering_range_id: idRango, // D3
-        send_email: Boolean(enviarCorreo && documento.adquiriente.correo),
+        // El correo al comprador lo manda EscalApp con la marca del negocio (correoFactura.js),
+        // no el proveedor: si los dos lo mandaran, el cliente recibiría dos correos.
+        send_email: false,
         observation: `Pedido ${documento.origen_referencia}`,
         payment_details: traducirPagos(documento.pagos),
         customer: traducirComprador(documento.adquiriente),
@@ -361,14 +363,14 @@ function traducirFactura({ documento, lineas, idRango, enviarCorreo }) {
 }
 
 /** Anulación total (D17): mismo cuerpo que la factura más la referencia a la que anula. */
-function traducirNotaCredito({ documento, lineas, facturaReferencia, idRango, enviarCorreo }) {
+function traducirNotaCredito({ documento, lineas, facturaReferencia, idRango }) {
     return {
         reference_code: documento.codigo_referencia,
         correction_concept_code: '2', // anulación de la factura electrónica
         customization_id: '20', // nota que referencia una factura
         bill_number: facturaReferencia.numero,
         numbering_range_id: idRango,
-        send_email: Boolean(enviarCorreo && documento.adquiriente.correo),
+        send_email: false,
         observation: `Anula la factura ${facturaReferencia.numero} (pedido ${documento.origen_referencia})`,
         payment_details: traducirPagos(documento.pagos),
         customer: traducirComprador(documento.adquiriente),

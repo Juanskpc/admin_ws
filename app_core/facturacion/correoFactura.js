@@ -11,8 +11,8 @@
  * pantallas y los correos de reserva (`gener_negocio.colores`, si no la paleta asignada, y
  * `logo_url`). Quien factura es el negocio; EscalApp solo firma abajo.
  *
- * Hoy no lo envía nadie automáticamente: el correo que recibe el comprador lo manda el proveedor
- * (Factus) con su propio diseño. Esto existe para el día en que EscalApp mande el suyo.
+ * Lo envía `emisionService.enviarCorreo` en cuanto el documento queda aceptado, si el comprador dio
+ * correo. El proveedor (Factus) ya no manda el suyo (`send_email: false`): serían dos correos.
  */
 const Models = require('../models/conection');
 

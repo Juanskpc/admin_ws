@@ -7,8 +7,38 @@ const { validationResult } = require('express-validator');
  * pedidoController — Endpoints para el sistema de pedidos (POS).
  */
 
+/**
+ * La factura electrónica de un pedido, opcional. Tres formas:
+ *   · sin `factura` (o null)             → no se pide factura;
+ *   · `{ consumidor_final: true }`       → anónima;
+ *   · `{ tipo_persona, tipo_documento… }` → a nombre del cliente.
+ * Viaja al tomar el pedido (se guarda como intención) y al cobrarlo (manda sobre lo guardado).
+ * Aquí solo se comprueba la forma; el fondo (dígito de verificación, razón social según el tipo
+ * de persona) lo valida facturación, y un comprador que no pase deja el documento esperando
+ * datos: nunca tumba el cobro.
+ */
+const conDatosDelCliente = (_valor, { req }) =>
+    Boolean(req.body?.factura) && req.body.factura.consumidor_final !== true;
+const facturaValidators = [
+    body('factura').optional({ nullable: true }).isObject().withMessage('factura inválida'),
+    body('factura.consumidor_final').optional({ nullable: true }).isBoolean(),
+    body('factura.tipo_persona').if(conDatosDelCliente)
+        .isIn(['1', '2']).withMessage('tipo de persona inválido'),
+    body('factura.tipo_documento').if(conDatosDelCliente)
+        .isIn(['13', '22', '31', '41']).withMessage('tipo de documento inválido'),
+    body('factura.numero_documento').if(conDatosDelCliente)
+        .isString().trim().isLength({ min: 3, max: 20 }).withMessage('número de documento inválido'),
+    body('factura.dv').optional({ nullable: true }).isString().matches(/^[0-9]$/).withMessage('dv inválido'),
+    body('factura.razon_social').optional({ nullable: true }).isString().isLength({ max: 255 }),
+    body('factura.nombres').optional({ nullable: true }).isString().isLength({ max: 255 }),
+    body('factura.correo').optional({ nullable: true }).isEmail().withMessage('correo inválido'),
+    body('factura.telefono').optional({ nullable: true }).isString().isLength({ max: 30 }),
+    body('factura.direccion').optional({ nullable: true }).isString().isLength({ max: 255 }),
+];
+
 /** POST /restaurante/pedidos */
 const crearOrdenValidators = [
+    ...facturaValidators,
     body('id_negocio').isInt({ min: 1 }).withMessage('id_negocio inválido'),
     body('id_metodo_pago').optional({ nullable: true }).isInt({ min: 1 }).withMessage('id_metodo_pago inválido'),
     // La cuenta del cliente elegida al tomar el pedido. Igual que la forma de pago: es una
@@ -38,6 +68,7 @@ const crearOrdenValidators = [
 ];
 
 const agregarItemsOrdenValidators = [
+    ...facturaValidators,
     body('id_negocio').isInt({ min: 1 }).withMessage('id_negocio inválido'),
     body('id_metodo_pago').optional({ nullable: true }).isInt({ min: 1 }).withMessage('id_metodo_pago inválido'),
     body('id_cuenta').optional({ nullable: true }).isInt({ min: 1 }).withMessage('id_cuenta inválido'),
@@ -63,34 +94,6 @@ const quitarItemsOrdenValidators = [
     body('items.*.cantidad').isInt({ min: 1 }).withMessage('Cantidad mínima: 1'),
     body('items.*.exclusiones').optional().isArray(),
     body('items.*.nota').optional({ nullable: true }).isString(),
-];
-
-/**
- * La factura electrónica de un cobro, opcional. Tres formas:
- *   · sin `factura` (o null)             → no se pide factura para este cobro;
- *   · `{ consumidor_final: true }`       → anónima;
- *   · `{ tipo_persona, tipo_documento… }` → a nombre del cliente.
- * Aquí solo se comprueba la forma; el fondo (dígito de verificación, razón social según el tipo
- * de persona) lo valida facturación, y un comprador que no pase deja el documento esperando
- * datos: nunca tumba el cobro.
- */
-const conDatosDelCliente = (_valor, { req }) =>
-    Boolean(req.body?.factura) && req.body.factura.consumidor_final !== true;
-const facturaValidators = [
-    body('factura').optional({ nullable: true }).isObject().withMessage('factura inválida'),
-    body('factura.consumidor_final').optional({ nullable: true }).isBoolean(),
-    body('factura.tipo_persona').if(conDatosDelCliente)
-        .isIn(['1', '2']).withMessage('tipo de persona inválido'),
-    body('factura.tipo_documento').if(conDatosDelCliente)
-        .isIn(['13', '22', '31', '41']).withMessage('tipo de documento inválido'),
-    body('factura.numero_documento').if(conDatosDelCliente)
-        .isString().trim().isLength({ min: 3, max: 20 }).withMessage('número de documento inválido'),
-    body('factura.dv').optional({ nullable: true }).isString().matches(/^[0-9]$/).withMessage('dv inválido'),
-    body('factura.razon_social').optional({ nullable: true }).isString().isLength({ max: 255 }),
-    body('factura.nombres').optional({ nullable: true }).isString().isLength({ max: 255 }),
-    body('factura.correo').optional({ nullable: true }).isEmail().withMessage('correo inválido'),
-    body('factura.telefono').optional({ nullable: true }).isString().isLength({ max: 30 }),
-    body('factura.direccion').optional({ nullable: true }).isString().isLength({ max: 255 }),
 ];
 
 const marcarPagadoValidators = [
@@ -164,6 +167,7 @@ async function crearOrden(req, res) {
             idMetodoPago: id_metodo_pago ? Number(id_metodo_pago) : null,
             idCuenta: req.body.id_cuenta ? Number(req.body.id_cuenta) : null,
             pagos: Array.isArray(req.body.pagos) ? req.body.pagos : null,
+            factura: req.body.factura ?? null,
             idUsuario:  req.usuario.id_usuario,
             idMesa:     id_mesa || null,
             nota,
@@ -227,6 +231,8 @@ async function agregarItemsOrden(req, res) {
             idMetodoPago: id_metodo_pago ? Number(id_metodo_pago) : null,
             idCuenta: req.body.id_cuenta ? Number(req.body.id_cuenta) : null,
             pagos: Array.isArray(req.body.pagos) ? req.body.pagos : null,
+            // undefined = el body no lo trae y se conserva lo guardado; null = se quitó.
+            factura: req.body.factura,
             nota,
             items,
             porcentajeImpuesto: porcentaje_impuesto || 0,
@@ -387,7 +393,7 @@ async function marcarPagado(req, res) {
             origenCobro: req.body.origen_cobro || 'CAJA',
             idCuenta: req.body.id_cuenta ? Number(req.body.id_cuenta) : null,
             idUsuario: req.usuario?.id_usuario ?? null,
-            factura: req.body.factura ?? null,
+            factura: req.body.factura,
         });
         if (!orden) return Respuesta.error(res, 'Orden no encontrada', 404);
         return Respuesta.success(res, 'Pago registrado', orden);
@@ -505,7 +511,7 @@ async function cerrarOrden(req, res) {
             idMetodoPago: req.body?.id_metodo_pago ? Number(req.body.id_metodo_pago) : null,
             pagos: Array.isArray(req.body?.pagos) ? req.body.pagos : null,
             idCuenta: req.body?.id_cuenta ? Number(req.body.id_cuenta) : null,
-            factura: req.body?.factura ?? null,
+            factura: req.body?.factura,
         });
         if (!orden) return Respuesta.error(res, 'Orden no encontrada', 404);
         return Respuesta.success(res, 'Orden cerrada', orden);

@@ -42,6 +42,7 @@ const { construirFactura } = require('./construirFactura');
 const { normalizarComprador } = require('./comprador');
 const { CONSUMIDOR_FINAL, topeConsumidorFinal } = require('./constantes');
 const { getProveedor } = require('./proveedores');
+const { correoFactura, marcaDeNegocio } = require('./correoFactura');
 
 const sequelize = Models.sequelize;
 const SELECT = sequelize.QueryTypes.SELECT;
@@ -374,10 +375,11 @@ async function emitirReclamado(doc) {
             await configuracionDao
                 .anotarConsecutivo(rango.id_resolucion, r.numero)
                 .catch((err) => console.error('[facturacion] anotarConsecutivo', err.message));
-            // La copia propia del PDF y el XML no puede retrasar ni tumbar la respuesta.
-            archivar(doc.id_documento).catch((err) =>
-                console.error('[facturacion] archivar', doc.id_documento, err.message)
-            );
+            // La copia propia del PDF y el XML, y después el correo al comprador (que los lleva
+            // adjuntos). Ninguno de los dos puede retrasar ni tumbar la respuesta del cobro.
+            archivar(doc.id_documento)
+                .then(() => enviarCorreo(doc.id_documento))
+                .catch((err) => console.error('[facturacion] archivar/correo', doc.id_documento, err.message));
             return aceptado;
         }
         case 'RECHAZADO': {
@@ -488,6 +490,68 @@ async function archivar(idDocumento) {
                 },
             }
         );
+    }
+}
+
+/**
+ * Le manda al comprador su factura (o nota crédito), con la marca del negocio y el PDF y el XML
+ * adjuntos. Una sola vez por documento: el reclamo es atómico, así que dos procesos no mandan dos
+ * correos; si el envío falla, se suelta para poder reintentarlo.
+ *
+ * No hace nada si el comprador no dio correo o si el negocio apagó el envío.
+ *
+ * @returns {Promise<boolean>} si se envió.
+ */
+async function enviarCorreo(idDocumento) {
+    const doc = await leerDocumento(idDocumento);
+    const correo = doc?.adquiriente?.correo;
+    if (!doc || doc.estado !== 'ACEPTADO' || !correo || doc.correo_enviado_en) return false;
+    const config = await configuracionDao.obtener(doc.id_negocio);
+    if (config && config.enviar_correo === false) return false;
+
+    const [reclamado] = await sequelize.query(
+        `UPDATE facturacion.fe_documento SET correo_enviado_en = now()
+          WHERE id_documento = :idDocumento AND correo_enviado_en IS NULL RETURNING id_documento;`,
+        { replacements: { idDocumento }, type: SELECT }
+    );
+    if (!reclamado) return false;
+
+    try {
+        const [lineas, marca, pdf, xml, anulada] = await Promise.all([
+            leerLineas(idDocumento),
+            marcaDeNegocio(doc.id_negocio),
+            obtenerArchivo(idDocumento, 'PDF'),
+            obtenerArchivo(idDocumento, 'XML'),
+            doc.id_documento_referencia ? leerDocumento(doc.id_documento_referencia) : null,
+        ]);
+        const { asunto, html, texto } = correoFactura({
+            documento: { ...doc, numero_factura_anulada: anulada?.numero ?? null },
+            lineas,
+            marca,
+            ejemplo: doc.ambiente === 'PRUEBAS',
+        });
+        // El servicio de correo vive en el admin; se carga aquí y no arriba para no arrastrarlo
+        // a quien solo necesita emitir (las pruebas, los scripts).
+        const MailService = require('../../app_admin_api/services/mailService');
+        const enviado = await MailService.sendHtmlEmail({
+            to: correo,
+            subject: asunto,
+            text: texto,
+            html,
+            attachments: [
+                { filename: `${doc.numero}.pdf`, content: pdf, contentType: 'application/pdf' },
+                { filename: `${doc.numero}.xml`, content: xml, contentType: 'application/xml' },
+            ],
+        });
+        if (!enviado) throw new Error('el servicio de correo no lo envió');
+        return true;
+    } catch (err) {
+        await sequelize.query(
+            `UPDATE facturacion.fe_documento SET correo_enviado_en = NULL WHERE id_documento = :idDocumento;`,
+            { replacements: { idDocumento } }
+        );
+        console.error('[facturacion] enviarCorreo', idDocumento, err.message);
+        return false;
     }
 }
 
@@ -788,6 +852,7 @@ module.exports = {
     listar,
     obtenerDeNegocio,
     obtenerArchivo,
+    enviarCorreo,
     completarComprador,
     reintentar,
     reconciliar,
