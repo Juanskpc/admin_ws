@@ -186,7 +186,7 @@ Marca ✅ al terminar, con fecha y hash corto del commit.
 | **R10.1** | Nota crédito al anular un pedido cobrado | R4.3, R0.2 | ✅ 2026-10-08 |
 | **R11.1** | Alertas de rango y vigencia | R6.1 | ✅ 2026-10-08 |
 | **R11.2** | Número, CUFE y QR en el comprobante impreso | R8.2 | ⏸ espera decisión (ver §7) |
-| **R12.1** | Documentación y despliegue | todo lo anterior | ⬜ |
+| **R12.1** | Documentación y despliegue | todo lo anterior | ✅ 2026-10-09 (desplegado; falta la viñeta de CLAUDE.md) |
 
 Tareas que se pueden hacer **en paralelo** desde el inicio: R0.1, R1.1, R2.1, R3.1.
 
@@ -1651,6 +1651,24 @@ servidor para todo lo que se custodia cifrado por negocio, no una clave de Whats
 negocio. ⚠️ Cada PC de desarrollo tiene la suya, así que **las credenciales que un dev guarda en la
 base compartida el otro no las puede descifrar**: para emitir desde el otro PC hay que volver a
 correr `fe_configurar_sandbox.js` allí (o compartir la clave de desarrollo).
+
+### 2026-10-09 00:46–00:50 — DESPLEGADO EN PRODUCCIÓN
+
+- **Backend** `5c650ef` (master, con lo de Juan David mezclado): respaldo `db_2026-10-09_0046.dump`,
+  `git pull`, `npm install --omit=dev`, **la migración antes del reinicio** con el registro nuevo
+  (`node scripts/migrar.js facturacion-emision` → aplicada y registrada; `--pendientes` quedó
+  vacío), reinicio, log limpio.
+- **admin_app-v21** `fa1d511` (main). Comparado antes por textos con el de producción: 0 textos
+  solo en producción. Respaldo del anterior en `/tmp/admin_respaldo_0048` del VPS.
+- **restaurante_app** `11d9c0b`: ⚠️ **Juan David trabaja en la rama `main` de este repo, no en
+  `master`** — ahí estaban la Bandeja de conversaciones y Caja con «Tomó/Cobró», ya desplegadas
+  desde su PC. Se mezcló `origin/main` en master (el único choque fue `pedidos.ts`, entero por
+  finales de línea: se tomó su versión y se aplicaron encima los 14 cambios reales), y se subió
+  el resultado a **las dos**, `master` y `main`. Comparado por textos con producción: lo único
+  «solo en prod» eran dos textos que están en el código y compilan distinto. Respaldo en
+  `/tmp/restaurante_respaldo_0050`.
+- Nada cambia para ningún cliente hasta que el super admin configure uno en
+  `/admin/facturacion` → «Emisión».
 
 ### 2026-10-09 (tarde) — El correo lo manda EscalApp, y la factura viaja con el pedido
 
