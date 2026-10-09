@@ -53,9 +53,18 @@ para ningún cliente hasta que el super admin configure uno. Faltan el QR en el 
 
 ## 3. Cómo seguir (en este orden)
 
-1. **R11.2 — QR y CUFE en el tiquete impreso.** Espera dos decisiones del usuario: la librería de QR
-   (Orbita usa `qrcode`) y aceptar que Pedidos y Mesas impriman **después** del cobro (hoy imprimen
-   antes, cuando todavía no hay CUFE).
+1. **R11.2 — QR y CUFE en el tiquete impreso.** Librería decidida el 2026-10-09: **`qrcode`**. Ese
+   día se hizo la base (rama `feature/tiquete-diseno` en `admin_ws` y `restaurante_app`, sin
+   desplegar): pestaña **Configuración → Tiquete**, donde el negocio arma su tiquete común y el de
+   factura electrónica con vista previa al lado. Lo que exige la DIAN (emisor, número, resolución,
+   CUFE, QR, comprador, impuestos, forma de pago) no es opción: sale siempre. Tabla
+   `restaurante.tiquete_diseno` (`npm run migrate:restaurante-tiquete-diseno`), API
+   `GET/PUT /restaurante/tiquete/diseno`, y una sola función que dibuja el tiquete
+   (`shared/tiquete-diseno/tiquete-diseno.ts → construirTiqueteHtml`). **Falta** que Pedidos, Mesas
+   y Despacho impriman con esa función (hoy cada uno tiene su copia) y decidir **cuándo** se
+   imprime la factura: la propuesta del usuario es que, con factura electrónica, salgan **dos**
+   tiquetes —el común para cocina y la factura para el cliente—, y eso obliga a imprimir la
+   factura **después** del cobro, cuando ya hay CUFE.
 2. **Revisar en pantalla lo que no se vio:** la tarjeta «Qué cobros se facturan» del panel, el
    impuesto en la carta, el tipo de pago en Configuración y la vista de teléfono de Pedidos.
 3. **Primer cliente real:** alta en el panel de aliados de Factus (paquete individual), credenciales

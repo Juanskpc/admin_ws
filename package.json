@@ -117,6 +117,7 @@
     "migrate:restaurante-mesa-secciones": "node migrations/migrate_mesa_secciones.js",
     "migrate:restaurante-barrios-domicilio": "node migrations/migrate_restaurante_barrios_domicilio.js",
     "migrate:restaurante-carta-diseno": "node migrations/migrate_restaurante_carta_diseno.js",
+    "migrate:restaurante-tiquete-diseno": "node migrations/migrate_restaurante_tiquete_diseno.js",
     "migrate:restaurante-domicilio-personal": "node migrations/migrate_restaurante_domicilio_personal.js",
     "migrate:restaurante-cancelado-por": "node migrations/migrate_restaurante_cancelado_por.js",
     "migrate:restaurante-horario": "node migrations/migrate_restaurante_horario.js",

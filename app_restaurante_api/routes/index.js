@@ -22,6 +22,7 @@ const CajaController       = require('../controllers/cajaController');
 const PuntoCajaController  = require('../controllers/puntoCajaController');
 const MetodoPagoController = require('../controllers/metodoPagoController');
 const CartaDisenoController = require('../controllers/cartaDisenoController');
+const TiqueteDisenoController = require('../controllers/tiqueteDisenoController');
 const HorarioController    = require('../controllers/horarioController');
 const ProveedorController  = require('../controllers/proveedorController');
 const FacturacionController = require('../controllers/facturacionController');
@@ -311,6 +312,17 @@ router.post('/carta/diseno/logo',
 router.delete('/carta/diseno/logo', [
 	query('id_negocio').isInt({ min: 1 }),
 ], CartaDisenoController.eliminarLogo);
+
+// --- Diseño del tiquete impreso (común y factura electrónica) ---
+router.get('/tiquete/diseno', [
+	query('id_negocio').isInt({ min: 1 }),
+], TiqueteDisenoController.getDiseno);
+
+router.put('/tiquete/diseno', [
+	body('id_negocio').isInt({ min: 1 }),
+	body('comun').optional({ nullable: true }).isObject(),
+	body('electronica').optional({ nullable: true }).isObject(),
+], TiqueteDisenoController.guardar);
 
 // --- Carta / Menú (lectura pública para POS) ---
 router.get('/carta/categorias', CartaController.getCategorias);
