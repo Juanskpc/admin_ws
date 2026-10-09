@@ -16,6 +16,7 @@
 'use strict';
 const { validationResult } = require('express-validator');
 const CobranzaService = require('../services/cobranzaService');
+const ComprobanteService = require('../services/comprobanteService');
 const Respuesta = require('../../app_core/helpers/respuesta');
 const { alcanceDeNegocios } = require('../../app_core/middleware/auth');
 
@@ -256,6 +257,107 @@ async function getMisCobros(req, res) {
 }
 
 /**
+ * GET /admin/cobranza/mis-pagos?id_negocio=N — el historial de pagos del cliente.
+ *
+ * `id_negocio` es opcional; cuando viene se cruza contra los negocios que el usuario ADMINISTRA
+ * dentro del servicio, así que un id ajeno no devuelve nada en vez de devolver lo de otro.
+ */
+async function getMisPagos(req, res) {
+    if (!check(req, res)) return;
+    try {
+        const pagos = await CobranzaService.pagosDeUsuario(req.usuario.id_usuario, {
+            idNegocio: req.query.id_negocio ? Number(req.query.id_negocio) : null,
+        });
+        return Respuesta.success(res, 'Mis pagos', pagos);
+    } catch (err) {
+        return fallo(res, err, 'getMisPagos', 'Error al consultar tus pagos.');
+    }
+}
+
+/**
+ * ¿Es de este usuario esta factura? Devuelve los datos del comprobante, o null si ya respondió.
+ *
+ * El id viaja en la URL y cualquiera puede cambiarlo, así que el dueño se comprueba contra la
+ * base —igual que al pagar—. El 404 es el mismo tanto si la factura no existe como si no es suya:
+ * distinguirlos le diría a un curioso qué ids existen.
+ */
+async function comprobanteDelUsuario(req, res) {
+    const idFactura = Number(req.params.id);
+    const factura = await require('../../app_core/dao/cobranzaDao').getFactura(idFactura);
+    if (!factura) {
+        Respuesta.error(res, 'No encontramos ese pago', 404);
+        return null;
+    }
+
+    const alcance = await alcanceDeNegocios(req.usuario?.id_usuario);
+    const esSuyo =
+        alcance.superAdmin ||
+        (await CobranzaService.usuarioAdministraNegocio(req.usuario.id_usuario, factura.id_negocio));
+    if (!esSuyo) {
+        Respuesta.error(res, 'No encontramos ese pago', 404);
+        return null;
+    }
+
+    return ComprobanteService.datosComprobante(idFactura);
+}
+
+/** GET /admin/cobranza/facturas/:id/comprobante — el PDF del pago. */
+async function getComprobante(req, res) {
+    if (!check(req, res)) return;
+    try {
+        const datos = await comprobanteDelUsuario(req, res);
+        if (!datos) return;
+
+        const { buffer, filename } = await ComprobanteService.generarPDF(datos);
+        res.setHeader('Content-Type', 'application/pdf');
+        // `inline`: la acción de la pantalla es VER el comprobante. Quien lo quiera guardar lo
+        // descarga desde el visor, que es donde todo el mundo busca ese botón.
+        res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+        // Sin esto el navegador no ve la cabecera y el archivo se guarda sin nombre ni extensión.
+        res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
+        return res.send(buffer);
+    } catch (err) {
+        return fallo(res, err, 'getComprobante', 'No se pudo generar el comprobante.');
+    }
+}
+
+/**
+ * POST /admin/cobranza/facturas/:id/comprobante/enviar — manda el comprobante por correo.
+ *
+ * Sin `email` en el cuerpo va al correo del negocio (o al del usuario si el negocio no tiene):
+ * el caso normal es «mándamelo» y no tiene por qué teclear su propia dirección.
+ */
+async function enviarComprobante(req, res) {
+    if (!check(req, res)) return;
+    try {
+        const datos = await comprobanteDelUsuario(req, res);
+        if (!datos) return;
+
+        const email =
+            (req.body.email || '').trim() ||
+            (await ComprobanteService.destinatarioPorDefecto(datos.id_negocio, req.usuario?.id_usuario));
+        if (!email) {
+            return Respuesta.error(
+                res,
+                'No tenemos un correo al que enviarlo. Escribe la dirección.',
+                422
+            );
+        }
+
+        const resultado = await ComprobanteService.enviarPorCorreo(datos, { email });
+        // `enviado: false` = en desarrollo sin SMTP. Decirlo evita el «ya te lo mandamos» de una
+        // pantalla que no mandó nada.
+        return Respuesta.success(
+            res,
+            resultado.enviado ? `Comprobante enviado a ${email}` : 'Correo no configurado en este entorno',
+            resultado
+        );
+    } catch (err) {
+        return fallo(res, err, 'enviarComprobante', 'No se pudo enviar el comprobante.');
+    }
+}
+
+/**
  * POST /admin/cobranza/facturas/:id/pagar — el administrador paga desde la app.
  *
  * El dueño de la factura se comprueba contra la base: el id viaja en la URL y cualquiera puede
@@ -492,6 +594,9 @@ module.exports = {
     cobrarFactura,
     anularFactura,
     getMisCobros,
+    getMisPagos,
+    getComprobante,
+    enviarComprobante,
     getMiPlan,
     pagarFactura,
     elegirPlan,

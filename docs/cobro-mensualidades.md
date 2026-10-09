@@ -726,6 +726,47 @@ la redirect-url y comprobar que el siguiente inicio de sesión lo aplica. La res
 `data` como arreglo u objeto. Tampoco se registra la comisión de la pasarela: la API de transacciones de
 Wompi no la devuelve (no verificado), así que `comision_pasarela` sigue en 0 como hasta ahora.
 
+### Historial y comprobante de pago (2026-10-07)
+
+«Mis pagos» tenía dos pestañas —pagar y cambiar de plan— y ninguna respondía a la pregunta más
+corriente de un cliente: *«¿qué he pagado y dónde está el soporte?»*. Tercera pestaña,
+**Historial**: una tabla con lo pagado y, por fila, las tres cosas que alguien pide de un pago
+viejo.
+
+| Método | Ruta | Qué hace |
+|---|---|---|
+| `GET` | `/admin/cobranza/mis-pagos?id_negocio=N` | Las facturas `pagada` de los negocios que **administra** |
+| `GET` | `/admin/cobranza/facturas/:id/comprobante` | El PDF (`inline`), generado con `pdfkit` |
+| `POST` | `/admin/cobranza/facturas/:id/comprobante/enviar` | Lo manda por correo, adjunto |
+
+Decisiones que importan:
+
+1. **Ni una cifra de la conciliación sale al cliente.** `comision_pasarela`,
+   `retencion_declarada` y `neto_recibido` no viajan en la respuesta ni se imprimen en el PDF: son
+   nuestras (`obligaciones-escalapp.md` §3). Que el cliente vea «pagaste 27.999, nos llegaron
+   26.283» solo abre una conversación que no es suya.
+2. **Solo `estado = 'pagada'`.** Una `fallida` es un intento y una `anulada` se perdonó; un PDF que
+   diga «PAGADO» sobre cualquiera de las dos es un documento falso. El servicio lo exige y
+   responde 409 si no.
+3. **Se llama comprobante, no factura.** Con `numero_factura` lleno el documento se titula
+   «Factura de venta» y lleva el número (y el CUFE); sin él se rotula «Comprobante de pago» y dice
+   explícitamente que no es una factura electrónica — §1.5 sigue pendiente y mentir aquí le deja al
+   cliente un papel que su contador no acepta.
+4. **El dueño se comprueba contra la base**, como al pagar: el `:id` viaja en la URL. Factura
+   ajena e inexistente responden lo mismo (404), para no revelar qué ids existen.
+5. **Compartir es del sistema, no nuestro.** En el móvil se abre la hoja de compartir con el PDF
+   adjunto (`navigator.share` con `files`) y de ahí sale a WhatsApp o a donde quiera; donde esa API
+   no existe —el escritorio— se cae al envío por correo, que es la vía real: mandárselo al
+   contador. No hay integración con WhatsApp para esto y no hace falta.
+6. **El envío lleva límite propio** (10 / 15 min por IP, contando aciertos): ahí el 200 es lo caro,
+   porque gasta la cuota de envío de la cuenta de correo. Mismo razonamiento que `forgot-password`
+   (ver `app_core/middleware/limites.js`).
+
+Código: `app_admin_api/services/comprobanteService.js` (datos + PDF + correo) ·
+`cobranzaService.pagosDeUsuario` · `mailService.sendHtmlEmail` acepta `attachments` ·
+`admin_app_v21` → `admin/features/mis-pagos/` (pestaña, tabla, ficha de detalle y modal de envío).
+Pruebas: `__tests__/cobranza/comprobante.test.js` (sin base).
+
 ## 7. Lo que este documento NO decide
 
 1. **Precio para Chile.** CLP 9.900 es un ejemplo. Decisión comercial del dueño.

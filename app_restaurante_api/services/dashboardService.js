@@ -1,5 +1,8 @@
 const Models = require('../../app_core/models/conection');
 const { Op } = Models.Sequelize;
+// Mismo import de nivel superior que usa `app_admin_api/controllers/negocioController.js` para
+// lo mismo: es la única fuente de qué trae el plan de un negocio (ADR-021).
+const { featuresDeNegocios } = require('../../intelligence/core/features');
 
 /**
  * dashboardService — Lógica de negocio para el módulo restaurante.
@@ -429,6 +432,12 @@ async function verificarAccesoRestaurante(idUsuario) {
     // 3. Obtener roles del usuario en esos negocios
     const idNegocios = negociosUsuario.map(nu => nu.negocio.id_negocio);
 
+    // Las FEATURES del plan de cada negocio (ADR-021: se pregunta por la feature, nunca por el
+    // nombre del plan). Hacen falta desde que `negocio_app` tiene la vista de Conversaciones:
+    // es lo que decide si al inquilino se le enseña el asistente o la invitación a mejorar el
+    // plan. `negocioController.getMisNegocios` hace exactamente esto mismo para el panel.
+    const featuresMap = await featuresDeNegocios(idNegocios);
+
     const rolesUsuario = await Models.GenerUsuarioRol.findAll({
         where: { id_usuario: idUsuario, estado: 'A', id_negocio: idNegocios },
         include: [{
@@ -485,6 +494,7 @@ async function verificarAccesoRestaurante(idUsuario) {
             permite_cuentas_cliente: !!negocio.permite_cuentas_cliente,
             controla_inventario: negocio.controla_inventario !== false,
             muestra_iconos_productos: negocio.muestra_iconos_productos !== false,
+            features: featuresMap.get(Number(negocio.id_negocio)) ?? [],
             roles,
             permisos_vista: permisosVista,
             permisos_subnivel: permisosSubnivel,
@@ -502,6 +512,7 @@ async function verificarAccesoRestaurante(idUsuario) {
         permisos_cargados: true,
         negocios,
         negocio: negocios[0] || null, // Negocio principal (el primero)
+        features: negocios[0]?.features || [],
         roles: negocios[0]?.roles || [],
         permisos_vista: negocios[0]?.permisos_vista || [],
         permisos_subnivel: negocios[0]?.permisos_subnivel || [],

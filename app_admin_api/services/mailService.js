@@ -805,9 +805,12 @@ async function sendConversacionEscaladaEmail(email, datos) {
  * @param {string} correo.text
  * @param {string} correo.html
  * @param {string} [correo.replyTo] - Para que la respuesta del cliente llegue al negocio y no a EscalApp.
+ * @param {Array<object>} [correo.attachments] - Adjuntos en formato nodemailer
+ *        (`{ filename, content, contentType }`). Lo usa el comprobante de pago, que manda el PDF
+ *        ya generado en memoria: escribirlo a disco solo para adjuntarlo no aporta nada.
  * @returns {Promise<boolean>} true si salió; false si no hay SMTP en desarrollo.
  */
-async function sendHtmlEmail({ to, subject, text, html, replyTo }) {
+async function sendHtmlEmail({ to, subject, text, html, replyTo, attachments }) {
     const from = process.env.MAIL_FROM || '"EscalApp" <escalappsystem@gmail.com>';
 
     if (!process.env.MAIL_USER || !process.env.MAIL_PASS) {
@@ -821,6 +824,7 @@ async function sendHtmlEmail({ to, subject, text, html, replyTo }) {
     const info = await transporter.sendMail({
         from, to, subject, text, html,
         ...(replyTo ? { replyTo } : {}),
+        ...(attachments?.length ? { attachments } : {}),
     });
     console.info(`✉️  Correo enviado a ${to} («${subject}») — messageId: ${info.messageId}`);
     return true;

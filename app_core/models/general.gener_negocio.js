@@ -48,6 +48,17 @@ module.exports = (sequelize, DataTypes) => {
          * personal activo del negocio en vez de solo a quien tenga el rol DOMICILIARIO.
          */
         permite_domicilio_personal: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+        /**
+         * De qué forma de pago sale el pago al domiciliario (el EGRESO que deja
+         * `valor_domicilio` al cobrar). NULL = sale de la misma con la que pagó el
+         * cliente, que es el comportamiento anterior a esta columna.
+         *
+         * El caso real: el cliente paga 27.000 por transferencia (20.000 + 7.000 de
+         * domicilio) y el negocio le entrega al domiciliario 7.000 EN EFECTIVO. Sin
+         * esto, el turno restaba esos 7.000 de «Transferencia» y el cajón cuadraba
+         * de más. Ver `migrate:restaurante-metodo-pago-domicilio`.
+         */
+        id_metodo_pago_domicilio: { type: DataTypes.INTEGER, allowNull: true },
         /** Logo del negocio. Ruta relativa servida desde /uploads. */
         logo_url: DataTypes.STRING(500),
         /** Imagen ancha de cabecera del portal público (16:5). */

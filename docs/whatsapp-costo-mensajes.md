@@ -49,6 +49,12 @@ es cuántas citas al mes entran gratis:
 | 6 | 166 |
 | 3 | 333 |
 
+**Medido en restaurante el 2026-10-08** (Zona Burger, `id_negocio` 6, modelo `luna`): **8,6
+mensajes salientes por pedido conseguido**, contando también las conversaciones que no acaban en
+pedido. Con los 1.000 gratis eso son **unos 115 pedidos al mes** antes de que Meta empiece a
+cobrar. Es la equivalencia que hay que enseñarle al dueño —él cuenta pedidos, no mensajes— y la
+que usan los paquetes de [`asistente-economia.md`](asistente-economia.md) §6.
+
 Medido sobre el catálogo real de D'ALEX (17 servicios en 4 categorías, 10 profesionales, horario de
 09:00 a 19:00 en pasos de 30 min), antes del 2026-10-02 una cita costaba **9 o 10 mensajes**:
 categorías → servicios → «Ver más» → días → jornada → horas → nombre → profesional → resumen →
@@ -113,11 +119,18 @@ camino de pasarse **con tiempo para hacer algo**.
 
 ## 5. Lo que queda por decidir
 
-1. **La tarifa de Colombia.** La asignación es la misma para todos, pero el precio del mensaje 1.001
-   depende del mercado del destinatario y hay que leerlo del *rate card* de Meta (en COP desde abril
-   de 2026). Sin ese número no se puede poner precio al exceso en el plan del inquilino.
-2. **¿Quién paga el exceso?** Hoy el inquilino conecta su propio número, así que el exceso lo factura
-   Meta a su cuenta y nosotros solo avisamos. Si algún día algún inquilino sale por un número
-   nuestro, eso cambia y hay que decidirlo antes, no después.
+1. **La tarifa de Colombia.** ⚠️ **Cifra de trabajo desde el 2026-10-08: $2,9455 COP por mensaje
+   de servicio entregado a un número colombiano (≈ USD 0,0008).** Coincide en varias fuentes de
+   integradores y encaja con que Meta facture en COP desde abril de 2026, pero **no se ha leído
+   del tarifario oficial**. Antes de imprimirla en la landing hay que verla en el panel de la WABA
+   de un cliente real. Con ella ya se pudo poner precio a los paquetes del plan: ver
+   [`asistente-economia.md`](asistente-economia.md) §6.
+2. ~~**¿Quién paga el exceso?**~~ **Resuelto y verificado** ([`embedded-signup.md`](embedded-signup.md)
+   §9.1): como Tech Provider, el número del inquilino crea una empresa y una WABA separadas de las
+   nuestras y **Meta le cobra a su tarjeta**. La consecuencia comercial importa y está en
+   [`asistente-economia.md`](asistente-economia.md) §3: **no podemos revender mensajes**. Lo que
+   vendemos en un paquete es capacidad del asistente —nuestro costo de IA—, y lo de Meta se lo
+   cobran a él aparte. Sigue en pie el aviso de siempre: si algún día un inquilino sale por un
+   número nuestro, esto cambia y hay que decidirlo antes, no después.
 3. **El umbral del aviso.** 80 % es un punto de partida (`WHATSAPP_CUOTA_UMBRAL`). Con un mes de
    datos reales se sabrá si llega demasiado tarde.

@@ -23,7 +23,10 @@ const PuntoCajaController  = require('../controllers/puntoCajaController');
 const MetodoPagoController = require('../controllers/metodoPagoController');
 const CartaDisenoController = require('../controllers/cartaDisenoController');
 const HorarioController    = require('../controllers/horarioController');
+const ProveedorController  = require('../controllers/proveedorController');
 const { verificarToken }   = require('../../app_core/middleware/auth');
+const Respuesta            = require('../../app_core/helpers/respuesta');
+const { paisesParaSeleccion } = require('../../app_core/helpers/paises');
 
 // ───────── Multer: imágenes de la carta (productos y categorías) ─────────
 // Se guardan en admin_ws/uploads/restaurante/menu/<id_negocio>/ y se sirven
@@ -58,12 +61,50 @@ const uploadMenuImg = multer({
     limits: { fileSize: 5 * 1024 * 1024 },  // 5 MB
 });
 
+// ───────── Multer: factura adjunta de una compra a proveedor ─────────
+// Se guardan en admin_ws/uploads/restaurante/compras/<id_negocio>/ y, a diferencia de las
+// imágenes de la carta, **NO se sirven estáticamente**: una factura lleva precios de compra y
+// datos fiscales. Se leen por `GET /proveedores/compras/:id/adjunto`, con token y negocio.
+const COMPRA_ADJ_BASE = path.resolve(path.join(__dirname, '..', '..', 'uploads', 'restaurante', 'compras'));
+const compraAdjStorage = multer.diskStorage({
+    destination(req, _file, cb) {
+        const idNegocio = String(req.body.id_negocio || '').replace(/[^\d]/g, '') || 'misc';
+        const dir = path.join(COMPRA_ADJ_BASE, idNegocio);
+        fs.mkdirSync(dir, { recursive: true });
+        cb(null, dir);
+    },
+    filename(req, file, cb) {
+        // El nombre lo pone el servidor, nunca el cliente: un nombre de archivo que llega de
+        // fuera es por donde se cuela un `../` o un `.js`.
+        const idCompra = String(req.params.idCompra || '').replace(/[^\d]/g, '') || 'tmp';
+        const ext = file.mimetype === 'application/pdf' ? '.pdf'
+            : file.mimetype === 'image/png' ? '.png'
+            : file.mimetype === 'image/webp' ? '.webp'
+            : '.jpg';
+        cb(null, `${idCompra}-${Date.now()}${ext}`);
+    },
+});
+const uploadAdjuntoCompra = multer({
+    storage: compraAdjStorage,
+    fileFilter(_req, file, cb) {
+        if (['image/jpeg', 'image/png', 'image/webp', 'application/pdf'].includes(file.mimetype)) cb(null, true);
+        else cb(Object.assign(new Error('Solo se permiten imágenes JPG/PNG/WEBP o PDF'), { statusCode: 400 }));
+    },
+    limits: { fileSize: 8 * 1024 * 1024 },  // 8 MB: una foto de factura cabe de sobra
+});
+
 // ============================================================
 // RUTAS PÚBLICAS (no requieren autenticación)
 // ============================================================
 
 // Verificar token recibido desde el admin_app (validación de sesión)
 router.post('/auth/verificar-token', DashboardController.verificarTokenAcceso);
+
+// Países con indicativo telefónico. Mismo catálogo y misma respuesta que `GET /admin/paises`:
+// la lista vive en `helpers/paises.js` junto con la regla de cuántos dígitos tiene un número en
+// cada país, y copiarla al frontend la dejaría vieja el día que se añada uno. Público porque es
+// catálogo de plataforma, sin datos de nadie — igual que en la consola.
+router.get('/paises', (_req, res) => Respuesta.success(res, 'Países', paisesParaSeleccion()));
 
 // Code-exchange para login cross-origin (admin_app → restaurante_app).
 router.post('/auth/generar-codigo',
@@ -212,6 +253,9 @@ router.patch('/configuracion', [
 	body('url_instagram').optional({ nullable: true }).isURL({ require_protocol: true }),
 	body('permite_multipago').optional().isBoolean(),
 	body('permite_pago_domicilio').optional().isBoolean(),
+	// null/vacío es una respuesta válida: «el egreso del domicilio sale de la forma de pago
+	// del pedido», que es el comportamiento anterior a esta opción.
+	body('id_metodo_pago_domicilio').optional({ nullable: true }).custom((v) => v === null || v === '' || Number.isInteger(Number(v))),
 	body('permite_descuento').optional().isBoolean(),
 	body('pregunta_cobro_envio').optional().isBoolean(),
 	body('permite_cuentas_cliente').optional().isBoolean(),
@@ -469,6 +513,200 @@ router.post('/inventario/ingredientes/:id/restablecer', [
 	param('id').isInt({ min: 1 }).withMessage('Insumo inválido'),
 	body('id_negocio').isInt({ min: 1 }).withMessage('id_negocio inválido'),
 ], InventarioController.restablecerStockACero);
+
+// --- Proveedores de insumos ---
+//
+// OJO CON EL ORDEN: `/proveedores/categorias`, `/proveedores/comparador`, `/proveedores/compras`
+// e `/proveedores/insumos/...` van ANTES que `/proveedores/:id`, o Express leería «categorias»
+// como un id y devolvería 400 en todas.
+router.get('/proveedores/categorias', ProveedorController.categorias);
+
+router.get('/proveedores/comparador', [
+	query('id_negocio').isInt({ min: 1 }),
+	query('busqueda').optional({ nullable: true }).isString().isLength({ max: 120 }),
+	query('id_ingrediente').optional({ nullable: true }).isInt({ min: 1 }),
+], ProveedorController.comparar);
+
+// Compras — el resumen y la evolución van antes que `/compras/:idCompra`.
+router.get('/proveedores/compras/resumen', [
+	query('id_negocio').isInt({ min: 1 }),
+	query('desde').optional({ nullable: true }).isISO8601(),
+	query('hasta').optional({ nullable: true }).isISO8601(),
+], ProveedorController.resumenCompras);
+
+router.get('/proveedores/compras/evolucion-precio', [
+	query('id_negocio').isInt({ min: 1 }),
+	query('id_proveedor_insumo').optional({ nullable: true }).isInt({ min: 1 }),
+	query('id_ingrediente').optional({ nullable: true }).isInt({ min: 1 }),
+], ProveedorController.evolucionPrecio);
+
+router.get('/proveedores/compras', [
+	query('id_negocio').isInt({ min: 1 }),
+	query('id_proveedor').optional({ nullable: true }).isInt({ min: 1 }),
+	query('id_ingrediente').optional({ nullable: true }).isInt({ min: 1 }),
+	query('busqueda').optional({ nullable: true }).isString().isLength({ max: 120 }),
+	query('desde').optional({ nullable: true }).isISO8601(),
+	query('hasta').optional({ nullable: true }).isISO8601(),
+	query('limite').optional().isInt({ min: 1, max: 200 }),
+	query('offset').optional().isInt({ min: 0 }),
+], ProveedorController.listarCompras);
+
+router.post('/proveedores/compras', [
+	body('id_negocio').isInt({ min: 1 }),
+	body('id_proveedor').isInt({ min: 1 }),
+	body('fecha').optional({ nullable: true }).isISO8601(),
+	body('referencia').optional({ nullable: true }).isString().isLength({ max: 60 }),
+	body('descuento').optional({ nullable: true }).isFloat({ min: 0 }),
+	body('impuesto').optional({ nullable: true }).isFloat({ min: 0 }),
+	body('id_metodo_pago').optional({ nullable: true }).isInt({ min: 1 }),
+	body('observaciones').optional({ nullable: true }).isString().isLength({ max: 2000 }),
+	body('afecta_inventario').optional().isBoolean(),
+	body('detalles').isArray({ min: 1, max: 100 }),
+	body('detalles.*.cantidad').isFloat({ gt: 0 }),
+	body('detalles.*.precio_unitario').optional({ nullable: true }).isFloat({ min: 0 }),
+	body('detalles.*.descuento').optional({ nullable: true }).isFloat({ min: 0 }),
+	body('detalles.*.descripcion').optional({ nullable: true }).isString().isLength({ max: 160 }),
+	body('detalles.*.id_proveedor_insumo').optional({ nullable: true }).isInt({ min: 1 }),
+	body('detalles.*.id_ingrediente').optional({ nullable: true }).isInt({ min: 1 }),
+], ProveedorController.crearCompra);
+
+router.get('/proveedores/compras/:idCompra', [
+	param('idCompra').isInt({ min: 1 }),
+	query('id_negocio').isInt({ min: 1 }),
+], ProveedorController.detalleCompra);
+
+router.patch('/proveedores/compras/:idCompra/anular', [
+	param('idCompra').isInt({ min: 1 }),
+	body('id_negocio').isInt({ min: 1 }),
+	body('motivo').optional({ nullable: true }).isString().isLength({ max: 200 }),
+], ProveedorController.anularCompra);
+
+// La factura escaneada. NO se sirve desde `/uploads` (lleva precios y datos fiscales): se
+// sube aquí y se lee por `GET .../adjunto`, que vuelve a comprobar el negocio.
+router.post('/proveedores/compras/:idCompra/adjunto',
+	[param('idCompra').isInt({ min: 1 })],
+	uploadAdjuntoCompra.single('archivo'),
+	ProveedorController.subirAdjunto,
+);
+router.get('/proveedores/compras/:idCompra/adjunto', [
+	param('idCompra').isInt({ min: 1 }),
+	query('id_negocio').isInt({ min: 1 }),
+], ProveedorController.descargarAdjunto);
+
+// Insumos — `/proveedores/insumos/:idInsumo` es la ficha suelta; crear va bajo su proveedor.
+router.get('/proveedores/insumos/:idInsumo/precios', [
+	param('idInsumo').isInt({ min: 1 }),
+	query('id_negocio').isInt({ min: 1 }),
+], ProveedorController.historicoPrecios);
+
+router.put('/proveedores/insumos/:idInsumo', [
+	param('idInsumo').isInt({ min: 1 }),
+	body('id_negocio').isInt({ min: 1 }),
+	body('nombre').isString().trim().isLength({ min: 2, max: 160 }),
+	body('unidad').optional().isString().isLength({ max: 10 }),
+	body('precio').optional({ nullable: true }).isFloat({ min: 0 }),
+	body('cantidad_presentacion').optional({ nullable: true }).isFloat({ gt: 0 }),
+	body('id_ingrediente').optional({ nullable: true }).isInt({ min: 1 }),
+	body('publico').optional().isBoolean(),
+	body('disponible').optional().isBoolean(),
+], ProveedorController.editarInsumo);
+
+router.delete('/proveedores/insumos/:idInsumo', [
+	param('idInsumo').isInt({ min: 1 }),
+	query('id_negocio').isInt({ min: 1 }),
+], ProveedorController.eliminarInsumo);
+
+// Listado y alta de proveedores
+router.get('/proveedores', [
+	query('id_negocio').isInt({ min: 1 }),
+	query('ambito').optional().isIn(['mios', 'directorio', 'todos']),
+	query('busqueda').optional({ nullable: true }).isString().isLength({ max: 120 }),
+	query('categoria').optional({ nullable: true }).isString().isLength({ max: 40 }),
+	query('ciudad').optional({ nullable: true }).isString().isLength({ max: 100 }),
+	query('orden').optional().isIn(['nombre', 'reciente', 'precio', 'uso', 'actualizacion']),
+	query('archivados').optional().isBoolean(),
+	query('limite').optional().isInt({ min: 1, max: 200 }),
+	query('offset').optional().isInt({ min: 0 }),
+], ProveedorController.listar);
+
+router.post('/proveedores', [
+	body('id_negocio').isInt({ min: 1 }),
+	body('nombre_comercial').isString().trim().isLength({ min: 2, max: 160 }),
+	body('email').optional({ nullable: true, checkFalsy: true }).isEmail().isLength({ max: 160 }),
+	body('visibilidad').optional().isIn(['PRIVADO', 'DIRECTORIO_BASICO', 'DIRECTORIO_SIN_PRECIOS', 'DIRECTORIO']),
+	body('tipo_atencion').optional().isIn(['ENTREGA', 'RECOGIDA', 'AMBOS']),
+	body('pedido_minimo').optional({ nullable: true }).isFloat({ min: 0 }),
+	body('tiempo_entrega_hrs').optional({ nullable: true }).isInt({ min: 0, max: 8760 }),
+	body('categorias').optional().isArray({ max: 15 }),
+	body('zonas_cobertura').optional().isArray({ max: 30 }),
+	body('dias_entrega').optional().isArray({ max: 7 }),
+], ProveedorController.crear);
+
+router.get('/proveedores/:id', [
+	param('id').isInt({ min: 1 }),
+	query('id_negocio').isInt({ min: 1 }),
+], ProveedorController.detalle);
+
+router.put('/proveedores/:id', [
+	param('id').isInt({ min: 1 }),
+	body('id_negocio').isInt({ min: 1 }),
+	body('nombre_comercial').isString().trim().isLength({ min: 2, max: 160 }),
+	body('email').optional({ nullable: true, checkFalsy: true }).isEmail().isLength({ max: 160 }),
+	body('tipo_atencion').optional().isIn(['ENTREGA', 'RECOGIDA', 'AMBOS']),
+	body('pedido_minimo').optional({ nullable: true }).isFloat({ min: 0 }),
+	body('tiempo_entrega_hrs').optional({ nullable: true }).isInt({ min: 0, max: 8760 }),
+	body('categorias').optional().isArray({ max: 15 }),
+	body('zonas_cobertura').optional().isArray({ max: 30 }),
+	body('dias_entrega').optional().isArray({ max: 7 }),
+], ProveedorController.editar);
+
+router.patch('/proveedores/:id/visibilidad', [
+	param('id').isInt({ min: 1 }),
+	body('id_negocio').isInt({ min: 1 }),
+	body('visibilidad').isIn(['PRIVADO', 'DIRECTORIO_BASICO', 'DIRECTORIO_SIN_PRECIOS', 'DIRECTORIO']),
+], ProveedorController.cambiarVisibilidad);
+
+router.patch('/proveedores/:id/archivar', [
+	param('id').isInt({ min: 1 }),
+	body('id_negocio').isInt({ min: 1 }),
+	body('archivado').optional().isBoolean(),
+], ProveedorController.archivar);
+
+router.post('/proveedores/:id/vincular', [
+	param('id').isInt({ min: 1 }),
+	body('id_negocio').isInt({ min: 1 }),
+], ProveedorController.vincular);
+
+router.put('/proveedores/:id/privado', [
+	param('id').isInt({ min: 1 }),
+	body('id_negocio').isInt({ min: 1 }),
+	body('notas').optional({ nullable: true }).isString().isLength({ max: 4000 }),
+	body('condiciones').optional({ nullable: true }).isString().isLength({ max: 4000 }),
+	body('calificacion').optional({ nullable: true }).isInt({ min: 1, max: 5 }),
+], ProveedorController.guardarPrivado);
+
+router.post('/proveedores/:id/reportar', [
+	param('id').isInt({ min: 1 }),
+	body('id_negocio').isInt({ min: 1 }),
+	body('motivo').isString().trim().isLength({ min: 5, max: 500 }),
+], ProveedorController.reportar);
+
+router.get('/proveedores/:id/insumos', [
+	param('id').isInt({ min: 1 }),
+	query('id_negocio').isInt({ min: 1 }),
+], ProveedorController.listarInsumos);
+
+router.post('/proveedores/:id/insumos', [
+	param('id').isInt({ min: 1 }),
+	body('id_negocio').isInt({ min: 1 }),
+	body('nombre').isString().trim().isLength({ min: 2, max: 160 }),
+	body('unidad').optional().isString().isLength({ max: 10 }),
+	body('precio').optional({ nullable: true }).isFloat({ min: 0 }),
+	body('cantidad_presentacion').optional({ nullable: true }).isFloat({ gt: 0 }),
+	body('id_ingrediente').optional({ nullable: true }).isInt({ min: 1 }),
+	body('publico').optional().isBoolean(),
+	body('disponible').optional().isBoolean(),
+], ProveedorController.crearInsumo);
 
 // --- Reportes ---
 router.get('/reportes', [
