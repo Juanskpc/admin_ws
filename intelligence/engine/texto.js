@@ -152,6 +152,38 @@ function esAlgunComando(texto) {
 }
 
 /**
+ * «Que me regalen salsa de ajo», «que sea sin cebolla», «que venga bien caliente»: empieza por
+ * «que» pero PIDE, no pregunta. Sobre texto normalizado (sin tildes ni signos).
+ *
+ * Zona Burger, 2026-10-05: con el pedido esperando el sí, «Que me regalen salsa de ajo porfis»
+ * se leyó como pregunta, se pasó a una persona y el pedido salió sin la salsa en la nota.
+ */
+const PETICION_CON_QUE =
+    /^que (por favor |porfa |porfis )?(me |nos |le |les |se )?(lo |la |los |las )?(regal|envi|mand|pong|ech|agreg|anad|traig|den\b|sea|venga|vaya|no |lleve|tenga|quede|incluy|empaqu|salga)/;
+function esPeticionConQue(textoNormalizado) {
+    return PETICION_CON_QUE.test(String(textoNormalizado || ''));
+}
+
+/**
+ * ¿Este mensaje puede ser la PRIMERA parte de algo que el cliente sigue escribiendo?
+ *
+ * WhatsApp no avisa de que alguien está escribiendo, así que se adivina por la forma: lo que ya
+ * está completo se contesta enseguida —un comando, un sí o un no, el toque de un botón, el pedido
+ * que arma la carta digital (`#P6-…`), una foto, un saludo— y el texto libre espera un poco más
+ * (`cola.js`, `debounceTextoMs`) por si llega el resto.
+ */
+function puedeSeguirEscribiendo(texto) {
+    const crudo = String(texto || '').trim();
+    if (!crudo) return false;
+    if (esAlgunComando(crudo) || esAfirmacion(crudo) || esSaludo(crudo)) return false;
+    if (/#p\d+-/i.test(crudo)) return false; // el pedido de la carta digital llega entero
+    if (/^\[[a-z_]+\]$/i.test(crudo)) return false; // [image], [audio]…
+    if (/^[a-z0-9]+(_[a-z0-9]+)+$/i.test(crudo)) return false; // el id de un botón
+    if (/^[\d\s+.-]{7,}$/.test(crudo)) return false; // un teléfono suelto: es el dato que se le pidió
+    return true;
+}
+
+/**
  * Un saludo, escrito como lo escribe la gente.
  *
  * ## Por qué no basta con la lista de `COMANDO.MENU`
@@ -177,7 +209,11 @@ function esAlgunComando(texto) {
  * y el mensaje se iba al modelo en vez de abrir la bienvenida.
  */
 const PALABRA_DE_SALUDO =
-    /^(?:h+o+l+a*s?|o+l+a+s?|h+o+l+i+s?|b+u+e+n+[oa]*s?|d+i+a+s?|t+a+r+d+e+s?|n+o+c+h+e+s?|h+e+y+|e+y+|epa|ola|alo+|hi|hello|saludo?s?|que|q|k|mas|tal|dice|buenass?)$/;
+    /^(?:h+o+l+a*s?|o+l+a+s?|h+o+l+i+s?|b+u+e+n+[oa]*s?|d+i+a+s?|t+a+r+d+e+s?|n+o+c+h+e+s?|h+e+y+|e+y+|epa|ola|alo+|hi|hello|saludo?s?|que|q|k|mas|tal|dice|buenass?|veci|vecin[oa]s?|vecinit[oa]s?|amig[oa]s?|senor|senora|senorita|sr|sra|caballero|joven|parce|como|esta|estas|estan|muy)$/;
+
+/** Palabras que acompañan a un saludo pero solas no lo son: «veci», «amiga», «cómo está». */
+const SOLO_ACOMPANA =
+    /^(?:veci|vecin[oa]s?|vecinit[oa]s?|amig[oa]s?|senor|senora|senorita|sr|sra|caballero|joven|parce|como|esta|estas|estan|muy)$/;
 
 function esSaludo(texto) {
     const palabras = normalizar(ultimaLinea(texto))
@@ -188,8 +224,14 @@ function esSaludo(texto) {
 
     // Un saludo es corto. El tope no es estético: sin él, una frase larga hecha solo de
     // muletillas reconocidas acabaría abriendo la bienvenida en medio de una conversación.
-    if (palabras.length === 0 || palabras.length > 4) return false;
-    return palabras.every((p) => PALABRA_DE_SALUDO.test(p));
+    //
+    // Seis y no cuatro desde el 2026-10-05: «Hola buenas noches veci, ¿cómo está?» es un saludo
+    // y se iba al modelo, que contestaba «¡Muy bien, gracias!» sin la carta. Con los vocativos
+    // («veci», «amiga», «señor») y el «¿cómo está?» pasa igual que con el resto: todas las
+    // palabras tienen que ser de saludar, y solo de vocativos no hay saludo («veci» a secas).
+    if (palabras.length === 0 || palabras.length > 6) return false;
+    if (!palabras.every((p) => PALABRA_DE_SALUDO.test(p))) return false;
+    return palabras.some((p) => !SOLO_ACOMPANA.test(p));
 }
 
 /**
@@ -221,6 +263,8 @@ module.exports = {
     ultimaLinea,
     esComando,
     esAlgunComando,
+    puedeSeguirEscribiendo,
+    esPeticionConQue,
     esAfirmacion,
     esAfirmacionConEntrega,
     esSaludo,

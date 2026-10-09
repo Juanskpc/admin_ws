@@ -54,7 +54,7 @@ function eligioPagar(texto) {
 function esCancelarAmbiguo(texto) {
     const t = limpiar(texto);
     if (!t || t.split(' ').length > MAX_PALABRAS) return false;
-    if (/\banul/.test(t)) return false;
+    if (/\banul/.test(t) || pareceDatosDePedido(texto)) return false;
     return /\bcancel(ar|arlo|arla|o|a|e|amos|ando|aria|ado)\b/.test(t);
 }
 
@@ -66,7 +66,8 @@ function esCancelarAmbiguo(texto) {
 const PREGUNTA_PAGO = [
     /\b(como|donde|a donde|por donde|con que|en que|a que) (pago|pagar|puedo pagar|se paga|pagamos|le pago|te pago|transfiero|puedo transferir|consigno)\b/,
     /\b(formas?|medios?|metodos?|opciones) de pago\b/,
-    /\b(me )?(das|da|regalas|regala|pasas|pasa|compartes|comparte|envias|envia|mandas|manda|dices|dice) (el |la |tu |su )?(nequi|numero|llave|cuenta|bre ?b|daviplata)\b/,
+    // Con el plural: «Por favor me regalan Nequi para cancelar» recibía «¿anular o pagar?» (2026-10-05).
+    /\b(me )?(das|da|dan|regalas|regala|regalan|pasas|pasa|pasan|compartes|comparte|comparten|envias|envia|envian|mandas|manda|mandan|dices|dice|dicen) (el |la |tu |su )?(nequi|numero|llave|cuenta|bre ?b|daviplata)\b/,
     /\b(cual es|cual seria|cual) (el |la |tu |su )?(nequi|numero|llave|cuenta|bre ?b)\b/,
     /\b(a que|a cual) (numero|cuenta|nequi|llave)\b/,
     /\b(aceptan|reciben|manejan|tienen) (nequi|daviplata|transferencia|transferencias|efectivo|tarjeta|datafono|bre ?b)\b/,
@@ -74,9 +75,32 @@ const PREGUNTA_PAGO = [
 ];
 const PALABRA_SUELTA_PAGO = /^(por )?(nequi|transferencia|trasferencia|transferencias|efectivo|bre ?b|llave|daviplata)( por favor| porfa)?$/;
 
+/**
+ * ¿El mensaje ENTERO trae los datos de un pedido? Se mira todo el texto, no la última línea.
+ *
+ * Observado en producción (2026-10-04, Zona Burger): el personal manda una plantilla («📝 Pedido
+ * 📍 Dirección 👤 Nombre 📞 Teléfono 💳 Medio de pago») y el cliente la devuelve llena. Su última
+ * línea es «💳 Medio de pago: efectivo», casaba con «medios de pago» y el bot contestaba cómo
+ * pagar en vez de tomar el pedido —4 veces en una tarde, y un cliente se fue molesto—. Un pedido
+ * con su forma de pago dentro lo atiende el modelo, que sí toma el pedido.
+ */
+const ROTULO_PEDIDO = /\b(pedido|direccion|nombre|telefono|celular|cel|barrio)\s*:/;
+function pareceDatosDePedido(texto) {
+    const crudo = String(texto || '');
+    if (/[📝📍👤📞]/u.test(crudo)) return true;
+    const t = normalizar(crudo);
+    if (/\d[\d\s.-]{8,}\d/.test(t)) return true; // un teléfono
+    if (ROTULO_PEDIDO.test(t)) return true;
+    return t.split(/\s+/).filter(Boolean).length > 25;
+}
+
+/** «Medio de pago: efectivo» / «medio de pago nequi» lo DICE, no lo pregunta. */
+const MEDIO_DE_PAGO_DICHO = /\bmedios? de pago\s*:?\s*(nequi|efectivo|transferencia|trasferencia|tarjeta|daviplata|bre ?b)\b/;
+
 function esPreguntaDePago(texto, { hayPedido = false } = {}) {
     const t = limpiar(texto);
     if (!t || t.split(' ').length > MAX_PALABRAS) return false;
+    if (pareceDatosDePedido(texto) || MEDIO_DE_PAGO_DICHO.test(t)) return false;
     if (PREGUNTA_PAGO.some((p) => p.test(t))) return true;
     return hayPedido && PALABRA_SUELTA_PAGO.test(t);
 }
@@ -148,6 +172,7 @@ module.exports = {
     eligioPagar,
     esCancelarAmbiguo,
     esPreguntaDePago,
+    pareceDatosDePedido,
     textosDePago,
     frasePago,
     ultimoPedidoVivo,

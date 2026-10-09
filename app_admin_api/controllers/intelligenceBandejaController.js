@@ -4,6 +4,8 @@ const Respuesta = require('../../app_core/helpers/respuesta');
 const Models = require('../../app_core/models/conection');
 const Audit = require('../../app_core/helpers/auditHelper');
 const { alcanceDeNegocios } = require('../../app_core/middleware/auth');
+// Quién ve la Bandeja: administrador siempre, cajero si el plan incluye WhatsApp (2026-10-04).
+const { alcanceBandeja } = require('../services/accesoBandejaService');
 const PreparacionAsistente = require('../services/preparacionAsistenteService');
 const { Readable } = require('stream');
 
@@ -179,7 +181,7 @@ async function listarConversaciones(req, res) {
         if (!revisar(req, res)) return;
         if (!(await hayEsquemaIntelligence())) return sinEsquema(res);
 
-        const alcance = await alcanceDeNegocios(req.usuario.id_usuario);
+        const alcance = await alcanceBandeja(req.usuario.id_usuario);
         const idNegocio = req.query.id_negocio ? Number(req.query.id_negocio) : null;
         const filtro = filtroDeNegocio(alcance, idNegocio);
 
@@ -271,7 +273,7 @@ async function cargarConversacionPermitida(idConversacion, idUsuario) {
     );
     if (!conversacion) return null;
 
-    const alcance = await alcanceDeNegocios(idUsuario);
+    const alcance = await alcanceBandeja(idUsuario);
     if (alcance.superAdmin) return conversacion;
     if (alcance.idNegocios.includes(Number(conversacion.id_negocio))) return conversacion;
     return null;
@@ -692,7 +694,7 @@ async function esAdministradorDelNegocio(idUsuario, idNegocio) {
 
 /** El negocio que se pide, comprobado contra lo que el usuario puede ver. Nunca se cree el id. */
 async function negocioVisible(idUsuario, idNegocio) {
-    const alcance = await alcanceDeNegocios(idUsuario);
+    const alcance = await alcanceBandeja(idUsuario);
     return alcance.superAdmin || alcance.idNegocios.includes(Number(idNegocio));
 }
 
@@ -713,7 +715,10 @@ async function leerConfiguracion(req, res) {
         const [fila] = await Models.sequelize.query(
             `SELECT id_negocio, nombre, reactivar_asistente_min,
                     tiempo_estimado_min, tiempo_estimado_max, info_asistente,
-                    domicilio_valor_min, domicilio_valor_max, domicilio_nota
+                    domicilio_valor_min, domicilio_valor_max, domicilio_nota,
+                    asistente_pausado, asistente_pausado_en,
+                    asistente_mira_stock, controla_inventario,
+                    tiempo_recoger_min, tiempo_recoger_max
                FROM general.gener_negocio WHERE id_negocio = :idNegocio;`,
             { replacements: { idNegocio }, ...SELECT }
         );
@@ -725,12 +730,22 @@ async function leerConfiguracion(req, res) {
             // Lo que el asistente contesta a «¿cuánto se demora?». null = sin configurar.
             tiempo_estimado_min: fila.tiempo_estimado_min,
             tiempo_estimado_max: fila.tiempo_estimado_max,
+            // El de un pedido PARA RECOGER, que no lleva camino. null = vale el de arriba.
+            tiempo_recoger_min: fila.tiempo_recoger_min ?? null,
+            tiempo_recoger_max: fila.tiempo_recoger_max ?? null,
             // Lo que el asistente le dice al cliente sobre pagos, domicilio, etc. null = nada.
             info_asistente: fila.info_asistente ?? null,
             // Cuánto vale el domicilio, como rango («entre $7.000 y $9.000») + una nota corta.
             domicilio_valor_min: fila.domicilio_valor_min ?? null,
             domicilio_valor_max: fila.domicilio_valor_max ?? null,
             domicilio_nota: fila.domicilio_nota ?? null,
+            // Pausa de emergencia: el asistente no contesta a nadie hasta que se reanude.
+            asistente_pausado: fila.asistente_pausado === true,
+            asistente_pausado_en: fila.asistente_pausado_en ?? null,
+            // ¿El asistente deja de ofrecer lo que no tiene insumos? Decisión propia, aparte
+            // del control de inventario de caja (que viaja solo para que la pantalla avise).
+            asistente_mira_stock: fila.asistente_mira_stock === true,
+            controla_inventario: fila.controla_inventario !== false,
             puede_editar: await esAdministradorDelNegocio(req.usuario.id_usuario, idNegocio),
         });
     } catch (err) {
@@ -742,7 +757,8 @@ async function leerConfiguracion(req, res) {
 /**
  * PUT /admin/intelligence/bandeja/configuracion
  *   { id_negocio, reactivar_asistente_min?, tiempo_estimado_min?, tiempo_estimado_max?,
- *     info_asistente?, domicilio_valor_min?, domicilio_valor_max?, domicilio_nota? }
+ *     info_asistente?, domicilio_valor_min?, domicilio_valor_max?, domicilio_nota?,
+ *     asistente_mira_stock? }
  *   (cada ajuste es independiente; el tiempo estimado es lo que el asistente contesta a
  *   «¿cuánto se demora?», y null lo borra)
  *
@@ -768,7 +784,12 @@ async function guardarConfiguracion(req, res) {
             req.body.domicilio_valor_min !== undefined ||
             req.body.domicilio_valor_max !== undefined ||
             req.body.domicilio_nota !== undefined;
-        if (!traeReactivacion && !traeTiempo && !traeInfo && !traeDomicilio) {
+        // ¿El asistente tiene en cuenta el inventario aunque caja no lo controle? (2026-10-07)
+        const traeStock = req.body.asistente_mira_stock !== undefined;
+        // El tiempo de un pedido para recoger, aparte del de entrega (2026-10-07).
+        const traeRecoger =
+            req.body.tiempo_recoger_min !== undefined || req.body.tiempo_recoger_max !== undefined;
+        if (!traeReactivacion && !traeTiempo && !traeInfo && !traeDomicilio && !traeStock && !traeRecoger) {
             return Respuesta.error(res, 'No hay nada que guardar', 400);
         }
 
@@ -785,7 +806,8 @@ async function guardarConfiguracion(req, res) {
 
         const [antes] = await Models.sequelize.query(
             `SELECT reactivar_asistente_min, tiempo_estimado_min, tiempo_estimado_max, info_asistente,
-                    domicilio_valor_min, domicilio_valor_max, domicilio_nota
+                    domicilio_valor_min, domicilio_valor_max, domicilio_nota, asistente_mira_stock,
+                    tiempo_recoger_min, tiempo_recoger_max
                FROM general.gener_negocio WHERE id_negocio = :idNegocio;`,
             { replacements: { idNegocio }, ...SELECT }
         );
@@ -849,10 +871,53 @@ async function guardarConfiguracion(req, res) {
             Object.assign(replacements, { domicilioMin, domicilioMax, domicilioNota });
         }
 
+        let recogerMin = antes.tiempo_recoger_min ?? null;
+        let recogerMax = antes.tiempo_recoger_max ?? null;
+        if (traeRecoger) {
+            // Igual que el tiempo de entrega: sin mínimo no hay máximo.
+            recogerMin = nulo(req.body.tiempo_recoger_min);
+            recogerMax = recogerMin === null ? null : nulo(req.body.tiempo_recoger_max);
+            if (recogerMax !== null && recogerMax < recogerMin) {
+                return Respuesta.error(res, 'El tiempo máximo para recoger no puede ser menor que el mínimo', 400);
+            }
+            cambios.push('tiempo_recoger_min = :recogerMin', 'tiempo_recoger_max = :recogerMax');
+            Object.assign(replacements, { recogerMin, recogerMax });
+        }
+
+        let miraStock = antes.asistente_mira_stock === true;
+        if (traeStock) {
+            miraStock = req.body.asistente_mira_stock === true;
+            cambios.push('asistente_mira_stock = :miraStock');
+            replacements.miraStock = miraStock;
+        }
+
         await Models.sequelize.query(
             `UPDATE general.gener_negocio SET ${cambios.join(', ')} WHERE id_negocio = :idNegocio;`,
             { replacements }
         );
+
+        if (traeRecoger) {
+            await Audit.registrarEvento({
+                modulo: 'intelligence',
+                accion: 'tiempo_recoger_configurado',
+                idUsuario: req.usuario.id_usuario,
+                idNegocio,
+                detalle: {
+                    antes: { min: antes.tiempo_recoger_min ?? null, max: antes.tiempo_recoger_max ?? null },
+                    despues: { min: recogerMin, max: recogerMax },
+                },
+            });
+        }
+
+        if (traeStock) {
+            await Audit.registrarEvento({
+                modulo: 'intelligence',
+                accion: 'asistente_mira_stock_configurado',
+                idUsuario: req.usuario.id_usuario,
+                idNegocio,
+                detalle: { antes: antes.asistente_mira_stock === true, despues: miraStock },
+            });
+        }
 
         if (traeReactivacion) {
             await Audit.registrarEvento({
@@ -907,7 +972,19 @@ async function guardarConfiguracion(req, res) {
             });
         }
 
-        const mensaje = traeDomicilio && !traeInfo && !traeTiempo && !traeReactivacion
+        const soloRecoger =
+            traeRecoger && !traeStock && !traeDomicilio && !traeInfo && !traeTiempo && !traeReactivacion;
+        const soloStock =
+            traeStock && !traeRecoger && !traeDomicilio && !traeInfo && !traeTiempo && !traeReactivacion;
+        const mensaje = soloRecoger
+            ? (recogerMin === null
+                ? 'Para recoger, el asistente dirá el mismo tiempo que para la entrega'
+                : 'Tiempo para recoger guardado')
+            : soloStock
+            ? (miraStock
+                ? 'El asistente tendrá en cuenta el inventario'
+                : 'El asistente ya no tendrá en cuenta el inventario')
+            : traeDomicilio && !traeInfo && !traeTiempo && !traeReactivacion
             ? (domicilioMin === null && !domicilioNota
                 ? 'El asistente ya no dirá el valor del domicilio'
                 : 'Valor del domicilio guardado')
@@ -930,6 +1007,9 @@ async function guardarConfiguracion(req, res) {
             domicilio_valor_min: domicilioMin,
             domicilio_valor_max: domicilioMax,
             domicilio_nota: domicilioNota,
+            asistente_mira_stock: miraStock,
+            tiempo_recoger_min: recogerMin,
+            tiempo_recoger_max: recogerMax,
         });
     } catch (err) {
         console.error('Error en bandeja.guardarConfiguracion:', err);
@@ -1083,7 +1163,136 @@ async function leerPreparacion(req, res) {
     }
 }
 
+/**
+ * POST /admin/intelligence/bandeja/asistente-pausa   { id_negocio, pausado: boolean }
+ *
+ * Pausa de emergencia (2026-10-04: Zona Burger se quedó sin papas y pidió que el bot dejara de
+ * contestar YA). En pausa, los mensajes siguen entrando y quedan en «Esperan respuesta», pero el
+ * asistente no contesta ni ejecuta nada (ver `motor.recibir`). Al reanudar, lo que llegó durante
+ * la pausa no se contesta: lo atendió el personal. Solo un administrador del negocio (o el
+ * superadmin), y queda auditado.
+ */
+async function pausarAsistente(req, res) {
+    try {
+        if (!revisar(req, res)) return;
+        const idNegocio = Number(req.body.id_negocio);
+        const pausado = req.body.pausado === true;
+
+        if (!(await esAdministradorDelNegocio(req.usuario.id_usuario, idNegocio))) {
+            return Respuesta.error(res, 'Solo un administrador de este negocio puede pausar el asistente.', 403);
+        }
+
+        const [fila] = await Models.sequelize.query(
+            `UPDATE general.gener_negocio
+                SET asistente_pausado = :pausado,
+                    asistente_pausado_en = CASE WHEN :pausado THEN now() ELSE NULL END
+              WHERE id_negocio = :idNegocio
+          RETURNING asistente_pausado, asistente_pausado_en;`,
+            { replacements: { idNegocio, pausado }, ...SELECT }
+        );
+        if (!fila) return Respuesta.error(res, 'Negocio no encontrado', 404);
+
+        await Audit.registrarEvento({
+            modulo: 'intelligence',
+            accion: pausado ? 'asistente_pausado' : 'asistente_reanudado',
+            idUsuario: req.usuario.id_usuario,
+            idNegocio,
+            detalle: { pausado },
+        });
+
+        return Respuesta.success(res, pausado ? 'Asistente en pausa' : 'Asistente reanudado', {
+            asistente_pausado: fila.asistente_pausado === true,
+            asistente_pausado_en: fila.asistente_pausado_en ?? null,
+        });
+    } catch (err) {
+        console.error('Error en bandeja.pausarAsistente:', err);
+        return Respuesta.error(res, 'No se pudo cambiar la pausa del asistente');
+    }
+}
+
+/**
+ * GET /admin/intelligence/bandeja/diagnostico?id_negocio=
+ *
+ * El diagnóstico a fondo de la carta (reglas + prueba del buscador del asistente). Bajo demanda:
+ * hace decenas de búsquedas, no va en la carga de la Bandeja. Lo ve quien puede arreglarlo: el
+ * administrador del negocio y el super admin (que prepara la carta antes de entregar WhatsApp).
+ */
+async function leerDiagnostico(req, res) {
+    try {
+        if (!revisar(req, res)) return;
+        const idNegocio = Number(req.query.id_negocio);
+        if (!(await esAdministradorDelNegocio(req.usuario.id_usuario, idNegocio))) {
+            return Respuesta.error(res, 'Negocio no encontrado', 404);
+        }
+        const diagnostico = await require('../services/diagnosticoAsistenteService').diagnosticar(idNegocio);
+        return Respuesta.success(res, 'Diagnóstico del asistente', diagnostico);
+    } catch (err) {
+        console.error('Error en bandeja.leerDiagnostico:', err);
+        return Respuesta.error(res, 'No se pudo hacer el diagnóstico');
+    }
+}
+
+/**
+ * POST /admin/intelligence/bandeja/diagnostico/recomendaciones   { id_negocio, forzar? }
+ *
+ * Fase 2 del diagnóstico: un modelo redacta el arreglo concreto de la carta («renómbralo así»).
+ * Solo recomienda; nada se cambia. Cuesta centavos y se guarda por carta, así que repetir sin
+ * cambios no gasta (`forzar: true` vuelve a preguntar). Administrador del negocio o super admin.
+ */
+async function pedirRecomendaciones(req, res) {
+    try {
+        if (!revisar(req, res)) return;
+        const idNegocio = Number(req.body.id_negocio);
+        if (!(await esAdministradorDelNegocio(req.usuario.id_usuario, idNegocio))) {
+            return Respuesta.error(res, 'Negocio no encontrado', 404);
+        }
+        const recomendaciones = await require('../services/recomendacionesAsistenteService').recomendar(idNegocio, {
+            forzar: req.body.forzar === true,
+            idUsuario: req.usuario.id_usuario,
+        });
+        // El costo y el modelo son internos (quedan en la auditoría): al panel no viajan.
+        const { costo_usd: _c, modelo: _m, descartados: _d, ...paraElPanel } = recomendaciones;
+        return Respuesta.success(res, 'Recomendaciones para la carta', paraElPanel);
+    } catch (err) {
+        if (err.statusCode && err.code) return Respuesta.error(res, err.message, err.statusCode);
+        console.error('Error en bandeja.pedirRecomendaciones:', err);
+        return Respuesta.error(res, 'No se pudieron generar las recomendaciones');
+    }
+}
+
+/**
+ * GET /admin/intelligence/bandeja/informe?id_negocio=&dias=
+ *
+ * Cómo le fue al asistente con las conversaciones reales (fase 3): pedidos por carta y por chat,
+ * lo que se pidió y no se encontró, chats que acabaron en una persona, pedidos rechazados, y qué
+ * hacer. Administrador del negocio o super admin; el gasto en IA —que es de EscalApp, no del
+ * negocio— solo viaja al super admin.
+ */
+async function leerInforme(req, res) {
+    try {
+        if (!revisar(req, res)) return;
+        if (!(await hayEsquemaIntelligence())) return sinEsquema(res);
+        const idNegocio = Number(req.query.id_negocio);
+        if (!(await esAdministradorDelNegocio(req.usuario.id_usuario, idNegocio))) {
+            return Respuesta.error(res, 'Negocio no encontrado', 404);
+        }
+        const { superAdmin } = await alcanceDeNegocios(req.usuario.id_usuario);
+        const informe = await require('../services/informeAsistenteService').informe(idNegocio, {
+            dias: req.query.dias ? Number(req.query.dias) : 7,
+            conCosto: superAdmin,
+        });
+        return Respuesta.success(res, 'Informe del asistente', informe);
+    } catch (err) {
+        console.error('Error en bandeja.leerInforme:', err);
+        return Respuesta.error(res, 'No se pudo generar el informe');
+    }
+}
+
 module.exports = {
+    leerInforme,
+    pedirRecomendaciones,
+    leerDiagnostico,
+    pausarAsistente,
     leerPreparacion,
     listarConversaciones,
     detalleConversacion,

@@ -43,6 +43,19 @@ plan ([ADR-021](adr/ADR-021-features.md)). **La costura ya existe; lo que falta 
 > Las dos cosas ya son dato: el volumen está contado y los precios de Factus están sobre la mesa
 > ([`facturacion-electronica.md`](facturacion-electronica.md) §8.1 y §8.2-quater).
 
+> ⚠️ **2026-10-05 — a esta tabla le falta una fila: el costo de la IA.** Medido con Zona Burger
+> (`scripts/auditoria_costo_ia.js`): con `gpt-5.6-terra`, US$14–22 al mes —más que el plan Avanzado
+> entero—; con `gpt-5.6-luna`, en producción desde el 2026-10-04, **~US$1,5–2,5 al mes**. Es un
+> costo que crece con las conversaciones del cliente, igual que el de WhatsApp. Detalle y cómo
+> volver a medir: [`sesion-2026-10-04-zona-burger-costo-carta-diagnostico.md`](sesion-2026-10-04-zona-burger-costo-carta-diagnostico.md) §2.
+
+> **2026-10-05 (noche) — y el de WhatsApp ya no es un estimado.** Zona Burger: ~7.000 mensajes del
+> asistente al mes, 6.000 cobrables a **US$0,0008** (tarifa de Colombia) = **~US$4,80 ≈ $20.000 COP**,
+> que le factura Meta **al cliente**, no a nosotros. Asistente completo (Meta + modelo con luna):
+> **~US$6–7 al mes** frente a un plan Avanzado de $59.999. La fila «WhatsApp — desde oct-2026» de la
+> tabla (~$8.000) se quedó corta para un restaurante grande. Medición:
+> [`sesion-2026-10-05-auditoria-en-vivo-zona-burger.md`](sesion-2026-10-05-auditoria-en-vivo-zona-burger.md) §4–§5.
+
 El costo de la facturación **no es un número, es una función de cuánto venda el cliente**. Por eso
 la tabla lleva dos columnas y no una: son los dos extremos reales de la cartera de hoy.
 
@@ -279,7 +292,8 @@ mensajes de servicio salientes el 1 de octubre de 2026.**
 Lo que esto cambia:
 
 - El costo de WhatsApp pasa de ~$0 a una cifra que **hoy no sabemos**, y depende de cuántos mensajes
-  emite el bot por conversación — no de cuántas conversaciones hay.
+  emite el bot por conversación — no de cuántas conversaciones hay. **(Medido el 2026-10-05: ~$20.000
+  COP al mes para Zona Burger, ~$3,3 por mensaje; ver el recuadro de §2.)**
 - Un asistente que contesta en tres mensajes cortos cuesta el triple que uno que contesta en uno.
   **De golpe, la verbosidad del bot es una línea de costo.**
 - Los recordatorios (`recordatorio_cita`, categoría *Utility*) ya se cobraban y no cambian.
@@ -354,7 +368,7 @@ corre.
 | # | Qué | Dónde está el dato | Bloquea |
 |---|---|---|---|
 | 1 | ✅ **Tiquetes reales al mes** | Contados el 2026-09-11: **1.730/mes en Zona Burger** (`id_negocio` 6), no Pregonchos, que es mucho más pequeño | — |
-| 2 | ✅ **Mensajes salientes al mes** por negocio | **Medido el 2026-10-08: 5.235/mes en Zona Burger** (`id_negocio` 6). Cuenta completa en [`asistente-economia.md`](asistente-economia.md) | — |
+| 2 | ✅ **Mensajes salientes al mes** por negocio | Medido dos veces en Zona Burger (`id_negocio` 6) con **filtros distintos, y las dos cifras valen**: ~7.000/mes contando todo lo saliente (2026-10-05) y **5.235/mes contando solo lo que Meta factura** (2026-10-08). La diferencia son los mensajes del móvil del dueño y lo no entregado. Cuenta completa en [`asistente-economia.md`](asistente-economia.md) | — |
 | 3 | ✅ **Precio de Factus** | Lista completa recibida el 2026-09-11 y las 11 preguntas contestadas el 2026-09-12. **No es plano: bolsa anual por documentos** | — |
 | 4 | ✅ **Certificado digital** | **$130.000/año por NIT** en bolsa repartida; incluido en el paquete individual | — |
 | 5 | ⬜ **Cotización de Alegra** como contraste | Un correo | Nada: es comparación, ya no decisión |

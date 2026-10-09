@@ -1,0 +1,507 @@
+'use strict';
+const { validationResult } = require('express-validator');
+const Respuesta = require('../../app_core/helpers/respuesta');
+const Models = require('../../app_core/models/conection');
+const Audit = require('../../app_core/helpers/auditHelper');
+const Consumo = require('../services/consumoIaService');
+const Meta = require('../services/metaCostosService');
+const { trmVigente } = require('../services/trmService');
+
+/**
+ * Terceros — lo que se les paga a los proveedores: OpenAI (IA) y Meta (WhatsApp). Solo super
+ * admin. Nació como «Consumo IA» y la ruta conserva ese nombre.
+ *
+ * OpenAI cobra en USD y Meta en COP; el total del mes se pasa a pesos con la TRM del día
+ * (`trmService`). Lo de WhatsApp sale de `metaCostosService`, que separa lo que paga EscalApp
+ * (su propia WABA) de lo que pagan los clientes conectados por Embedded Signup.
+ *
+ * Junta las dos fuentes que explica `consumoIaService`: el gasto **oficial** de OpenAI (todo lo
+ * que cobra) y el **interno** del Ledger (solo el bot, pero repartido por negocio y modelo).
+ * Si OpenAI no contesta, la pantalla sigue en pie con la fuente interna y lo dice: una vista de
+ * gasto que se cae justo cuando OpenAI falla es la que no sirve el día que importa.
+ *
+ * Los días van en **hora de Colombia** en las dos fuentes, igual que los de Meta: OpenAI los
+ * entrega en UTC y `consumoIaService` los reparte por hora para traerlos al día de aquí.
+ *
+ * Como la Consola de Intelligence, lee `intelligence.costo` con SQL y no importa `intelligence/`.
+ */
+
+const PROVEEDOR = 'openai';
+const VENTANAS = [7, 30, 90];
+
+async function hayEsquemaIntelligence() {
+    const filas = await Models.sequelize.query(
+        `SELECT 1 FROM information_schema.schemata WHERE schema_name = 'intelligence' LIMIT 1;`,
+        { type: Models.sequelize.QueryTypes.SELECT }
+    );
+    return filas.length > 0;
+}
+
+async function listarMovimientos() {
+    return Models.sequelize.query(
+        `SELECT r.id_recarga, r.tipo, r.monto_usd::float AS monto_usd, r.fecha, r.nota,
+                r.gasto_dia_previo_usd::float AS gasto_dia_previo_usd,
+                r.creado_en,
+                NULLIF(TRIM(CONCAT(u.primer_nombre, ' ', u.primer_apellido)), '') AS registrado_por
+           FROM general.gener_recarga_ia r
+           LEFT JOIN general.gener_usuario u ON u.id_usuario = r.id_usuario
+          WHERE r.proveedor = :proveedor AND r.estado = 'A'
+          ORDER BY r.fecha DESC, r.id_recarga DESC;`,
+        { replacements: { proveedor: PROVEEDOR }, type: Models.sequelize.QueryTypes.SELECT }
+    );
+}
+
+/** El gasto del bot según el Ledger, desde `desdeSeg` (por día) y dentro de la ventana. */
+async function gastoInterno(desdeSeg, desdeRangoSeg) {
+    const q = (sql, replacements) =>
+        Models.sequelize.query(sql, { replacements, type: Models.sequelize.QueryTypes.SELECT });
+
+    const [porDia, porNegocio, porModelo, [turnos]] = await Promise.all([
+        q(
+            `SELECT to_char((creado_en AT TIME ZONE 'America/Bogota')::date, 'YYYY-MM-DD') AS fecha,
+                    SUM(costo_usd)::float AS usd
+               FROM intelligence.costo
+              WHERE creado_en >= to_timestamp(:desde)
+              GROUP BY 1 ORDER BY 1;`,
+            { desde: desdeSeg }
+        ),
+        q(
+            `SELECT k.id_negocio, n.nombre AS negocio,
+                    SUM(k.costo_usd)::float                 AS costo_usd,
+                    COUNT(*)::int                           AS llamadas,
+                    COUNT(DISTINCT k.id_conversacion)::int  AS conversaciones
+               FROM intelligence.costo k
+               LEFT JOIN general.gener_negocio n ON n.id_negocio = k.id_negocio
+              WHERE k.creado_en >= to_timestamp(:desde)
+              GROUP BY k.id_negocio, n.nombre
+              ORDER BY costo_usd DESC;`,
+            { desde: desdeRangoSeg }
+        ),
+        q(
+            `SELECT proveedor, modelo,
+                    SUM(costo_usd)::float                    AS costo_usd,
+                    COUNT(*)::int                            AS llamadas,
+                    SUM(tokens_entrada)::bigint::float       AS tokens_entrada,
+                    SUM(tokens_salida)::bigint::float        AS tokens_salida,
+                    SUM(tokens_cache_lectura)::bigint::float AS tokens_cache_lectura
+               FROM intelligence.costo
+              WHERE creado_en >= to_timestamp(:desde)
+              GROUP BY proveedor, modelo
+              ORDER BY costo_usd DESC;`,
+            { desde: desdeRangoSeg }
+        ),
+        q(
+            `SELECT COUNT(*)::int                                          AS total,
+                    COUNT(*) FILTER (WHERE nivel = 'llm')::int             AS con_ia,
+                    COUNT(*) FILTER (WHERE nivel = 'determinista')::int    AS sin_ia,
+                    COUNT(*) FILTER (WHERE nivel = 'humano')::int          AS humano
+               FROM intelligence.turno
+              WHERE creado_en >= to_timestamp(:desde);`,
+            { desde: desdeRangoSeg }
+        ),
+    ]);
+
+    return { porDia, porNegocio, porModelo, turnos };
+}
+
+/** Rellena con ceros los días sin gasto para que la gráfica no se salte fechas. */
+function serieCompleta(desdeSeg, hastaSeg, oficial, interno) {
+    const mapaOficial = oficial ? new Map(oficial.map((d) => [d.fecha, d.usd])) : null;
+    const mapaInterno = new Map(interno.map((d) => [d.fecha, d.usd]));
+    const serie = [];
+    for (let s = desdeSeg; s <= hastaSeg; s += Consumo.SEG_DIA) {
+        const fecha = Consumo.fechaBogota(s);
+        serie.push({
+            fecha,
+            oficial: mapaOficial ? Consumo.redondear(mapaOficial.get(fecha) || 0) : null,
+            interno: Consumo.redondear(mapaInterno.get(fecha) || 0),
+        });
+    }
+    return serie;
+}
+
+/**
+ * Lleva un costo de Meta a pesos. Meta cobra en la moneda de la WABA (COP en todas las de hoy);
+ * si alguna cobrara en USD se convierte con la TRM, y en cualquier otra moneda no se suma: un
+ * total con monedas mezcladas es peor que uno incompleto que lo dice.
+ */
+function aPesos(valor, moneda, trm) {
+    if (!valor) return 0;
+    if (moneda === 'COP') return valor;
+    if (moneda === 'USD' && trm) return valor * trm.valor;
+    return null;
+}
+
+/** Arma la sección de WhatsApp de la respuesta: cuentas, números con su cuota y serie diaria. */
+function armarWhatsapp(consumo, { desdeVentana, hoy, inicioMes, trm }) {
+    const { cuentas, por_dia: porDia } = Meta.resumirMeta(consumo, { desdeVentana, inicioMes });
+
+    let costoEscalappMes = 0;
+    let costoEscalappPeriodo = 0;
+    let costoClientesMes = 0;
+    let sinConvertir = false;
+    for (const c of cuentas) {
+        const mes = aPesos(c.costo_mes, c.moneda, trm);
+        const periodo = aPesos(c.costo_periodo, c.moneda, trm);
+        if (mes === null || periodo === null) {
+            sinConvertir = true;
+            continue;
+        }
+        if (c.paga === 'escalapp') {
+            costoEscalappMes += mes;
+            costoEscalappPeriodo += periodo;
+        } else {
+            costoClientesMes += mes;
+        }
+    }
+
+    const serie = [];
+    for (let s = Date.parse(`${desdeVentana}T00:00:00Z`); ; s += 86_400_000) {
+        const fecha = new Date(s).toISOString().slice(0, 10);
+        if (fecha > hoy) break;
+        const d = porDia.get(fecha);
+        serie.push({
+            fecha,
+            escalapp: d?.escalapp ?? 0,
+            clientes: d?.clientes ?? 0,
+        });
+    }
+
+    return {
+        consultado_en: consumo.consultado_en,
+        cuentas,
+        serie,
+        totales: {
+            mensajes_periodo: cuentas.reduce((s, c) => s + c.mensajes_periodo, 0),
+            costo_escalapp_mes_cop: Math.round(costoEscalappMes),
+            costo_escalapp_periodo_cop: Math.round(costoEscalappPeriodo),
+            costo_clientes_mes_cop: Math.round(costoClientesMes),
+            moneda_sin_convertir: sinConvertir,
+        },
+    };
+}
+
+/**
+ * GET /admin/consumo-ia?dias=7|30|90&forzar=true
+ *
+ * `forzar=true` se salta la caché de 10 minutos (botón «Actualizar»).
+ */
+async function resumen(req, res) {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return Respuesta.error(res, 'Parámetros inválidos', 400, errors.array());
+
+    try {
+        const dias = VENTANAS.includes(Number(req.query.dias)) ? Number(req.query.dias) : 30;
+        const forzar = req.query.forzar === 'true';
+
+        const ahora = new Date();
+        const hoySeg = Consumo.inicioDiaBogota(ahora);
+        const desdeRangoSeg = hoySeg - (dias - 1) * Consumo.SEG_DIA; // la ventana incluye hoy
+        const inicioMesSeg = Consumo.inicioMesBogota(ahora);
+        const desdePromedioSeg = hoySeg - 7 * Consumo.SEG_DIA;
+
+        const movimientos = await listarMovimientos();
+        const partida = movimientos.find((m) => m.tipo === 'SALDO');
+
+        // Una sola consulta a OpenAI que cubra todo lo que hace falta: la ventana, el mes en
+        // curso, el promedio de 7 días y el gasto desde el saldo de partida.
+        const desdeSeg = Math.min(
+            desdeRangoSeg,
+            inicioMesSeg,
+            desdePromedioSeg,
+            partida ? Consumo.inicioDiaBogota(partida.fecha) : Infinity
+        );
+
+        // Meta ya corta los días en hora de Colombia; su ventana es la misma.
+        const hoyBogotaSeg = Meta.inicioDiaBogota(ahora);
+        const desdeVentanaMetaSeg = hoyBogotaSeg - (dias - 1) * Consumo.SEG_DIA;
+        const inicioMesMetaSeg = Meta.inicioMesBogota(ahora);
+
+        // Los tres proveedores en paralelo; ninguno tumba a los demás si falla.
+        const [rOficial, rMeta, trm] = await Promise.all([
+            Consumo.consultarCostosOficiales(desdeSeg, { forzar }).then(
+                (v) => ({ v }),
+                (e) => ({ e })
+            ),
+            Meta.consultarConsumoMeta(Math.min(desdeVentanaMetaSeg, inicioMesMetaSeg), { forzar }).then(
+                (v) => ({ v }),
+                (e) => ({ e })
+            ),
+            trmVigente(),
+        ]);
+
+        let oficial = null;
+        let avisoOficial = null;
+        if (rOficial.e) {
+            if (!rOficial.e.code) throw rOficial.e;
+            avisoOficial = { code: rOficial.e.code, mensaje: rOficial.e.message };
+        } else {
+            oficial = rOficial.v;
+        }
+
+        let whatsapp = null;
+        let avisoWhatsapp = null;
+        if (rMeta.e) {
+            avisoWhatsapp = { code: rMeta.e.code || 'META_ERROR', mensaje: rMeta.e.message };
+        } else {
+            whatsapp = armarWhatsapp(rMeta.v, {
+                desdeVentana: Meta.fechaBogota(desdeVentanaMetaSeg),
+                hoy: Meta.fechaBogota(hoyBogotaSeg),
+                inicioMes: Meta.fechaBogota(inicioMesMetaSeg),
+                trm,
+            });
+        }
+
+        const hayLedger = await hayEsquemaIntelligence();
+        const interno = hayLedger
+            ? await gastoInterno(desdeSeg, desdeRangoSeg)
+            : { porDia: [], porNegocio: [], porModelo: [], turnos: { total: 0, con_ia: 0, sin_ia: 0, humano: 0 } };
+
+        // El saldo se calcula con la fuente oficial; si OpenAI no contesta, con la interna, y
+        // la respuesta dice cuál se usó (la interna no ve el gasto que no es del bot).
+        const fuente = oficial ? 'oficial' : 'interno';
+        const porDiaFuente = oficial ? oficial.por_dia : interno.porDia;
+
+        // Con el gasto oficial por hora, el saldo se resta desde la hora exacta del registro.
+        // Sin él (OpenAI no contestó, o no dio el uso por hora), un SALDO sin foto del gasto de
+        // su día se completa con lo que el Ledger anotó después de su hora, hasta el fin del día.
+        const porHora = oficial && oficial.reparto === 'por_hora' ? oficial.por_hora : null;
+        let gastoInternoTrasPartida = null;
+        if (!porHora && partida && partida.gasto_dia_previo_usd == null && hayLedger) {
+            const finDia = Consumo.inicioDiaBogota(partida.fecha) + Consumo.SEG_DIA;
+            const [fila] = await Models.sequelize.query(
+                `SELECT COALESCE(SUM(costo_usd), 0)::float AS usd
+                   FROM intelligence.costo
+                  WHERE creado_en >= :desde::timestamptz AND creado_en < to_timestamp(:hasta);`,
+                {
+                    replacements: { desde: new Date(partida.fecha).toISOString(), hasta: finDia },
+                    type: Models.sequelize.QueryTypes.SELECT,
+                }
+            );
+            gastoInternoTrasPartida = fila.usd;
+        }
+
+        const saldo = Consumo.calcularSaldo(movimientos, porDiaFuente, {
+            porHora,
+            gastoInternoTrasPartida,
+        });
+        const promedio = Consumo.promedioDiario(porDiaFuente, 7, ahora);
+        const fechaHoy = Consumo.fechaBogota(hoySeg);
+        const fechaMes = Consumo.fechaBogota(inicioMesSeg);
+        const fechaRango = Consumo.fechaBogota(desdeRangoSeg);
+
+        const totalInternoRango = Consumo.sumarDesde(interno.porDia, fechaRango);
+        const conversacionesConIa = interno.porNegocio.reduce((s, n) => s + n.conversaciones, 0);
+
+        return Respuesta.success(res, 'Consumo de IA', {
+            periodo: { dias, desde: fechaRango, hasta: fechaHoy },
+            fuente_saldo: fuente,
+            aviso_oficial: avisoOficial,
+            // 'aproximado' = OpenAI no dio el uso por hora y los días siguen cortados en UTC.
+            reparto_dias: oficial ? oficial.reparto : null,
+            consultado_en: oficial?.consultado_en ?? null,
+            saldo: saldo && {
+                ...saldo,
+                promedio_diario_7d: Consumo.redondear(promedio),
+                dias_restantes: Consumo.diasRestantes(saldo.saldo_estimado, promedio),
+            },
+            promedio_diario_7d: Consumo.redondear(promedio),
+            resumen: {
+                hoy: Consumo.redondear(Consumo.sumarDesde(porDiaFuente, fechaHoy)),
+                mes: Consumo.redondear(Consumo.sumarDesde(porDiaFuente, fechaMes)),
+                periodo_oficial: oficial
+                    ? Consumo.redondear(Consumo.sumarDesde(oficial.por_dia, fechaRango))
+                    : null,
+                periodo_interno: Consumo.redondear(totalInternoRango),
+                proyeccion_mes: Consumo.redondear(promedio * 30),
+            },
+            serie: serieCompleta(
+                desdeRangoSeg,
+                hoySeg,
+                oficial && oficial.por_dia,
+                interno.porDia
+            ),
+            por_concepto: oficial
+                ? (await Consumo.consultarCostosOficiales(desdeRangoSeg)).por_concepto.map((c) => ({
+                      concepto: c.concepto,
+                      usd: Consumo.redondear(c.usd),
+                  }))
+                : [],
+            por_negocio: interno.porNegocio.map((n) => ({
+                ...n,
+                costo_usd: Consumo.redondear(n.costo_usd),
+                costo_por_conversacion: n.conversaciones
+                    ? Consumo.redondear(n.costo_usd / n.conversaciones)
+                    : 0,
+            })),
+            por_modelo: interno.porModelo.map((m) => ({
+                ...m,
+                costo_usd: Consumo.redondear(m.costo_usd),
+            })),
+            conversaciones: {
+                con_ia: conversacionesConIa,
+                costo_promedio: conversacionesConIa
+                    ? Consumo.redondear(totalInternoRango / conversacionesConIa)
+                    : 0,
+            },
+            turnos: interno.turnos,
+            movimientos,
+            whatsapp,
+            aviso_whatsapp: avisoWhatsapp,
+            trm,
+            // Lo que EscalApp paga a terceros este mes (de Colombia, en las dos fuentes), en pesos.
+            terceros: {
+                openai_mes_usd: Consumo.redondear(Consumo.sumarDesde(porDiaFuente, fechaMes)),
+                openai_mes_cop: trm
+                    ? Math.round(Consumo.sumarDesde(porDiaFuente, fechaMes) * trm.valor)
+                    : null,
+                whatsapp_mes_cop: whatsapp ? whatsapp.totales.costo_escalapp_mes_cop : null,
+                total_mes_cop:
+                    trm && whatsapp
+                        ? Math.round(Consumo.sumarDesde(porDiaFuente, fechaMes) * trm.valor) +
+                          whatsapp.totales.costo_escalapp_mes_cop
+                        : null,
+            },
+        });
+    } catch (error) {
+        return Respuesta.error(res, `Error al consultar el consumo de IA: ${error.message}`, 500);
+    }
+}
+
+/**
+ * Cuánto llevaba gastado OpenAI en el día (de Colombia) de un SALDO, en el momento de
+ * registrarlo. Es el respaldo de `calcularSaldo` para cuando no hay gasto por hora.
+ *
+ * Solo tiene sentido si el SALDO es de hoy: la foto se toma ahora, así que para un día
+ * anterior mediría el día entero y no lo que iba a la hora escrita. En ese caso, o si OpenAI no
+ * contesta, devuelve `null` y el cálculo usa la cuenta interna para ese día.
+ *
+ * @param {string|null} fecha  `yyyy-MM-ddTHH:mm` en hora de Colombia, o null = ahora.
+ */
+async function fotoGastoDelDia(fecha) {
+    const conZona = /([zZ]|[+-]\d\d:?\d\d)$/.test(fecha || '');
+    const instante = fecha ? new Date(conZona ? fecha : `${fecha}-05:00`) : new Date();
+    if (Number.isNaN(instante.getTime())) return null;
+    const hoy = Consumo.inicioDiaBogota(new Date());
+    if (Consumo.inicioDiaBogota(instante) !== hoy) return null;
+    try {
+        const { por_dia: porDia } = await Consumo.consultarCostosOficiales(hoy, { forzar: true });
+        const usd = porDia.find((d) => d.fecha === Consumo.fechaBogota(hoy))?.usd ?? 0;
+        return usd.toFixed(6);
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * POST /admin/consumo-ia/movimientos
+ * Body: { tipo: 'SALDO'|'RECARGA', monto_usd, fecha?, nota? }
+ *
+ * `fecha` llega como la escribe un `<input type="datetime-local">` —hora de Colombia, sin
+ * zona— y se guarda tal cual, que es como se guardan las fechas en esta base.
+ */
+async function registrarMovimiento(req, res) {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return Respuesta.error(res, 'Datos inválidos', 400, errors.array());
+
+    const { tipo, monto_usd: monto, nota } = req.body;
+    const fecha = req.body.fecha || null;
+
+    if (tipo === 'RECARGA' && Number(monto) <= 0) {
+        return Respuesta.error(res, 'Una recarga tiene que ser mayor que cero', 400);
+    }
+
+    const gastoDiaPrevio = tipo === 'SALDO' ? await fotoGastoDelDia(fecha) : null;
+
+    const t = await Models.sequelize.transaction();
+    try {
+        const [fila] = await Models.sequelize.query(
+            `INSERT INTO general.gener_recarga_ia
+                 (proveedor, tipo, monto_usd, fecha, nota, id_usuario, gasto_dia_previo_usd)
+             VALUES (:proveedor, :tipo, :monto, COALESCE(:fecha::timestamp, now()), :nota, :idUsuario,
+                     :gastoDiaPrevio)
+             RETURNING id_recarga, tipo, monto_usd::float AS monto_usd, fecha, nota,
+                       (fecha > now() + interval '5 minutes') AS en_el_futuro;`,
+            {
+                replacements: {
+                    proveedor: PROVEEDOR,
+                    tipo,
+                    monto: Number(monto).toFixed(2),
+                    fecha,
+                    nota: nota?.trim() || null,
+                    idUsuario: req.usuario?.id_usuario ?? null,
+                    gastoDiaPrevio,
+                },
+                type: Models.sequelize.QueryTypes.SELECT,
+                transaction: t,
+            }
+        );
+
+        if (fila.en_el_futuro) {
+            await t.rollback();
+            return Respuesta.error(res, 'La fecha no puede ser futura', 400);
+        }
+
+        await Audit.registrarEvento({
+            modulo: 'consumo_ia',
+            accion: tipo === 'SALDO' ? 'saldo_registrado' : 'recarga_registrada',
+            idUsuario: req.usuario?.id_usuario ?? null,
+            ip: req.ip,
+            detalle: { id_recarga: fila.id_recarga, monto_usd: fila.monto_usd, fecha: fila.fecha },
+            transaction: t,
+        });
+
+        await t.commit();
+        delete fila.en_el_futuro;
+        return Respuesta.success(
+            res,
+            tipo === 'SALDO' ? 'Saldo de partida registrado' : 'Recarga registrada',
+            fila,
+            201
+        );
+    } catch (error) {
+        await t.rollback();
+        return Respuesta.error(res, `Error al registrar el movimiento: ${error.message}`, 500);
+    }
+}
+
+/** DELETE /admin/consumo-ia/movimientos/:id — anula (estado 'E'), nunca borra. */
+async function anularMovimiento(req, res) {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return Respuesta.error(res, 'Datos inválidos', 400, errors.array());
+
+    const t = await Models.sequelize.transaction();
+    try {
+        const [fila] = await Models.sequelize.query(
+            `UPDATE general.gener_recarga_ia SET estado = 'E'
+              WHERE id_recarga = :id AND proveedor = :proveedor AND estado = 'A'
+              RETURNING id_recarga, tipo, monto_usd::float AS monto_usd, fecha;`,
+            {
+                replacements: { id: Number(req.params.id), proveedor: PROVEEDOR },
+                type: Models.sequelize.QueryTypes.SELECT,
+                transaction: t,
+            }
+        );
+        if (!fila) {
+            await t.rollback();
+            return Respuesta.error(res, 'Movimiento no encontrado', 404);
+        }
+
+        await Audit.registrarEvento({
+            modulo: 'consumo_ia',
+            accion: 'movimiento_anulado',
+            idUsuario: req.usuario?.id_usuario ?? null,
+            ip: req.ip,
+            detalle: fila,
+            transaction: t,
+        });
+
+        await t.commit();
+        return Respuesta.success(res, 'Movimiento anulado', fila);
+    } catch (error) {
+        await t.rollback();
+        return Respuesta.error(res, `Error al anular el movimiento: ${error.message}`, 500);
+    }
+}
+
+module.exports = { resumen, registrarMovimiento, anularMovimiento };

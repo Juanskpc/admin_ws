@@ -250,7 +250,15 @@ function crearManejadorLlm({
             // capacidades de siempre) no cambia de orden, solo crece.
             capacidades: [...ofrecidas, PASAR_A_PERSONA],
             historial,
-            mensaje: texto,
+            // Con algo esperando el sí del cliente, el modelo lo sabe: contesta la pregunta y no
+            // dice que ya quedó hecho (el «¿lo confirmo?» lo añade la escalera después). Va en el
+            // mensaje y no en el sistema para no mover el prefijo cacheado (ADR-019).
+            mensaje: confirmacion.pendiente(conversacion)
+                ? `${texto}\n\n[Nota del sistema, no del cliente: hay un pedido esperando que el ` +
+                  'cliente diga sí; todavía NO se ha enviado. Contesta solo lo que pregunta, sin ' +
+                  'decir que quedó hecho. Si pide cambiar algo del pedido, vuelve a llamar la ' +
+                  'herramienta del pedido con el cambio.]'
+                : texto,
             ahora: ahora(),
             modelo: config.modelo,
             maxTokens: config.maxTokensRespuesta,
@@ -414,6 +422,19 @@ function crearManejadorLlm({
                     turno,
                     mutacionesEjecutadas,
                     dryRun: config.dryRun,
+                    conversado: {
+                        cliente: [
+                            ...historial.filter((t) => t.rol === 'cliente').map((t) => t.texto),
+                            texto,
+                        ],
+                        asistente: historial.filter((t) => t.rol !== 'cliente').map((t) => t.texto),
+                        // Lo mismo en orden, para saber qué se dijo DESPUÉS de qué.
+                        hilo: [...historial, { rol: 'cliente', texto }],
+                        idConversacion: conversacion.id_conversacion ?? null,
+                        // Para reconocer un pedido que el negocio ya le tomó A MANO a este cliente.
+                        idNegocio,
+                        telefono: quien.principal?.telefono_verificado ?? null,
+                    },
                 });
 
                 // Una mutación que exige confirmación **termina el turno aquí**. No se le
@@ -469,7 +490,15 @@ function crearManejadorLlm({
         // conversación en `handoff_humano` —y el motor deja de contestar en ese estado— el
         // escalado es real y ese motivo desaparece.
         function decisionDeHandoff(pasosAcumulados, invocacionesAcumuladas) {
-            return handoff.decision(
+            // En un restaurante el modelo solo atiende con el local ABIERTO (cerrado contesta el
+            // flujo, sin modelo), así que «no tengo a nadie disponible… te contestan en el
+            // transcurso del día» es falso: salió dos veces en plena hora fuerte con el local
+            // contestando 30 s después (Zona Burger, 2026-10-05). Ahí se dice lo mismo que
+            // cuando el modelo pide una persona. El resto de verticales conserva la frase de
+            // ADR-023, que existe para la barbería a las once de la noche.
+            const decidir =
+                negocio?.tipoNegocio === 'RESTAURANTE' ? handoff.decisionAPersona : handoff.decision;
+            return decidir(
                 {
                     pasos: pasosAcumulados,
                     invocaciones: invocacionesAcumuladas,
@@ -511,6 +540,9 @@ async function ejecutarSolicitud({
     // en `invocaciones` a proposito: eso se persiste y aqui hay datos del cliente (ADR-024).
     respaldoDelTurno = [],
     dryRun = false,
+    // Lo dicho en el chat, por quién: `{ cliente: [textos], asistente: [textos] }`. Solo lo leen
+    // las capacidades que declaran `confirmacion.falta`.
+    conversado = null,
 }) {
     const iniciado = Date.now();
 
@@ -555,6 +587,33 @@ async function ejecutarSolicitud({
     // cliente lo descubra después de haber dicho que sí. Es en seco de verdad pase lo que pase
     // dentro: la transacción se deshace siempre, así que no hay nada que perder por intentarlo.
     if (exigenConfirmacion.has(solicitada.capacidad)) {
+        // Antes de preguntar nada: ¿al modelo le falta un dato que solo puede dar el cliente y
+        // que él rellenó por su cuenta? La capacidad lo declara (`confirmacion.falta`) mirando
+        // lo que de verdad se ha dicho en el chat, que es lo que los argumentos no cuentan. El
+        // error vuelve al modelo, que entonces pregunta. Zona Burger, 2026-10-05: «me puedes dar
+        // tres salchipapas» salió a confirmar «para recoger» sin que nadie lo hubiera dicho.
+        // Puede ser asíncrona: la de los pedidos mira en el Ledger si este chat ya tomó uno.
+        const falta = conversado
+            ? await registry.obtener(solicitada.capacidad)?.confirmacion?.falta?.({
+                  args: solicitada.argumentos,
+                  ...conversado,
+              })
+            : null;
+        if (falta) {
+            invocaciones.push({
+                capacidad: solicitada.capacidad,
+                vertical: registry.describir(solicitada.capacidad)?.vertical ?? null,
+                argumentos: solicitada.argumentos,
+                resultado: 'error',
+                errorCodigo: falta.codigo,
+                latenciaMs: Date.now() - iniciado,
+            });
+            return {
+                id: solicitada.id,
+                error: true,
+                contenido: comoResultado({ error: falta.codigo, mensaje: falta.mensaje }),
+            };
+        }
         try {
             await gate.ejecutar({
                 capacidad: solicitada.capacidad,
@@ -605,7 +664,21 @@ async function ejecutarSolicitud({
             return {
                 id: solicitada.id,
                 error: true,
-                contenido: comoResultado({ error: error.code || 'ERROR', mensaje: error.message }),
+                contenido: comoResultado({
+                    error: error.code || 'ERROR',
+                    mensaje: error.message,
+                    // Zona Burger, 2026-10-04: el modelo mandó `id_producto: 0` sin haber buscado
+                    // el producto, recibió «debe ser >= 1» y le dijo al cliente que hubo «un
+                    // problema interno». Un argumento mal puesto lo arregla el modelo, no el cliente.
+                    ...(error.code === 'ARGUMENTOS_INVALIDOS'
+                        ? {
+                              instruccion:
+                                  'Corrige los argumentos y vuelve a llamar. Si te falta un id, ' +
+                                  'búscalo primero con la herramienta de búsqueda; nunca inventes ' +
+                                  'uno. No le cuentes este error al cliente.',
+                          }
+                        : {}),
+                }),
             };
         }
     }

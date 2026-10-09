@@ -84,11 +84,14 @@ describe('la confirmación de un pedido cuando el cliente se desvía', () => {
         expect(d.pasos[0].motivo.media).toBe(true);
     });
 
-    test('un texto que no es sí ni no se repregunta con el resumen, como siempre', async () => {
+    test('un texto que no es sí ni no se repregunta CORTO, sin repetir el resumen (2026-10-05)', async () => {
         const d = await resolver('Siempre me cobran 23 cada ves que pido al barrio el Pilar', 0);
 
         expect(d.pasos[0].decision).toBe('confirmacion_repreguntada');
-        expect(d.respuestas[0].texto).toContain('criollita');
+        // El resumen está justo arriba: repetirlo entero es lo que se lee como un bot atascado.
+        expect(d.respuestas[0].texto).not.toContain('criollita');
+        expect(d.respuestas[0].texto).toContain('¿Confirmo lo de arriba?');
+        expect(d.respuestas[0].opciones).toHaveLength(2);
     });
 
     test('al segundo desvío el pedido NO se suelta: pasa a una persona', async () => {

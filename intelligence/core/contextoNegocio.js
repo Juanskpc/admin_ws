@@ -155,6 +155,8 @@ async function obtener(idNegocio) {
         perfilReserva: String(fila.perfil_reserva || '').trim().toUpperCase() || null,
         // Cuánto tarda un pedido, según el propio negocio (`null` = no lo ha dicho).
         tiempoEstimado: await leerTiempoEstimado(id),
+        // Cuánto tarda uno PARA RECOGER (`null` = no lo ha dicho: vale el estimado de arriba).
+        tiempoRecoger: await leerTiempoRecoger(id),
         // Cuánto vale el domicilio, como rango (`null` = no lo ha dicho).
         domicilioRango: await leerDomicilioRango(id),
     };
@@ -187,6 +189,28 @@ async function leerTiempoEstimado(id) {
             avisoTiempoEmitido = true;
             console.warn(`[contextoNegocio] no se pudo leer el tiempo estimado: ${error.message}`);
         }
+        return null;
+    }
+}
+
+/**
+ * El tiempo de un pedido para recoger: `{ min, max }` o `null` si el negocio no lo ha dicho.
+ *
+ * Aparte de `leerTiempoEstimado` (que es el del domicilio: cocina más camino) y con la misma
+ * falla contenida: en un entorno sin la columna, el asistente dice el estimado de siempre.
+ */
+async function leerTiempoRecoger(id, transaction = undefined) {
+    try {
+        const [fila] = await Models.sequelize.query(
+            `SELECT tiempo_recoger_min AS min, tiempo_recoger_max AS max
+               FROM general.gener_negocio WHERE id_negocio = :id`,
+            { replacements: { id }, type: Models.sequelize.QueryTypes.SELECT, transaction }
+        );
+        const min = Number(fila?.min);
+        if (!Number.isInteger(min) || min < 1) return null;
+        const max = Number(fila?.max);
+        return { min, max: Number.isInteger(max) && max >= min ? max : null };
+    } catch (_) {
         return null;
     }
 }
@@ -252,4 +276,5 @@ function tipoParaEnrutar(fila) {
 
 module.exports = {
     obtener, GENERICO, normalizarDomicilioRango, registrarProveedor, limpiarProveedores,
+    leerTiempoRecoger,
 };

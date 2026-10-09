@@ -465,6 +465,44 @@ async function cambiarEstadoConversacion(idConversacion, estado, { transaction =
 }
 
 /**
+ * ¿El negocio pausó su asistente? (`gener_negocio.asistente_pausado`, desde 2026-10-04).
+ *
+ * Va FUERA de la transacción de la ingesta a propósito: si la columna todavía no existe (código
+ * desplegado antes que la migración), el error abortaría esa transacción y se perdería el mensaje.
+ * Ante cualquier fallo, `false`: el asistente sigue como siempre.
+ */
+async function asistentePausado(idNegocio) {
+    try {
+        const fila = await unaFila(
+            `SELECT asistente_pausado FROM general.gener_negocio WHERE id_negocio = :idNegocio;`,
+            { idNegocio },
+            null
+        );
+        return fila?.asistente_pausado === true;
+    } catch (error) {
+        console.warn(`[intelligence] no se pudo leer la pausa del negocio ${idNegocio}: ${error.message}`);
+        return false;
+    }
+}
+
+/**
+ * Con el asistente en pausa, la conversación pasa a una persona y a «Esperan respuesta»: así el
+ * mensaje no se queda sin que nadie lo vea. Solo desde un estado que el asistente atiende.
+ */
+async function pasarAPersonaPorPausa(idConversacion, { transaction }) {
+    return unaFila(
+        `
+        UPDATE intelligence.conversacion
+           SET estado = 'handoff_humano', atendida_en = NULL
+         WHERE id_conversacion = :idConversacion AND estado IN ('activa', 'dormida')
+        RETURNING id_conversacion, estado;
+        `,
+        { idConversacion },
+        transaction
+    );
+}
+
+/**
  * Toma el lock pesimista de la conversación (ADR-014, mecanismo 2).
  *
  * `NOWAIT` y no una espera: si otro proceso tiene la conversación, este vuelve a encolarla y
@@ -483,7 +521,7 @@ async function bloquear(idConversacion, { transaction }) {
         return await unaFila(
             `
             SELECT id_conversacion, id_negocio, canal, id_externo, estado,
-                   variables, tarea_actual, tarea_datos
+                   variables, tarea_actual, tarea_datos, humano_ultimo_en
               FROM intelligence.conversacion
              WHERE id_conversacion = :idConversacion
                FOR UPDATE NOWAIT;
@@ -1518,6 +1556,8 @@ module.exports = {
     marcarIntervencionHumana,
     buscarConversacion,
     cambiarEstadoConversacion,
+    asistentePausado,
+    pasarAPersonaPorPausa,
     bloquear,
     guardarEstado,
     insertarMensajeEntrante,

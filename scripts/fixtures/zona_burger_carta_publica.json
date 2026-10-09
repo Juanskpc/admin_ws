@@ -1,0 +1,388 @@
+{
+ "fuente": "GET /restaurante/public/carta/completa?id_negocio=6 (carta pública), 2026-10-04 ~21:50; HOT DOG completado con los precios de las conversaciones del día (estaba agotado a esa hora). · 2026-10-04 noche: nombres ajustados como en producción (scripts/aplicar_carta_zona_burger.js).",
+ "categorias": [
+  {
+   "nombre": "SALCHIPAPAS",
+   "icono": "🍟",
+   "productos": [
+    {
+     "nombre": "Choripapa",
+     "descripcion": "Papa a la francesa, chorizo y salsas de la casa.",
+     "precio": 9000,
+     "icono": "🍟"
+    },
+    {
+     "nombre": "concurso",
+     "descripcion": "",
+     "precio": 65000,
+     "icono": "🍟"
+    },
+    {
+     "nombre": "Criollita mediana",
+     "descripcion": "Tamaño mediano. Papa a la francesa, carne desmechada, pulled pork, pollo en salsa de la casa, chorizo artesanal, salchicha, salsa de ajo casera, salsa BBQ y madurito frito.",
+     "precio": 28000,
+     "icono": "🍟"
+    },
+    {
+     "nombre": "Criollita pequeña",
+     "descripcion": "Tamaño pequeño. Papa a la francesa, carne desmechada, pulled pork, pollo en salsa de la casa, chorizo artesanal, salchicha, salsa de ajo casera, salsa BBQ y madurito frito.",
+     "precio": 15500,
+     "icono": "🍟"
+    },
+    {
+     "nombre": "Criollita grande",
+     "descripcion": "Tamaño grande. Papa a la francesa, carne desmechada, pulled pork, pollo en salsa de la casa, chorizo artesanal, salchicha, salsa de ajo casera, salsa BBQ y madurito frito.",
+     "precio": 39000,
+     "icono": "🍟"
+    },
+    {
+     "nombre": "Salchi-limón personal",
+     "descripcion": "Tamaño personal. Papa a la francesa bañada en limón, fajitas de pollo crocante, chicharrón crocante, salsa mayo cilantro, BBQ, guacamole cremoso, salchicha, chorizo y madurito frito.",
+     "precio": 17500,
+     "icono": "🍟"
+    },
+    {
+     "nombre": "Salchi-limón mediana (pareja)",
+     "descripcion": "Tamaño pareja. Papa a la francesa bañada en limón, fajitas de pollo crocante, chicharrón crocante, salsa mayo cilantro, BBQ, guacamole cremoso, salchicha, chorizo y madurito frito.",
+     "precio": 29000,
+     "icono": "🍟"
+    },
+    {
+     "nombre": "The House pequeña",
+     "descripcion": "Tamaño pequeño. Papas a la francesa, pulled pork, pollo desmechado, chorizo artesanal, salchicha, madurito frito, maicitos, salsa de ajo y BBQ.",
+     "precio": 15500,
+     "icono": "🍟"
+    },
+    {
+     "nombre": "The House grande",
+     "descripcion": "Tamaño grande. Papas a la francesa, pulled pork, pollo desmechado, chorizo artesanal, salchicha, madurito frito, maicitos, salsa de ajo y BBQ.",
+     "precio": 39000,
+     "icono": "🍟"
+    },
+    {
+     "nombre": "The House mediana",
+     "descripcion": "Tamaño mediano. Papas a la francesa, pulled pork, pollo desmechado, chorizo artesanal, salchicha, madurito frito, maicitos, salsa de ajo y BBQ.",
+     "precio": 28000,
+     "icono": "🍟"
+    },
+    {
+     "nombre": "Viciosa pequeña",
+     "descripcion": "Tamaño pequeño. Papas a la francesa, carne de cerdo desmechada, pollo en salsa de la casa, chorizo artesanal, salchicha, tocineta crocante, maíz dulce y salsas de la casa.",
+     "precio": 15500,
+     "icono": "🍟"
+    },
+    {
+     "nombre": "Viciosa grande",
+     "descripcion": "Tamaño grande. Papas a la francesa, carne de cerdo desmechada, pollo en salsa de la casa, chorizo artesanal, salchicha, tocineta crocante, maíz dulce y salsas de la casa.",
+     "precio": 39000,
+     "icono": "🍟"
+    },
+    {
+     "nombre": "Viciosa mediana",
+     "descripcion": "Tamaño mediano. Papas a la francesa, carne de cerdo desmechada, pollo en salsa de la casa, chorizo artesanal, salchicha, tocineta crocante, maíz dulce y salsas de la casa.",
+     "precio": 28000,
+     "icono": "🍟"
+    },
+    {
+     "nombre": "Familiar Criollita",
+     "descripcion": "Tamaño familiar de nuestra salchipapa La Criollita.",
+     "precio": 60000,
+     "icono": "🍟"
+    },
+    {
+     "nombre": "Familiar The House",
+     "descripcion": "Tamaño familiar de nuestra salchipapa The House.",
+     "precio": 60000,
+     "icono": "🍟"
+    },
+    {
+     "nombre": "Familiar Viciosa",
+     "descripcion": "Tamaño familiar de nuestra salchipapa La Viciosa.",
+     "precio": 60000,
+     "icono": "🍟"
+    }
+   ]
+  },
+  {
+   "nombre": "HAMBURGUESAS",
+   "icono": "🍔",
+   "productos": [
+    {
+     "nombre": "Discordia",
+     "descripcion": "Pan artesanal, 140 gr de carne mixta, 80 gr de pollo en salsa cremosa, queso cheddar, cebolla caramelizada, mostaza agridulce y salsa BBQ. Acompañada de papas a la francesa.",
+     "precio": 15500,
+     "icono": "🍔"
+    },
+    {
+     "nombre": "Dulce pecado",
+     "descripcion": "Pan artesanal, 140 gr de carne mixta, tocineta, queso cheddar, cebolla caramelizada, ensalada coleslaw, mayo cilantro y BBQ. Acompañada de papas a la francesa.",
+     "precio": 15500,
+     "icono": "🍔"
+    },
+    {
+     "nombre": "Dulcinea",
+     "descripcion": "Pan brioche, 140 gr de carne mixta, tocineta caramelizada, cebolla caramelizada, queso cheddar, salsa BBQ, mostaza dulce y salsa de ajo. Acompañada de papas a la francesa.",
+     "precio": 16000,
+     "icono": "🍔"
+    },
+    {
+     "nombre": "Pata-crunch",
+     "descripcion": "Hamburguesa con patacón como pan, 150 gr de carne mixta bañada en salsa de ajo, 120 gr de carne desmechada con abundante chimichurri fresco, queso costeño y tártara de la casa. Acompañada de papas a la francesa.",
+     "precio": 16000,
+     "icono": "🍔"
+    }
+   ]
+  },
+  {
+   "nombre": "CARNES",
+   "icono": "🥩",
+   "productos": [
+    {
+     "nombre": "Parrilla de res",
+     "descripcion": "250 gr de res, acompañada de papa a la francesa, yuca frita, patacón y salsas de la casa.",
+     "precio": 17000,
+     "icono": "🥩"
+    },
+    {
+     "nombre": "Parrilla de cerdo",
+     "descripcion": "250 gr de cerdo, acompañado de papa a la francesa, yuca frita, patacón y salsas de la casa.",
+     "precio": 17000,
+     "icono": "🥩"
+    },
+    {
+     "nombre": "Parrilla de pollo",
+     "descripcion": "250 gr de pollo, acompañado de papa a la francesa, yuca frita, patacón y salsas de la casa.",
+     "precio": 17000,
+     "icono": "🥩"
+    },
+    {
+     "nombre": "picada zona burguer",
+     "descripcion": "300 gr de carne mixta (res, cerdo y pollo), chicharrón, costilla ahumada y chorizo. Acompañada de papa, yuca, patacón, chimichurri y salsas de la casa.",
+     "precio": 29000,
+     "icono": "🥩"
+    }
+   ]
+  },
+  {
+   "nombre": "COSTILLAS",
+   "icono": "🍖",
+   "productos": [
+    {
+     "nombre": "costilla personal",
+     "descripcion": "450 gr de costilla bañadas en salsa BBQ, acompañadas de papa a la francesa.",
+     "precio": 15000,
+     "icono": "🍖"
+    },
+    {
+     "nombre": "costillas dobles",
+     "descripcion": "",
+     "precio": 28000,
+     "icono": "🍖"
+    }
+   ]
+  },
+  {
+   "nombre": "ALITAS",
+   "icono": "🍗",
+   "productos": [
+    {
+     "nombre": "alitas dobles",
+     "descripcion": "Alitas bañadas en salsa BBQ de la casa acompañadas de papa a la francesa",
+     "precio": 28000,
+     "icono": "🍗"
+    },
+    {
+     "nombre": "alitas personal",
+     "descripcion": "Alitas bañadas en salsa BBQ de la casa acompañadas de papa a la francesa",
+     "precio": 15000,
+     "icono": "🍗"
+    }
+   ]
+  },
+  {
+   "nombre": "HOT DOG",
+   "icono": "🌭",
+   "productos": [
+    {
+     "nombre": "Perro caliente smoked",
+     "descripcion": "Salchicha americana, costilla ahumada, pollo, pulled pork y papas.",
+     "precio": 14000,
+     "icono": "🌭"
+    },
+    {
+     "nombre": "Perro caliente loco",
+     "descripcion": "Salchicha americana, pollo, pulled pork, tocineta, queso gratinado y papas.",
+     "precio": 14000,
+     "icono": "🌭"
+    }
+   ]
+  },
+  {
+   "nombre": "JUGOS NATURALES",
+   "icono": "🥛",
+   "productos": []
+  },
+  {
+   "nombre": "HERVIDOS",
+   "icono": "🍹",
+   "productos": [
+    {
+     "nombre": "Hervido de lulo",
+     "descripcion": "",
+     "precio": 5000,
+     "icono": "🍹"
+    },
+    {
+     "nombre": "Hervido de maracuyá",
+     "descripcion": "",
+     "precio": 5000,
+     "icono": "🍹"
+    },
+    {
+     "nombre": "Hervido de mora",
+     "descripcion": "",
+     "precio": 5000,
+     "icono": "🍹"
+    }
+   ]
+  },
+  {
+   "nombre": "MICHELADA",
+   "icono": "🍺",
+   "productos": [
+    {
+     "nombre": "michelada",
+     "descripcion": "",
+     "precio": 6000,
+     "icono": "🍺"
+    }
+   ]
+  },
+  {
+   "nombre": "GASEOSAS",
+   "icono": "🍾",
+   "productos": [
+    {
+     "nombre": "Agua en botella",
+     "descripcion": "",
+     "precio": 4000,
+     "icono": "🍾"
+    },
+    {
+     "nombre": "Cigarra 400ml",
+     "descripcion": "",
+     "precio": 1,
+     "icono": "🍾"
+    },
+    {
+     "nombre": "Coca-Cola personal",
+     "descripcion": "",
+     "precio": 5000,
+     "icono": "🍾"
+    },
+    {
+     "nombre": "Coca-Cola 1,5 L",
+     "descripcion": "",
+     "precio": 10000,
+     "icono": "🍾"
+    },
+    {
+     "nombre": "Gaseosa Cuatro personal",
+     "descripcion": "",
+     "precio": 5000,
+     "icono": "🍾"
+    },
+    {
+     "nombre": "Gaseosa Cuatro 1,5 L",
+     "descripcion": "",
+     "precio": 10000,
+     "icono": "🍾"
+    },
+    {
+     "nombre": "Jugo Del Valle",
+     "descripcion": "",
+     "precio": 4000,
+     "icono": "🍾"
+    },
+    {
+     "nombre": "Jugo Hit 500 ml",
+     "descripcion": "",
+     "precio": 5000,
+     "icono": "🍾"
+    },
+    {
+     "nombre": "Postobón 1,5 L",
+     "descripcion": "",
+     "precio": 10000,
+     "icono": "🍾"
+    },
+    {
+     "nombre": "Postobón 1 L",
+     "descripcion": "",
+     "precio": 8000,
+     "icono": "🍾"
+    },
+    {
+     "nombre": "Postobón personal 500 ml",
+     "descripcion": "",
+     "precio": 5000,
+     "icono": "🍾"
+    },
+    {
+     "nombre": "Bebida Power",
+     "descripcion": "",
+     "precio": 4000,
+     "icono": null
+    }
+   ]
+  },
+  {
+   "nombre": "ADICIONALES",
+   "icono": null,
+   "productos": [
+    {
+     "nombre": "Carne de hamburguesa",
+     "descripcion": "Adición para tu pedido",
+     "precio": 6000,
+     "icono": null
+    },
+    {
+     "nombre": "Chicharrón",
+     "descripcion": "Adición para tu pedido",
+     "precio": 6000,
+     "icono": null
+    },
+    {
+     "nombre": "Costilla ahumada",
+     "descripcion": "Adición para tu pedido",
+     "precio": 5000,
+     "icono": null
+    },
+    {
+     "nombre": "Porción de maicitos",
+     "descripcion": "Adición para tu pedido",
+     "precio": 3000,
+     "icono": null
+    },
+    {
+     "nombre": "Porción de papa",
+     "descripcion": "Adición para tu pedido",
+     "precio": 6000,
+     "icono": null
+    },
+    {
+     "nombre": "Porción de patacón",
+     "descripcion": "Adición para tu pedido",
+     "precio": 4000,
+     "icono": null
+    },
+    {
+     "nombre": "Queso gratinado",
+     "descripcion": "Adición para tu pedido",
+     "precio": 3000,
+     "icono": null
+    }
+   ]
+  }
+ ]
+}

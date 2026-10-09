@@ -116,6 +116,11 @@ function cambioDeMensaje(mensaje) {
     if (mensaje?.type === 'revoke' && mensaje.revoke?.original_message_id) {
         return { tipo: 'revoke', wamidOriginal: String(mensaje.revoke.original_message_id) };
     }
+    // Una reacción no es un mensaje nuevo: es una anotación sobre uno que ya existe.
+    // Al devolverla como cambio evitamos que se guarde como "[reaction]" en la Bandeja.
+    if (mensaje?.type === 'reaction') {
+        return { tipo: 'reaction', wamidOriginal: String(mensaje.reaction?.message_id || '') };
+    }
     return null;
 }
 
@@ -467,6 +472,9 @@ async function recibirWebhook(cuerpo, { config = configReal } = {}) {
     }
 
     for (const cambio of leido.cambios) {
+        // Las reacciones se reconocen para que no creen un mensaje nuevo, pero no hay nada que
+        // actualizar en la base: se descartan aquí sin llamar a repositorio ni emitir avisos.
+        if (cambio.tipo === 'reaction') continue;
         await aparte(`un ${cambio.tipo === 'edit' ? 'mensaje editado' : 'mensaje borrado'}`, cambio.wamidOriginal, async () => {
             const r = await repositorio.aplicarCambioDeMensaje(cambio);
             if (!r) {

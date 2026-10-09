@@ -60,7 +60,15 @@ function pintar(resumen, etiqueta = '') {
 
     if (resumen.fallos.length) {
         console.log(`\n   ${resumen.fallos.length} fallo(s):`);
-        for (const f of resumen.fallos) console.log(`   ✗ ${f.id}: ${f.detalle}`);
+        for (const f of resumen.fallos) {
+            console.log(`   ✗ ${f.id}: ${f.detalle}`);
+            // `--detalle`: qué dijo y qué herramientas usó, para saber POR QUÉ falló.
+            if (process.argv.includes('--detalle')) {
+                console.log(`       herramientas: ${(f.invocaciones || []).join(', ') || '—'}`);
+                if (f.confirmaria) console.log(`       pidió confirmar con: ${JSON.stringify(f.confirmaria)}`);
+                console.log(`       respondió: ${String(f.respuesta || '').replace(/\s+/g, ' ').slice(0, 300)}`);
+            }
+        }
     }
 
     // El aviso que ADR-019 convierte en criterio de aceptación: caché a cero de forma
@@ -111,7 +119,7 @@ function pintarComparacion(filas) {
 }
 
 /** Monta el manejador de Nivel 4 para un modelo concreto, en seco y sin historial. */
-function manejadorPara(modelo) {
+function manejadorPara(modelo, historiales = new Map()) {
     const elegido = fabrica.crearAdaptador({ modelo });
     if (!elegido) {
         throw new Error(
@@ -130,8 +138,9 @@ function manejadorPara(modelo) {
             // consultas, así que es cinturón y tirantes — y lo seguirá siendo cuando no lo sea.
             config: { ...CONFIG, modelo: elegido.modelo, dryRun: true },
             // El arnés evalúa turnos aislados: cada caso arranca sin historial a propósito, para
-            // que dos tandas separadas por una semana sean comparables.
-            repositorio: { historialReciente: async () => [] },
+            // que dos tandas separadas por una semana sean comparables — salvo que el caso traiga
+            // el suyo, fijo en el JSON (el turno N de una conversación real).
+            repositorio: { historialReciente: async (idConversacion) => historiales.get(idConversacion) ?? [] },
         }),
     };
 }
@@ -166,7 +175,7 @@ async function main() {
     for (const nombreSuite of suites) {
         const filas = [];
         for (const modelo of modelos) {
-            const montado = manejadorPara(modelo);
+            const montado = manejadorPara(modelo, arnes.historialesDe(nombreSuite));
             const resumen = await arnes.evaluarConversaciones({
                 suite: nombreSuite,
                 manejador: montado.manejador,

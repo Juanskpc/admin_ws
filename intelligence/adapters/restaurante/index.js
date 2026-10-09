@@ -88,6 +88,22 @@ function normalizarTexto(texto) {
 }
 
 /**
+ * Con qué opción lee la carta el asistente: `{ miraStock }` según lo que el negocio decidió en
+ * los ajustes del asistente (`cartaService.asistenteMiraStock`), que es aparte del control de
+ * inventario de caja. Si no se puede leer, `{}`: la carta decide como siempre.
+ */
+async function opcionDeStock(idNegocio) {
+    try {
+        return { miraStock: await cartaService.asistenteMiraStock(idNegocio) };
+    } catch (_) {
+        return {};
+    }
+}
+
+/** El nombre sin espacios, guiones ni tildes: «Salchi-limón» y «salchilimon» son lo mismo. */
+const pegado = (t) => normalizarTexto(t).replace(/[^a-z0-9ñ]/g, '');
+
+/**
  * Busca en la carta, y si la frase entera no casa, lo intenta por palabras.
  *
  * ## El fallo que obliga a la segunda pasada
@@ -117,7 +133,8 @@ function normalizarTexto(texto) {
  * aquí sería cambiarle el comportamiento a una pantalla que nadie ha pedido tocar (ADR-009).
  */
 async function buscarEnLaCarta(idNegocio, termino) {
-    const directa = await cartaService.buscarProductos(idNegocio, termino);
+    const stock = await opcionDeStock(idNegocio);
+    const directa = await cartaService.buscarProductos(idNegocio, termino, stock);
 
     const palabras = normalizarTexto(termino)
         .split(/\s+/)
@@ -126,7 +143,7 @@ async function buscarEnLaCarta(idNegocio, termino) {
     let segunda = [];
     if (palabras.length >= 2) {
         const ancla = palabras.slice().sort((a, b) => b.length - a.length)[0];
-        const candidatos = await cartaService.buscarProductos(idNegocio, ancla);
+        const candidatos = await cartaService.buscarProductos(idNegocio, ancla, stock);
 
         segunda = candidatos.filter((c) => {
             const donde = normalizarTexto(`${c.nombre} ${c.descripcion || ''}`);
@@ -168,24 +185,61 @@ async function agotadosQueCoinciden(idNegocio, termino) {
             .split(/\s+/)
             .filter((w) => w.length >= 3 && !RELLENO.has(w))
             .slice(0, 4);
+        const stock = await opcionDeStock(idNegocio);
         const agotados = new Map();
-        for (const t of [termino, ...palabras]) {
+        /** Lo que casa con `t` y hoy no se vende; `cumple` afina sobre el nombre. */
+        const mirar = async (t, cumple = () => true) => {
             const [todos, vendibles] = await Promise.all([
                 cartaService.buscarProductos(idNegocio, t, { includeDisabled: true }),
-                cartaService.buscarProductos(idNegocio, t),
+                cartaService.buscarProductos(idNegocio, t, stock),
             ]);
             // Agotado = está en la vista completa y NO en la que se puede vender ahora.
             const seVende = new Set(vendibles.map((p) => p.id_producto));
             for (const p of todos) {
-                if (p.visible !== false && !seVende.has(p.id_producto)) agotados.set(p.id_producto, p.nombre);
+                if (p.visible !== false && !seVende.has(p.id_producto) && cumple(p)) {
+                    agotados.set(p.id_producto, p.nombre);
+                }
             }
+        };
+        for (const t of [termino, ...palabras]) {
+            await mirar(t);
             if (t === termino && agotados.size > 0) break;
+        }
+        // «salchilimon» no está, letra por letra, dentro de «Salchi-limón», y el servicio
+        // compara así. Zona Burger, 2026-10-07: el negocio desactivó la Salchi-limón y a
+        // «¿tienes disponible salchilimon?» se le contestó dos veces «no encuentro Salchilimon
+        // en la carta». Se trae lo que empieza igual y se compara el nombre pegado.
+        if (agotados.size === 0) {
+            for (const w of palabras.filter((p) => p.length >= 5)) {
+                await mirar(w.slice(0, 4), (p) => pegado(p.nombre).includes(pegado(w)));
+            }
         }
         return [...agotados.values()].slice(0, MAX_PRODUCTOS);
     } catch (error) {
         console.warn(`[buscar_producto] no se pudieron leer los agotados: ${error.message}`);
         return [];
     }
+}
+
+/**
+ * Lo que `buscar_producto` añade cuando lo pedido existe pero hoy no se vende: los nombres y
+ * cómo decirlo. La frase va aquí, pegada al dato, para que el modelo no improvise un «no
+ * encuentro» (pedido del dueño, 2026-10-07: «agotado por hoy», amable y corto).
+ */
+async function conAgotados(idNegocio, termino, productos, terminoUsado) {
+    if (!noTraeLoPedido(productos, terminoUsado)) return {};
+    const agotados = (await agotadosQueCoinciden(idNegocio, termino)).filter(
+        (nombre) => !productos.some((p) => p.nombre === nombre)
+    );
+    if (agotados.length === 0) return { agotados_ahora: agotados };
+    return {
+        agotados_ahora: agotados,
+        nota_agotado:
+            'Lo que pidió SÍ está en la carta, pero hoy se agotó. Díselo corto y amable, por ' +
+            'ejemplo: «Hoy se nos agotó la *Salchi-limón* 🙏 ¿Te provoca otra cosa?». Si son ' +
+            'varios tamaños del mismo plato, nómbralo una sola vez. Nunca digas «no encuentro», ' +
+            '«no me aparece» ni «no está en la carta».',
+    };
 }
 
 /**
@@ -200,7 +254,340 @@ function noTraeLoPedido(productos, termino) {
         .filter((w) => w.length >= 3 && !RELLENO.has(w))
         .sort((a, b) => b.length - a.length)[0];
     if (!ancla) return false;
-    return !productos.some((p) => normalizarTexto(p.nombre).includes(ancla));
+    // «salchilimon» SÍ es «Salchi-limón»: el nombre se mira también sin guiones ni espacios. Y
+    // nada más laxo que eso: con la tolerancia de `mismaPalabra`, «salchibarril» (agotada) casaba
+    // con «Salchi-limón» por el prefijo, no se miraban los agotados y el modelo anotó la
+    // Salchi-limón en su lugar (2026-10-05, 18:49).
+    return !productos.some((p) => {
+        const nombre = normalizarTexto(p.nombre);
+        return nombre.includes(ancla) || nombre.replace(/[^a-z0-9ñ]/g, '').includes(ancla);
+    });
+}
+
+/**
+ * Dónde empieza el pedido de AHORA dentro del chat: después del último «pedido tomado», del
+ * último saludo con la carta o de la última cancelación.
+ *
+ * El historial son los últimos mensajes de la conversación, y la conversación de WhatsApp no se
+ * acaba nunca: un «para recoger» de hace cinco días seguía contando. Zona Burger, 2026-10-07:
+ * a «una salchilimón personal» se le armó el pedido «para recoger» sin preguntar, porque la
+ * clienta lo había dicho el 2 de octubre; esta vez lo quería a domicilio (ORD-7876).
+ */
+const FRONTERA_DE_PEDIDO = /tu pedido quedo (tomado|para servir)|lo sume a la cuenta de tu mesa|te saluda \*|tu pedido fue cancelado/;
+function pedidoEnCurso(hilo) {
+    let desde = 0;
+    hilo.forEach((m, i) => {
+        if (m.rol !== 'cliente' && FRONTERA_DE_PEDIDO.test(normalizarTexto(m.texto))) desde = i + 1;
+    });
+    return hilo.slice(desde);
+}
+
+/** Lo que NO contesta a «¿a domicilio, para recoger o para comer aquí?»: otro producto, o un sí. */
+const SIGUE_PIDIENDO = /^(?:(?:y|mas|tambien|ademas)\s+)?(?:\d+|un|una|unas|unos|dos|tres|cuatro|cinco|media)\s+[a-zñ]{3,}/;
+const SI_SUELTO = /^(si|sip|sii+|claro|ok|okay|dale|listo|bueno|vale|de una|por favor|porfa)(\s+(si|claro|por favor|porfa|gracias|senor|senora|veci))*$/;
+
+/**
+ * ¿Se le preguntó cómo lo recibe Y contestó? O ya vio un resumen con esa misma entrega, que es
+ * lo que hay cuando solo añade un producto o corrige el nombre.
+ *
+ * Antes bastaba con que el asistente hubiera preguntado. Zona Burger, 2026-10-07: el cliente
+ * siguió dictando productos sin contestar, el modelo eligió «para servir» y se le reservó una
+ * mesa a un domicilio (ORD-7878). Un «sí» a una pregunta de tres opciones tampoco contesta
+ * (2026-10-06: «¿para recoger, a domicilio o para comer aquí?» → «Si» → para recoger).
+ */
+function contestoComoLoRecibe(enCurso, paraServir) {
+    const resumen = paraServir ? /confirmo tu pedido.*para servirlo/ : /confirmo tu pedido.*para recogerlo/;
+    let pregunta = -1;
+    for (let i = 0; i < enCurso.length; i++) {
+        if (enCurso[i].rol === 'cliente') continue;
+        const t = normalizarTexto(enCurso[i].texto);
+        if (resumen.test(t)) return true;
+        if (/recog/.test(t) && String(enCurso[i].texto).includes('?')) pregunta = i;
+    }
+    if (pregunta < 0) return false;
+    return enCurso.slice(pregunta + 1).some((m) => {
+        if (m.rol !== 'cliente') return false;
+        const t = normalizarTexto(m.texto).replace(/[^a-z0-9ñ\s]/g, ' ').replace(/\s+/g, ' ').trim();
+        return t.length > 0 && !SIGUE_PIDIENDO.test(t) && !SI_SUELTO.test(t);
+    });
+}
+
+/**
+ * ¿El modelo eligió «para recoger» (o «para servir» sin mesa) sin que el cliente lo dijera?
+ *
+ * «Para recoger» no se supone. Si el modelo lo pone y en el chat nadie ha hablado de recoger, se
+ * le devuelve para que pregunte (Zona Burger, 2026-10-05: un domicilio quedó tomado para
+ * recoger). «Para servir» sin mesa tampoco: cerrado el paso a LLEVAR, el modelo probó con MESA en
+ * una de cada cuatro rondas de evaluación. Un domicilio ya exige dirección y teléfono.
+ *
+ * Con el chat en orden se mira solo el pedido en curso, y que se le haya preguntado no basta:
+ * tiene que haber contestado (`pedidoEnCurso`, `contestoComoLoRecibe`). Sin el orden —quien
+ * llama sin `hilo`— como antes.
+ */
+function entregaSinDecir({ args, cliente = [], asistente = [], hilo = [] }) {
+    const paraServir = args?.tipo_entrega === 'MESA' && !args?.id_mesa;
+    if (args?.tipo_entrega !== 'LLEVAR' && !paraServir) return false;
+    const dicho = paraServir ? HABLA_DE_COMER_AQUI : HABLA_DE_RECOGER;
+    if (hilo.length > 0) {
+        const enCurso = pedidoEnCurso(hilo);
+        const loDijoAhora = enCurso.some((m) => m.rol === 'cliente' && dicho.test(normalizarTexto(m.texto)));
+        return !(loDijoAhora || contestoComoLoRecibe(enCurso, paraServir));
+    }
+    const loDijo = cliente.some((t) => dicho.test(normalizarTexto(t)));
+    const sePregunto = asistente.some((t) => /recog/.test(normalizarTexto(t)));
+    return !(loDijo || sePregunto);
+}
+
+/**
+ * El error que vuelve al modelo cuando le faltan datos que solo puede dar el cliente, o `null`.
+ *
+ * Con una sola falta, su código de siempre. Con varias, `FALTAN_DATOS` y la orden de pedirlas
+ * TODAS en un mensaje, con la frase hecha: un modelo al que se le dice «falta el nombre» pregunta
+ * el nombre, y al turno siguiente descubre que también faltaba la entrega.
+ */
+function loQueFalta({ entrega, direccion, nombre }) {
+    const cierre = 'No le cuentes este error.';
+    if (entrega) {
+        // Sin saber cómo lo recibe no se sabe qué más pedir: se pregunta eso y, de una vez, lo
+        // que hará falta según lo que conteste.
+        const paraElLocal = nombre
+            ? '🏃 *Para recoger o comer aquí*: dime a nombre de quién.'
+            : '🏃 *Para recoger o comer aquí*: con eso me basta.';
+        return {
+            codigo: nombre ? 'FALTAN_DATOS' : 'ENTREGA_SIN_DECIR',
+            mensaje:
+                'El cliente no ha dicho cómo quiere recibir el pedido' +
+                (nombre ? ' ni a nombre de quién queda' : '') +
+                '. No lo elijas tú. Pregúntaselo en UN solo mensaje que pida de una vez lo que ' +
+                'hará falta según conteste, así: «¿Cómo lo quieres? 🛵 *A domicilio*: mándame la ' +
+                `dirección con el barrio y un teléfono. ${paraElLocal}» ` +
+                `Vuelve a llamar con lo que conteste. ${cierre}`,
+        };
+    }
+    if (direccion && nombre) {
+        return {
+            codigo: 'FALTAN_DATOS',
+            mensaje:
+                'El cliente todavía no ha dicho la dirección ni a nombre de quién queda el pedido. ' +
+                'No los rellenes tú. Pídele las dos cosas en UN solo mensaje —la dirección con el ' +
+                'barrio o una indicación para llegar, y el nombre— y vuelve a llamar cuando las ' +
+                `tengas. ${cierre}`,
+        };
+    }
+    if (direccion) {
+        return {
+            codigo: 'DIRECCION_REQUERIDA',
+            mensaje:
+                'Eso no es una dirección: el cliente todavía no la ha dicho. No la ' +
+                'rellenes tú: pídele la dirección, con el barrio o una indicación para ' +
+                `llegar, y vuelve a llamar cuando la tengas. ${cierre}`,
+        };
+    }
+    if (nombre) {
+        return {
+            codigo: 'NOMBRE_REQUERIDO',
+            mensaje:
+                'No sabes cómo se llama el cliente. No pongas «cliente»: pregúntale a ' +
+                `nombre de quién queda el pedido y vuelve a llamar con lo que conteste. ${cierre}`,
+        };
+    }
+    return null;
+}
+
+/** «20 a 40 minutos» / «unos 20 minutos», o `null` si el negocio no ha dicho ese tiempo. */
+function minutosEnPalabras(tiempo) {
+    const min = Number(tiempo?.min);
+    if (!Number.isInteger(min) || min < 1) return null;
+    const max = Number(tiempo?.max);
+    return Number.isInteger(max) && max > min ? `${min} a ${max} minutos` : `unos ${min} minutos`;
+}
+
+/**
+ * La línea del resumen que dice cuánto falta, según cómo lo recibe: el tiempo de recoger para
+ * quien pasa por el local (o el estimado de siempre si el negocio no lo ha dicho aparte) y el
+ * estimado para un domicilio. `null` si no hay ningún tiempo configurado: no se inventa.
+ */
+async function lineaDeTiempo(idNegocio, tipoEntrega) {
+    try {
+        const negocio = await contextoNegocio.obtener(idNegocio);
+        const enElLocal = tipoEntrega !== 'DOMICILIO';
+        const cuanto = minutosEnPalabras(
+            enElLocal ? negocio?.tiempoRecoger || negocio?.tiempoEstimado : negocio?.tiempoEstimado
+        );
+        if (!cuanto) return null;
+        const rango = cuanto.startsWith('unos') ? cuanto : `unos ${cuanto}`;
+        return enElLocal
+            ? `⏱️ Estará listo en ${rango}, contados desde que confirmes.`
+            : `⏱️ Te llega en ${rango}, contados desde que confirmes.`;
+    } catch (_) {
+        return null;
+    }
+}
+
+/** El cliente habló de recoger, pasar o ir al local (sobre texto sin tildes). */
+const HABLA_DE_RECOGER = /\b(recog\w*|recoj\w*|llevar|llevo|llevarl[oa]s?|paso|pasar|pasare|pasamos|voy|vamos|retir\w*|busc\w*|local|alla|caigo)\b|~m=r\b/;
+
+/** El asistente acaba de decir que el pedido quedó hecho (las tres frases de `hecho`). */
+const PEDIDO_TOMADO = /pedido quedo tomado|pedido quedo para servir|lo sume a la cuenta/;
+
+/** El cliente pide OTRO pedido, o el asistente ya le preguntó si es uno nuevo. */
+const QUIERE_OTRO_PEDIDO = /\b(otr[oa]s?|nuevo pedido|pedido nuevo|aparte|adicional|de nuevo|tambien quiero|tambien me|ademas)\b/;
+
+/** Cuánto dura «este chat ya tiene un pedido»: lo que tarda en salir de cocina. */
+const HORAS_PEDIDO_YA_TOMADO = 2;
+
+/**
+ * ¿Se está por crear un SEGUNDO pedido donde el cliente solo quería cambiar el primero?
+ *
+ * Zona Burger, 2026-10-05, 21:25: con el pedido ORD-7789 ya tomado, la clienta escribió «solo
+ * salsa de piña y tomate, menos la BBQ». El asistente no puede editar un pedido hecho, así que
+ * llamó otra vez a `tomar_pedido` y le enseñó la confirmación de un pedido NUEVO igual; con un
+ * «sí» a cocina le entraban dos.
+ *
+ * Que hay un pedido lo dice el Ledger (`tomar_pedido` ok de este chat en las últimas horas), no
+ * el texto. Se deja pasar cuando, después de ese pedido, el cliente habla de «otro» o el
+ * asistente ya le preguntó si es uno nuevo. Ante cualquier fallo, `null`: no se bloquea una
+ * venta por no poder leer el Ledger.
+ */
+async function pedidoQueYaSeTomo({ hilo = [], idConversacion = null, idNegocio = null, telefonos = [] }) {
+    // Si este chat no tomó ningún pedido, queda mirar si el negocio se lo tomó A MANO. Ver
+    // `pedidoTomadoAMano`. Ese pedido no dejó «pedido tomado» en el chat, así que lo que cuenta
+    // como «pide otro» es todo lo que haya en el hilo.
+    const tomadoAMano = async () => {
+        const aMano = await pedidoTomadoAMano({ idNegocio, telefonos });
+        if (!aMano) return null;
+        const pideOtro = hilo.some(
+            (t) =>
+                (t.rol === 'cliente' && QUIERE_OTRO_PEDIDO.test(normalizarTexto(t.texto))) ||
+                (t.rol !== 'cliente' && /pedido nuevo/.test(normalizarTexto(t.texto)))
+        );
+        if (!pideOtro) {
+            return {
+                codigo: 'YA_HAY_PEDIDO',
+                mensaje:
+                    `El restaurante ya le tomó a este cliente el pedido ${aMano} hace poco, por fuera ` +
+                    'de ti: NO crees otro. Lo que el cliente escribe ahora seguramente es sobre ESE ' +
+                    'pedido (la dirección, una indicación, una pregunta): llama a pasar_a_persona. ' +
+                    'Solo si de verdad pide otro pedido aparte, pregúntale «¿es un pedido nuevo, ' +
+                    'aparte del anterior?» y vuelve a llamar cuando diga que sí.',
+            };
+        }
+        return null;
+    };
+    if (!idConversacion) return tomadoAMano();
+    try {
+        const [fila] = await Models.sequelize.query(
+            `SELECT 1 AS hay FROM intelligence.invocacion_capacidad
+              WHERE id_conversacion = :c AND capacidad = 'tomar_pedido'
+                AND resultado = 'ok' AND NOT dry_run
+                AND creado_en >= now() - (:horas * interval '1 hour')
+              LIMIT 1;`,
+            {
+                replacements: { c: idConversacion, horas: HORAS_PEDIDO_YA_TOMADO },
+                type: Models.sequelize.QueryTypes.SELECT,
+                logging: false,
+            }
+        );
+        if (!fila) return tomadoAMano();
+    } catch (error) {
+        console.warn(`[tomar_pedido] no se pudo saber si ya hay un pedido: ${error.message}`);
+        return null;
+    }
+
+    // Lo dicho DESPUÉS del «pedido tomado» (o todo el hilo, si esa frase ya quedó atrás).
+    let desde = -1;
+    hilo.forEach((t, i) => {
+        if (t.rol !== 'cliente' && PEDIDO_TOMADO.test(normalizarTexto(t.texto))) desde = i;
+    });
+    const despues = hilo.slice(desde + 1);
+    const numero = desde >= 0 ? (String(hilo[desde].texto).match(/ORD-\d+/) || [])[0] : null;
+    const pideOtro = despues.some(
+        (t) =>
+            (t.rol === 'cliente' && QUIERE_OTRO_PEDIDO.test(normalizarTexto(t.texto))) ||
+            (t.rol !== 'cliente' && /pedido nuevo/.test(normalizarTexto(t.texto)))
+    );
+    if (pideOtro) return null;
+
+    const cual = numero ? `el pedido ${numero}` : 'un pedido';
+    return {
+        codigo: 'YA_HAY_PEDIDO',
+        mensaje:
+            `En esta conversación ya se tomó ${cual}: NO crees otro. Si el cliente quiere CAMBIAR ` +
+            'algo de ese pedido (salsas, una nota, la dirección, quitar algo), llama a ' +
+            'pasar_a_persona: tú no puedes editarlo. Si quiere AÑADIR productos, usa ' +
+            'agregar_items_pedido con ese número. Solo si de verdad pide otro pedido aparte, ' +
+            'pregúntale «¿es un pedido nuevo, aparte del anterior?» y vuelve a llamar cuando diga que sí.',
+    };
+}
+
+/**
+ * El número de un pedido vivo que el negocio le tomó A MANO a este cliente en las últimas horas,
+ * o `null`. Se reconoce por el teléfono de contacto (los últimos 10 dígitos), que es lo único que
+ * une un pedido hecho en caja con un chat.
+ *
+ * Zona Burger, 2026-10-06, 18:47: el cajero tomó el domicilio a mano (ORD-7803); a los 25 minutos
+ * el asistente volvió, el cliente escribió «habitación 404» y el modelo armó el mismo pedido otra
+ * vez. Un «dale» después había dos domicilios iguales, con dos domiciliarios. El Ledger no lo
+ * veía: ese pedido no lo tomó el asistente. Ante cualquier fallo, `null`.
+ */
+async function pedidoTomadoAMano({ idNegocio = null, telefonos = [] }) {
+    const finales = [
+        ...new Set(
+            telefonos
+                .map((t) => String(t || '').replace(/\D/g, '').slice(-10))
+                .filter((t) => t.length === 10)
+        ),
+    ];
+    if (!idNegocio || finales.length === 0) return null;
+    try {
+        const [fila] = await Models.sequelize.query(
+            `SELECT o.numero_orden
+               FROM restaurante.pedid_orden o
+              WHERE o.id_negocio = :idNegocio
+                AND o.estado <> 'CANCELADA'
+                AND o.tipo_pedido IN ('DOMICILIO', 'LLEVAR')
+                AND o.fecha_creacion >= (now() AT TIME ZONE 'America/Bogota') - (:horas * interval '1 hour')
+                AND right(regexp_replace(coalesce(o.contacto_telefono, ''), '\\D', '', 'g'), 10) IN (:finales)
+              ORDER BY o.fecha_creacion DESC
+              LIMIT 1;`,
+            {
+                replacements: { idNegocio, horas: HORAS_PEDIDO_YA_TOMADO, finales },
+                type: Models.sequelize.QueryTypes.SELECT,
+                logging: false,
+            }
+        );
+        return fila?.numero_orden ?? null;
+    } catch (error) {
+        console.warn(`[tomar_pedido] no se pudo saber si hay un pedido tomado a mano: ${error.message}`);
+        return null;
+    }
+}
+
+/**
+ * Lo que el modelo escribe cuando NO tiene el dato y aun así tiene que llenar el campo. Zona
+ * Burger, 2026-10-06: un domicilio salió a nombre de «Cliente» y con dirección «pendiente»; el
+ * local consiguió la dirección a mano y el cliente esperó más de una hora. Sobre texto
+ * normalizado y entero: «Hotel Nova, habitación por confirmar» sí es una dirección.
+ */
+const DIRECCION_DE_RELLENO = /^(la )?(pendiente|por confirmar|por definir|por indicar|por verificar|sin direccion|sin definir|no aplica|no indica|no tiene|no se|n\/?a|ninguna|desconocida?|direccion|domicilio|a domicilio|ubicacion|ubicacion en tiempo real|maps|[\W_]*)$/;
+const NOMBRE_DE_RELLENO = /^(el |la )?(cliente|clienta|usuario|usuaria|pendiente|por confirmar|sin nombre|anonimo|anonima|desconocid[oa]|n\/?a|whatsapp)$/;
+
+/** El cliente habló de comer en el local («para servir», «vamos para allá»). */
+const HABLA_DE_COMER_AQUI = /\b(servir\w*|comer|comemos|consum\w*|mesa|aqui|alla|local|sentad\w*|voy|vamos|llego|llegamos)\b/;
+
+/** Palabras de tamaño que el cliente puede pedir y que la carta puede no tener para ese plato. */
+const PIDE_TAMANO = /^(mediana|mediano|medianas|medianos|grande|grandes|familiar|familiares|xl|jumbo|gigante|gigantes)$/;
+
+/**
+ * Separa el tamaño del resto: «salchilimon grande» → { resto: 'salchilimon', tamano: 'grande' }.
+ * Sin tamaño, o si el término ES solo el tamaño, `tamano` es null.
+ */
+function sinElTamano(termino) {
+    const palabras = String(termino || '').trim().split(/\s+/).filter(Boolean);
+    const tamanos = palabras.filter((w) => PIDE_TAMANO.test(normalizarTexto(w)));
+    const resto = palabras.filter((w) => !PIDE_TAMANO.test(normalizarTexto(w))).join(' ');
+    if (tamanos.length === 0 || resto.length < 2) return { resto: termino, tamano: null };
+    return { resto, tamano: normalizarTexto(tamanos[0]) };
 }
 
 /** Palabras de relleno: no dicen QUÉ producto es, así que no se le exigen a la carta. */
@@ -209,10 +596,16 @@ const RELLENO = new Set([
     'con', 'sin', 'para', 'que', 'quiero', 'quisiera', 'pedir', 'dame', 'deme', 'tienen',
     'tiene', 'hay', 'precio', 'cuanto', 'vale', 'cuesta', 'tamano', 'size', 'me', 'regala',
     'regalas', 'regalame', 'mas', 'otra', 'otro', 'también', 'tambien',
+    // «gaseosa personal sabor cuatro» no encontraba nada: «sabor» no está en ningún nombre (2026-10-04).
+    'sabor', 'sabores',
 ]);
 
 /** Tamaños que NO figuran en el nombre cuando el producto es el básico («criollita» = personal). */
-const TAMANO_BASICO = new Set(['pequena', 'pequeno', 'chica', 'chico', 'personal', 'individual', 'sencilla', 'sencillo', 'normal']);
+// Con plurales: «alitas pequeñas» no encontraba nada (2026-10-04) porque «pequenas» no estaba.
+const TAMANO_BASICO = new Set([
+    'pequena', 'pequeno', 'pequenas', 'pequenos', 'chica', 'chico', 'chicas', 'chicos', 'personal',
+    'personales', 'individual', 'individuales', 'sencilla', 'sencillo', 'sencillas', 'sencillos', 'normal',
+]);
 
 /** Marcas de tamaño que sí se escriben en el nombre de las variantes grandes. */
 const MARCA_TAMANO = /\b(mediana|mediano|grande|familiar|xl|jumbo|gigante)\b/;
@@ -277,7 +670,7 @@ async function buscarPorCategoriaYNombre(idNegocio, termino) {
     const exigidas = palabras.filter((w) => !TAMANO_BASICO.has(w));
     if (exigidas.length === 0) return [];
 
-    const categorias = await cartaService.getCartaPublicaCompleta(idNegocio);
+    const categorias = await cartaService.getCartaPublicaCompleta(idNegocio, await opcionDeStock(idNegocio));
     const encontrados = [];
     for (const cat of categorias || []) {
         const palabrasCategoria = normalizarTexto(cat.nombre).split(/\s+/);
@@ -307,15 +700,49 @@ async function buscarPorCategoriaYNombre(idNegocio, termino) {
     return resultado.sort((a, b) => b._afinidad - a._afinidad);
 }
 
-function producto(p) {
+function producto(p, { conDescripcion = true } = {}) {
     return {
         id_producto: p.id_producto,
         nombre: p.nombre,
         ...(p.categoria ? { categoria: p.categoria } : {}),
-        descripcion: p.descripcion || null,
+        ...(conDescripcion ? { descripcion: p.descripcion || null } : {}),
         precio: precio(p.precio),
         es_popular: Boolean(p.es_popular),
     };
+}
+
+/** Con más resultados que esto, `buscar_producto` los manda sin descripción. */
+// Cuatro y no tres (2026-10-05): un plato con sus cuatro tamaños —pequeña, mediana, grande y
+// familiar— llegaba sin descripción, y a «¿la viciosa trae tocineta?» el modelo contestaba que
+// la descripción no lo decía. No la había recibido.
+const MAX_CON_DESCRIPCION = 4;
+
+/**
+ * Se queda con lo que el cliente NOMBRÓ, no con todo lo que lo menciona.
+ *
+ * Las tres pasadas de `buscarEnLaCarta` también buscan en las descripciones, y eso es lo que
+ * permite encontrar «empanadas de carne»; pero en Zona Burger (2026-10-04) «choripapa» traía diez
+ * productos —todas las salchipapas dicen «papa a la francesa»—, unos 870 tokens que el modelo
+ * leía en cada búsqueda. Ahora:
+ *  - si el término nombra una CATEGORÍA («hamburguesa», «gaseosa»), salen esa categoría y lo que
+ *    lo lleve en el nombre;
+ *  - si no, y hay productos que lo llevan en el NOMBRE («choripapa», «queso gratinado»), solo esos;
+ *  - si no, todo lo encontrado, como antes (ahí la descripción es la única pista).
+ * Las palabras de tamaño básico («pequeña», «personal») no cuentan: ese producto no las dice.
+ */
+function afinarResultado(productos, termino) {
+    const tokens = (texto) => normalizarTexto(texto).replace(/[^a-z0-9ñ\s]/g, ' ').split(/\s+/).filter(Boolean);
+    const exigidas = tokens(termino).filter((w) => w.length >= 3 && !RELLENO.has(w) && !TAMANO_BASICO.has(w));
+    if (exigidas.length === 0 || productos.length <= 1) return productos;
+    const cubre = (texto) => {
+        const bolsa = tokens(texto);
+        return exigidas.every((w) => bolsa.some((b) => mismaPalabra(w, b)));
+    };
+    const enNombre = (p) => cubre(p.nombre);
+    const enCategoria = (p) => Boolean(p.categoria) && cubre(p.categoria);
+    if (productos.some(enCategoria)) return productos.filter((p) => enCategoria(p) || enNombre(p));
+    if (productos.some(enNombre)) return productos.filter(enNombre);
+    return productos;
 }
 
 /**
@@ -373,6 +800,7 @@ async function leerFichaDelNegocio(idNegocio, transaction) {
         return {
             tiempo_estimado_min: fila?.tiempo_estimado_min ?? null,
             tiempo_estimado_max: fila?.tiempo_estimado_max ?? null,
+            tiempo_recoger: await contextoNegocio.leerTiempoRecoger(idNegocio, transaction),
             info_asistente: String(fila?.info_asistente || '').trim() || null,
             domicilio_rango: await leerDomicilioRango(idNegocio, transaction),
         };
@@ -442,7 +870,7 @@ function registrarCapacidades() {
             // sigue disponible, con id_categoria, para cuando el cliente SÍ pregunta por una
             // parte concreta.
             if (!args.id_categoria) {
-                const carta = await cartaService.getCartaPublica(idNegocio);
+                const carta = await cartaService.getCartaPublica(idNegocio, await opcionDeStock(idNegocio));
 
                 const categorias = carta
                     .map((c) => ({
@@ -487,7 +915,8 @@ function registrarCapacidades() {
 
             const productos = await cartaService.getProductosPublicosByCategoria(
                 idNegocio,
-                args.id_categoria
+                args.id_categoria,
+                await opcionDeStock(idNegocio)
             );
             return {
                 id_categoria: args.id_categoria,
@@ -508,6 +937,8 @@ function registrarCapacidades() {
             'no inventes productos ni precios: lo único que existe es lo que devuelve esto. ' +
             'Si el producto viene en `agotados_ahora`, SÍ está en la carta pero hoy se acabó: ' +
             'dilo así y ofrece otra cosa; nunca digas que no existe. ' +
+            'Si viene `tamano_que_no_hay`, el producto SÍ existe pero no en ese tamaño: dile ' +
+            'cuáles hay con sus precios; nunca digas que no está en la carta. ' +
             'Si salen varias presentaciones del mismo plato (personal/pequeña, mediana, grande, ' +
             'familiar, sencilla, doble) y el cliente NO dijo el tamaño, pregúntale cuál quiere ' +
             'con sus precios; nunca elijas tú el tamaño. Si con el término completo no aparece ' +
@@ -524,22 +955,47 @@ function registrarCapacidades() {
             // panel del negocio, donde ver lo oculto es justo lo que se quiere. Por el bot no
             // puede salir. Se filtra aquí y no en el servicio para no cambiarle el
             // comportamiento a la vertical desde el adaptador — es su contrato, no el nuestro.
-            const productos = (await buscarEnLaCarta(idNegocio, args.termino)).filter(
+            let productos = (await buscarEnLaCarta(idNegocio, args.termino)).filter(
                 (p) => p.visible !== false
             );
+            // El plato existe pero no en ESE tamaño. Zona Burger, 2026-10-05: «una salchilimon
+            // grande» —hay personal y mediana— devolvía vacío, el modelo contestó dos veces «no
+            // la encuentro en la carta» y la clienta se fue. Se busca sin el tamaño y se dice
+            // cuál es el que no hay: así la respuesta es «grande no, hay estas», no «no existe».
+            let terminoUsado = args.termino;
+            let tamanoQueNoHay = null;
+            if (productos.length === 0) {
+                const { resto, tamano } = sinElTamano(args.termino);
+                if (tamano) {
+                    const sinTamano = (await buscarEnLaCarta(idNegocio, resto)).filter(
+                        (p) => p.visible !== false
+                    );
+                    if (sinTamano.length > 0) {
+                        productos = sinTamano;
+                        terminoUsado = resto;
+                        tamanoQueNoHay = tamano;
+                    }
+                }
+            }
+            // Lo que se nombró, y sin descripciones si es una lista: el modelo vuelve a buscar
+            // el producto concreto si le preguntan qué trae (ver `afinarResultado`).
+            const afinados = afinarResultado(productos, terminoUsado).slice(0, MAX_PRODUCTOS);
+            const conDescripcion = afinados.length <= MAX_CON_DESCRIPCION;
             return {
                 termino: args.termino,
-                productos: productos.slice(0, MAX_PRODUCTOS).map(producto),
+                productos: afinados.map((p) => producto(p, { conDescripcion })),
+                ...(tamanoQueNoHay
+                    ? {
+                          tamano_que_no_hay: tamanoQueNoHay,
+                          nota:
+                              `Este producto SÍ está en la carta, pero no en tamaño «${tamanoQueNoHay}». ` +
+                              'Dile al cliente las presentaciones que hay, con sus precios, y que elija.',
+                      }
+                    : {}),
                 // Solo cuando no hay nada que vender: así «no tenemos» y «se acabó» dejan de ser
                 // la misma respuesta (Zona Burger, 2026-10-02: la Discordia, agotada por un
                 // stock en −321, se le dijo a una clienta que «no está en la carta»).
-                ...(noTraeLoPedido(productos, args.termino)
-                    ? {
-                          agotados_ahora: (await agotadosQueCoinciden(idNegocio, args.termino)).filter(
-                              (nombre) => !productos.some((p) => p.nombre === nombre)
-                          ),
-                      }
-                    : {}),
+                ...(await conAgotados(idNegocio, args.termino, productos, terminoUsado)),
             };
         },
     });
@@ -554,7 +1010,9 @@ function registrarCapacidades() {
             'en palabras del cliente; no le añadas etapas que no dice. El pago casi siempre es al ' +
             'recibir o al recoger: NUNCA le digas que el pedido espera el pago para prepararse o ' +
             'salir. Si `pasado_del_tiempo_estimado` es true y el pedido sigue abierto, discúlpate ' +
-            'por la demora y usa pasar_a_persona para que alguien del equipo le diga dónde va.',
+            'por la demora y usa pasar_a_persona para que alguien del equipo le diga dónde va. ' +
+            'Nunca le digas cuántos minutos lleva su pedido. Si en esta conversación ya le dijiste ' +
+            'cómo va y vuelve a preguntar, no repitas: usa pasar_a_persona.',
         vertical: VERTICAL,
         tipo: registry.TIPO.CONSULTA,
         feature: FEATURE.ASISTENTE_IA,
@@ -629,10 +1087,13 @@ function registrarCapacidades() {
                 ya_pagado: orden.estado_pago === 'pagado' || orden.estado === 'CERRADA',
                 ...(abierta
                     ? {
-                          ...tiempoDelPedido(orden, {
+                          // Solo si ya pasó el tiempo, NO cuántos minutos lleva: con el número
+                          // delante el modelo contestó «va en 57 minutos desde que se pidió» a
+                          // quien reclamaba la demora (Zona Burger, 2026-10-04). Suena a reproche.
+                          pasado_del_tiempo_estimado: tiempoDelPedido(orden, {
                               min: ficha?.tiempo_estimado_min,
                               max: ficha?.tiempo_estimado_max,
-                          }),
+                          }).pasado_del_tiempo_estimado,
                           // Lo que el negocio declaró, dicho tal cual. Sin esto el modelo sabía cuánto
                           // llevaba el pedido pero no cuánto suele tardar, y contestaba «aún no tengo
                           // un tiempo estimado» (Zona Burger, 2026-10-03: «Cuánto te demoras?»).
@@ -658,7 +1119,7 @@ function registrarCapacidades() {
             'mezclar el de domicilio con el de llevar), el número de Nequi si el negocio lo dio, ' +
             'cuánto vale el domicilio (un rango de precios, o por barrio si lo tiene; con rango, ' +
             'di el rango tal cual y que el valor exacto lo confirma el restaurante — nunca elijas ' +
-            'tú un valor dentro del rango), cuánto suele tardar un pedido y ' +
+            'tú un valor dentro del rango ni decidas si un barrio queda fuera de la ciudad), cuánto suele tardar un pedido y ' +
             'notas que el negocio dejó para ti. Úsala SIEMPRE antes de decir «no tengo esa ' +
             'información» cuando pregunten por pagos, Nequi, efectivo, transferencia, valor del ' +
             'domicilio, horario, si siguen atendiendo o cuánto se demoran. Ojo: en Colombia ' +
@@ -727,6 +1188,14 @@ function registrarCapacidades() {
                     ? {
                           valor: rangoEnPalabras(negocio.domicilio_rango),
                           nota: negocio.domicilio_rango.nota,
+                          // 2026-10-04: el modelo decidió que San Vicente (un barrio de Pasto)
+                          // era «fuera de Pasto», le dio a un cliente frecuente el valor de fuera
+                          // y casi lo pierde. Qué queda dentro o fuera no lo sabe: no lo adivina.
+                          como_usarlo:
+                              'Con cualquier barrio, conjunto o dirección da `valor` tal cual y di que el ' +
+                              'restaurante confirma el exacto. NUNCA decidas tú si un barrio o lugar queda ' +
+                              'dentro o fuera de la ciudad: lo que diga `nota` sobre «fuera» solo aplica si ' +
+                              'el cliente mismo dice que es otro municipio o una vereda.',
                       }
                     : null,
                 domicilio_por_barrio: barrios.slice(0, 40).map((b) => ({
@@ -735,6 +1204,17 @@ function registrarCapacidades() {
                 })),
                 tiempo_estimado_min: negocio.tiempo_estimado_min,
                 tiempo_estimado_max: negocio.tiempo_estimado_max,
+                // El de arriba es el de un DOMICILIO. Para recoger o comer en el local, este.
+                ...(negocio.tiempo_recoger
+                    ? {
+                          tiempo_para_recoger_min: negocio.tiempo_recoger.min,
+                          tiempo_para_recoger_max: negocio.tiempo_recoger.max,
+                          como_usar_los_tiempos:
+                              '`tiempo_estimado` es para pedidos a domicilio; `tiempo_para_recoger` para ' +
+                              'los que el cliente recoge o come en el local. Di el que corresponda a ' +
+                              'cómo lo va a recibir; si aún no lo sabes, di los dos en una frase.',
+                      }
+                    : {}),
                 notas_del_negocio: negocio.info_asistente,
             };
         },
@@ -1012,6 +1492,12 @@ function registrarCapacidades() {
                         ? aviso.replace('puede variar por el empaque', 'puede variar si cambias algo')
                         : aviso;
 
+                    // Cuánto falta, dicho ANTES del «sí»: es lo que el cliente pregunta justo
+                    // después («¿cuánto se demora?», en una de cada tres conversaciones del
+                    // 2026-10-07) y es parte de lo que está aceptando. No con una mesa ya
+                    // asignada: quien está sentado no espera un «estará en…».
+                    const cuanto = enMesa && args.id_mesa ? null : await lineaDeTiempo(idNegocio, args.tipo_entrega);
+
                     return [
                         cabecera,
                         '',
@@ -1022,6 +1508,7 @@ function registrarCapacidades() {
                         ...(nota ? [`📝 _Nota: ${nota}_`] : []),
                         '',
                         `*Total: ${enPesos(total)}*`,
+                        ...(cuanto ? [cuanto] : []),
                         avisoFinal,
                     ].join('\n');
                 } catch (error) {
@@ -1042,6 +1529,42 @@ function registrarCapacidades() {
                 const previa = String(args?.nota || '').trim();
                 const nota = (previa ? `${previa}. ${texto}` : texto).slice(0, 500);
                 return { ...args, nota };
+            },
+            // «Para recoger» no se supone. Si el modelo lo pone y en el chat nadie ha hablado de
+            // recoger —ni el cliente lo dijo ni se le preguntó—, se le devuelve para que pregunte
+            // (Zona Burger, 2026-10-05: un domicilio quedó tomado para recoger). Solo LLEVAR: es
+            // lo que el modelo elige cuando no sabe; un domicilio ya exige dirección y teléfono.
+            falta: async ({
+                args,
+                cliente = [],
+                asistente = [],
+                hilo = [],
+                idConversacion = null,
+                idNegocio = null,
+                telefono = null,
+            }) => {
+                // Antes que nada: ¿este chat ya tomó un pedido hace poco —o se lo tomó el negocio
+                // a mano— y el cliente solo quiere cambiarle algo? Ver `pedidoQueYaSeTomo`.
+                const repetido = await pedidoQueYaSeTomo({
+                    hilo,
+                    idConversacion,
+                    idNegocio,
+                    telefonos: [telefono, args?.cliente_telefono],
+                });
+                if (repetido) return repetido;
+                // Ni la dirección, ni el nombre, ni cómo lo recibe se rellenan: si el modelo no
+                // los tiene, pregunta. Y si le falta más de una cosa, las pregunta JUNTAS: antes
+                // cada falta volvía sola y eran dos turnos («¿a nombre de quién?», y luego «¿para
+                // recoger, a domicilio…?») para lo que cabe en un mensaje. Zona Burger,
+                // 2026-10-07: siete mensajes para una salchipapa para recoger.
+                return loQueFalta({
+                    entrega: entregaSinDecir({ args, cliente, asistente, hilo }),
+                    direccion:
+                        args?.tipo_entrega === 'DOMICILIO' &&
+                        args?.direccion != null &&
+                        DIRECCION_DE_RELLENO.test(normalizarTexto(args.direccion).trim()),
+                    nombre: NOMBRE_DE_RELLENO.test(normalizarTexto(args?.cliente_nombre ?? '').trim()),
+                });
             },
             hecho: ({ resultado }) =>
                 resultado.suma_a_cuenta
@@ -1307,6 +1830,37 @@ function registrarCapacidades() {
                 e.code = 'DIRECCION_REQUERIDA';
                 e.statusCode = 400;
                 throw e;
+            }
+            // Y un teléfono: sin él, el domiciliario no tiene a quién llamar en la puerta. El
+            // canal casi siempre lo prueba; cuando no (BSUID), lo tiene que decir el cliente. Lo
+            // impone la plataforma y no el modelo: con gpt-5.6-luna, 1 de cada ~12 domicilios se
+            // pedía confirmar sin número (evaluación de 2026-10-04). El error vuelve al modelo,
+            // que entonces lo pide.
+            if (esDomicilio && !telefono) {
+                const e = new Error('Para que el domiciliario te llame al llegar necesito un número de contacto.');
+                e.code = 'TELEFONO_REQUERIDO';
+                e.statusCode = 400;
+                throw e;
+            }
+            // El teléfono que DICE el cliente no puede ser el del propio negocio. gpt-5.6-luna, a
+            // falta de número, copió el del restaurante —que tiene delante en el prompt— como
+            // `cliente_telefono` (evaluación de 2026-10-04): el domiciliario habría llamado al
+            // local. Solo se mira el dicho; el probado por el canal no pasa por aquí.
+            if (args.cliente_telefono && !contexto.principal?.telefono_verificado) {
+                const soloDigitos = (v) => String(v || '').replace(/\D/g, '').replace(/^57/, '');
+                const [delNegocio] = await Models.sequelize.query(
+                    `SELECT telefono FROM general.gener_negocio WHERE id_negocio = :idNegocio;`,
+                    { replacements: { idNegocio }, type: Models.sequelize.QueryTypes.SELECT, transaction: contexto.transaction }
+                );
+                const dicho = soloDigitos(args.cliente_telefono);
+                if (dicho && dicho === soloDigitos(delNegocio?.telefono)) {
+                    const e = new Error(
+                        'Ese es el teléfono del restaurante, no el del cliente. Pídele al cliente su número de contacto.'
+                    );
+                    e.code = 'TELEFONO_REQUERIDO';
+                    e.statusCode = 400;
+                    throw e;
+                }
             }
 
             // ── La mesa, releída de la base ───────────────────────────────────────────────
@@ -1810,4 +2364,4 @@ function registrarFlujo({ flujos }) {
     });
 }
 
-module.exports = { VERTICAL, registrarCapacidades, registrarFlujo, estadoParaElCliente, tiempoDelPedido, mismaPalabra };
+module.exports = { VERTICAL, registrarCapacidades, registrarFlujo, estadoParaElCliente, tiempoDelPedido, mismaPalabra, afinarResultado };

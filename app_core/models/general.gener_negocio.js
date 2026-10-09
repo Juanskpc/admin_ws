@@ -37,6 +37,12 @@ module.exports = (sequelize, DataTypes) => {
          */
         controla_inventario: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
         /**
+         * ¿El asistente de WhatsApp deja de ofrecer lo que no tiene insumos? Decisión aparte de
+         * `controla_inventario`: cualquiera de las cuatro combinaciones vale. Nace ENCENDIDO,
+         * igual que el control de caja — ver `cartaService.asistenteMiraStock`.
+         */
+        asistente_mira_stock: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
+        /**
          * ¿Pedidos lista los productos con su icono, o solo con el nombre? Opt-OUT como
          * `controla_inventario`: nace ENCENDIDO porque los iconos son lo que todos los
          * negocios ven hoy, y lo que se activa aquí es quitarlos.

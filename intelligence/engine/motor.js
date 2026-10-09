@@ -55,6 +55,9 @@ const { ESTADO_HANDOFF } = require('./handoff');
 // El asistente puede dejar constancia de que alguien lo está usando para nada. No bloquea a
 // nadie ni cambia el estado de la conversación: ver la cabecera del módulo.
 const reporteAutomatico = require('./reporteAutomatico');
+// Que el asistente no le conteste sin fin a otro bot. Mira la conversación entera, que es lo
+// que ningún flujo ve: ver la cabecera del módulo.
+const cortacircuito = require('./cortacircuito');
 
 const sequelize = Models.sequelize;
 
@@ -68,10 +71,16 @@ const EVENTO_ESCALADA = 'conversacion.escalada.v1';
 // Para decidir si un mensaje del cliente reabre «Esperan respuesta» (solo cortesía → no).
 const cortesia = require('./cortesia');
 const confirmacion = require('./confirmacion');
-const { esAfirmacionConEntrega } = require('./texto');
+const { esAfirmacionConEntrega, puedeSeguirEscribiendo } = require('./texto');
 
-/** Avisos del canal que no son un mensaje del cliente: hoy, que borró uno (`[revoke]`). */
-const SIN_CONTENIDO = /^\[revoke\]$/i;
+/**
+ * Avisos del canal que no son un mensaje del cliente: que borró uno (`[revoke]`) o que reaccionó
+ * con un emoji a otro (`[reaction]`). El canal de WhatsApp ya descarta las reacciones (a47a8ac),
+ * esto es la red por si otro canal o un mensaje viejo las trae: el 2026-10-04 una clienta reaccionó
+ * al aviso de «pedido listo» una hora después, la regla de cortesía no aplicó (sesión nueva), el
+ * modelo se quedó en blanco y salió «no tengo a nadie del negocio disponible».
+ */
+const SIN_CONTENIDO = /^\[(revoke|reaction)\]$/i;
 
 const CONFIG = {
     /** Días hacia atrás que se consideran «pendiente». Ver `repositorio.mensajesPendientes`. */
@@ -258,6 +267,11 @@ async function recibir(entrada) {
         mensajeCanonico.normalizarEntrada(entrada);
     const contenido = texto;
 
+    // Pausa de emergencia del negocio (2026-10-04, Zona Burger sin papas): el mensaje se guarda y
+    // pasa a una persona, pero el asistente no contesta ni ejecuta nada. Se lee antes de abrir la
+    // transacción (ver `repositorio.asistentePausado`).
+    const pausado = await repositorio.asistentePausado(idNegocio);
+
     const t = await sequelize.transaction();
     let resultado;
     try {
@@ -288,6 +302,16 @@ async function recibir(entrada) {
             }
         );
 
+        // Con el asistente en pausa, la conversación pasa a una persona («Esperan respuesta») y este
+        // mensaje no abre turno. Al reanudar, lo que llegó en la pausa ya no se contesta: lo atendió
+        // el personal.
+        const enPausa =
+            pausado && !duplicado && !antiguo && repositorio.ESTADOS_PROCESABLES.includes(conversacion.estado);
+        if (enPausa) {
+            await repositorio.pasarAPersonaPorPausa(conversacion.id_conversacion, { transaction: t });
+            conversacion.estado = ESTADO_HANDOFF;
+        }
+
         // Un «sí» a una confirmación de pedido que ya estaba pendiente NO se pierde porque una persona
         // haya entrado a la conversación: se ejecuta y la conversación vuelve a la persona (ver
         // `repositorio.reanudarConfirmacionPendiente`). Solo con un sí claro y con la confirmación
@@ -295,6 +319,7 @@ async function recibir(entrada) {
         if (
             !duplicado &&
             !antiguo &&
+            !pausado &&
             conversacion.estado === ESTADO_HANDOFF &&
             confirmacion.pendiente(conversacion) &&
             !confirmacion.caducado(conversacion.tarea_datos) &&
@@ -331,6 +356,8 @@ async function recibir(entrada) {
                 ? 'antiguo'
                 : SIN_CONTENIDO.test(String(contenido || '').trim())
                   ? 'sin_contenido'
+                  : enPausa
+                  ? 'asistente_pausado'
                   : repositorio.ESTADOS_PROCESABLES.includes(conversacion.estado)
                   ? null
                   : conversacion.estado;
@@ -364,7 +391,11 @@ async function recibir(entrada) {
     }
 
     if (despertar && !resultado.duplicado && !resultado.sin_turno_motivo) {
-        obtenerCola().despertar(resultado.id_conversacion);
+        obtenerCola().despertar(
+            resultado.id_conversacion,
+            {},
+            { puedeSeguir: puedeSeguirEscribiendo(contenido) }
+        );
     }
     return resultado;
 }
@@ -596,6 +627,31 @@ async function decidir({ conversacion, mensajes, turno, transaction }) {
                 aviso?.cancelar();
             }
 
+            // ¿Esto es un bucle con otro bot? Se mira ANTES de escribir nada: lo que el
+            // cortacircuito quita es la respuesta, y una respuesta ya encolada sale. Lo demás
+            // que decidió el manejador (pasos, invocaciones, memoria) se guarda igual, porque
+            // ocurrió. Ver `cortacircuito.js`.
+            const corte = await cortacircuito.evaluar({
+                conversacion,
+                mensajes,
+                respuestas: decision.respuestas,
+                transaction: savepoint,
+            });
+            if (corte) {
+                console.warn(
+                    `[cortacircuito] negocio ${conversacion.id_negocio}, conversación ` +
+                        `${String(conversacion.id_conversacion).slice(-6)}: ${corte.regla}` +
+                        `${corte.pasar_a_persona ? ' — pasa a una persona' : ' — el asistente se calla'}`
+                );
+                decision = {
+                    ...decision,
+                    respuestas: [],
+                    pasos: [...(decision.pasos || []), { tipo: 'regla', decision: 'bucle_cortado', motivo: corte }],
+                    resultado: corte.pasar_a_persona ? 'handoff' : 'sin_respuesta',
+                    ...(corte.pasar_a_persona ? { estado: ESTADO_HANDOFF } : {}),
+                };
+            }
+
             let secuencia = 0;
 
             // Se registra si llegó a encenderse, no si se armó: ADR-022 pide que el
@@ -712,6 +768,9 @@ async function decidir({ conversacion, mensajes, turno, transaction }) {
             );
 
             await avisarSiSeEscalo({ conversacion, estadoNuevo, transaction: savepoint });
+            if (corte?.pasar_a_persona) {
+                await cortacircuito.asentarCorte({ conversacion, corte, transaction: savepoint });
+            }
 
             if (decision.nivel) salida.nivel = decision.nivel;
             // Compatibilidad: un manejador puede devolver sus costos en vez de empujarlos.

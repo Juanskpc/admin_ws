@@ -38,7 +38,7 @@
 'use strict';
 
 const registryReal = require('../core/registry');
-const { COMANDO, esComando, esAfirmacion, esAfirmacionConEntrega, normalizar } = require('./texto');
+const { COMANDO, esComando, esAfirmacion, esAfirmacionConEntrega, esPeticionConQue, normalizar } = require('./texto');
 
 /** Nombre de la tarea. Vive en el mismo espacio que `agendar_cita`, no en uno nuevo. */
 const TAREA = 'confirmar_mutacion';
@@ -62,6 +62,14 @@ const HABLA_DE_PRECIO = /\b(cobran|cobra|cobro|cobraron|cobrar|cobrarian|vale|va
 /** Un mensaje que no es texto: el canal lo trae como `[image]`, `[audio]`, `[sticker]`… */
 const ES_MEDIA = /^\[(image|audio|video|sticker|document|location|contacts|unsupported)\]$/;
 
+/**
+ * Frases que no son un añadido al pedido y no se anotan (Zona Burger, 2026-10-04): repetir la
+ * entrega que ya dice el resumen («Para servir», «para recogerla») y avisar que va en camino
+ * («Voy para allá», «ya voy», «estoy llegando»). Acababan en la nota de cocina.
+ */
+const SOLO_ENTREGA = /^(para |pa )?(servir|recoger|recogerla|recogerlo|recogerlas|recogerlos|llevar|domicilio|a domicilio|comer aqui|consumir aqui)( aqui| alla| en el local| por favor| porfa)?$/;
+const VA_EN_CAMINO = /^(ya )?(voy|vamos|salgo|voy saliendo|estoy llegando|ya llego|llego|voy para alla|voy en camino|en camino|ya paso|ahi voy)\b/;
+
 /** Empieza como pregunta: eso no se anota, se contesta (y lo atiende el repreguntado). */
 const EMPIEZA_PREGUNTA = /^(cuanto|cuantos|cuanta|que|cual|cuales|como|donde|cuando|tienen|tiene|hay|me pueden|puedo|podria|se puede|a que)\b/;
 
@@ -79,8 +87,9 @@ function lineasParaAnotar(texto, { afirma }) {
         const t = normalizar(l).replace(/[¡¿!.,;:]/g, ' ').replace(/\s+/g, ' ').trim();
         const palabras = t.split(' ').filter(Boolean);
         if (palabras.length < 2 || palabras.length > 40) return false;
-        if (l.includes('?') || EMPIEZA_PREGUNTA.test(t)) return false;
+        if (l.includes('?') || (EMPIEZA_PREGUNTA.test(t) && !esPeticionConQue(t))) return false;
         if (HABLA_DE_PRECIO.test(t)) return false;
+        if (SOLO_ENTREGA.test(t) || (VA_EN_CAMINO.test(t) && palabras.length <= 6)) return false;
         if (esAfirmacion(l) || esComando(l, COMANDO.NO) || esComando(l, COMANDO.CANCELAR)) return false;
         return true;
     });
@@ -342,13 +351,13 @@ async function resolver(ctx, { gate, registry = registryReal, ahora = () => new 
             pasos: [paso('confirmacion_repreguntada', { capacidad: datos.capacidad, media: esMedia })],
             respuestas: [
                 {
+                    // Corta también cuando no es una foto (2026-10-05): el resumen está justo
+                    // arriba y nada cambió —si algo cambia, se anota y ahí sí se enseña entero—.
+                    // Repetirlo palabra por palabra a un «Personal» era el bot atascado otra vez.
                     texto: esMedia
                         ? 'No puedo ver fotos ni audios por aquí 🙏 Todavía no he enviado nada: ' +
                           '¿confirmo lo de arriba? Respóndeme sí o no.'
-                        : `${await textoDePregunta(datos.capacidad, datos.args, {
-                              registry,
-                              idNegocio: ctx.conversacion?.id_negocio ?? null,
-                          })} Respóndeme sí o no.`,
+                        : 'Todavía no he enviado nada 🙏 ¿Confirmo lo de arriba? Respóndeme sí o no.',
                     opciones: opcionesSiNo(),
                 },
             ],

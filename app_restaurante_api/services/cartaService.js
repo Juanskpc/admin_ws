@@ -25,6 +25,34 @@ async function negocioControlaInventario(idNegocio) {
 }
 
 /**
+ * ¿El ASISTENTE de WhatsApp deja de ofrecer lo que hoy no tiene insumos?
+ *
+ * Es una decisión propia del negocio (`asistente_mira_stock`, en los ajustes del asistente),
+ * aparte de controlar inventario en caja: se puede tener el control encendido y el asistente sin
+ * mirar existencias, o al revés (Zona Burger, 2026-10-07). Solo habla de EXISTENCIAS: lo que el
+ * negocio desactiva a mano en Productos (`disponible`) no se ofrece nunca, diga esto lo que diga.
+ *
+ * Quien lea la carta para el asistente lo pasa como `{ miraStock }`; sin esa opción las vistas
+ * públicas siguen al control de caja, como siempre (la carta digital).
+ */
+async function asistenteMiraStock(idNegocio) {
+    const negocio = await Models.GenerNegocio.findByPk(idNegocio, {
+        attributes: ['id_negocio', 'controla_inventario', 'asistente_mira_stock'],
+    });
+    if (!negocio) return true;
+    // Una base sin la columna todavía: lo de antes, seguir al control de caja.
+    if (typeof negocio.asistente_mira_stock !== 'boolean') return negocio.controla_inventario !== false;
+    return negocio.asistente_mira_stock;
+}
+
+/** Lo que manda en una vista pública: la decisión de quien llama, o el control de caja. */
+async function miraElStock(idNegocio, opciones) {
+    return typeof opciones?.miraStock === 'boolean'
+        ? opciones.miraStock
+        : negocioControlaInventario(idNegocio);
+}
+
+/**
  * \u00bfAlcanza el stock actual para preparar una unidad m\u00e1s de este producto? Se calcula al vuelo
  * sobre `producto.ingredientes` (cada uno con `.ingrediente.stock_actual`), nunca se guarda.
  *
@@ -77,8 +105,8 @@ async function getCategorias(idNegocio) {
 /**
  * Lista las categorias visibles del negocio para vista publica.
  */
-async function getCategoriasPublicas(idNegocio) {
-    const controlaInventario = await negocioControlaInventario(idNegocio);
+async function getCategoriasPublicas(idNegocio, opciones = {}) {
+    const controlaInventario = await miraElStock(idNegocio, opciones);
 
     const categorias = await Models.CartaCategoria.findAll({
         where: { id_negocio: idNegocio, estado: 'A', visible: true },
@@ -114,8 +142,8 @@ async function getCategoriasPublicas(idNegocio) {
  * diferencia entre lo que el negocio gestiona y lo que le enseña a un cliente. Y, sin guardar
  * nada, tampoco ofrece lo que hoy no alcanza en stock (ver `alcanzaStockPara`).
  */
-async function getCartaPublica(idNegocio) {
-    const controlaInventario = await negocioControlaInventario(idNegocio);
+async function getCartaPublica(idNegocio, opciones = {}) {
+    const controlaInventario = await miraElStock(idNegocio, opciones);
 
     const categorias = await Models.CartaCategoria.findAll({
         where: { id_negocio: idNegocio, estado: 'A', visible: true },
@@ -157,11 +185,12 @@ async function getCartaPublica(idNegocio) {
  * del negocio que la vista previa deba poder mostrar, así que `incluirAgotados` no lo trae de
  * vuelta (ver `alcanzaStockPara`).
  */
-async function getCartaPublicaCompleta(idNegocio, { incluirAgotados = false } = {}) {
+async function getCartaPublicaCompleta(idNegocio, opciones = {}) {
+    const { incluirAgotados = false } = opciones;
     const whereProductos = { estado: 'A', visible: true };
     if (!incluirAgotados) whereProductos.disponible = true;
 
-    const controlaInventario = await negocioControlaInventario(idNegocio);
+    const controlaInventario = await miraElStock(idNegocio, opciones);
 
     const categorias = await Models.CartaCategoria.findAll({
         where: { id_negocio: idNegocio, estado: 'A', visible: true },
@@ -257,7 +286,8 @@ async function getProductosByCategoria(idNegocio, idCategoria) {
  * `incluirAgotados` suma los productos con `disponible = false` al final de la lista. Por
  * defecto no se incluyen, que es lo que esperan el POS y el asistente de WhatsApp.
  */
-async function getProductosPublicosByCategoria(idNegocio, idCategoria, { incluirAgotados = false } = {}) {
+async function getProductosPublicosByCategoria(idNegocio, idCategoria, opciones = {}) {
+    const { incluirAgotados = false } = opciones;
     const where = {
         id_negocio: idNegocio,
         id_categoria: idCategoria,
@@ -266,7 +296,7 @@ async function getProductosPublicosByCategoria(idNegocio, idCategoria, { incluir
     };
     if (!incluirAgotados) where.disponible = true;
 
-    const controlaInventario = await negocioControlaInventario(idNegocio);
+    const controlaInventario = await miraElStock(idNegocio, opciones);
 
     const productos = await Models.CartaProducto.findAll({
         where,
@@ -308,7 +338,7 @@ async function buscarProductos(idNegocio, termino, options = {}) {
     // `includeDisabled` es la misma bandera de siempre (vista de administración/POS vs. vista
     // pública). El stock sigue esa misma división: `includeDisabled=true` la deja fuera, igual
     // que ya dejaba fuera el filtro por `disponible`.
-    const controlaInventario = !includeDisabled && (await negocioControlaInventario(idNegocio));
+    const controlaInventario = !includeDisabled && (await miraElStock(idNegocio, options));
 
     const productos = await Models.CartaProducto.findAll({
         where: {
@@ -347,6 +377,7 @@ async function buscarProductos(idNegocio, termino, options = {}) {
 }
 
 module.exports = {
+    asistenteMiraStock,
     getCartaPublicaCompleta,
     getCategorias,
     getProductosByCategoria,

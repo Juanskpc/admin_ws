@@ -853,6 +853,29 @@ router.post('/intelligence/conversaciones/:id/desbloquear', requireSuperAdmin, [
         .withMessage('El motivo es obligatorio (5 a 300 caracteres)'),
 ], IntelligenceConsolaController.desbloquearConversacion);
 
+// --- Consumo IA — Super Admin ---
+// Gasto oficial de OpenAI (con OPENAI_ADMIN_KEY), saldo estimado y gasto del bot por negocio.
+// OpenAI no expone el saldo prepagado: se reconstruye con los movimientos que se registran aquí.
+const ConsumoIaController = require('../controllers/consumoIaController');
+
+router.get('/consumo-ia', requireSuperAdmin, [
+    query('dias').optional().isIn(['7', '30', '90']).withMessage('Ventana inválida (7, 30 o 90)'),
+    query('forzar').optional().isIn(['true', 'false']).withMessage('forzar debe ser true o false'),
+], ConsumoIaController.resumen);
+
+router.post('/consumo-ia/movimientos', requireSuperAdmin, [
+    body('tipo').isIn(['SALDO', 'RECARGA']).withMessage('Tipo inválido (SALDO o RECARGA)'),
+    body('monto_usd').isFloat({ min: 0, max: 100000 })
+        .withMessage('El monto debe ser un número entre 0 y 100.000 USD'),
+    body('fecha').optional({ values: 'falsy' }).isISO8601().withMessage('Fecha inválida'),
+    body('nota').optional({ values: 'null' }).isString().isLength({ max: 200 })
+        .withMessage('La nota admite hasta 200 caracteres'),
+], ConsumoIaController.registrarMovimiento);
+
+router.delete('/consumo-ia/movimientos/:id', requireSuperAdmin, [
+    param('id').isInt({ min: 1 }).withMessage('ID de movimiento inválido'),
+], ConsumoIaController.anularMovimiento);
+
 // --- Bandeja del inquilino ---
 // Las mismas conversaciones, pero para el dueño del negocio y CON respuesta humana. No lleva
 // `requireSuperAdmin`: el alcance lo decide `alcanceDeNegocios()` dentro del controlador,
@@ -918,6 +941,25 @@ router.post('/intelligence/bandeja/conversaciones/:id/desbloquear', [
 router.get('/intelligence/bandeja/preparacion', [
     query('id_negocio').isInt({ min: 1 }).withMessage('ID de negocio inválido'),
 ], IntelligenceBandejaController.leerPreparacion);
+// Diagnóstico a fondo de la carta para el asistente (bajo demanda; admin del negocio o super admin).
+router.get('/intelligence/bandeja/diagnostico', [
+    query('id_negocio').isInt({ min: 1 }).withMessage('ID de negocio inválido'),
+], IntelligenceBandejaController.leerDiagnostico);
+// Informe del asistente con las conversaciones reales de los últimos días (fase 3).
+router.get('/intelligence/bandeja/informe', [
+    query('id_negocio').isInt({ min: 1 }).withMessage('ID de negocio inválido'),
+    query('dias').optional().isInt({ min: 1, max: 31 }).withMessage('Los días deben estar entre 1 y 31'),
+], IntelligenceBandejaController.leerInforme);
+// Recomendaciones con IA sobre la carta (fase 2): solo recomienda, no cambia nada.
+router.post('/intelligence/bandeja/diagnostico/recomendaciones', [
+    body('id_negocio').isInt({ min: 1 }).withMessage('ID de negocio inválido'),
+    body('forzar').optional().isBoolean({ strict: true }).withMessage('forzar debe ser true o false'),
+], IntelligenceBandejaController.pedirRecomendaciones);
+// Pausa de emergencia del asistente: deja de contestar a todos hasta que se reanude.
+router.post('/intelligence/bandeja/asistente-pausa', [
+    body('id_negocio').isInt({ min: 1 }).withMessage('ID de negocio inválido'),
+    body('pausado').isBoolean({ strict: true }).withMessage('pausado debe ser true o false'),
+], IntelligenceBandejaController.pausarAsistente);
 router.get('/intelligence/bandeja/configuracion', [
     query('id_negocio').isInt({ min: 1 }).withMessage('ID de negocio inválido'),
 ], IntelligenceBandejaController.leerConfiguracion);
@@ -941,6 +983,14 @@ router.put('/intelligence/bandeja/configuracion', [
         .withMessage('El valor máximo del domicilio debe ser un número de pesos válido'),
     body('domicilio_nota').optional({ values: 'null' }).isString().isLength({ max: 200 })
         .withMessage('La nota del domicilio admite hasta 200 caracteres'),
+    // Tiempo de un pedido PARA RECOGER, aparte del de entrega a domicilio. null lo borra.
+    body('tiempo_recoger_min').optional({ values: 'null' }).isInt({ min: 1, max: 600 })
+        .withMessage('El tiempo para recoger debe estar entre 1 y 600 minutos'),
+    body('tiempo_recoger_max').optional({ values: 'null' }).isInt({ min: 1, max: 600 })
+        .withMessage('El tiempo máximo para recoger debe estar entre 1 y 600 minutos'),
+    // ¿El asistente deja de ofrecer lo que no tiene insumos, aunque caja no controle inventario?
+    body('asistente_mira_stock').optional().isBoolean({ strict: true })
+        .withMessage('asistente_mira_stock debe ser true o false'),
 ], IntelligenceBandejaController.guardarConfiguracion);
 
 module.exports = router;

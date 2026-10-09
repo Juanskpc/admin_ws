@@ -379,10 +379,32 @@ function crearManejadorEscalera({
             // el sistema de F5 entero funcionaba así y el silencio nunca fue parte del diseño.
             if (llm) {
                 try {
-                    const delModelo = await llm(ctx);
+                    // El flujo puede ceder SOLTANDO la tarea (`soltarTarea`): lo que esperaba el
+                    // sí del cliente ya no es lo que quiere (2026-10-05, un domicilio que quedó
+                    // tomado «para recoger»). El modelo atiende entonces sin pendiente —con la
+                    // nota que le deja el flujo— y la tarea se cierra aunque él no abra otra.
+                    const soltar = decision.soltarTarea === true;
+                    if (soltar) cesion.motivo.tarea_soltada = true;
+                    // La nota del flujo viaja con o sin soltar: con el pendiente en su
+                    // sitio le recuerda al modelo qué había anotado (2026-10-07).
+                    const conNota = decision.notaParaElModelo
+                        ? `${ctx.texto}\n\n${decision.notaParaElModelo}`
+                        : ctx.texto;
+                    const ctxModelo = soltar
+                        ? {
+                              ...ctx,
+                              conversacion: { ...ctx.conversacion, tarea_actual: null, tarea_datos: {} },
+                              texto: conNota,
+                          }
+                        : { ...ctx, texto: conNota };
+                    const contestado = await llm(ctxModelo);
+                    const delModelo =
+                        soltar && contestado && contestado.tarea === undefined
+                            ? { ...contestado, tarea: null }
+                            : contestado;
                     if (!sinNadaQueDecir(delModelo)) {
                         return conPaso(
-                            conPaso(conPaso(conAviso(delModelo), cesion), pasoDeRuta),
+                            conPaso(conPaso(conAviso(conSiPendiente(delModelo, ctxModelo)), cesion), pasoDeRuta),
                             pasoDeCaducidad
                         );
                     }
@@ -554,6 +576,48 @@ function crearManejadorEscalera({
  */
 function sinNadaQueDecir(decision) {
     return !decision || (decision.respuestas || []).length === 0;
+}
+
+/**
+ * El modelo contestó una pregunta mientras algo esperaba el sí del cliente (el flujo se la cedió
+ * sin tocar la confirmación): se vuelve a pedir el sí al final, corto, para que el cliente sepa
+ * que su pedido sigue sin enviarse. No si el modelo abrió otra confirmación, escaló o cerró la
+ * tarea: entonces ya dijo lo que tocaba.
+ */
+function conSiPendiente(decision, ctx) {
+    const datos = confirmacion.pendiente(ctx.conversacion);
+    if (!datos) return decision;
+    if (decision.tarea !== undefined || decision.estado || decision.resultado === 'handoff') return decision;
+
+    // El modelo terminó con una PREGUNTA suya («¿Cuáles dos sabores prefieres?»): pegarle
+    // «¿Lo confirmo? sí o no» son dos preguntas a la vez, y el «sí» que llega no se sabe a cuál
+    // contesta. Zona Burger, 2026-10-05: ese «sí» creó el pedido sin los hervidos por los que el
+    // cliente estaba preguntando. No se recuerda el sí en este turno y se marca el pendiente:
+    // el flujo no ejecuta con el siguiente «sí», vuelve a enseñar el resumen.
+    const ultima = (decision.respuestas || []).slice(-1)[0];
+    const textoUltima = String(typeof ultima === 'string' ? ultima : ultima?.texto || '').trim();
+    if (/\?[^\p{L}\p{N}]*$/u.test(textoUltima)) {
+        return {
+            ...decision,
+            tarea: { nombre: confirmacion.TAREA, datos: { ...datos, pregunta_abierta: true } },
+        };
+    }
+    return {
+        ...decision,
+        ...(datos.pregunta_abierta
+            ? { tarea: { nombre: confirmacion.TAREA, datos: { ...datos, pregunta_abierta: false } } }
+            : {}),
+        respuestas: [
+            ...(decision.respuestas || []),
+            {
+                texto: 'Todavía no he enviado tu pedido. ¿Lo confirmo? Respóndeme sí o no.',
+                opciones: [
+                    { id: 'si', etiqueta: 'Sí, confirmo' },
+                    { id: 'no', etiqueta: 'No' },
+                ],
+            },
+        ],
+    };
 }
 
 /** Antepone un paso a la decisión, sin mutarla: la del manejador es suya. `null` no añade nada. */

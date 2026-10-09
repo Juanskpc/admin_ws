@@ -95,10 +95,16 @@ Confirmado el 2026-10-08 contra fuentes externas, no solo contra nuestra documen
 - Tarifa para Colombia: **≈ $2,9455 COP por mensaje** entregado a un número colombiano
   (≈ USD 0,0008).
 
-> ⚠️ **La tarifa de Colombia viene de blogs de integradores, no del tarifario oficial de Meta.**
-> Las fuentes coinciden en el valor en dólares y en el de pesos, y Meta factura en COP desde abril
-> de 2026, pero **antes de imprimir esta cifra en la landing hay que verla en el panel de la WABA
-> de un cliente real**. Es la única pieza de este documento que no está medida por nosotros.
+> **Sobre la tarifa.** El valor en dólares (US$0,0008) **sale del propio rate card de Meta** —lo
+> leyó el dueño el 2026-10-05, ver [`whatsapp-costo-mensajes.md`](whatsapp-costo-mensajes.md)
+> §5— y coincide con lo que publican varios integradores, que además lo dan en pesos
+> ($2,9455). O sea que está mejor fundada de lo que parecía al escribir este documento.
+>
+> ⚠️ Lo que sigue sin confirmarse es **el cobro real**: la cifra no se ha visto todavía en una
+> factura de Meta ni en `/admin/terceros`. Y el equivalente en pesos depende del tipo de cambio
+> que aplique Meta, que no es el que usemos nosotros: aquí se usa 3.682 COP/USD y la medición del
+> 5 de octubre usó ~4.125, que da $3,3 por mensaje en vez de $2,95. Para presupuestar, la cifra
+> honesta es **la de dólares**.
 
 ---
 
@@ -228,7 +234,7 @@ abusador; alguien que descubrió que al otro lado hay un modelo, sí.
 
 | # | Qué | Quién lo bloquea |
 |---|---|---|
-| 1 | **Ver la tarifa de Colombia en el panel de la WABA de un cliente real.** Es el único número de aquí que no medimos nosotros | Nadie: se mira y ya |
+| 1 | **Ver el cobro real de Meta** en una factura o en `/admin/terceros`. La tarifa en dólares ya salió del rate card; lo que falta es verla cobrada | Nadie: se mira y ya |
 | 2 | Sembrar los tres paquetes en `cob_complemento` + `cob_precio_complemento` (COP) | Decisión de precios (esta) |
 | 3 | Contar mensajes **por paquete contratado** y no solo contra los 1.000 de Meta (`whatsapp:cuota` ya cuenta; le falta saber qué paquete tiene el negocio) | 2 |
 | 4 | Tarjetas de la landing: el techo, la equivalencia en pedidos y la columna de Meta | 2 |
@@ -255,13 +261,18 @@ abusador; alguien que descubrió que al otro lado hay un modelo, sí.
 ## 9. Fuentes
 
 - Costos de IA y mensajes: `intelligence.costo` e `intelligence.mensaje` en producción,
-  1 al 8 de octubre de 2026
+  1 al 8 de octubre de 2026. Los 5.235 mensajes/mes de §2 cuentan **solo lo que Meta factura**
+  (entregado, sin plantillas y sin lo que el dueño manda desde su móvil); contando todo lo
+  saliente son ~9.300, y la medición del 2026-10-05 dio ~7.000 con un filtro intermedio. Las
+  tres son correctas: miden cosas distintas
 - Pedidos y valor: `restaurante.pedid_orden` (`confirmado_en IS NOT NULL` = lo tomó el asistente)
 - Precios de los modelos: `intelligence/model/precios.js` (lista pública verificada el 2026-08-17)
 - Quién le paga a Meta: [`embedded-signup.md`](embedded-signup.md) §9.1, verificado pantalla a
   pantalla el 2026-09-19
-- Asignación de 1.000 mensajes y tarifa de Colombia: consultado el 2026-10-08 en documentación de
-  integradores (Courier, EngageLab, Zendesk, Zenvia, respond.io, Hint, Simla). **Sin confirmar
-  contra el tarifario oficial de Meta** — ver §3.1
+- Asignación de 1.000 mensajes: consultado el 2026-10-08 en documentación de integradores
+  (Courier, EngageLab, Zendesk, Zenvia, respond.io, Hint, Simla)
+- Tarifa de Colombia (US$0,0008): **rate card de Meta**, leído por el dueño el 2026-10-05
+  ([`whatsapp-costo-mensajes.md`](whatsapp-costo-mensajes.md) §5); las fuentes de integradores
+  coinciden y añaden el equivalente en pesos. **Sin confirmar todavía contra un cobro real**
 - Tipo de cambio: **$3.682 COP/USD**, derivado del propio tarifario de Meta (USD 0,0008 = COP
   2,9455). No es la TRM: es la que usa Meta para convertir, que es la que aplica a esta cuenta

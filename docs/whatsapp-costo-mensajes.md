@@ -119,12 +119,20 @@ camino de pasarse **con tiempo para hacer algo**.
 
 ## 5. Lo que queda por decidir
 
-1. **La tarifa de Colombia.** ⚠️ **Cifra de trabajo desde el 2026-10-08: $2,9455 COP por mensaje
-   de servicio entregado a un número colombiano (≈ USD 0,0008).** Coincide en varias fuentes de
-   integradores y encaja con que Meta facture en COP desde abril de 2026, pero **no se ha leído
-   del tarifario oficial**. Antes de imprimirla en la landing hay que verla en el panel de la WABA
-   de un cliente real. Con ella ya se pudo poner precio a los paquetes del plan: ver
-   [`asistente-economia.md`](asistente-economia.md) §6.
+1. ~~**La tarifa de Colombia.**~~ **Resuelto el 2026-10-05: US$0,0008 por mensaje** (dato del dueño,
+   del *rate card* de Meta; falta verlo confirmado en el primer cobro real de `/admin/terceros`).
+   Con el volumen medido de Zona Burger —~7.000 mensajes del asistente al mes, 6.000 cobrables— son
+   **~US$4,80 ≈ $20.000 COP al mes**, unos **$3,3 por mensaje**. A ese precio el exceso no necesita
+   precio propio en el plan, y recortar mensajes deja de ser prioridad frente a no perder pedidos.
+   Desglose por clase de mensaje y cómo se midió:
+   [`sesion-2026-10-05-auditoria-en-vivo-zona-burger.md`](sesion-2026-10-05-auditoria-en-vivo-zona-burger.md) §4 y §5.
+
+   **Contraste del 2026-10-08** ([`asistente-economia.md`](asistente-economia.md)): fuentes
+   externas dan la misma tarifa en dólares y la publican además en pesos, **$2,9455 COP**. La
+   diferencia con los $3,3 de arriba es solo el tipo de cambio usado (3.682 frente a ~4.125
+   COP/USD); el dato en dólares coincide, que es lo que importa. Y el volumen también se midió
+   dos veces: ~7.000/mes contando todo lo saliente, **5.235/mes contando solo lo que Meta
+   factura** (sin los mensajes del móvil del dueño ni lo no entregado).
 2. ~~**¿Quién paga el exceso?**~~ **Resuelto y verificado** ([`embedded-signup.md`](embedded-signup.md)
    §9.1): como Tech Provider, el número del inquilino crea una empresa y una WABA separadas de las
    nuestras y **Meta le cobra a su tarjeta**. La consecuencia comercial importa y está en
@@ -132,5 +140,10 @@ camino de pasarse **con tiempo para hacer algo**.
    vendemos en un paquete es capacidad del asistente —nuestro costo de IA—, y lo de Meta se lo
    cobran a él aparte. Sigue en pie el aviso de siempre: si algún día un inquilino sale por un
    número nuestro, esto cambia y hay que decidirlo antes, no después.
+
+   > **Las dos conclusiones conviven y no se contradicen.** La de arriba dice que **lo de Meta**
+   > es barato y no necesita precio propio — cierto. La de `asistente-economia.md` propone
+   > paquetes por **nuestro costo de IA** y por la cola larga, que es otro eje: a 30.000 mensajes
+   > al mes la IA se come el 47 % del plan aunque Meta siga costando una miseria.
 3. **El umbral del aviso.** 80 % es un punto de partida (`WHATSAPP_CUOTA_UMBRAL`). Con un mes de
    datos reales se sabrá si llega demasiado tarde.
