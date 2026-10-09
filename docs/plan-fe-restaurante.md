@@ -148,26 +148,26 @@ Marca ✅ al terminar, con fecha y hash corto del commit.
 
 | ID | Tarea | Depende de | Estado |
 |---|---|---|---|
-| **R0.1** | Script de sondeo contra el sandbox | — | ⬜ |
-| **R0.2** | Ejecutar el sondeo y registrar resultados en §5 | R0.1 | ⬜ |
-| **R1.1** | Migración `migrate:facturacion-emision` | — | ⬜ |
-| **R1.2** | Pruebas de la migración (inmutabilidad y unicidad) | R1.1 | ⬜ |
-| **R2.1** | Puerto de proveedores + registro | — | ⬜ |
-| **R2.2** | Adaptador Factus: token, llamada HTTP y clasificación | R2.1 | ⬜ |
-| **R2.3** | Adaptador Factus: traducir documento → JSON de Factus | R2.2, R0.2 | ⬜ |
-| **R2.4** | Pruebas del adaptador (fetch simulado) | R2.3 | ⬜ |
-| **R3.1** | Constantes (UVT, códigos) y validación del comprador | — | ⬜ |
-| **R3.2** | `construirFactura`: cálculo puro de líneas y totales | R3.1 | ⬜ |
-| **R3.3** | Pruebas de `construirFactura` | R3.2 | ⬜ |
-| **R4.1** | `configuracionDao` + `debeFacturar` | R1.1 | ⬜ |
-| **R4.2** | Origen restaurante: leer el pedido para facturarlo | R1.1 | ⬜ |
-| **R4.3** | `emisionService`: encolar, emitir, archivar | R2.4, R3.3, R4.1, R4.2 | ⬜ |
-| **R4.4** | `emisionScheduler`: reintentos y reconciliación | R4.3 | ⬜ |
-| **R4.5** | Script `fe_configurar_sandbox.js` (preparar un negocio de desarrollo) | R4.1 | ⬜ |
-| **R4.6** | Pruebas de `emisionService` (proveedor simulado) | R4.3 | ⬜ |
-| **R5.1** | Gancho en `marcarPagado` y `cerrarOrden` | R4.3 | ⬜ |
-| **R5.2** | Validadores del campo `factura` en las rutas de cobro | R5.1 | ⬜ |
-| **R5.3** | Prueba de punta a punta contra el sandbox | R5.2, R4.5 | ⬜ |
+| **R0.1** | Script de sondeo contra el sandbox | — | ✅ 2026-10-08 (sin commit) |
+| **R0.2** | Ejecutar el sondeo y registrar resultados en §5 | R0.1 | ✅ 2026-10-08 (sin commit) |
+| **R1.1** | Migración `migrate:facturacion-emision` | — | ✅ 2026-10-08 (sin commit) |
+| **R1.2** | Pruebas de la migración (inmutabilidad y unicidad) | R1.1 | ✅ 2026-10-08 (sin commit) |
+| **R2.1** | Puerto de proveedores + registro | — | ✅ 2026-10-08 (sin commit) |
+| **R2.2** | Adaptador Factus: token, llamada HTTP y clasificación | R2.1 | ✅ 2026-10-08 (sin commit) |
+| **R2.3** | Adaptador Factus: traducir documento → JSON de Factus | R2.2, R0.2 | ✅ 2026-10-08 (sin commit) |
+| **R2.4** | Pruebas del adaptador (fetch simulado) | R2.3 | ✅ 2026-10-08 (sin commit) |
+| **R3.1** | Constantes (UVT, códigos) y validación del comprador | — | ✅ 2026-10-08 (sin commit) |
+| **R3.2** | `construirFactura`: cálculo puro de líneas y totales | R3.1 | ✅ 2026-10-08 (sin commit) |
+| **R3.3** | Pruebas de `construirFactura` | R3.2 | ✅ 2026-10-08 (sin commit) |
+| **R4.1** | `configuracionDao` + `debeFacturar` | R1.1 | ✅ 2026-10-08 (sin commit) |
+| **R4.2** | Origen restaurante: leer el pedido para facturarlo | R1.1 | ✅ 2026-10-08 (sin commit) |
+| **R4.3** | `emisionService`: encolar, emitir, archivar | R2.4, R3.3, R4.1, R4.2 | ✅ 2026-10-08 (sin commit) |
+| **R4.4** | `emisionScheduler`: reintentos y reconciliación | R4.3 | ✅ 2026-10-08 (sin commit) |
+| **R4.5** | Script `fe_configurar_sandbox.js` (preparar un negocio de desarrollo) | R4.1 | ✅ 2026-10-08 (sin commit) |
+| **R4.6** | Pruebas de `emisionService` (proveedor simulado) | R4.3 | ✅ 2026-10-08 (sin commit) |
+| **R5.1** | Gancho en `marcarPagado` y `cerrarOrden` | R4.3 | ✅ 2026-10-08 (sin commit) |
+| **R5.2** | Validadores del campo `factura` en las rutas de cobro | R5.1 | ✅ 2026-10-08 (sin commit) |
+| **R5.3** | Prueba de punta a punta contra el sandbox | R5.2, R4.5 | ✅ 2026-10-08 (sin commit) |
 | **R6.1** | API super admin: configuración de Factus por negocio | R4.1, R2.4 | ⬜ |
 | **R6.2** | Pantalla super admin en `admin_app-v21` | R6.1 | ⬜ |
 | **R7.1** | Campos fiscales del producto (API de carta) | R1.1 | ⬜ |
@@ -1552,15 +1552,18 @@ salto de línea permitido) y un QR de `url_qr`. Para el QR, **pregunta antes** q
 
 ## 5. Resultados del sondeo del sandbox (lo rellena R0.2)
 
+> Ejecutado el **2026-10-08** con `scripts/factus_sondeo.js`. Las respuestas completas están en
+> `tmp/factus/sondeo/` (fuera de git). Ninguna contradice una decisión de §2.
+
 | Pregunta | Resultado observado | Consecuencia en el plan |
 |---|---|---|
-| P1 `reference_code` repetido | ⬜ | R4.3 b) paso 3 y e) |
-| P2 consultar por referencia | ⬜ | R2.2 paso 10 |
-| P3 medios de pago `ZZZ`/`47`/`48`/`49` | ⬜ | R3.1 `MEDIO_PAGO_POR_DEFECTO`, R7.2 |
-| P4 comprador cédula / NIT | ⬜ | R2.3 `traducirComprador`, R8.1 campos |
-| P5 `discount_rate` por línea | ⬜ | D9 (solo se cambia si cuadra al centavo y el usuario lo aprueba) |
-| P6 nota crédito | ⬜ | R10.1 |
-| P7 duración del token | ⬜ | R2.2 caché |
+| P1 `reference_code` repetido | **No duplica.** Las dos veces HTTP 201 «registrado y validado con éxito» y el **mismo número** (`SETP990024139`). Repetido también a través del adaptador: mismo documento. | R4.3 b) paso 3 y e) |
+| P2 consultar por referencia | `GET /v2/bills?filter[reference_code]=<ref>` → 200, `data.data[]` con `number`, `reference_code`, `is_validated`, `errors`, `total` (sin CUFE ni enlaces). La v1 responde **403**. El documento entero: `GET /v2/bills/<número>`. | R2.2 paso 10 |
+| P3 medios de pago `ZZZ`/`47`/`48`/`49` | Los cuatro validan (201). `ZZZ` se queda como medio por defecto. | R3.1 `MEDIO_PAGO_POR_DEFECTO`, R7.2 |
+| P4 comprador cédula / NIT | Los dos validan **solo con los campos mínimos** del plan (cédula `1000000009`; NIT `900123456`, DV `8` según `calcularDv`). No pide `tribute`, `address` ni `municipality`: Factus rellena «No informado», ZZ y R-99-PN. | R2.3 `traducirComprador`, R8.1 campos |
+| P5 `discount_rate` por línea | Cuadra al centavo: 2 × 22.000 + 1 × 6.500 con INC 8 % y `discount_rate: 10.00` → Factus 45.450,00 = nuestro 45.450,00. **D9 no se cambia** (falta la aprobación del usuario); queda como alternativa conocida. | D9 (solo se cambia si cuadra al centavo y el usuario lo aprueba) |
+| P6 nota crédito | `POST /v2/credit-notes/validate` con el cuerpo de la factura + `correction_concept_code: '2'`, `customization_id: '20'`, `bill_number` y un `numbering_range_id` de un rango **«Nota Crédito»** → 201, `CRTE869`, con `cude` (no `cufe`). Avisos, no rechazos: CAK55 (sin correo) y CBF02. | R10.1 |
+| P7 duración del token | `expires_in: 3600`, `token_type: Bearer`, y **sí** trae `refresh_token` (no se usa: se repite el grant `password`). | R2.2 caché |
 
 ---
 
@@ -1580,3 +1583,120 @@ salto de línea permitido) y un QR de `url_qr`. Para el QR, **pregunta antes** q
 
 (Anota aquí, con fecha y tarea, lo que encontraste fuera del alcance, las decisiones que tuviste
 que pedir y los números de factura de las pruebas contra el sandbox.)
+
+### 2026-10-08 — R0, R1, R2 y R3
+
+**Hecho, sin commitear** (el usuario no lo ha pedido): R0.1–R0.2, R1.1–R1.2, R2.1–R2.4, R3.1–R3.3.
+`migrate:facturacion-emision` aplicada dos veces en la local (5432) y en la compartida (5433);
+**no** en producción. `DB_PORT=5432 npx jest __tests__/facturacion --forceExit`: 94 pruebas en verde.
+
+**Facturas de prueba en el sandbox:** sondeo `SETP990024139`–`SETP990024146` y nota `CRTE869`;
+humo del adaptador (cálculo → emisión → reintento → consulta → PDF/XML → nota crédito)
+`SETP990024149`, `SETP990024150` y `CRTE870`. En el humo, un pedido de 67.999 con INC, descuento,
+domicilio y dos pagos salió por 67.999,01 en Factus y en nuestro cálculo (`ajuste_redondeo` 0,01).
+
+**Desviaciones del texto del plan, todas en `proveedores/factus.js`:**
+
+- **`listarRangos` no filtra por `filter[document]=21`**: recorre todas las páginas y traduce el
+  nombre del documento («Factura de Venta» → `FV`, «Nota Crédito» → `NC`). Así el mismo listado
+  sirve para el rango de notas crédito, que R10.1 necesita. Lo que no es ninguno de los dos
+  (documento soporte, nota débito, nómina) sale con `tipoDocumento: null`: **R4.1 `guardarRangos`
+  debe saltárselos**, porque `chk_feres_tipo` solo admite FV y NC.
+- **La unidad de medida que no sea `94` se envía como `94`.** En Orbita se probaron ocho códigos
+  que la documentación de Factus da por válidos y los ocho rechazaron la factura.
+- **`fechaValidacion` se convierte**: Factus manda `08-10-2026 09:23:26 PM` (día-mes-año, hora de
+  Bogotá) y `new Date()` lo leería como 10 de agosto.
+- **`emitirNotaCredito` y `descargarArchivo(..., documento: 'NC')` ya están**, porque el sondeo dejó
+  el cuerpo probado. R10.1 solo tiene que llamarlos. `consultarPorReferencia` busca **solo
+  facturas**: para notas crédito hay que resolverlo en R10.1.
+- **Cualquier HTTP que no sea 2xx, 400, 401, 409 o 422 es `ERROR_PROVEEDOR`** (el plan solo nombraba
+  429 y 5xx; un 403 o un 404 no podían quedar sin clasificar).
+- **`llamar` no lanza tampoco por credenciales**: un token rechazado vuelve como 401 y se clasifica
+  `ERROR_CREDENCIALES`. `probarConexion` sí lanza `FE_CREDENCIALES_INVALIDAS`, que es lo que la
+  pantalla de R6 necesita.
+- `comprador.js` no limpia a dígitos un pasaporte (`41`): lleva letras.
+
+**Lo aprendido en Orbita (JD&D, en producción con la DIAN desde el 2026-10-07) que este plan no
+contemplaba — afecta a R6 y a R12:**
+
+1. **Factus no toma el rango solo.** Después de que el cliente asocia el prefijo en el portal de la
+   DIAN, el rango hay que **crearlo por API**: `GET /v2/numbering-ranges/dian` (lo que la DIAN
+   tiene asociado) → `POST /v2/numbering-ranges`. Hasta entonces `listarRangos` no lo devuelve.
+   Modelo: `sst_ws/scripts/factus-rango-crear-fe.mjs` y `factus-rangos-consultar.mjs`. **R6.1
+   necesita esa acción** («Crear rango desde la DIAN»), o el super admin no puede terminar un alta.
+2. **El rango de notas crédito es aparte** y tampoco existe solo: en Orbita se creó a mano (sin
+   resolución). Sin él R10.1 no puede anular.
+3. **El alta de un cliente va por el panel de aliados** de Factus (somos aliado, a nombre de
+   Nicolás Pantoja Páez): se radica la solicitud con el paquete, Factus activa y entrega las
+   credenciales de producción de **esa** cuenta. El certificado viene con el paquete y queda a
+   nombre del cliente. En la DIAN el software sale como «software propio» del cliente.
+4. **Las credenciales de producción de un cliente nunca pasan por un `.env` local ni por un chat**:
+   se cargan en R6.2, desde el navegador del super admin, directo a `credenciales_cifradas`.
+5. Orbita usa 30 s de timeout con Factus y aquí son 8 s (`TIMEOUT_MS`). Con la idempotencia de P1
+   un corte temprano no duplica, pero si en producción se ven muchos `ERROR_RED`, es lo primero que
+   mirar.
+
+**`WHATSAPP_TOKEN_KEY`:** estaba vacía en el `.env` de este PC; se generó una **solo de desarrollo**
+el 2026-10-08. El nombre es histórico (nació con los tokens de WhatsApp): es la única clave del
+servidor para todo lo que se custodia cifrado por negocio, no una clave de WhatsApp ni una por
+negocio. ⚠️ Cada PC de desarrollo tiene la suya, así que **las credenciales que un dev guarda en la
+base compartida el otro no las puede descifrar**: para emitir desde el otro PC hay que volver a
+correr `fe_configurar_sandbox.js` allí (o compartir la clave de desarrollo).
+
+### 2026-10-08 (noche) — R4 y R5
+
+**Hecho, sin commitear:** R4.1–R4.6 y R5.1–R5.3. `DB_PORT=5432 npx jest __tests__/facturacion
+--forceExit`: 118 pruebas en verde. `__tests__/restaurante`: 233 de 235; las dos que fallan
+(`proveedores` «el historial…» y `auditoria_actor` «cerrarCaja…») dependen de datos de la base
+local —un negocio sin insumos en gramos y una caja con pedidos pendientes— y no pasan por el cobro.
+
+**R5.3, de punta a punta en la compartida** (negocio 17 «RESTAURANTE CHAYANE», configurado con
+`fe_configurar_sandbox.js 17 --aplicar`; rangos FV 389 y NC 1776): tres pedidos cobrados con el
+`PedidoService.marcarPagado` real y `FEATURES_FORZADAS=facturacion_electronica`:
+
+| Pedido | Resultado |
+|---|---|
+| $33.000 a consumidor final | `SETP990024154`, ACEPTADO, PDF y XML archivados |
+| $16.000 a nombre de NIT 900123456 | `SETP990024155`, ACEPTADO |
+| $320.000 sin comprador | `PENDIENTE_DATOS`, no se envió (D10) |
+
+El cobro con factura tardó **4–5 s** en responder. Casi todo es la latencia del túnel a la base
+(138 ms por consulta) más los ~2 s de Factus; en producción la base es local. Aun así, **es lo
+que va a notar el cajero**: `FE_ESPERA_MS` es el tope de esa espera. No se probó la llegada del
+correo (los compradores de prueba iban sin correo).
+
+**Desviaciones y hallazgos de R4/R5:**
+
+- **La referencia en PRUEBAS lleva un sufijo aleatorio** (`EAP17-FV-1150-3f9a1c2e`). Todas las
+  bases de desarrollo emiten contra la MISMA cuenta del sandbox y Factus devuelve el documento
+  existente cuando se repite una referencia: sin el sufijo, el pedido 10 de la base local habría
+  recibido sin error la factura del pedido 10 de la compartida. En producción la referencia sigue
+  siendo `EA<negocio>-FV-<orden>`.
+- **`crearDocumentoPedido` empieza por una sola consulta** (¿este negocio tiene configuración
+  activa?) antes de leer el pedido. Es D12 en otro orden: al negocio que no factura —casi todos—
+  el cobro le cuesta una consulta y nada más.
+- **`leerPedido` devuelve también `impuestoDomicilio`**, ya resuelto con D7 (un negocio no
+  responsable tampoco le pone impuesto al domicilio).
+- **Si el proveedor lanza una excepción, `alCobrarPedido` devuelve el resumen en `ERROR`**, no
+  `null` como decía R4.6 caso 6: el documento existe y la caja lo puede ver. `null` queda para
+  «este negocio no factura» y para un fallo anterior a crear el documento.
+- **Un error nuestro (`FE_SIN_CREDENCIALES`, `FE_SIN_RANGO`, `FE_SIN_LINEAS`) no se reintenta
+  solo**: esperar no lo arregla. Queda en `ERROR` hasta que alguien pulse «Reintentar».
+- **`reintentar` y `completarComprador` estrenan referencia solo si el documento estaba
+  RECHAZADO** (sufijo `-r<intentos>`): en Orbita se vio que la referencia de un rechazado queda
+  gastada. Un `ERROR` reintenta con la misma, que es lo que lo hace idempotente.
+- **El gancho usa `adjuntarFactura()`** en vez de escribir en `orden.dataValues` directamente: la
+  orden ya está cobrada y confirmada, y esa línea no puede lanzar venga la orden como venga.
+- Los validadores de `factura` responden **422**, como el resto de ese controlador (el plan decía
+  400).
+- 🐛 **Arreglado un fallo de FE-1 que está en producción:** `datosFiscales.actualizar` no podía
+  guardar `responsabilidades_fiscales` ni `tributos` («malformed array literal»), o sea que
+  **la pantalla `/admin/facturacion` falla al guardar esos dos campos**. La suite no lo veía
+  porque los fijaba con SQL directo. Corregido aquí y con prueba; **falta desplegarlo**.
+- Se aplicaron en la **compartida** las tres migraciones del 2026-10-07 que estaban pendientes
+  (`restaurante-cambio-cliente`, `negocio-asistente-stock`, `negocio-tiempo-recoger`): sin la
+  primera, `marcarPagado` fallaba ahí para cualquiera. Y en la **local**,
+  `restaurante-metodo-pago-domicilio` y `restaurante-proveedores`, que le faltaban.
+- El negocio 17 de la compartida quedó declarado REGISTRADO, en modo POS, con la ficha de la
+  empresa del sandbox y en `EN_PRUEBAS`. Antes estaba en `SIN_REGISTRO`. Sin la feature forzada
+  no cambia nada para quien lo use.
