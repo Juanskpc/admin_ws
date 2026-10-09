@@ -138,6 +138,7 @@ RADIAN, nómina electrónica, y el cobro comercial de la feature (qué plan la i
 | **D16** | Puerta comercial: `features.estaHabilitado(idNegocio, 'facturacion_electronica')` (ya existe en `intelligence/core/features.js`). Ningún plan la incluye todavía; en desarrollo se enciende con `FEATURES_FORZADAS=facturacion_electronica`. | ADR-021: se pregunta por la feature, nunca por el nombre del plan |
 | **D17** | **Nota crédito solo por anulación total**, disparada al anular un pedido cobrado. | Es el único caso de corrección que existe hoy en el restaurante |
 | **D18** | `fe_documento` **no tiene `ON DELETE CASCADE`** hacia el negocio (`ON DELETE RESTRICT`), y un documento `ACEPTADO` no se puede modificar ni borrar (trigger). | Conservación legal ≥ 5 años; invariante 1 de §6.2 |
+| **D20** | **No todo cobro se factura** (decisión del usuario, 2026-10-09; **corrige D5, D10 y D11**). Por defecto se factura **solo el cobro en el que el cajero lo pide**, con el interruptor «Factura electrónica» de la pantalla de cobro: **anónima** (consumidor final) o **con los datos del cliente**. El negocio que quiera facturarlo todo enciende `fe_configuracion.facturar_todo` (lo hace el super admin) y entonces vale lo que decía D5. | Un negocio con un paquete pequeño de documentos no puede gastarlo en cada venta |
 | **D19** | Pedidos con pago por **Cuenta/Tiquetera** se facturan por el total del pedido igual que los demás; la parte pagada con la cuenta va con medio de pago «otro» (`ZZZ`). **La venta de la tiquetera en sí NO se factura** en este plan. | Pendiente de contador (§6); no bloquea |
 
 ---
@@ -1650,6 +1651,45 @@ servidor para todo lo que se custodia cifrado por negocio, no una clave de Whats
 negocio. ⚠️ Cada PC de desarrollo tiene la suya, así que **las credenciales que un dev guarda en la
 base compartida el otro no las puede descifrar**: para emitir desde el otro PC hay que volver a
 correr `fe_configurar_sandbox.js` allí (o compartir la clave de desarrollo).
+
+### 2026-10-09 — Facturar solo lo que se pide, y el interruptor con ventana (D20)
+
+Tras ver las pantallas, el usuario cambió dos cosas:
+
+1. **«Factura a nombre de» ya no es una casilla con campos dentro del cobro.** En Pedidos hay un
+   interruptor **«Factura electrónica»** en el hueco junto al selector de mesa (o al aviso «Para
+   llevar», o al botón del domicilio), y al marcarlo se abre una **ventana** con dos pestañas:
+   «Con datos del cliente» (la que abre por defecto) y «Anónima». Es
+   `shared/factura-chip/` (`FacturaChipComponent`), controlado: lo elegido vive en la pantalla
+   (`facturaPedido`) para que no se pierda al cambiar de «En mesa» a «Para llevar». En Mesas y
+   Despacho el mismo interruptor va dentro del selector de pago, debajo del desplegable.
+2. **Facturar es opcional por cobro (D20).** Sin marcar el interruptor, el cobro **no** se
+   factura. El contrato del cobro quedó así: sin `factura` → no se factura;
+   `factura: { consumidor_final: true }` → anónima; `factura: { tipo_persona, … }` → a nombre
+   del cliente. `fe_configuracion.facturar_todo` (nueva, `false` por defecto; la migración
+   `migrate:facturacion-emision` la añade y está aplicada en la local y en la compartida)
+   devuelve el comportamiento anterior, y **la reconciliación solo corre para esos negocios**:
+   en los demás no hay forma de saber si a un pedido le falta la factura o nadie la pidió.
+
+Consecuencias que conviene tener presentes:
+
+- **⚠️ Decidir qué se factura es responsabilidad del negocio, no nuestra.** Quien está obligado a
+  facturar lo está por cada venta; ofrecer el interruptor no cambia eso. Tiene que quedar dicho
+  en los términos del servicio, igual que la declaración de registro (ver
+  `docs/obligaciones-escalapp.md`).
+- Una **anónima** no vale por encima del tope de 5 UVT: la ventana no deja elegirla, y si el
+  pedido crece después de elegirla el cobro avisa (`avisoFacturaIncompleta`).
+- El **cobro directo desde la tarjeta de Despacho** no factura (no hay dónde pedirlo): hay que
+  abrir el detalle.
+- `modo_facturacion` POS/COMPLETO ya no cambia nada en la pantalla (D11 queda sin efecto): la
+  ventana abre siempre en «Con datos del cliente».
+- `DatosFacturaComponent` quedó en solo el formulario (sin interruptor ni tope); lo usan la
+  ventana y la fila «Completar datos» de Caja.
+- En el panel del super admin hay una tarjeta nueva, «5. Qué cobros se facturan».
+
+Verificado: 136 pruebas de facturación en el backend, 367 en `restaurante_app`, y visto en el
+navegador el interruptor en Pedidos (modo «Para llevar») y la ventana abierta. **No visto:** Mesas,
+Despacho, la pestaña «Anónima» y un cobro completo desde la interfaz.
 
 ### 2026-10-08 (madrugada del 9) — R6 a R11
 

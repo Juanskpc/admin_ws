@@ -11,6 +11,14 @@
  * jamás. Si aquí se rompe algo, el documento queda en `ERROR` o, en el peor caso, ni se crea: la
  * reconciliación recoge luego los pedidos cobrados que se quedaron sin documento.
  *
+ * ## No todo cobro se factura
+ *
+ * Por defecto se factura **solo el cobro en el que el cajero lo pide** («Factura electrónica» en
+ * la pantalla de cobro): anónima —a consumidor final— o con los datos del cliente. Un negocio con
+ * un paquete pequeño de documentos no puede gastarlo en cada venta. El que sí quiere facturarlo
+ * todo enciende `fe_configuracion.facturar_todo`, y entonces un cobro sin más sale a consumidor
+ * final y la reconciliación recoge los que se queden sin documento.
+ *
  * ## Por qué reintentar no duplica
  *
  * El documento se crea una sola vez por pedido (`uq_fedoc_origen`) y guarda su
@@ -117,13 +125,21 @@ async function crearDocumentoPedido({ idOrden, comprador = null, idUsuario = nul
     // Lo primero y lo más barato: casi ningún negocio factura, y a esos el cobro no les puede
     // costar más que esta consulta.
     const activos = await sequelize.query(
-        `SELECT o.id_negocio
+        `SELECT o.id_negocio, c.facturar_todo
            FROM restaurante.pedid_orden o
            JOIN facturacion.fe_configuracion c ON c.id_negocio = o.id_negocio
           WHERE o.id_orden = :idOrden AND c.estado IN (:estados);`,
         { replacements: { idOrden, estados: configuracionDao.ESTADOS_QUE_EMITEN }, type: SELECT }
     );
     if (activos.length === 0) return null;
+
+    // Sin que nadie la pida no hay factura, salvo en el negocio que lo factura todo. Si el pedido
+    // ya tenía una (se cobró en Despacho y ahora se cierra), se devuelve esa.
+    if (!activos[0].facturar_todo && (comprador === null || comprador === undefined)) {
+        return buscarPorPedido(activos[0].id_negocio, idOrden);
+    }
+    // «Anónima»: la pidieron, pero sin datos. Sale a consumidor final.
+    const anonima = comprador?.consumidor_final === true;
 
     const pedido = await origenRestaurante.leerPedido(idOrden);
     if (!pedido || !pedido.cobrado || pedido.anulado) return null;
@@ -133,7 +149,7 @@ async function crearDocumentoPedido({ idOrden, comprador = null, idUsuario = nul
 
     const existente = await buscarPorPedido(pedido.id_negocio, idOrden);
     if (existente) {
-        if (existente.estado === 'PENDIENTE_DATOS' && comprador) {
+        if (existente.estado === 'PENDIENTE_DATOS' && comprador && !anonima) {
             return completarComprador(existente.id_documento, comprador);
         }
         return existente;
@@ -144,7 +160,7 @@ async function crearDocumentoPedido({ idOrden, comprador = null, idUsuario = nul
     let adquiriente = CONSUMIDOR_FINAL;
     let errorComprador = null;
     try {
-        adquiriente = normalizarComprador(comprador) ?? CONSUMIDOR_FINAL;
+        adquiriente = anonima ? CONSUMIDOR_FINAL : normalizarComprador(comprador) ?? CONSUMIDOR_FINAL;
     } catch (err) {
         if (err.code !== 'FE_COMPRADOR_INVALIDO') throw err;
         errorComprador = err.message;
@@ -705,7 +721,9 @@ async function reintentar(idDocumento) {
 
 /**
  * Pedidos cobrados que se quedaron sin documento (el proceso se reinició justo después del
- * commit, o el gancho falló). Es la red de D4.
+ * commit, o el gancho falló). Es la red de D4, y solo existe para los negocios que facturan
+ * todos sus cobros: en los demás no hay forma de saber si a un pedido le falta la factura o
+ * simplemente nadie la pidió.
  *
  * `fecha_creacion` es `timestamp` en hora de Bogotá y `activado_en` es `timestamptz`: la
  * comparación es correcta porque la sesión de Postgres está en `America/Bogota`. No «arreglarlo».
@@ -716,6 +734,8 @@ async function reconciliar() {
            FROM restaurante.pedid_orden o
            JOIN facturacion.fe_configuracion c
              ON c.id_negocio = o.id_negocio AND c.estado IN ('EN_PRUEBAS','ACTIVO')
+            -- Solo donde se factura todo: en los demás, un pedido sin documento es lo normal.
+            AND c.facturar_todo
           WHERE (o.estado_pago = 'pagado' OR (o.estado = 'CERRADA' AND o.id_caja IS NOT NULL))
             AND o.estado NOT IN ('CANCELADA','ANULADA')
             AND o.fecha_creacion >= c.activado_en

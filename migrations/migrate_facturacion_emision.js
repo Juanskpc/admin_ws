@@ -22,6 +22,9 @@
  *    limpien lo suyo.
  * 2. **Una venta se factura una sola vez** (D5): `uq_fedoc_origen`. El gancho del cobro se puede
  *    llamar dos veces —`marcarPagado` y `cerrarOrden`— y el segundo no crea nada.
+ *    Y **no toda venta se factura**: por defecto solo la que el cajero pide
+ *    (`fe_configuracion.facturar_todo = false`). Un negocio con un paquete pequeño de documentos
+ *    no puede gastarlo en cada gaseosa; el que quiera facturarlo todo lo enciende.
  * 3. **El origen es texto y no tiene FK** (ADR-005): `origen_id` guarda el `id_orden` como texto.
  *    Facturación sabe de qué venta salió el documento; el restaurante no sabe que existe.
  *
@@ -55,6 +58,9 @@ CREATE TABLE IF NOT EXISTS facturacion.fe_configuracion (
     impuesto_domicilio_tarifa  numeric(5,2) NOT NULL DEFAULT 0,
     -- ¿Factus envía el correo al comprador cuando hay correo?
     enviar_correo              boolean      NOT NULL DEFAULT true,
+    -- false (defecto): solo se factura el cobro en el que el cajero lo pide.
+    -- true: todo cobro sale facturado, a consumidor final si no se dice otra cosa.
+    facturar_todo              boolean      NOT NULL DEFAULT false,
     activado_en                timestamptz,
     activado_por               integer REFERENCES general.gener_usuario(id_usuario),
     creado_en                  timestamptz  NOT NULL DEFAULT now(),
@@ -258,6 +264,19 @@ async function migrate() {
         // Sin `replacements`: el SQL lleva `::jsonb` y un cuerpo plpgsql, y Sequelize no debe
         // interpretar nada de eso.
         await Models.sequelize.query(SQL_ESQUEMA, { transaction: t });
+
+        // La tabla ya existía en las bases migradas antes del 2026-10-09: ahí el CREATE de arriba
+        // no hace nada y la columna hay que añadirla.
+        console.log('1b. facturacion.fe_configuracion.facturar_todo...');
+        if (await existeColumna('facturacion', 'fe_configuracion', 'facturar_todo', t)) {
+            console.log('   (ya existía)');
+        } else {
+            await Models.sequelize.query(
+                `ALTER TABLE facturacion.fe_configuracion
+                   ADD COLUMN facturar_todo boolean NOT NULL DEFAULT false;`,
+                { transaction: t }
+            );
+        }
 
         console.log('2. restaurante.rest_metodo_pago.codigo_medio_pago_dian...');
         if (!(await existeTabla('restaurante', 'rest_metodo_pago', t))) {

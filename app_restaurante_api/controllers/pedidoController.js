@@ -66,17 +66,24 @@ const quitarItemsOrdenValidators = [
 ];
 
 /**
- * «Factura a nombre de», opcional en los dos cobros. Aquí solo se comprueba la forma; el fondo
- * (dígito de verificación, razón social según el tipo de persona) lo valida facturación, y un
- * comprador que no pase deja el documento esperando datos: nunca tumba el cobro.
+ * La factura electrónica de un cobro, opcional. Tres formas:
+ *   · sin `factura` (o null)             → no se pide factura para este cobro;
+ *   · `{ consumidor_final: true }`       → anónima;
+ *   · `{ tipo_persona, tipo_documento… }` → a nombre del cliente.
+ * Aquí solo se comprueba la forma; el fondo (dígito de verificación, razón social según el tipo
+ * de persona) lo valida facturación, y un comprador que no pase deja el documento esperando
+ * datos: nunca tumba el cobro.
  */
+const conDatosDelCliente = (_valor, { req }) =>
+    Boolean(req.body?.factura) && req.body.factura.consumidor_final !== true;
 const facturaValidators = [
     body('factura').optional({ nullable: true }).isObject().withMessage('factura inválida'),
-    body('factura.tipo_persona').if(body('factura').exists({ values: 'null' }))
+    body('factura.consumidor_final').optional({ nullable: true }).isBoolean(),
+    body('factura.tipo_persona').if(conDatosDelCliente)
         .isIn(['1', '2']).withMessage('tipo de persona inválido'),
-    body('factura.tipo_documento').if(body('factura').exists({ values: 'null' }))
+    body('factura.tipo_documento').if(conDatosDelCliente)
         .isIn(['13', '22', '31', '41']).withMessage('tipo de documento inválido'),
-    body('factura.numero_documento').if(body('factura').exists({ values: 'null' }))
+    body('factura.numero_documento').if(conDatosDelCliente)
         .isString().trim().isLength({ min: 3, max: 20 }).withMessage('número de documento inválido'),
     body('factura.dv').optional({ nullable: true }).isString().matches(/^[0-9]$/).withMessage('dv inválido'),
     body('factura.razon_social').optional({ nullable: true }).isString().isLength({ max: 255 }),

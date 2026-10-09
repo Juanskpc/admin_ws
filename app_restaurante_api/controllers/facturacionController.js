@@ -64,6 +64,8 @@ const getEstado = manejar('getEstado', async (req, res, idNegocio) => {
         activa: decision.facturar,
         modo: ficha?.modo_facturacion ?? 'NINGUNO',
         ambiente: decision.config?.ambiente ?? null,
+        // false: se factura solo el cobro en el que se pide. true: se factura todo.
+        facturar_todo: Boolean(decision.config?.facturar_todo),
         tope_identificacion: topeConsumidorFinal(),
         motivo: decision.motivo,
         medios_pago: MEDIOS_PAGO_DIAN,

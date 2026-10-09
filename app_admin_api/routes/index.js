@@ -465,6 +465,7 @@ router.put(FE, requireSuperAdmin, [
     body('impuesto_domicilio_codigo').optional().isString().isLength({ min: 2, max: 4 }),
     body('impuesto_domicilio_tarifa').optional().isFloat({ min: 0, max: 100 }),
     body('enviar_correo').optional().isBoolean(),
+    body('facturar_todo').optional().isBoolean(),
 ], FeConfiguracionController.putConfiguracion);
 
 router.post(`${FE}/probar`, requireSuperAdmin, idNegocioValidator, FeConfiguracionController.probarConexion);

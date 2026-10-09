@@ -121,7 +121,9 @@ beforeAll(async () => {
     const idCategoria = (await q(`INSERT INTO restaurante.carta_categoria (id_negocio, nombre) VALUES (:idNegocio, 'FE') RETURNING id_categoria;`, { idNegocio }))[0].id_categoria;
     idProducto = (await q(`INSERT INTO restaurante.carta_producto (id_negocio, id_categoria, nombre, precio) VALUES (:idNegocio, :idCategoria, 'Hamburguesa', 20000) RETURNING id_producto;`, { idNegocio, idCategoria }))[0].id_producto;
 
-    await configuracionDao.guardar(idNegocio, { credenciales: CREDENCIALES });
+    // La mayoría de la suite prueba el envío en sí, así que el negocio lo factura todo; el
+    // caso por defecto —solo lo que se pide— tiene su propio bloque más abajo.
+    await configuracionDao.guardar(idNegocio, { credenciales: CREDENCIALES, facturar_todo: true });
     const rangos = await configuracionDao.guardarRangos(idNegocio, [
         { id: 389, tipoDocumento: 'FV', prefijo: 'SETP', desde: 990000000, hasta: 995000000, actual: 990000010, vencido: false },
         { id: 1776, tipoDocumento: 'NC', prefijo: 'CRTE', vencido: false },
@@ -405,6 +407,57 @@ describe('reintentos y reconciliación', () => {
         expect((await documentoDe(huerfano)).estado).toBe('EN_COLA');
         expect(await documentoDe(reciente)).toBeUndefined();
         expect(adaptador.emitirFactura).not.toHaveBeenCalled();
+    });
+});
+
+describe('facturar solo lo que se pide (el caso por defecto)', () => {
+    beforeAll(() => configuracionDao.guardar(idNegocio, { facturar_todo: false }));
+    afterAll(() => configuracionDao.guardar(idNegocio, { facturar_todo: true }));
+
+    test('un cobro sin pedir factura no crea nada ni llama al proveedor', async () => {
+        const idOrden = await crearPedido();
+        expect(await alCobrarPedido({ idOrden })).toBeNull();
+        expect(await documentoDe(idOrden)).toBeUndefined();
+        expect(adaptador.emitirFactura).not.toHaveBeenCalled();
+    });
+
+    test('pedirla anónima la emite a consumidor final', async () => {
+        const idOrden = await crearPedido();
+        const r = await alCobrarPedido({ idOrden, comprador: { consumidor_final: true } });
+        expect(r.estado).toBe('ACEPTADO');
+        expect((await documentoDe(idOrden)).adquiriente.consumidor_final).toBe(true);
+    });
+
+    test('pedirla con datos la emite a nombre del cliente', async () => {
+        const idOrden = await crearPedido();
+        const r = await alCobrarPedido({
+            idOrden,
+            comprador: { tipo_persona: '2', tipo_documento: '13', numero_documento: '1000000009', nombres: 'Ana Pérez' },
+        });
+        expect(r.estado).toBe('ACEPTADO');
+        expect((await documentoDe(idOrden)).adquiriente).toMatchObject({ consumidor_final: false, nombres: 'Ana Pérez' });
+    });
+
+    test('anónima por encima del tope: espera los datos del comprador', async () => {
+        const idOrden = await crearPedido({ precio: 300000 });
+        const r = await alCobrarPedido({ idOrden, comprador: { consumidor_final: true } });
+        expect(r.estado).toBe('PENDIENTE_DATOS');
+        expect(adaptador.emitirFactura).not.toHaveBeenCalled();
+    });
+
+    test('cerrar un pedido que ya se facturó al cobrarlo devuelve esa factura, sin pedir otra', async () => {
+        const idOrden = await crearPedido();
+        await alCobrarPedido({ idOrden, comprador: { consumidor_final: true } });
+        const alCerrar = await alCobrarPedido({ idOrden });
+        expect(alCerrar).toMatchObject({ estado: 'ACEPTADO', numero: 'SETP1' });
+        expect(adaptador.emitirFactura).toHaveBeenCalledTimes(1);
+    });
+
+    test('la reconciliación no factura por su cuenta lo que nadie pidió', async () => {
+        await q(`UPDATE facturacion.fe_configuracion SET activado_en = now() - interval '1 hour' WHERE id_negocio = :idNegocio RETURNING 1;`, { idNegocio });
+        const idOrden = await crearPedido({ haceMinutos: 5 });
+        await emision.reconciliar();
+        expect(await documentoDe(idOrden)).toBeUndefined();
     });
 });
 

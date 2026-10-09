@@ -24,6 +24,7 @@ const CAMPOS_EDITABLES = [
     'impuesto_domicilio_codigo',
     'impuesto_domicilio_tarifa',
     'enviar_correo',
+    'facturar_todo',
 ];
 const CAMPOS_CREDENCIAL = ['client_id', 'client_secret', 'username', 'password'];
 
