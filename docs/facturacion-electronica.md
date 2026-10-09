@@ -1374,6 +1374,29 @@ Aparte de todo esto: EscalApp es persona jurídica y **está obligada a facturar
 con o sin Factus ([`obligaciones-escalapp.md`](obligaciones-escalapp.md)) — revisarlo con la
 contadora.
 
+#### 9. Sondeo del sandbox (2026-10-08): las siete preguntas que faltaban antes del adaptador
+
+Hecho con `scripts/factus_sondeo.js` (un subcomando por pregunta; respuestas completas en
+`tmp/factus/sondeo/`). Detalle y consecuencias en `plan-fe-restaurante.md` §5. Lo que importa:
+
+- **Repetir un `reference_code` no duplica.** La segunda vez Factus contesta 201 con el **mismo
+  número**. Un reintento va siempre con la misma referencia, y eso es toda la idempotencia que
+  hace falta.
+- **Se puede preguntar por referencia**: `GET /v2/bills?filter[reference_code]=…` (la v1 da 403).
+  La lista no trae CUFE ni enlaces; para eso, `GET /v2/bills/<número>`.
+- **Medios de pago `ZZZ`, `47`, `48` y `49` validan**, además del `10`.
+- **Un comprador identificado no exige más que documento, nombre o razón social y tipo de
+  persona**, con cédula y con NIT. Sin tributo, dirección ni municipio: Factus pone «No informado».
+- **`discount_rate` por línea cuadra al centavo** (45.450,00 en el caso probado). No se adopta: D9
+  sigue repartiendo el descuento en el precio; queda como alternativa conocida.
+- **La nota crédito de anulación total valida** con `correction_concept_code: '2'`,
+  `customization_id: '20'` y `bill_number`. Necesita **su propio rango** («Nota Crédito»).
+- **El token dura 3.600 s** y trae `refresh_token`.
+
+Dos trampas que no dan error: `validated_at` llega como `08-10-2026 09:23:26 PM` —día-mes-año, hora
+de Bogotá; `new Date()` lo lee como 10 de agosto— y `GET /v2/numbering-ranges` nombra el documento
+con un **texto** («Factura de Venta»), no con un código.
+
 #### El correo de cierre (pendiente de enviar)
 
 Dos propósitos: dejar por escrito lo que se dijo de viva voz y cerrar lo que no dio tiempo.
