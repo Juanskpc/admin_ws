@@ -31,6 +31,15 @@ const CanalWhatsappController = require('../controllers/canalWhatsappController'
 const CobranzaController = require('../controllers/cobranzaController');
 const AdquirirController = require('../controllers/adquirirController');
 const { verificarToken, requireSuperAdmin } = require('../../app_core/middleware/auth');
+// Límite estrecho para las rutas donde se prueban credenciales. Va aquí y no en `app.js` porque
+// la clave del cubo incluye la identificación que viene en el cuerpo, y el parser JSON corre
+// después del limitador global. El por qué de los números, en el propio módulo.
+const { limitadorAutenticacion } = require('../../app_core/middleware/limites');
+// Dos techos distintos: donde se prueban credenciales se cuentan los FALLOS (entrar varias
+// veces en una tarde es normal), y donde se manda un correo se cuenta TODO — ahí el acierto es
+// lo caro, porque gasta la cuota de envío. El detalle, en el módulo.
+const limiteAuth = limitadorAutenticacion();
+const limiteCodigo = limitadorAutenticacion({ contarAciertos: true });
 const rateLimit = require('express-rate-limit');
 
 // Los países cuyos móviles sabemos pasar a E.164. La lista sale del propio normalizador para
@@ -44,7 +53,7 @@ const Respuesta = require('../../app_core/helpers/respuesta');
 // ============================================================
 
 // Login
-router.post('/auth/login', [
+router.post('/auth/login', limiteAuth, [
     body('num_identificacion')
         .trim()
         .notEmpty().withMessage('El número de identificación es requerido'),
@@ -53,20 +62,20 @@ router.post('/auth/login', [
 ], UsuarioController.loginUsuario);
 
 // Recuperar contraseña (genera OTP)
-router.post('/auth/forgot-password', forgotPasswordValidators, forgotPassword);
+router.post('/auth/forgot-password', limiteCodigo, forgotPasswordValidators, forgotPassword);
 
 // Verificar OTP (sin consumir el token — paso 1 del formulario de reset)
-router.post('/auth/verify-otp', verifyOtpValidators, verifyOtp);
+router.post('/auth/verify-otp', limiteAuth, verifyOtpValidators, verifyOtp);
 
 // Restablecer contraseña (verifica OTP y actualiza)
-router.post('/auth/reset-password', resetPasswordValidators, resetPassword);
+router.post('/auth/reset-password', limiteAuth, resetPasswordValidators, resetPassword);
 
 // Verificación de email para registro (landing page)
-router.post('/auth/registro/enviar-codigo', enviarCodigoValidators, enviarCodigo);
-router.post('/auth/registro/verificar-codigo', verificarCodigoValidators, verificarCodigo);
+router.post('/auth/registro/enviar-codigo', limiteCodigo, enviarCodigoValidators, enviarCodigo);
+router.post('/auth/registro/verificar-codigo', limiteAuth, verificarCodigoValidators, verificarCodigo);
 
 // Registro trial: verifica OTP y crea cuenta automáticamente
-router.post('/auth/registro/prueba/verificar', verificarYCrearValidators, verificarYCrear);
+router.post('/auth/registro/prueba/verificar', limiteAuth, verificarYCrearValidators, verificarYCrear);
 
 // SSO de salida: canjea un código de un solo uso por la sesión del admin_app
 // (permite volver al portal central autenticado desde una app vertical).
@@ -285,7 +294,7 @@ router.get('/roles/lista', RolController.getListaRoles);
 router.get('/roles/:id', [
     param('id').isInt({ min: 1 }).withMessage('ID de rol inválido')
 ], RolController.getRolById);
-router.post('/roles', [
+router.post('/roles', requireSuperAdmin, [
     body('descripcion')
         .trim()
         .notEmpty().withMessage('La descripción del rol es requerida')
@@ -294,19 +303,19 @@ router.post('/roles', [
         .optional({ nullable: true })
         .isInt({ min: 1 }).withMessage('ID de tipo de negocio inválido')
 ], RolController.createRol);
-router.patch('/roles/:id/inactivar', [
+router.patch('/roles/:id/inactivar', requireSuperAdmin, [
     param('id').isInt({ min: 1 }).withMessage('ID de rol inválido')
 ], RolController.inactivarRol);
 
 // --- Negocios ---
 router.get('/mis-negocios', NegocioController.getMisNegocios);
-router.get('/negocios', NegocioController.getListaNegocios);
+router.get('/negocios', requireSuperAdmin, NegocioController.getListaNegocios);
 // '/negocios/admin' debe ir ANTES de '/negocios/:id' para no colisionar.
 router.get('/negocios/admin', requireSuperAdmin, NegocioController.getListaNegociosAdmin);
 router.get('/negocios/:id', [
     param('id').isInt({ min: 1 }).withMessage('ID de negocio inválido')
 ], NegocioController.getNegocioById);
-router.post('/negocios', [
+router.post('/negocios', requireSuperAdmin, [
     body('nombre')
         .trim()
         .notEmpty().withMessage('El nombre del negocio es requerido'),
@@ -815,7 +824,7 @@ router.post('/tipos-negocio', requireSuperAdmin, [
 
 // --- Planes ---
 router.get('/planes', PlanController.getListaPlanes);
-router.post('/planes', [
+router.post('/planes', requireSuperAdmin, [
     body('nombre')
         .trim()
         .notEmpty().withMessage('El nombre del plan es requerido'),
@@ -823,15 +832,15 @@ router.post('/planes', [
         .optional()
         .isDecimal().withMessage('El precio debe ser un número válido')
 ], PlanController.createPlan);
-router.put('/planes/:id', [
+router.put('/planes/:id', requireSuperAdmin, [
     param('id').isInt({ min: 1 }).withMessage('ID de plan inválido')
 ], PlanController.updatePlan);
-router.patch('/planes/:id/inactivar', [
+router.patch('/planes/:id/inactivar', requireSuperAdmin, [
     param('id').isInt({ min: 1 }).withMessage('ID de plan inválido')
 ], PlanController.inactivarPlan);
 
 // --- Paletas de colores (asignación, protegida) ---
-router.patch('/negocios/:id/paleta', PaletaColorController.assignPaletaValidators, PaletaColorController.assignPaletaNegocio);
+router.patch('/negocios/:id/paleta', requireSuperAdmin, PaletaColorController.assignPaletaValidators, PaletaColorController.assignPaletaNegocio);
 
 // --- Notificaciones ---
 router.get('/mis-notificaciones', NotificacionController.getMisNotificaciones);

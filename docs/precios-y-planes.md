@@ -298,8 +298,22 @@ Lo que esto cambia:
   **De golpe, la verbosidad del bot es una línea de costo.**
 - Los recordatorios (`recordatorio_cita`, categoría *Utility*) ya se cobraban y no cambian.
 
-**Hay que medir antes de esa fecha, no después.** El detalle del cobro de Meta está en
-[`canal-whatsapp.md`](canal-whatsapp.md) §«Cómo funciona el cobro de Meta».
+~~**Hay que medir antes de esa fecha, no después.**~~ **Medido el 2026-10-08**, una semana tarde
+pero con datos reales en vez de una estimación: [`asistente-economia.md`](asistente-economia.md).
+
+Dos cosas de esta sección resultaron ciertas y una se quedó corta:
+
+- ✅ «la verbosidad del bot es una línea de costo» — lo es, y además **resultó ser la misma línea
+  que el costo de IA**: sale casi exactamente un turno de modelo por mensaje enviado.
+- ✅ «no sabemos la cifra» — ya se sabe: $0,93 COP de IA por mensaje, más $2,9455 que Meta le
+  cobra al cliente pasados los 1.000 del mes.
+- ⚠️ Lo que esta sección **no** vio venir: el costo que de verdad importaba no era el de Meta sino
+  **el del modelo**, que se llevaba el 82 % del plan y nadie miraba. Lo arregló un cambio de
+  modelo el 5 de octubre, no una decisión comercial.
+
+El detalle del cobro de Meta está en [`canal-whatsapp.md`](canal-whatsapp.md) §«Cómo funciona el
+cobro de Meta» y, actualizado, en
+[`whatsapp-costo-mensajes.md`](whatsapp-costo-mensajes.md).
 
 ---
 
@@ -354,14 +368,22 @@ corre.
 | # | Qué | Dónde está el dato | Bloquea |
 |---|---|---|---|
 | 1 | ✅ **Tiquetes reales al mes** | Contados el 2026-09-11: **1.730/mes en Zona Burger** (`id_negocio` 6), no Pregonchos, que es mucho más pequeño | — |
-| 2 | ✅ **Mensajes salientes al mes** por negocio | Medido el 2026-10-05 en `intelligence.mensaje`: **~7.000/mes en Zona Burger** (235 al día), a US$0,0008 → ~$20.000 COP. Falta el mismo dato de un negocio pequeño | — |
+| 2 | ✅ **Mensajes salientes al mes** por negocio | Medido dos veces en Zona Burger (`id_negocio` 6) con **filtros distintos, y las dos cifras valen**: ~7.000/mes contando todo lo saliente (2026-10-05) y **5.235/mes contando solo lo que Meta factura** (2026-10-08). La diferencia son los mensajes del móvil del dueño y lo no entregado. Cuenta completa en [`asistente-economia.md`](asistente-economia.md) | — |
 | 3 | ✅ **Precio de Factus** | Lista completa recibida el 2026-09-11 y las 11 preguntas contestadas el 2026-09-12. **No es plano: bolsa anual por documentos** | — |
 | 4 | ✅ **Certificado digital** | **$130.000/año por NIT** en bolsa repartida; incluido en el paquete individual | — |
 | 5 | ⬜ **Cotización de Alegra** como contraste | Un correo | Nada: es comparación, ya no decisión |
 | 6 | ⚠️ **Precio de aliado de Factus** — **no existe**: aplica la lista pública (reunión del 2026-09-14). **Corregido el 2026-09-26: la bolsa multifacturador tiene lista propia y más cara**; sin fecha impresa y sin confirmar que sea la vigente | Preguntas en [`facturacion-electronica.md`](facturacion-electronica.md) §8.2-septies, apartado 6 | Con paquete individual, nada: los tramos aguantan. Con bolsa, los márgenes de L y XL |
 
-**La número 2 es ahora la única que de verdad bloquea**, y es la que más urge: el cobro de Meta
-empieza el 1 de octubre y no depende de nadie de fuera medirlo.
+~~**La número 2 es ahora la única que de verdad bloquea**~~ — **medida el 2026-10-08**, y con ella
+se cerró la pregunta que abrió §4. El resultado, con la cuenta entera (costo de IA, margen por
+cliente, paquetes propuestos y quién le paga a Meta), está en
+[`asistente-economia.md`](asistente-economia.md). El titular: el asistente cuesta **$4.900 al
+mes** por el cliente que más lo usa —no los ~$49.000 que costaba hasta el 4 de octubre con el
+modelo anterior— y le genera a ese cliente **$16,6 millones en pedidos**.
+
+Lo único que sigue abierto de aquella lista es **la tarifa oficial de Colombia**: la cifra que se
+usa ($2,9455 por mensaje) viene de integradores, no del tarifario de Meta. Hay que verla en el
+panel de la WABA de un cliente real antes de imprimirla en la landing.
 
 ---
 
@@ -383,9 +405,18 @@ con `codigo` estable). Estas cosas quedan **fuera de esa primera entrega** y hay
 de vender:
 
 - **CLP (Chile).** Los planes nuevos **no tienen precio en pesos chilenos** y por tanto **no se
-  venden en Chile** hasta definirlo. Hoy solo «Plan Básico» ($8.900) y «Plan Avanzado» ($18.900) tienen
-  precio CLP en `cob_precio_plan`. Un negocio chileno que intente contratar uno de los nuevos recibe
-  «ese plan todavía no tiene precio publicado para tu país».
+  venden en Chile** hasta definirlo. Hoy solo «Plan Básico» y «Plan Avanzado» tienen precio CLP en
+  `cob_precio_plan`, y desde el 2026-10-08 cada uno con su fila de Reserva:
+
+  | | Restaurante (por defecto) | Reserva |
+  |---|---|---|
+  | Plan Básico | $8.900 | **$12.900** |
+  | Plan Avanzado | $18.900 | **$22.900** |
+
+  Un negocio chileno que intente contratar uno de los nuevos recibe «ese plan todavía no tiene
+  precio publicado para tu país». **La landing no publica precios en CLP**: las cifras chilenas
+  viven solo en la base, así que cambiarlas no tiene una página que actualizar — ni una que las
+  contradiga.
 - **Ciclo anual.** La landing presenta los planes con facturación como anuales (certificado digital
   incluido), pero **se crean con precio MENSUAL**. `cob_suscripcion` admite `ciclo = 'anual'` y no está
   probado que la renovación, el prorrateo de cambios de plan y el aviso de vencimiento se comporten
@@ -403,5 +434,16 @@ de vender:
   (`gener_negocio.id_tipo_negocio`): la factura y su renovación, el total mensual, cambiar de plan, el
   primer plan y la compra en línea. **Sin precio pactado**: la renovación cotiza a precio de hoy, así que
   un cliente de Reserva que ya paga toma el precio de Reserva en su próxima renovación. El dueño lo aceptó
-  porque hoy no hay clientes reales de Reserva en Colombia; el de Chile (CLP) no cambia porque no hay
-  precios de Reserva en CLP.
+  porque hoy no hay clientes reales de Reserva en Colombia.
+
+- **Reserva en CLP (2026-10-08).** Aquella entrega sembró Reserva **solo en COP**, y la nota de
+  entonces daba por inofensivo el hueco de Chile. Dejó de serlo: el negocio 16 (Chile, CLP, dLocal,
+  módulo Reserva) renovó el 2026-10-06 y, al no haber fila de Reserva en CLP, `getPrecio` cayó al
+  precio **por defecto** —el de Restaurante— y le cobró $8.900. El respaldo al precio por defecto
+  es el diseño y funcionó como debía; lo que faltaba era el precio. `migrate:cobranza-precio-reserva-clp`
+  siembra los dos que faltaban. **La factura ya pagada se respeta** (decisión del dueño): el precio
+  nuevo entra en la renovación del 9-nov, igual que se resolvió el mismo caso en COP.
+
+  La lección que deja: **un aplicativo con precio propio en una moneda y sin él en otra no falla,
+  cobra de menos en silencio.** Al abrir una moneda o un aplicativo nuevo hay que sembrar la matriz
+  completa (plan × moneda × aplicativo), no solo la celda que tiene cliente ese día.

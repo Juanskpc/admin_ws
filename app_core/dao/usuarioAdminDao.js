@@ -138,7 +138,23 @@ async function syncUsuarioRolActivo(idUsuario, idRol, idNegocio, transaction) {
     );
 }
 
-async function getUsuarios({ search = '', idRol = null, idNegocio = null, estado = null } = {}) {
+/**
+ * @param {Object}   [filtros]
+ * @param {number}   [filtros.idNegocio]   un negocio concreto, el filtro que elige el usuario.
+ * @param {number[]} [filtros.idsNegocio]  **acota el alcance**: solo usuarios con rol activo en
+ *        alguno de estos negocios. Lo pone el controlador a partir de `req.principal` cuando
+ *        quien pide no es super administrador, para que un inquilino no vea la plantilla de
+ *        otro (ver `app_core/authz/alcanceAdmin.js`). Un array vacío no lista a nadie, que es
+ *        lo correcto para un usuario sin negocios asignados — distinto de `null`, que es «sin
+ *        acotar». Se cruza con `idNegocio`: si el pedido queda fuera del alcance, no hay filas.
+ */
+async function getUsuarios({
+    search = '',
+    idRol = null,
+    idNegocio = null,
+    idsNegocio = null,
+    estado = null,
+} = {}) {
     // Los eliminados no se listan nunca, ni siquiera pidiendo un estado concreto: eliminar
     // significa que no se ve en ninguna parte. Su fila sigue ahí para que pedidos, caja y
     // auditoría puedan decir quién los hizo (ver `softDeleteUsuario`).
@@ -166,6 +182,17 @@ async function getUsuarios({ search = '', idRol = null, idNegocio = null, estado
         rolesWhere.id_negocio = Number(idNegocio);
     }
 
+    // El alcance manda sobre el filtro: pedir un negocio ajeno no lo abre, lo deja sin filas.
+    // `required: true` más abajo es lo que convierte esto en un filtro de verdad — sin él, el
+    // `include` sería un LEFT JOIN y los usuarios sin rol en esos negocios saldrían igual, solo
+    // con la lista de roles vacía.
+    if (Array.isArray(idsNegocio)) {
+        const permitidos = idsNegocio.map(Number);
+        rolesWhere.id_negocio = idNegocio
+            ? (permitidos.includes(Number(idNegocio)) ? Number(idNegocio) : { [Op.in]: [] })
+            : { [Op.in]: permitidos };
+    }
+
     const usuarios = await Models.GenerUsuario.findAll({
         where,
         attributes: [
@@ -186,7 +213,7 @@ async function getUsuarios({ search = '', idRol = null, idNegocio = null, estado
                 model: Models.GenerUsuarioRol,
                 as: 'roles',
                 where: rolesWhere,
-                required: Boolean(idNegocio),
+                required: Boolean(idNegocio) || Array.isArray(idsNegocio),
                 attributes: ['id_usuario_rol', 'id_rol', 'id_negocio', 'fecha_creacion'],
                 include: [
                     {

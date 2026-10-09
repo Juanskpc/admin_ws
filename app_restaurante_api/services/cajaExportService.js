@@ -56,6 +56,11 @@ function etiquetaTipoPedido(m) {
     return mapa[String(t).toUpperCase()] || t;
 }
 
+/** «Nombre Apellido» de un usuario, o cadena vacía. */
+function persona(u) {
+    return [u?.primer_nombre, u?.primer_apellido].filter(Boolean).join(' ');
+}
+
 /** El concepto corto: si el movimiento viene de un pedido basta el número de orden. */
 function concepto(m) {
     return m.orden?.numero_orden || m.concepto || '';
@@ -72,6 +77,9 @@ function concepto(m) {
 async function generarXLSXCaja(caja, movimientos, nombreNegocio) {
     const ExcelJS = require('exceljs');
 
+    // Columnas de la tabla de pedidos: es el ancho al que se extienden los títulos de sección.
+    const ANCHO = 7;
+
     const wb = new ExcelJS.Workbook();
     wb.creator = 'EscalApp';
     wb.created = new Date();
@@ -79,13 +87,13 @@ async function generarXLSXCaja(caja, movimientos, nombreNegocio) {
     const hoja = wb.addWorksheet(`Caja ${caja.id_caja}`);
     hoja.columns = [
         { width: 22 }, { width: 16 }, { width: 16 },
-        { width: 26 }, { width: 24 }, { width: 16 },
+        { width: 26 }, { width: 22 }, { width: 22 }, { width: 16 },
     ];
 
     /** Escribe una fila de sección y devuelve su número. */
     const seccion = (titulo) => {
         const fila = hoja.addRow([titulo]);
-        hoja.mergeCells(fila.number, 1, fila.number, 6);
+        hoja.mergeCells(fila.number, 1, fila.number, ANCHO);
         fila.getCell(1).font = { bold: true, size: 12, color: { argb: 'FFFFFFFF' } };
         fila.getCell(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: AZUL } };
         fila.height = 20;
@@ -102,12 +110,12 @@ async function generarXLSXCaja(caja, movimientos, nombreNegocio) {
 
     // ── Cabecera ──────────────────────────────────────────────────────
     const titulo = hoja.addRow([nombreNegocio]);
-    hoja.mergeCells(titulo.number, 1, titulo.number, 6);
+    hoja.mergeCells(titulo.number, 1, titulo.number, ANCHO);
     titulo.getCell(1).font = { bold: true, size: 15 };
     titulo.height = 22;
 
     const sub = hoja.addRow([`Reporte de caja · Turno #${caja.id_caja}`]);
-    hoja.mergeCells(sub.number, 1, sub.number, 6);
+    hoja.mergeCells(sub.number, 1, sub.number, ANCHO);
     sub.getCell(1).font = { size: 11, color: { argb: 'FF667085' } };
 
     hoja.addRow([]);
@@ -161,7 +169,9 @@ async function generarXLSXCaja(caja, movimientos, nombreNegocio) {
     hoja.addRow([]);
     seccion('PEDIDOS DEL TURNO');
 
-    const COLS = ['Fecha', 'Tipo', 'Tipo de pedido', 'Pedido / Concepto', 'Usuario', 'Monto'];
+    // «Tomó» es de la orden (quien levantó el pedido) y «Cobró» del movimiento (quien lo asentó
+    // en caja). En un turno con mesero y cajero no son la misma persona.
+    const COLS = ['Fecha', 'Tipo', 'Tipo de pedido', 'Pedido / Concepto', 'Tomó', 'Cobró', 'Monto'];
     const cabPedidos = hoja.addRow(COLS);
     COLS.forEach((_, i) => {
         const celda = cabPedidos.getCell(i + 1);
@@ -178,10 +188,11 @@ async function generarXLSXCaja(caja, movimientos, nombreNegocio) {
                 etiquetaTipo(m),
                 etiquetaTipoPedido(m),
                 concepto(m),
-                [m.usuario?.primer_nombre, m.usuario?.primer_apellido].filter(Boolean).join(' '),
+                persona(m.orden?.usuario),
+                persona(m.usuario),
                 Number(m.monto || 0),
             ]);
-            fila.getCell(6).numFmt = FORMATO_MONEDA;
+            fila.getCell(ANCHO).numFmt = FORMATO_MONEDA;
             // Lo anulado se tacha en vez de esconderse: la fila sigue estando en la caja.
             if (m.anulado || m.es_anulacion) {
                 fila.eachCell((celda) => {

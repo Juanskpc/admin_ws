@@ -836,6 +836,15 @@ async function getMovimientos(idCaja) {
                 required: false,
                 include: [
                     metodo(),
+                    // Quien TOMÓ el pedido. El `usuario` de arriba es el del MOVIMIENTO, o sea
+                    // quien cobró: con mesero y cajero no son la misma persona, y la caja solo
+                    // mostraba al segundo.
+                    {
+                        model: Models.GenerUsuario,
+                        as: 'usuario',
+                        attributes: ['id_usuario', 'primer_nombre', 'primer_apellido'],
+                        required: false,
+                    },
                     {
                         model: Models.RestPagoOrden,
                         as: 'pagos',

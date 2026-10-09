@@ -27,6 +27,29 @@
 module.exports = {
     testEnvironment: 'node',
     maxWorkers: 1,
+
+    /**
+     * ## Por qué 30 s y no los 5 s de serie
+     *
+     * El valor por defecto de Jest está pensado para pruebas unitarias en memoria. Aquí la
+     * mayoría de las suites abren transacciones contra una base **real**, y en desarrollo esa
+     * base suele estar al otro lado de un túnel SSH (ver `docs/vps-desarrollo.md`): una suite
+     * que inserta un negocio, su plan, su equipo y luego lo limpia hace decenas de idas y
+     * vueltas, y pasa de 5 s sin que nada esté mal.
+     *
+     * El 2026-10-04 eso dejaba **12 pruebas en rojo** de `cobranza`, `negocios` y `platform`,
+     * todas con el mismo mensaje —«Exceeded timeout of 5000 ms»— y ninguna por un fallo de
+     * código. El coste de eso no es la espera: es que una suite que siempre tiene rojos deja de
+     * leerse, y entonces un rojo de verdad no lo ve nadie.
+     *
+     * 30 s es holgado para la latencia del túnel y sigue siendo un límite: una prueba que se
+     * queda colgada de verdad falla, no bloquea la corrida.
+     *
+     * ⚠️ Esto trata el síntoma. El arreglo de fondo es correr las pruebas contra un PostgreSQL
+     * **local** —ya hay un 17 instalado en el equipo— en vez de contra el de desarrollo por
+     * túnel. Mientras la base esté remota, bajar esto devuelve los rojos de mentira.
+     */
+    testTimeout: 30000,
     // `_apoyo/` guarda utilidades compartidas por las suites (modelos falsos, fixtures): no
     // son pruebas, y sin esto Jest las correría como suites vacías y fallaría.
     testPathIgnorePatterns: ['/node_modules/', '/__tests__/_apoyo/'],

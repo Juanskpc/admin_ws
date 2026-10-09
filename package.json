@@ -76,7 +76,8 @@
     "migrate:restaurante-tiempo-estimado": "node migrations/migrate_restaurante_tiempo_estimado.js",
     "migrate:negocio-domicilio-rango": "node migrations/migrate_negocio_domicilio_rango.js",
     "migrate:restaurante-empaque-producto": "node migrations/migrate_restaurante_empaque_producto.js",
-    "migrate:planes-codigo": "node migrations/migrate_planes_codigo.js",    "migrate:platform-numeros-canal": "node migrations/migrate_platform_numeros_canal.js",
+    "migrate:planes-codigo": "node migrations/migrate_planes_codigo.js",
+    "migrate:platform-numeros-canal": "node migrations/migrate_platform_numeros_canal.js",
     "migrate:embedded-signup": "node migrations/migrate_embedded_signup.js",
     "migrate:embedded-signup-coexistencia": "node migrations/migrate_embedded_signup_coexistencia.js",
     "evaluar": "node scripts/evaluar.js",
@@ -125,12 +126,16 @@
     "migrate:cobranza-complementos": "node migrations/migrate_cobranza_complementos.js",
     "migrate:cobranza-cambios-plan": "node migrations/migrate_cobranza_cambios_plan.js",
     "migrate:cobranza-precio-aplicativo": "node migrations/migrate_cobranza_precio_aplicativo.js",
+    "migrate:cobranza-precio-reserva-clp": "node migrations/migrate_cobranza_precio_reserva_clp.js",
     "migrate:planes-landing": "node migrations/migrate_planes_landing.js",
     "migrate:usuario-eliminado": "node migrations/migrate_usuario_eliminado.js",
     "migrate:restaurante-cajas": "node migrations/migrate_restaurante_cajas.js",
     "migrate:restaurante-para-servir": "node migrations/migrate_restaurante_para_servir.js",
     "migrate:restaurante-proveedores": "node migrations/migrate_restaurante_proveedores.js",
-    "migrate:recarga-ia": "node migrations/migrate_recarga_ia.js"
+    "migrate:restaurante-conversaciones": "node migrations/migrate_restaurante_conversaciones.js",
+    "migrate:recarga-ia": "node migrations/migrate_recarga_ia.js",
+    "migrate:registro-migraciones": "node migrations/migrate_registro_migraciones.js",
+    "migrar": "node scripts/migrar.js"
   },
   "keywords": [],
   "author": "",
@@ -162,6 +167,7 @@
     "sequelize": "^6.37.7"
   },
   "devDependencies": {
+    "jest": "^30.5.2",
     "nodemon": "^3.1.0"
   }
 }

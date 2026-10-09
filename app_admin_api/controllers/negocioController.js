@@ -3,6 +3,7 @@ const { validationResult } = require('express-validator');
 const NegocioDao = require('../../app_core/dao/negocioDao');
 const planHelper = require('../../app_core/helpers/planHelper');
 const Respuesta = require('../../app_core/helpers/respuesta');
+const Alcance = require('../../app_core/authz/alcanceAdmin');
 const CicloVida = require('../services/negocioCicloVidaService');
 const { featuresDeNegocios } = require('../../intelligence/core/features');
 const { getUsoUsuarios } = require('../../app_core/helpers/cupoUsuarios');
@@ -26,6 +27,13 @@ async function getListaNegocios(req, res) {
 async function getNegocioById(req, res) {
     try {
         const { id } = req.params;
+
+        // Acotado al propio negocio, no reservado al super administrador: la ficha de un
+        // negocio es algo que su dueño tiene todo el derecho a leer. Hoy ningún frontend llama
+        // aquí —el panel usa `/negocios/admin` y `/mis-negocios`—, pero la ruta estaba abierta a
+        // cualquier token y recorrer `:id` del 1 al 20 enumeraba la cartera de clientes entera.
+        if (Alcance.negarSiNegocioFuera(req, res, id)) return;
+
         const negocio = await NegocioDao.getNegocioById(id);
 
         if (!negocio) {

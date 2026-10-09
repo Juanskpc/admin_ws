@@ -54,6 +54,23 @@ let precioProducto;
 let idMetodoEfectivo;
 let idMetodoCuenta;
 let idCaja;
+/**
+ * El punto de caja (rubro) en el que trabaja la prueba.
+ *
+ * Se resuelve y se pasa EXPLICITAMENTE a cada servicio. Dejarlo en null hace que
+ * `resolverPuntoCaja` decida, y eso solo funciona si el negocio elegido tiene una sola caja:
+ * con dos responde PUNTO_CAJA_REQUERIDO —correctamente, porque ahi la pregunta significa algo—
+ * y los 20 casos se caen por algo que no tiene nada que ver con tiqueteras.
+ *
+ * Paso de verdad: al desplegar varias cajas (2026-09-23) quedo una «Caja secundaria» en el
+ * negocio 17 de la base compartida, que es justo el que esta prueba elige. Nadie lo vio durante
+ * once dias porque jest no estaba instalado y la suite no se podia correr.
+ *
+ * Filtrar el negocio por «que tenga una sola caja» no sirve: el 17 es el UNICO candidato con
+ * carta, formas de pago y usuarios, asi que la prueba se quedaba sin donde correr. Decir en que
+ * caja se trabaja es ademas mas honesto: la prueba mide un arqueo, y un arqueo es de una caja.
+ */
+let idPuntoCaja;
 /** Cómo estaba el interruptor de cuentas antes de la prueba, para dejarlo igual. */
 let flagOriginal = false;
 const cuentasCreadas = [];
@@ -136,6 +153,16 @@ async function retirarSubnivelAnular() {
     permisosTemporales = [];
 }
 
+/**
+ * `registrarAbono` con la caja de la prueba puesta.
+ *
+ * Catorce llamadas la necesitan; un envoltorio evita repetirla catorce veces y que se olvide en
+ * la decimoquinta.
+ */
+function abonar(args) {
+    return cuentaService.registrarAbono({ idPuntoCaja, ...args });
+}
+
 async function crearCuenta(nombre, extra = {}) {
     const cuenta = await cuentaService.crearCuenta({
         idNegocio: ID_NEGOCIO,
@@ -152,6 +179,7 @@ async function crearOrdenDe(cantidad = 1) {
         idUsuario,
         idMesa: null,
         tipoPedido: 'LLEVAR',
+        idPuntoCaja,
         items: [{
             id_producto: idProducto,
             cantidad,
@@ -229,13 +257,22 @@ beforeAll(async () => {
     );
     idMetodoEfectivo = efectivo.id_metodo_pago;
 
+    // La caja (rubro) donde va todo lo de esta prueba: la primera activa del negocio.
+    const [punto] = await sequelize.query(
+        `SELECT id_punto_caja FROM restaurante.rest_punto_caja
+          WHERE id_negocio = :n AND estado = 'A' ORDER BY orden, id_punto_caja LIMIT 1`,
+        { replacements: { n: ID_NEGOCIO }, type: sequelize.QueryTypes.SELECT },
+    );
+    idPuntoCaja = punto ? punto.id_punto_caja : null;
+
     // Turno propio para la prueba: el arqueo se mide sobre él.
-    const abierta = await cajaService.getCajaAbierta(ID_NEGOCIO);
+    const abierta = await cajaService.getCajaAbierta(ID_NEGOCIO, { idPuntoCaja });
     if (abierta) {
         idCaja = abierta.id_caja;
     } else {
         const caja = await cajaService.abrirCaja({
             idNegocio: ID_NEGOCIO, idUsuario, montoApertura: 0, observaciones: 'test tiquetera',
+            idPuntoCaja,
         });
         idCaja = caja.id_caja;
     }
@@ -313,7 +350,7 @@ describe('el módulo está apagado mientras el negocio no lo encienda', () => {
 
     test('encenderlo la hace aparecer, y apagarlo NO borra los saldos', async () => {
         const cuenta = await crearCuenta('Cliente Apagado tiquetera-test');
-        await cuentaService.registrarAbono({
+        await abonar({
             idNegocio: ID_NEGOCIO, idCuenta: cuenta.id_cuenta, idUsuario,
             idMetodoPago: idMetodoEfectivo, monto: 30000, concepto: 'tiquetera-test apagado',
         });
@@ -336,7 +373,7 @@ describe('la plata no se cuenta dos veces', () => {
             { replacements: { n: ID_NEGOCIO, c: idCaja }, type: sequelize.QueryTypes.SELECT },
         );
 
-        await cuentaService.registrarAbono({
+        await abonar({
             idNegocio: ID_NEGOCIO,
             idCuenta: cuenta.id_cuenta,
             idUsuario,
@@ -362,7 +399,7 @@ describe('la plata no se cuenta dos veces', () => {
 
     test('comer con la tiquetera SÍ es venta del día y NO mueve el arqueo', async () => {
         const cuenta = await crearCuenta('Cliente Come tiquetera-test');
-        await cuentaService.registrarAbono({
+        await abonar({
             idNegocio: ID_NEGOCIO, idCuenta: cuenta.id_cuenta, idUsuario,
             idMetodoPago: idMetodoEfectivo, monto: 100000, concepto: 'tiquetera-test venta',
         });
@@ -389,7 +426,7 @@ describe('la plata no se cuenta dos veces', () => {
 
     test('el pedido pagado con la cuenta deja UN solo ingreso, de cero, y sigue en el turno', async () => {
         const cuenta = await crearCuenta('Cliente Visible tiquetera-test');
-        await cuentaService.registrarAbono({
+        await abonar({
             idNegocio: ID_NEGOCIO, idCuenta: cuenta.id_cuenta, idUsuario,
             idMetodoPago: idMetodoEfectivo, monto: 100000, concepto: 'tiquetera-test venta',
         });
@@ -425,7 +462,7 @@ describe('la plata no se cuenta dos veces', () => {
         );
         try {
             const cuenta = await crearCuenta('Cliente Mixto tiquetera-test');
-            await cuentaService.registrarAbono({
+            await abonar({
                 idNegocio: ID_NEGOCIO, idCuenta: cuenta.id_cuenta, idUsuario,
                 idMetodoPago: idMetodoEfectivo, monto: precioProducto * 3, concepto: 'tiquetera-test mixto',
             });
@@ -519,7 +556,7 @@ describe('el saldo manda', () => {
         });
 
         const netoAntes = await netoDeCaja(idCaja);
-        await cuentaService.registrarAbono({
+        await abonar({
             idNegocio: ID_NEGOCIO, idCuenta: cuenta.id_cuenta, idUsuario,
             idMetodoPago: idMetodoEfectivo, monto: precioProducto, concepto: 'tiquetera-test pago mes',
         });
@@ -537,7 +574,7 @@ describe('tiquetes contados', () => {
         const descuento = Math.round(precioProducto * 10 * 0.1);
         const netoAntes = await netoDeCaja(idCaja);
 
-        await cuentaService.registrarAbono({
+        await abonar({
             idNegocio: ID_NEGOCIO, idCuenta: cuenta.id_cuenta, idUsuario,
             idMetodoPago: idMetodoEfectivo,
             // Un navegador manipulado (o un error de dedo) no puede vender 10 almuerzos por un peso.
@@ -574,7 +611,7 @@ describe('tiquetes contados', () => {
     test('un descuento que se come toda la tiquetera se rechaza', async () => {
         const cuenta = await crearCuenta('Cliente Regalo tiquetera-test', { modo: 'TIQUETES' });
         await expect(
-            cuentaService.registrarAbono({
+            abonar({
                 idNegocio: ID_NEGOCIO, idCuenta: cuenta.id_cuenta, idUsuario,
                 idMetodoPago: idMetodoEfectivo, tiquetes: 2, idProducto,
                 descuento: precioProducto * 2,
@@ -584,7 +621,7 @@ describe('tiquetes contados', () => {
 
     test('se compran 20, se come 1, quedan 19', async () => {
         const cuenta = await crearCuenta('Cliente Tiquetes tiquetera-test', { modo: 'TIQUETES' });
-        await cuentaService.registrarAbono({
+        await abonar({
             idNegocio: ID_NEGOCIO, idCuenta: cuenta.id_cuenta, idUsuario,
             idMetodoPago: idMetodoEfectivo,
             tiquetes: 20,
@@ -621,7 +658,7 @@ describe('tiquetes contados', () => {
 
     test('cambiar de modo con saldo vivo se rechaza: dejaría tiquetes varados', async () => {
         const cuenta = await crearCuenta('Cliente Cambia tiquetera-test', { modo: 'TIQUETES' });
-        await cuentaService.registrarAbono({
+        await abonar({
             idNegocio: ID_NEGOCIO, idCuenta: cuenta.id_cuenta, idUsuario,
             idMetodoPago: idMetodoEfectivo, monto: 50000, tiquetes: 5, idProducto,
             concepto: 'tiquetera-test 5',
@@ -638,7 +675,7 @@ describe('tiquetes contados', () => {
 describe('deshacer', () => {
     test('anular un pedido pagado con la cuenta le devuelve al cliente lo suyo', async () => {
         const cuenta = await crearCuenta('Cliente Anula tiquetera-test');
-        await cuentaService.registrarAbono({
+        await abonar({
             idNegocio: ID_NEGOCIO, idCuenta: cuenta.id_cuenta, idUsuario,
             idMetodoPago: idMetodoEfectivo, monto: 100000, concepto: 'tiquetera-test venta',
         });
@@ -680,7 +717,7 @@ describe('deshacer', () => {
 
     test('eliminar la tiquetera la saca de la lista y del cobro, pero su libro sigue ahí', async () => {
         const cuenta = await crearCuenta('Cliente Borrado tiquetera-test');
-        await cuentaService.registrarAbono({
+        await abonar({
             idNegocio: ID_NEGOCIO, idCuenta: cuenta.id_cuenta, idUsuario,
             idMetodoPago: idMetodoEfectivo, monto: 40000, concepto: 'tiquetera-test borrado',
         });
@@ -737,7 +774,7 @@ describe('deshacer', () => {
     test('un abono no se puede pagar con la propia cuenta', async () => {
         const cuenta = await crearCuenta('Cliente Circular tiquetera-test');
         await expect(
-            cuentaService.registrarAbono({
+            abonar({
                 idNegocio: ID_NEGOCIO, idCuenta: cuenta.id_cuenta, idUsuario,
                 idMetodoPago: idMetodoCuenta, monto: 50000,
             }),
