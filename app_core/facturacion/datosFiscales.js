@@ -307,8 +307,14 @@ async function actualizar(idNegocio, campos, { transaction } = {}) {
         );
     }
 
+    // Las listas (responsabilidades, tributos) no se pueden pasar como un reemplazo normal:
+    // Sequelize convierte un arreglo en `'a', 'b'`, que es lo que quiere un IN y no una columna
+    // de tipo arreglo — con un solo elemento Postgres responde «malformed array literal».
     const asignaciones = Object.keys(cambios)
-        .map((c) => `${c} = :${c}`)
+        .map((c) => {
+            if (!Array.isArray(cambios[c])) return `${c} = :${c}`;
+            return cambios[c].length > 0 ? `${c} = ARRAY[:${c}]::text[]` : `${c} = ARRAY[]::text[]`;
+        })
         .join(', ');
     await Models.sequelize.query(
         `UPDATE general.gener_negocio_fiscal

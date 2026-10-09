@@ -139,6 +139,20 @@ describe('al activar, dice qué falta', () => {
         await fijarFicha({ dv: '4' });
     });
 
+    test('las listas se guardan por actualizar(), con uno, varios o ningún elemento', async () => {
+        // Hasta el 2026-10-08 esto fallaba con «malformed array literal» y la suite no lo veía,
+        // porque fijaba estas dos columnas con SQL directo.
+        let ficha = await actualizar(idNegocio, { responsabilidades_fiscales: ['R-99-PN'], tributos: ['ZZ'] });
+        expect(ficha.responsabilidades_fiscales).toEqual(['R-99-PN']);
+        expect(ficha.tributos).toEqual(['ZZ']);
+
+        ficha = await actualizar(idNegocio, { responsabilidades_fiscales: ['O-13', 'O-15'], tributos: [] });
+        expect(ficha.responsabilidades_fiscales).toEqual(['O-13', 'O-15']);
+        expect(ficha.tributos).toEqual([]);
+
+        await actualizar(idNegocio, { responsabilidades_fiscales: ['R-99-PN'], tributos: ['ZZ'] });
+    });
+
     test('a una persona natural le pide además el nombre partido', async () => {
         await fijarFicha({ tipo_persona: '2' });
 
