@@ -40,7 +40,7 @@ const configuracionDao = require('./configuracionDao');
 const origenRestaurante = require('./origenes/restaurante');
 const { construirFactura } = require('./construirFactura');
 const { normalizarComprador } = require('./comprador');
-const { CONSUMIDOR_FINAL, topeConsumidorFinal } = require('./constantes');
+const { CONSUMIDOR_FINAL, topeConsumidorFinal, urlConsultaDian } = require('./constantes');
 const { getProveedor } = require('./proveedores');
 const { correoFactura, marcaDeNegocio } = require('./correoFactura');
 
@@ -571,7 +571,8 @@ function resumen(doc) {
         tipo: doc.tipo,
         numero: doc.numero,
         cufe: doc.cufe,
-        url_publica: doc.url_publica,
+        // Hacia afuera, la consulta de la DIAN; nunca la página del proveedor (ver urlConsultaDian).
+        url_publica: urlConsultaDian(doc.cufe, doc.ambiente),
         url_qr: doc.url_qr,
         mensaje,
     };
@@ -701,9 +702,9 @@ async function alAnularPedido({ idOrden, idUsuario = null }) {
 
 /** Los documentos de un negocio, del más reciente al más antiguo (máx. 200). */
 async function listar(idNegocio, { desde = null, hasta = null, estado = null } = {}) {
-    return sequelize.query(
+    const filas = await sequelize.query(
         `SELECT d.id_documento, d.tipo, d.estado, d.numero, d.origen_referencia, d.total, d.creado_en,
-                d.ultimo_error, d.url_publica, d.cufe, d.intentos,
+                d.ultimo_error, d.ambiente, d.cufe, d.intentos,
                 COALESCE(d.adquiriente->>'razon_social', d.adquiriente->>'nombres') AS comprador,
                 COALESCE((d.adquiriente->>'consumidor_final')::boolean, false) AS consumidor_final,
                 f.numero AS numero_factura_anulada
@@ -717,6 +718,8 @@ async function listar(idNegocio, { desde = null, hasta = null, estado = null } =
           LIMIT 200;`,
         { replacements: { idNegocio, desde, hasta, estado }, type: SELECT }
     );
+    // «Ver en línea» abre la consulta de la DIAN, no la página del proveedor.
+    return filas.map(({ ambiente, ...d }) => ({ ...d, url_publica: urlConsultaDian(d.cufe, ambiente) }));
 }
 
 /** Un documento, solo si es de ese negocio. `null` tanto si no existe como si es de otro. */

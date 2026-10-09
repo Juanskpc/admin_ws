@@ -41,6 +41,22 @@ const CONSUMIDOR_FINAL = Object.freeze({
     nombres: 'Consumidor Final',
 });
 
+/**
+ * El enlace para consultar una factura, el que ve el comprador y el negocio.
+ *
+ * Es la consulta pública de la DIAN por CUFE, la misma que abre el QR. **No** es la página del
+ * proveedor (`fe_documento.url_publica`, que Factus devuelve en su dominio): nada del proveedor
+ * tecnológico se le muestra a nadie (decisión del 2026-10-09). `url_publica` se sigue guardando
+ * para soporte interno.
+ *
+ * En PRUEBAS la DIAN tiene su propio catálogo (habilitación): allí viven los CUFE del sandbox.
+ */
+function urlConsultaDian(cufe, ambiente = 'PRODUCCION') {
+    if (!cufe) return null;
+    const host = ambiente === 'PRUEBAS' ? 'catalogo-vpfe-hab.dian.gov.co' : 'catalogo-vpfe.dian.gov.co';
+    return `https://${host}/document/searchqr?documentkey=${encodeURIComponent(cufe)}`;
+}
+
 module.exports = {
     UVT_POR_ANIO,
     TOPE_UVT_CONSUMIDOR_FINAL,
@@ -49,4 +65,5 @@ module.exports = {
     MEDIO_PAGO_POR_DEFECTO,
     UNIDAD_POR_DEFECTO,
     CONSUMIDOR_FINAL,
+    urlConsultaDian,
 };
