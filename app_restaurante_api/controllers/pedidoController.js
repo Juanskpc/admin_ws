@@ -65,6 +65,27 @@ const quitarItemsOrdenValidators = [
     body('items.*.nota').optional({ nullable: true }).isString(),
 ];
 
+/**
+ * «Factura a nombre de», opcional en los dos cobros. Aquí solo se comprueba la forma; el fondo
+ * (dígito de verificación, razón social según el tipo de persona) lo valida facturación, y un
+ * comprador que no pase deja el documento esperando datos: nunca tumba el cobro.
+ */
+const facturaValidators = [
+    body('factura').optional({ nullable: true }).isObject().withMessage('factura inválida'),
+    body('factura.tipo_persona').if(body('factura').exists({ values: 'null' }))
+        .isIn(['1', '2']).withMessage('tipo de persona inválido'),
+    body('factura.tipo_documento').if(body('factura').exists({ values: 'null' }))
+        .isIn(['13', '22', '31', '41']).withMessage('tipo de documento inválido'),
+    body('factura.numero_documento').if(body('factura').exists({ values: 'null' }))
+        .isString().trim().isLength({ min: 3, max: 20 }).withMessage('número de documento inválido'),
+    body('factura.dv').optional({ nullable: true }).isString().matches(/^[0-9]$/).withMessage('dv inválido'),
+    body('factura.razon_social').optional({ nullable: true }).isString().isLength({ max: 255 }),
+    body('factura.nombres').optional({ nullable: true }).isString().isLength({ max: 255 }),
+    body('factura.correo').optional({ nullable: true }).isEmail().withMessage('correo inválido'),
+    body('factura.telefono').optional({ nullable: true }).isString().isLength({ max: 30 }),
+    body('factura.direccion').optional({ nullable: true }).isString().isLength({ max: 255 }),
+];
+
 const marcarPagadoValidators = [
     // Pago simple: id_metodo_pago. Multipago: arreglo pagos[]. Al menos uno.
     body('id_metodo_pago').optional({ nullable: true }).isInt({ min: 1 }).withMessage('id_metodo_pago inválido'),
@@ -76,6 +97,7 @@ const marcarPagadoValidators = [
     // De quién es la tiquetera cuando se paga con la cuenta del cliente. El servidor NO lo
     // deduce del teléfono del pedido: adivinarlo le descontaría el almuerzo a otra persona.
     body('id_cuenta').optional({ nullable: true }).isInt({ min: 1 }).withMessage('id_cuenta inválido'),
+    ...facturaValidators,
 ];
 
 const actualizarValorDomicilioValidators = [
@@ -115,6 +137,7 @@ const cerrarOrdenValidators = [
     body('pagos.*.id_metodo_pago').optional().isInt({ min: 1 }).withMessage('id_metodo_pago inválido en pagos'),
     body('pagos.*.valor').optional().isFloat({ gt: 0 }).withMessage('valor inválido en pagos'),
     body('id_cuenta').optional({ nullable: true }).isInt({ min: 1 }).withMessage('id_cuenta inválido'),
+    ...facturaValidators,
 ];
 
 async function crearOrden(req, res) {
@@ -357,6 +380,7 @@ async function marcarPagado(req, res) {
             origenCobro: req.body.origen_cobro || 'CAJA',
             idCuenta: req.body.id_cuenta ? Number(req.body.id_cuenta) : null,
             idUsuario: req.usuario?.id_usuario ?? null,
+            factura: req.body.factura ?? null,
         });
         if (!orden) return Respuesta.error(res, 'Orden no encontrada', 404);
         return Respuesta.success(res, 'Pago registrado', orden);
@@ -474,6 +498,7 @@ async function cerrarOrden(req, res) {
             idMetodoPago: req.body?.id_metodo_pago ? Number(req.body.id_metodo_pago) : null,
             pagos: Array.isArray(req.body?.pagos) ? req.body.pagos : null,
             idCuenta: req.body?.id_cuenta ? Number(req.body.id_cuenta) : null,
+            factura: req.body?.factura ?? null,
         });
         if (!orden) return Respuesta.error(res, 'Orden no encontrada', 404);
         return Respuesta.success(res, 'Orden cerrada', orden);

@@ -15,6 +15,9 @@ const features = require('../../intelligence/core/features');
 // cierra ciclo: `avisoPedido` lee la orden con SQL en crudo justamente para no depender de este
 // servicio.
 const avisoPedido = require('../../intelligence/adapters/restaurante/avisoPedido');
+// Facturación electrónica (ADR-026). Se llama DESPUÉS del commit y nunca lanza: si la
+// facturación se cae, el cobro sigue (ADR-005). Ver docs/plan-fe-restaurante.md D4.
+const facturacion = require('../../app_core/facturacion');
 const { Op } = require('sequelize');
 
 const SUBNIVEL_CANCELAR_NO_PAGADO = 'despacho_cancelar_no_pagado';
@@ -1607,13 +1610,22 @@ async function validarYGuardarPagos({ orden, pagos, transaction, exigirCuadre = 
 }
 
 /**
+ * Pega el resumen de la factura a la orden que se devuelve. La orden ya está cobrada y
+ * confirmada: esto no puede lanzar, venga la orden en la forma que venga.
+ */
+function adjuntarFactura(orden, factura) {
+    if (orden?.dataValues) orden.dataValues.factura = factura;
+    else if (orden) orden.factura = factura;
+}
+
+/**
  * Registra el cobro de una orden sin cerrarla.
  * Usado en el flujo de despacho: el pedido queda ABIERTO pero marcado como pagado.
  * Registra inmediatamente el INGRESO en la caja activa del negocio.
  *
  * Acepta pago simple (`idMetodoPago`) o Multipago (`pagos: [{id_metodo_pago, valor}]`).
  */
-async function marcarPagado(idOrden, { idMetodoPago, pagos, origenCobro = 'CAJA', idCuenta = null, idUsuario = null } = {}) {
+async function marcarPagado(idOrden, { idMetodoPago, pagos, origenCobro = 'CAJA', idCuenta = null, idUsuario = null, factura = null } = {}) {
     const t = await Models.sequelize.transaction();
     try {
         const orden = await Models.PedidOrden.findByPk(idOrden, {
@@ -1739,6 +1751,10 @@ async function marcarPagado(idOrden, { idMetodoPago, pagos, origenCobro = 'CAJA'
         );
 
         await t.commit();
+        // `null` para el negocio que no factura, que es casi todos.
+        adjuntarFactura(orden, await facturacion.alCobrarPedido({
+            idOrden: orden.id_orden, comprador: factura, idUsuario,
+        }));
         return orden;
     } catch (err) {
         if (!t.finished) await t.rollback();
@@ -2076,7 +2092,7 @@ function sequelizeInicioDeHoy() {
  * @param {number} idOrden
  * @param {{ idUsuario: number }} ctx — usuario que ejecuta el cobro
  */
-async function cerrarOrden(idOrden, { idUsuario, idMetodoPago, pagos, idCuenta = null } = {}) {
+async function cerrarOrden(idOrden, { idUsuario, idMetodoPago, pagos, idCuenta = null, factura = null } = {}) {
     const t = await Models.sequelize.transaction();
     try {
         const orden = await Models.PedidOrden.findOne({
@@ -2201,7 +2217,14 @@ async function cerrarOrden(idOrden, { idUsuario, idMetodoPago, pagos, idCuenta =
         );
 
         await t.commit();
-        return getOrdenById(idOrden);
+        const resultado = await getOrdenById(idOrden);
+        if (resultado) {
+            // Si el pedido ya se había cobrado en Despacho, esto devuelve la factura que ya tiene.
+            adjuntarFactura(resultado, await facturacion.alCobrarPedido({
+                idOrden, comprador: factura, idUsuario,
+            }));
+        }
+        return resultado;
     } catch (err) {
         if (!t.finished) {
             await t.rollback();
