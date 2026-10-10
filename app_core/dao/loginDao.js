@@ -40,7 +40,10 @@ async function getUsuarioLogin(idUsuario) {
         include: [{
             model: Models.GenerNegocio,
             as: 'negocio',
-            attributes: ['id_negocio', 'nombre'],
+            // `id_negocio_padre` viaja para que el selector del panel pueda decir cuál de
+            // los negocios del usuario es la matriz y cuáles son sedes. Es una etiqueta: el
+            // aislamiento sigue siendo por `id_negocio`, y una sede es un `id_negocio` más.
+            attributes: ['id_negocio', 'nombre', 'id_negocio_padre'],
             where: { estado: 'A' },
             required: true
         }]
@@ -83,6 +86,7 @@ async function getUsuarioLogin(idUsuario) {
         return {
             id_negocio: negocio.id_negocio,
             nombre: negocio.nombre,
+            id_negocio_padre: negocio.id_negocio_padre ?? null,
             roles,
             plan_activo: estadosPlan.get(negocio.id_negocio)?.activo ?? false,
             plan: estadosPlan.get(negocio.id_negocio) ?? null,

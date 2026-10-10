@@ -83,6 +83,18 @@ module.exports = (sequelize, DataTypes) => {
          * cambió, para no romper un enlace que el negocio ya compartió.
          */
         slug: DataTypes.STRING(63),
+        /**
+         * La matriz de la que esta sede cuelga. NULL = es una matriz (o un negocio sin sedes,
+         * que es lo mismo visto desde aquí).
+         *
+         * Una sede es un negocio completo: su propio `id_negocio`, su propia caja, su propio
+         * inventario y su propio plan. Lo único que añade esta columna es el parentesco, para
+         * poder agrupar en la consola y clonar la configuración al abrirla. Ver
+         * `migrate:negocio-sede` y `app_core/dao/sedeDao.js`.
+         *
+         * Un solo nivel: una sede no tiene sedes (lo valida `sedeDao.crearSede`).
+         */
+        id_negocio_padre: { type: DataTypes.INTEGER, allowNull: true },
         estado: { type: DataTypes.CHAR(1), defaultValue: 'A' },
         fecha_registro: { type: DataTypes.DATE, defaultValue: DataTypes.NOW }
     }, {
@@ -115,6 +127,15 @@ module.exports = (sequelize, DataTypes) => {
         GenerNegocio.hasMany(models.GenerNivelNegocio, {
             foreignKey: 'id_negocio',
             as: 'nivelesNegocio'
+        });
+        // El parentesco de sedes. Un solo nivel: la matriz tiene sedes, la sede tiene matriz.
+        GenerNegocio.belongsTo(models.GenerNegocio, {
+            foreignKey: 'id_negocio_padre',
+            as: 'matriz'
+        });
+        GenerNegocio.hasMany(models.GenerNegocio, {
+            foreignKey: 'id_negocio_padre',
+            as: 'sedes'
         });
         GenerNegocio.belongsTo(models.GenerPaletaColor, {
             foreignKey: 'id_paleta',

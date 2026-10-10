@@ -192,7 +192,12 @@ async function construirPlan(transaction) {
                    JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = k.n) AS cols_hijo,
                 (SELECT array_agg(a.attname::text ORDER BY k.ord)
                    FROM unnest(con.confkey) WITH ORDINALITY k(n, ord)
-                   JOIN pg_attribute a ON a.attrelid = con.confrelid AND a.attnum = k.n) AS cols_padre
+                   JOIN pg_attribute a ON a.attrelid = con.confrelid AND a.attnum = k.n) AS cols_padre,
+                -- ¿Se puede poner la FK en NULL? Decide si un ciclo tiene salida. Ver
+                -- "neutralizables" más abajo.
+                (SELECT bool_and(NOT a.attnotnull)
+                   FROM unnest(con.conkey) k(n)
+                   JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = k.n) AS hijo_nulable
            FROM pg_constraint con
            JOIN pg_class hc ON hc.oid = con.conrelid
            JOIN pg_namespace hn ON hn.oid = hc.relnamespace
@@ -226,15 +231,40 @@ async function construirPlan(transaction) {
         );
     }
 
+    /*
+     * FK que apuntan DESDE la fila del negocio HACIA una tabla que cuelga del negocio.
+     *
+     * Son un ciclo: `gener_negocio.id_metodo_pago_domicilio` apunta a `rest_metodo_pago`, y
+     * `rest_metodo_pago.id_negocio` apunta de vuelta a `gener_negocio`. Ninguna de las dos se
+     * puede borrar primero, y el orden topológico se quedaba sin salida: la eliminación de
+     * CUALQUIER negocio fallaba con «se referencian en ciclo», no solo la de los que usan esa
+     * columna. (La columna llegó con `migrate:restaurante-metodo-pago-domicilio`.)
+     *
+     * El ciclo sí tiene salida cuando la columna admite NULL: se vacía ANTES de borrar y la
+     * arista desaparece. Eso es exactamente lo que hace el paso `neutralizar`, y por eso estas
+     * aristas no cuentan para el orden.
+     *
+     * Si alguna vez una de estas FK fuera NOT NULL, no se neutraliza: el ciclo se queda, el
+     * orden falla y la eliminación se niega. Es lo correcto — sin poder vaciarla no hay forma
+     * segura de borrar, y negarse es mejor que inventar un orden.
+     *
+     * Solo se miran las de la RAÍZ. Un ciclo entre dos tablas hijas sería otro problema y
+     * seguiría dando el error de siempre.
+     */
+    const neutralizables = aristas.filter(
+        (a) => a.hijo === RAIZ && a.padre !== RAIZ && a.hijo_nulable,
+    );
+    const aristasOrden = aristas.filter((a) => !neutralizables.includes(a));
+
     const aristasDeHijo = new Map();
-    for (const a of aristas) {
+    for (const a of aristasOrden) {
         if (!aristasDeHijo.has(a.hijo)) aristasDeHijo.set(a.hijo, []);
         aristasDeHijo.get(a.hijo).push(a);
     }
 
     // Orden de borrado (Kahn): una tabla sale cuando ya no queda ninguna hija sin borrar.
     const pendientesHijas = new Map([...nodos].map((n) => [n, 0]));
-    for (const a of aristas) pendientesHijas.set(a.padre, pendientesHijas.get(a.padre) + 1);
+    for (const a of aristasOrden) pendientesHijas.set(a.padre, pendientesHijas.get(a.padre) + 1);
     const cola = [...nodos].filter((n) => pendientesHijas.get(n) === 0);
     const orden = [];
     while (cola.length > 0) {
@@ -298,9 +328,23 @@ async function construirPlan(transaction) {
         return r;
     };
 
+    /*
+     * Lo que hay que vaciar antes de empezar a borrar, agrupado en un solo UPDATE por tabla.
+     * Son las columnas de `neutralizables`, y siempre sobre la fila del negocio.
+     */
+    const columnasAVaciar = [...new Set(neutralizables.flatMap((a) => a.cols_hijo))];
+    const neutralizar = columnasAVaciar.length > 0
+        ? [{
+            tabla: RAIZ,
+            columnas: columnasAVaciar,
+            sql: `UPDATE ${RAIZ} SET ${columnasAVaciar.map((c) => `${ident(c)} = NULL`).join(', ')} `
+               + 'WHERE id_negocio = :id',
+        }]
+        : [];
+
     // Las tablas sin FK van antes de la raíz: da igual entre sí, pero la raíz cierra el borrado.
     const raiz = tablas.pop();
-    return { pasos: [...sinFk, ...tablas, raiz], esConfig };
+    return { pasos: [...sinFk, ...tablas, raiz], neutralizar, esConfig };
 }
 
 // ── Personas ─────────────────────────────────────────────────────────────────
@@ -394,6 +438,23 @@ async function cambiarEstado(idNegocio, estado, motivo = null) {
  * Qué se llevaría por delante eliminar el negocio. NO modifica nada.
  * @returns {Promise<{negocio, usuarios, datos, totales}>}
  */
+/**
+ * Las sedes que cuelgan de este negocio.
+ *
+ * Una matriz con sedes no se puede eliminar: la FK `fk_gener_negocio_padre` es RESTRICT, así que
+ * el DELETE fallaría de todas formas — pero con un error de Postgres que no dice qué hacer. Mejor
+ * contarlas antes y decir cuáles son, para que quien elimina sepa que primero tiene que ocuparse
+ * de ellas (eliminarlas o emanciparlas).
+ */
+async function sedesDe(idNegocio, transaction = null) {
+    const [filas] = await sequelize.query(
+        `SELECT id_negocio, nombre, estado FROM general.gener_negocio
+          WHERE id_negocio_padre = :id ORDER BY nombre`,
+        { replacements: { id: idNegocio }, transaction },
+    );
+    return filas;
+}
+
 async function previsualizarEliminacion(idNegocio) {
     const [[negocio]] = await sequelize.query(
         `SELECT id_negocio, nombre, nit, estado FROM general.gener_negocio WHERE id_negocio = :id`,
@@ -402,6 +463,7 @@ async function previsualizarEliminacion(idNegocio) {
     if (!negocio) throw errorDominio('Negocio no encontrado', 'NEGOCIO_NO_ENCONTRADO', 404);
 
     const usuarios = await usuariosVinculados(idNegocio);
+    const sedes = await sedesDe(idNegocio);
     const { pasos, esConfig } = await construirPlan();
 
     const datos = [];
@@ -425,6 +487,10 @@ async function previsualizarEliminacion(idNegocio) {
     return {
         negocio,
         usuarios,
+        // Si trae sedes, la eliminación está bloqueada. La consola lo enseña antes de pedir la
+        // confirmación en vez de dejar que el botón falle.
+        sedes,
+        bloqueado_por_sedes: sedes.length > 0,
         datos,
         totales: {
             usuarios: usuarios.length,
@@ -452,6 +518,18 @@ async function eliminarNegocio(idNegocio, confirmacion) {
         );
         if (!negocio) throw errorDominio('Negocio no encontrado', 'NEGOCIO_NO_ENCONTRADO', 404);
 
+        // Antes de pedir la confirmación: una matriz con sedes no se elimina. La FK es
+        // RESTRICT y el DELETE fallaría igual, pero aquí el mensaje dice qué hacer.
+        const sedes = await sedesDe(idNegocio, transaction);
+        if (sedes.length > 0) {
+            throw errorDominio(
+                `Este negocio tiene ${sedes.length} sede(s). Elimínalas primero o desligalas de la matriz.`,
+                'SEDES_DEPENDIENTES',
+                409,
+                { sedes },
+            );
+        }
+
         if (typeof confirmacion !== 'string' || confirmacion.trim() !== negocio.nombre.trim()) {
             throw errorDominio(
                 'Para eliminar el negocio hay que escribir su nombre exacto.',
@@ -471,7 +549,15 @@ async function eliminarNegocio(idNegocio, confirmacion) {
         // del negocio y se borran con el resto (`gener_negocio_usuario`, `gener_usuario_rol`).
 
         // 2 y 3. Datos, de las hojas a la raíz; la última es la fila del negocio.
-        const { pasos } = await construirPlan(transaction);
+        const { pasos, neutralizar } = await construirPlan(transaction);
+
+        // Antes de borrar: vaciar las FK que la propia fila del negocio tiene hacia tablas que
+        // cuelgan de él (hoy, la forma de pago del domicilio). Sin esto no hay orden posible
+        // —ver `neutralizables`—, y como la fila se va a borrar entera, vaciarla no pierde nada.
+        for (const n of neutralizar) {
+            await sequelize.query(n.sql, { replacements: { id: idNegocio }, transaction });
+        }
+
         const filasPorTabla = {};
         for (const { tabla, donde } of pasos) {
             const [, meta] = await sequelize.query(
@@ -541,4 +627,9 @@ module.exports = {
     previsualizarEliminacion,
     historial,
     usuariosVinculados,
+    // Solo lee el catálogo de Postgres: lo expone para que una prueba pueda comprobar que el
+    // orden de borrado sigue siendo completo. Una FK nueva lo rompe en silencio y el fallo no
+    // aparece hasta que alguien intenta eliminar un negocio — pasó con la forma de pago del
+    // domicilio. Ver `__tests__/negocios/eliminar_orden.test.js`.
+    construirPlan,
 };

@@ -7,6 +7,25 @@ const datosFiscales = require('../facturacion/datosFiscales');
 const tipoOperativo = require('../helpers/tipoNegocioOperativo');
 const { generarSlugUnico } = require('../helpers/slug');
 
+/**
+ * Cuántas sedes activas tiene cada negocio, en una sola consulta.
+ *
+ * Vive aquí y no en `sedeDao` porque aquel ya requiere este módulo (usa `resolverVigencia`), y
+ * pedirlo de vuelta dejaría uno de los dos a medio cargar según quién entre primero.
+ *
+ * @returns {Promise<Map<number, number>>} id_negocio → número de sedes activas
+ */
+async function contarSedesPorNegocio() {
+    const filas = await Models.sequelize.query(
+        `SELECT id_negocio_padre, COUNT(*)::int AS sedes
+           FROM general.gener_negocio
+          WHERE id_negocio_padre IS NOT NULL AND estado = 'A'
+          GROUP BY id_negocio_padre;`,
+        { type: Models.sequelize.QueryTypes.SELECT },
+    );
+    return new Map(filas.map((f) => [Number(f.id_negocio_padre), f.sedes]));
+}
+
 /** Slug único para un negocio nuevo, a partir de su nombre. Comparte generador con el backfill de `migrate_negocio_slug.js`. */
 async function slugParaNegocioNuevo(nombre, t) {
     return generarSlugUnico(nombre, async (candidato) => {
@@ -289,11 +308,19 @@ async function getListaNegociosAdmin() {
         attributes: [
             'id_negocio', 'nombre', 'nit', 'email_contacto', 'telefono',
             'direccion', 'id_tipo_negocio', 'id_rubro', 'pais', 'estado', 'fecha_registro',
+            'id_negocio_padre',
         ],
         include: [{
             model: Models.GenerTipoNegocio,
             as: 'tipoNegocio',
             attributes: ['id_tipo_negocio', 'nombre', 'icono', 'color_hex'],
+            required: false,
+        }, {
+            // La matriz, cuando este negocio es una sede. Sale del mismo SELECT para que la
+            // consola pueda agrupar sin una segunda consulta por fila.
+            model: Models.GenerNegocio,
+            as: 'matriz',
+            attributes: ['id_negocio', 'nombre'],
             required: false,
         }, {
             // El oficio que dijo ser el cliente. Es lo que se enseña en la consola; el módulo
@@ -308,6 +335,8 @@ async function getListaNegociosAdmin() {
 
     const ids = negocios.map((n) => n.id_negocio);
     const planMap = await planHelper.getPlanesActivosPorNegocio(ids);
+    // Cuántas sedes tiene cada uno, en una sola consulta: la consola las agrupa bajo su matriz.
+    const sedesMap = await contarSedesPorNegocio();
 
     return negocios.map((n) => ({
         id_negocio: n.id_negocio,
@@ -328,6 +357,11 @@ async function getListaNegociosAdmin() {
         estado: n.estado,
         fecha_registro: n.fecha_registro,
         plan: planMap.get(n.id_negocio) || null,
+        // Parentesco de sedes. `id_negocio_padre` null = es una matriz; `total_sedes` solo
+        // tiene sentido en ese caso, porque una sede no tiene sedes.
+        id_negocio_padre: n.id_negocio_padre ?? null,
+        matriz_nombre: n.matriz?.nombre ?? null,
+        total_sedes: sedesMap.get(n.id_negocio) ?? 0,
     }));
 }
 
@@ -541,4 +575,5 @@ module.exports = {
     setEstadoNegocio,
     registrarCliente,
     resolverVigencia,
+    contarSedesPorNegocio,
 };
