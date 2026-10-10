@@ -15,6 +15,7 @@
  * correo. El proveedor (Factus) ya no manda el suyo (`send_email: false`): serían dos correos.
  */
 const Models = require('../models/conection');
+const { urlConsultaDian } = require('./constantes');
 
 /** Sin color propio ni paleta, el índigo del comprobante de pago. */
 const PRIMARIO_NEUTRO = '#312E81';
@@ -151,6 +152,8 @@ function correoFactura({ documento: d, lineas, marca, ejemplo = false }) {
         ? null
         : `${TIPO_DOCUMENTO[a.tipo_documento] || 'Documento'} ${a.numero_documento}${a.dv ? `-${a.dv}` : ''}`;
     const medios = (d.pagos || []).map((p) => MEDIO_PAGO[p.codigo_dian] || 'Otro').join(' + ') || '—';
+    // La consulta de la DIAN, no la página del proveedor (ver urlConsultaDian).
+    const enlace = urlConsultaDian(d.cufe, d.ambiente);
     const nitEmisor = e.numero_documento ? `NIT ${e.numero_documento}${e.dv ? `-${e.dv}` : ''}` : '';
 
     const filas = lineas
@@ -242,7 +245,7 @@ function correoFactura({ documento: d, lineas, marca, ejemplo = false }) {
         </td></tr>
       </table>
 
-      ${d.url_publica ? `<p style="margin:0 0 22px;"><a href="${esc(d.url_publica)}" style="display:inline-block;background:${c.primario};color:${c.sobrePrimario};padding:10px 20px;border-radius:8px;font-size:14px;font-weight:700;text-decoration:none;">Ver la factura en línea</a></p>` : ''}
+      ${enlace ? `<p style="margin:0 0 22px;"><a href="${esc(enlace)}" style="display:inline-block;background:${c.primario};color:${c.sobrePrimario};padding:10px 20px;border-radius:8px;font-size:14px;font-weight:700;text-decoration:none;">Ver la factura en línea</a></p>` : ''}
 
       <!-- La letra pequeña -->
       <p style="margin:0 0 6px;font-size:11px;line-height:1.5;color:${SUAVE};">
@@ -265,7 +268,7 @@ function correoFactura({ documento: d, lineas, marca, ejemplo = false }) {
         `Pedido: ${d.origen_referencia ?? '—'}\n` +
         `Total: ${dinero(d.total)}\n` +
         `${esNota ? 'CUDE' : 'CUFE'}: ${d.cufe}\n` +
-        (d.url_publica ? `Ver en línea: ${d.url_publica}\n` : '') +
+        (enlace ? `Ver en línea: ${enlace}\n` : '') +
         '\nEl PDF va adjunto.';
 
     return {
