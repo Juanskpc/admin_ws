@@ -163,51 +163,68 @@ Un plan plano y sin techo es una apuesta a que nadie use mucho el producto que l
 
 ## 6. La propuesta
 
-### 6.1 El plan base no se mueve
+### 6.1 El plan base no se mueve, pero gana techo
 
 **«Emprendedor + Asistente IA» se queda en $59.999.** Con el modelo nuevo deja 83 % de margen;
 no hay nada que arreglar en el precio. Subirlo sería cobrar por un problema que ya se resolvió
 cambiando de modelo, y bajarlo sería regalar margen sin motivo.
 
-**Lo que se añade es el techo:** el plan incluye **1.000 mensajes del asistente al mes**.
+**Lo que se añade es el techo:** el plan incluye **6.000 mensajes del asistente al mes**, que son
+**unos 700 pedidos**.
 
-La cifra no es arbitraria y ahí está su gracia: **es exactamente la asignación gratuita de Meta**.
-Dentro del paquete incluido, el cliente no le paga nada a nadie — ni a nosotros ni a Meta. Es la
-única cifra con la que esa frase es verdad, y se puede decir en la landing sin letra pequeña.
+> ⚠️ **Corregido el 2026-10-10.** La primera versión de este documento proponía incluir **1.000**
+> «porque coincide exactamente con la asignación gratuita de Meta, y así el cliente no le paga
+> nada a nadie». Suena limpio y es una trampa, por dos razones:
+>
+> 1. **1.000 son la quinta parte de lo que consume el único cliente real** (5.430/mes medidos).
+>    Todo negocio activo necesitaría paquete desde el primer mes, y el «incluye 1.000» sería
+>    letra pequeña disfrazada de generosidad.
+> 2. **El techo de Meta y el nuestro miden cosas distintas.** La factura de Meta le llega al
+>    cliente tengamos nosotros techo o no — somos Tech Provider (§3). Nuestro techo existe para
+>    cubrir **nuestro costo de IA**, y 6.000 mensajes nos cuestan $5.640: el 9 % del plan.
+>
+> Poner nuestro límite donde está el de Meta era copiar la cifra de otro para un problema que no
+> es el mismo. Con 6.000, **nadie real sube de precio** y el techo sigue cubriendo la cola larga,
+> que es el riesgo que de verdad había que cubrir (§5).
 
-> ⚠️ **Hay que decir también la otra mitad.** 1.000 mensajes son **la quinta parte** de lo que
-> consume el único restaurante que de verdad usa el asistente. Un negocio activo va a necesitar
-> un paquete casi seguro. Si eso no está dicho **en la tarjeta del plan, antes de comprar**, el
-> paquete se lee como una trampa. La landing tiene que llevar la equivalencia en el lenguaje del
-> cliente: *«1.000 mensajes ≈ 115 pedidos al mes tomados por el asistente»* (8,6 mensajes por
-> pedido), que es lo que el dueño sabe medir. «Mensajes» no le dice nada.
+La equivalencia en **pedidos** no es cosmética: el dueño de un restaurante cuenta pedidos.
+«6.000 mensajes» no le dice si le alcanza; «unos 700 pedidos al mes», sí. Son 8,6 mensajes por
+pedido conseguido, contando también las conversaciones que no acaban en pedido.
 
-### 6.2 Los paquetes
+### 6.2 El paquete
 
-Se suman al plan, como los complementos que ya existen (`cob_complemento`):
+**Uno solo, repetible: +6.000 mensajes por $19.999 al mes**, hasta cinco veces (36.000 en total).
 
-| Paquete | Mensajes/mes | Pedidos ≈ | Precio EscalApp | Lo que Meta le cobrará aparte | Nuestro costo | Margen |
+| | Mensajes/mes | Pedidos ≈ | Nos paga | Le cobra Meta aparte | Nuestro costo | Margen |
 |---|---|---|---|---|---|---|
-| **Incluido** | 1.000 | ~115 | — | **$0** | $930 | — |
-| **S** | 3.000 | ~350 | **+$12.000** | ~$5.900 | $2.790 | 84 % |
-| **M** | 6.000 | ~700 | **+$24.000** | ~$14.700 | $5.580 | 81 % |
-| **L** | 12.000 | ~1.400 | **+$42.000** | ~$32.400 | $11.160 | 76 % |
+| **Incluido** | 6.000 | ~700 | — | ~$14.700 | $5.640 | — |
+| **+1 paquete** | 12.000 | ~1.400 | +$19.999 | ~$32.400 | $11.280 | 72 % |
+| **+2** | 18.000 | ~2.100 | +$39.998 | ~$50.100 | $16.920 | 72 % |
+| **+3** | 24.000 | ~2.800 | +$59.997 | ~$67.700 | $22.560 | 72 % |
+| **+5** | 36.000 | ~4.200 | +$99.995 | ~$103.100 | $33.840 | 72 % |
 
 Tres decisiones dentro de esta tabla:
 
-1. **La columna de Meta se publica.** No es un descargo de responsabilidad en letra chica: va en
-   la misma tabla, con el mismo tamaño. El cliente tiene que poder sumar las dos columnas antes
-   de decidir, porque las dos las va a pagar.
-2. **El escalón entre paquetes baja de precio por mensaje** ($6,00 → $4,00 → $3,50 el mensaje
-   adicional). Quien más usa el asistente es quien más valor saca de él y quien más probable es
-   que se quede: cobrarle proporcionalmente más por crecer es el incentivo equivocado.
-3. **El paquete no se consume: se contrata.** Es una cuota mensual con un techo, no una bolsa que
-   se agota. Una bolsa obliga a decidir qué pasa a mitad de mes con un cliente a punto de
-   quedarse sin asistente en plena hora de almuerzo, y esa decisión no tiene buena respuesta.
+1. **La columna de Meta se publica**, en la landing y al mismo tamaño que el resto. No es un
+   descargo en letra chica: el cliente tiene que poder sumar las dos columnas antes de decidir,
+   porque las dos las va a pagar. Y es un **techo**, no una factura: Meta cobra lo entregado, así
+   que quien no agote el cupo paga menos.
+2. **Un paquete repetible y no tres tamaños.** `cob_suscripcion_complemento` ya suma `cantidad`
+   por complemento, y de ahí salen el prorrateo, la renovación y el cambio de plan. Un paquete
+   que se contrata 1..5 veces usa esa maquinaria tal cual.
+3. **Precio plano, sin descuento por volumen.** Lo propuso la primera versión ($6,00 → $3,50 el
+   mensaje adicional) y se retiró: **con un solo cliente midiendo, una curva de precios es una
+   invención**. Se revisa cuando haya datos de varios negocios.
 
-Dónde vive: **los tres paquetes son `cob_complemento`**, con `cantidad_maxima = 1` (se tiene uno o
-ninguno). La maquinaria de prorrateo, renovación y cambio de plan ya los sabe cobrar: no hace
-falta nada nuevo en cobranza.
+**El paquete no se consume: se contrata.** Es una cuota mensual con un techo, no una bolsa que se
+agota. Una bolsa obliga a decidir qué pasa a mitad de mes con un cliente a punto de quedarse sin
+asistente en plena hora de almuerzo, y esa decisión no tiene buena respuesta.
+
+Dónde vive: `MENSAJES_ASISTENTE` en `cob_complemento`, con `amplia = 'mensajes'` y
+`amplia_cantidad = 6000` — esa columna es nueva y dice cuántas unidades trae **cada** unidad del
+complemento, para que el tamaño del paquete no viva en una constante del código.
+Migración: `migrate:cobranza-paquetes-mensajes`.
+
 
 ### 6.3 Qué pasa al pasarse del techo
 
@@ -215,7 +232,10 @@ falta nada nuevo en cobranza.
 que el costo que nos ahorra, y lo hace en el peor momento posible.
 
 El camino, apoyado en lo que ya existe (`intelligence/avisos/cuotaWhatsapp.js`, que ya avisa al
-80 % y al 100 %):
+80 % y al 100 %). **Desde el 2026-10-10 ese aviso mide contra el techo CONTRATADO** —lo que
+incluye el plan más los paquetes— y no contra los 1.000 de Meta, que era lo único que sabía
+mirar. Las dos cifras siguen calculándose: `asignacion` es la nuestra y decide el aviso;
+`asignacion_meta` y `facturables_meta` son las de Meta y sirven para **decírselo al cliente**.
 
 | Consumo | Qué pasa |
 |---|---|
@@ -231,6 +251,10 @@ abusador; alguien que descubrió que al otro lado hay un modelo, sí.
 ---
 
 ## 7. Lo que hay que hacer para que esto deje de ser un documento
+
+**Actualizado el 2026-10-10:** los puntos 2, 3 y 4 están hechos
+(`migrate:cobranza-paquetes-mensajes`, el contador contra lo contratado y las tarjetas de la
+landing con el selector de paquetes). Queda el 1 y el 5.
 
 | # | Qué | Quién lo bloquea |
 |---|---|---|

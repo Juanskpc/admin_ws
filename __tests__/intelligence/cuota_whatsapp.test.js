@@ -63,18 +63,29 @@ describe('qué dice el aviso', () => {
             promedio: 7, citasGratisAlMes: 142,
         });
 
-        expect(titulo).toMatch(/80%/);
-        expect(mensaje).toMatch(/quedan 200/);
-        // «Vas por el 80 %» no es información útil; decir dónde está el gasto sí lo es.
+        // Reescrito el 2026-10-10: el techo dejó de ser el de Meta y pasó a ser el CONTRATADO,
+        // y agotarlo ahora tiene consecuencia —el asistente deja de conversar—. El aviso tiene
+        // que decir las tres cosas que permiten actuar, no solo el porcentaje.
+        expect(titulo).toMatch(/Te quedan 200 mensajes/);
+        // 1. Dónde está el gasto, y cuánto queda en la unidad que el dueño entiende.
         expect(mensaje).toMatch(/7 mensajes de media/);
-        expect(mensaje).toMatch(/142 citas al mes/);
+        expect(mensaje).toMatch(/28 más este mes/); // 200 restantes / 7 por conversación
+        // 2. Qué va a pasar. Es lo que faltaba y lo que convierte el dato en una advertencia.
+        expect(mensaje).toMatch(/deja de conversar/);
+        // 3. Qué hacer.
+        expect(mensaje).toMatch(/paquete/);
     });
 
-    test('el de agotada dice que desde ahora se cobra y cuándo se renueva', () => {
+    test('el de agotada dice QUÉ pasa, qué hacer y cuándo se renueva', () => {
         const { titulo, mensaje } = aviso.comoSeDice('agotada', consumo(1), { promedio: 0 });
 
-        expect(titulo).toMatch(/agotó/);
-        expect(mensaje).toMatch(/se cobran/);
+        expect(titulo).toMatch(/agotaron/);
+        // Lo importante no es que «se cobre»: es que el asistente dejó de atender solo y que
+        // las conversaciones ahora las contesta una persona. Sin eso, el negocio se entera
+        // cuando un cliente le reclama.
+        expect(mensaje).toMatch(/deja de conversar/);
+        expect(mensaje).toMatch(/Conversaciones/);
+        expect(mensaje).toMatch(/paquete/);
         expect(mensaje).toMatch(/día 1/);
     });
 

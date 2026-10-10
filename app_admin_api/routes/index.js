@@ -4,6 +4,7 @@ const router = express.Router();
 
 const UsuarioController = require('../controllers/usuarioController');
 const NegocioController = require('../controllers/negocioController');
+const SedeController = require('../controllers/sedeController');
 const PlanController = require('../controllers/planController');
 const RolController = require('../controllers/rolController');
 const UsuarioAdminController = require('../controllers/usuarioAdminController');
@@ -367,6 +368,16 @@ router.get('/negocios/:id/cupo-usuarios', requireSuperAdmin, [
 router.get('/negocios/:id/historial', requireSuperAdmin, [
     param('id').isInt({ min: 1 }).withMessage('ID de negocio inválido')
 ], NegocioController.getHistorialNegocio);
+
+// --- Sedes de un negocio (Super Admin) ---
+//
+// Una sede es un negocio con `id_negocio_padre`: su propio id, su propia caja y su propio plan.
+// Son rutas de super admin porque abrir una sede crea un cliente pagador nuevo — ver
+// `app_core/dao/sedeDao.js`. El `:id` es el de la MATRIZ en las dos.
+router.get('/negocios/:id/sedes', requireSuperAdmin,
+    SedeController.idMatrizValidators, SedeController.getSedes);
+router.post('/negocios/:id/sedes', requireSuperAdmin,
+    SedeController.crearSedeValidators, SedeController.crearSede);
 // --- Datos fiscales del negocio (FE-1) ---
 //
 // El parámetro se llama `id_negocio` a propósito: `exigirPertenenciaNegocio` solo reconoce ese
@@ -944,6 +955,12 @@ router.get('/intelligence/bandeja/conversaciones', [
         .withMessage('solo_escaladas debe ser true o false'),
     query('limite').optional().isInt({ min: 1, max: 100 }).withMessage('Límite inválido'),
 ], IntelligenceBandejaController.listarConversaciones);
+
+// Solo el NÚMERO de conversaciones que esperan a una persona, para la campanita del menú. Se
+// consulta desde cualquier pantalla y cada pocos segundos, así que no puede ser el listado.
+router.get('/intelligence/bandeja/pendientes', [
+    query('id_negocio').optional().isInt({ min: 1 }).withMessage('ID de negocio inválido'),
+], IntelligenceBandejaController.contarPendientes);
 
 router.get('/intelligence/bandeja/conversaciones/:id', [
     param('id').isUUID().withMessage('ID de conversación inválido'),

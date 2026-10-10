@@ -117,12 +117,36 @@ function montarEscalera({ adaptador = null, proveedor = null, modelo = null } = 
     const { manejarDeterminista } = require('./adapters/reserva/flujoCita');
     const fabrica = require('./model/adaptadores');
 
+    /**
+     * El freno por cupo, cableado aquí porque cuenta mensajes de un CANAL.
+     *
+     * El núcleo no conoce canales (ADR-017), así que `manejadorEscalera` lo recibe inyectado
+     * igual que `llm` y `determinista`. Esta función es la única línea del sistema que une
+     * «cuántos mensajes van este mes» con «qué contestar»: si se quita, el asistente vuelve a
+     * atender sin techo y nada más cambia.
+     *
+     * Se apaga con `WHATSAPP_CUPO_FRENO=false` sin tocar código. **Sin la variable queda
+     * encendido**, igual que el limitador de peticiones: un freno que hay que acordarse de
+     * encender es un freno que no existe el día que hace falta.
+     */
+    const frenoActivo = String(process.env.WHATSAPP_CUPO_FRENO || '').toLowerCase() !== 'false';
+    const cupoAgotado = frenoActivo
+        ? async (idNegocio) => {
+              const cuota = require('./channels/whatsapp/cuota');
+              const { agotado } = await cuota.cupoDelNegocio(idNegocio);
+              return agotado;
+          }
+        : null;
+
     const soloNivel1 = (motivo) => {
         console.log(
             `[intelligence] Nivel 4 apagado (${motivo}). La escalera se queda en el Nivel 1 ` +
                 'determinista: $0.00 por turno.'
         );
-        return { manejador: crearManejadorEscalera({ determinista: manejarDeterminista }), nivel4: null };
+        return {
+            manejador: crearManejadorEscalera({ determinista: manejarDeterminista, cupoAgotado }),
+            nivel4: null,
+        };
     };
 
     if (process.env.LLM_HABILITADO === 'false') return soloNivel1('LLM_HABILITADO=false');
@@ -165,7 +189,7 @@ function montarEscalera({ adaptador = null, proveedor = null, modelo = null } = 
     );
 
     return {
-        manejador: crearManejadorEscalera({ determinista: manejarDeterminista, llm }),
+        manejador: crearManejadorEscalera({ determinista: manejarDeterminista, llm, cupoAgotado }),
         nivel4: etiqueta,
     };
 }

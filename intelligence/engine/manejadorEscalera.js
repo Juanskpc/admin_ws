@@ -105,6 +105,18 @@ function crearManejadorEscalera({
     // Inyectable por la misma razón que los otros dos: un test del enrutado no debería
     // necesitar una base de datos para comprobar a qué peldaño va un mensaje.
     resolverNegocio = (id) => contextoNegocio.obtener(id),
+    /**
+     * ¿El negocio agotó los mensajes que tiene contratados este mes?
+     *
+     * Se **inyecta** y no se importa por lo mismo que `llm` y `determinista`: el cupo se cuenta
+     * sobre los mensajes de un CANAL, y ADR-017 dice que el núcleo no conoce canales. Lo cablea
+     * la composición (`intelligence/index.js`).
+     *
+     * **Nadie lo registra = no hay freno**, y el motor se comporta como hasta hoy. Es la misma
+     * propiedad que tienen los otros dos inyectables, y la que hace que un test del enrutado no
+     * necesite una base de datos con facturación dentro.
+     */
+    cupoAgotado = null,
 } = {}) {
     /**
      * El contador de turnos de la conversación, puesto en UN solo sitio.
@@ -157,6 +169,45 @@ function crearManejadorEscalera({
             },
         });
         if (cierre) return cierre;
+
+        // ── El freno por cupo ────────────────────────────────────────────────────────────────
+        //
+        // Va AQUÍ y no antes por dos razones, las dos medidas:
+        //
+        //   · **Después de `optout`**, porque una baja es una obligación legal y cuesta un
+        //     mensaje: frenarla sería lo único peor que atenderla.
+        //   · **Después de `cortesia`**, porque un «gracias» se contesta gratis y sin modelo —o
+        //     no se contesta—. Escalarlo gastaría el mismo mensaje Y metería en la Bandeja una
+        //     conversación que no necesita a nadie.
+        //
+        // Y antes de todo lo que cuesta: el flujo de la vertical y el modelo.
+        if (typeof cupoAgotado === 'function') {
+            let frenar = false;
+            try {
+                frenar = await cupoAgotado(ctx.idNegocio ?? ctx.conversacion?.id_negocio);
+            } catch {
+                // Falla abierto: ante la duda se atiende. Un mes caro es dinero; un negocio
+                // frenado por error es un cliente que no entiende qué pasó.
+                frenar = false;
+            }
+            if (frenar) {
+                const negocio = await resolverNegocio(
+                    ctx.idNegocio ?? ctx.conversacion?.id_negocio
+                ).catch(() => null);
+                return handoff.decision(
+                    {
+                        pasos: [
+                            {
+                                tipo: 'regla',
+                                decision: 'cupo_agotado',
+                                motivo: { regla: 'mensajes_del_mes_agotados' },
+                            },
+                        ],
+                    },
+                    negocio
+                );
+            }
+        }
 
         // ⚠️ El flujo de la vertical se resuelve ANTES de enrutar, no después.
         //

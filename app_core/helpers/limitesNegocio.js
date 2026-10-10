@@ -28,7 +28,7 @@ const sequelize = Models.sequelize;
  */
 async function getLimitesNegocio(idNegocio, { transaction } = {}) {
     const [plan] = await sequelize.query(
-        `SELECT p.id_plan, p.nombre, p.usuarios_incluidos, p.cajas_incluidas
+        `SELECT p.id_plan, p.nombre, p.usuarios_incluidos, p.cajas_incluidas, p.mensajes_incluidos
            FROM general.gener_negocio_plan np
            JOIN general.gener_plan p ON p.id_plan = np.id_plan
           WHERE np.id_negocio = :idNegocio
@@ -40,8 +40,11 @@ async function getLimitesNegocio(idNegocio, { transaction } = {}) {
     );
     if (!plan) return null;
 
+    // `amplia_cantidad` es cuantas unidades trae CADA unidad del complemento: 1 para un usuario
+    // o una caja, 6.000 para un paquete de mensajes. Multiplicarlo aqui es lo que evita que el
+    // tamano del paquete viva en una constante del codigo y se desincronice de la base.
     const complementos = await sequelize.query(
-        `SELECT c.amplia, SUM(sc.cantidad)::int AS cantidad
+        `SELECT c.amplia, SUM(sc.cantidad * c.amplia_cantidad)::int AS cantidad
            FROM cobranza.cob_suscripcion_complemento sc
            JOIN cobranza.cob_complemento c ON c.id_complemento = sc.id_complemento
           WHERE sc.id_negocio = :idNegocio AND sc.estado = 'A' AND c.amplia IS NOT NULL
@@ -64,6 +67,14 @@ async function getLimitesNegocio(idNegocio, { transaction } = {}) {
         plan: plan.nombre,
         usuarios: limite(plan.usuarios_incluidos, 'usuarios'),
         cajas: limite(plan.cajas_incluidas, 'cajas'),
+        /**
+         * Mensajes del asistente al mes.
+         *
+         * No confundir con los 1.000 gratis de Meta: esos son de Meta, se los cobra al inquilino
+         * en su propia tarjeta y existen tengamos techo o no. Este mide lo que el inquilino
+         * contrato con NOSOTROS, que es lo que paga nuestro costo de IA.
+         */
+        mensajes: limite(plan.mensajes_incluidos, 'mensajes'),
     };
 }
 

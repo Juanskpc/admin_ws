@@ -70,26 +70,54 @@ function nivelDeAviso(consumo, avisosPrevios) {
     return null;
 }
 
+/**
+ * Qué se le dice al negocio.
+ *
+ * ## Reescrito el 2026-10-10, y el cambio no es de redacción
+ *
+ * Antes el techo era **el de Meta** (1.000 gratis por número) y el aviso decía «se te acaban los
+ * mensajes gratis, los siguientes se cobran» — información sobre una factura ajena, sin nada que
+ * el negocio pudiera hacer al respecto.
+ *
+ * Ahora el techo es **el contratado** (lo que incluye su plan más sus paquetes) y al agotarlo el
+ * asistente **deja de conversar**: contesta una vez y pasa la conversación a una persona. O sea
+ * que el aviso pasó de ser un dato a ser una advertencia con consecuencia, y tiene que decir las
+ * tres cosas que permiten actuar:
+ *
+ *   1. **Cuánto queda** — el número, no un porcentaje suelto.
+ *   2. **Qué va a pasar** — el asistente deja de atender solo. Esto es lo que faltaba.
+ *   3. **Qué hacer** — añadir un paquete.
+ *
+ * Lo de Meta se menciona aparte y solo en el aviso de agotada: es su factura, le llega igual, y
+ * mezclarlo con el techo nuestro es lo que confundía las dos cifras.
+ */
 function comoSeDice(nivel, consumo, porCita) {
-    const gasto = porCita?.promedio > 0
-        ? ` Cada cita que agenda el asistente gasta ${porCita.promedio} mensajes de media, así que ` +
-          `a este ritmo caben unas ${porCita.citasGratisAlMes} citas al mes dentro de lo gratis.`
+    // Lo que queda, en la unidad que el dueño entiende: conversaciones, no mensajes. Se calcula
+    // contra el techo NUESTRO (`restantes`) y no contra el de Meta — mezclar las dos cifras es
+    // justo lo que hacía el aviso viejo.
+    const promedio = Number(porCita?.promedio || 0);
+    const gasto = promedio > 0
+        ? ` Cada conversación gasta unos ${promedio} mensajes de media, así que te caben unas ` +
+          `${Math.floor(consumo.restantes / promedio)} más este mes.`
         : '';
 
     if (nivel === 'agotada') {
         return {
-            titulo: 'Se agotó la cuota de WhatsApp del mes',
+            titulo: 'Se agotaron los mensajes del asistente',
             mensaje:
-                `Este número ya entregó los ${consumo.asignacion} mensajes que WhatsApp da gratis ` +
-                `cada mes (van ${consumo.servicio}). Los que salgan hasta fin de mes se cobran.` +
-                `${gasto} La cuota se renueva el día 1.`,
+                `Tu plan incluye ${consumo.asignacion} mensajes al mes y ya se usaron ${consumo.servicio}. ` +
+                'Desde ahora el asistente **deja de conversar**: contesta una vez y pasa la ' +
+                'conversación a tu equipo, en Conversaciones. Nadie se queda sin respuesta, pero ' +
+                'tendrás que atenderlas a mano. Para que vuelva a atender solo, añade un paquete ' +
+                'de mensajes desde Mis pagos. El cupo se renueva el día 1.',
         };
     }
     return {
-        titulo: 'La cuota de WhatsApp va por el ' + Math.round(consumo.porcentaje * 100) + '%',
+        titulo: `Te quedan ${consumo.restantes} mensajes del asistente`,
         mensaje:
-            `Este número lleva ${consumo.servicio} de los ${consumo.asignacion} mensajes gratis del ` +
-            `mes; quedan ${consumo.restantes}.${gasto} Pasados los gratis, cada mensaje se cobra.`,
+            `Van ${consumo.servicio} de los ${consumo.asignacion} que incluye tu plan este mes.${gasto} ` +
+            'Si se agotan, el asistente deja de conversar y te pasa las conversaciones a ti. ' +
+            'Puedes añadir un paquete desde Mis pagos para que siga atendiendo.',
     };
 }
 

@@ -170,6 +170,52 @@ async function estadoVentana(idConversacion) {
 }
 
 /**
+ * GET /admin/intelligence/bandeja/pendientes
+ *
+ * Cuántas conversaciones esperan a una persona. Solo el número.
+ *
+ * Existe para la **campanita del menú**: el contador tiene que verse desde cualquier pantalla de
+ * la app, no solo con la Bandeja abierta, y se consulta cada pocos segundos desde el layout. Con
+ * el listado normal habría que traerse hasta 100 conversaciones con su último mensaje para
+ * contarlas —y el número saldría mal en cuanto hubiera más de 100—, así que esto es un COUNT y
+ * nada más.
+ *
+ * Mismo alcance que el listado: el `id_negocio` de la petición nunca se cree, se cruza contra
+ * los negocios del usuario.
+ */
+async function contarPendientes(req, res) {
+    try {
+        if (!revisar(req, res)) return;
+        // Sin el esquema no hay nada que contar, y eso NO es un error: es una cuenta sin
+        // asistente. Cero deja la campanita apagada, que es exactamente lo correcto.
+        if (!(await hayEsquemaIntelligence())) {
+            return Respuesta.success(res, 'Pendientes', { disponible: false, total: 0 });
+        }
+
+        const alcance = await alcanceBandeja(req.usuario.id_usuario);
+        const idNegocio = req.query.id_negocio ? Number(req.query.id_negocio) : null;
+        const filtro = filtroDeNegocio(alcance, idNegocio);
+
+        const [fila] = await Models.sequelize.query(
+            `SELECT count(*)::int AS total
+               FROM intelligence.conversacion c
+              WHERE ${filtro.sql}
+                AND c.estado = :handoff
+                AND c.atendida_en IS NULL;`,
+            { replacements: { ...filtro.repl, handoff: ESTADO_HANDOFF }, ...SELECT }
+        );
+
+        return Respuesta.success(res, 'Pendientes', {
+            disponible: true,
+            total: Number(fila?.total ?? 0),
+        });
+    } catch (err) {
+        console.error('[Bandeja] Error contarPendientes:', err.message);
+        return Respuesta.error(res, 'Error al contar las conversaciones pendientes.');
+    }
+}
+
+/**
  * GET /admin/intelligence/bandeja/conversaciones
  *
  * Ordenadas por lo último que pasó, no por cuándo empezaron: una bandeja se lee por arriba.
@@ -193,17 +239,54 @@ async function listarConversaciones(req, res) {
             SELECT c.id_conversacion, c.id_negocio, c.estado, c.canal, c.id_externo,
                    c.creado_en, c.ultimo_mensaje_en,
                    n.nombre AS negocio,
-                   pn.nombre_mostrado AS persona,
-                   pn.telefono_e164,
+                   COALESCE(pn.nombre_mostrado, pt.nombre_mostrado) AS persona,
+                   COALESCE(pn.telefono_e164, pt.telefono_e164) AS telefono_e164,
                    (c.estado = :handoff AND c.atendida_en IS NULL) AS escalada,
                    (SELECT m.contenido
                       FROM intelligence.mensaje m
                      WHERE m.id_conversacion = c.id_conversacion
                      ORDER BY m.creado_en DESC
-                     LIMIT 1) AS ultimo_texto
+                     LIMIT 1) AS ultimo_texto,
+                   -- Cuántos mensajes del cliente quedaron SIN contestar: los que entraron
+                   -- después de la última salida nuestra (del asistente o de una persona). Es
+                   -- lo que convierte «hay algo nuevo» en «hay DOS cosas nuevas», que es lo que
+                   -- decide a quién se atiende primero.
+                   (SELECT count(*)
+                      FROM intelligence.mensaje m
+                     WHERE m.id_conversacion = c.id_conversacion
+                       AND m.direccion = 'entrante'
+                       AND m.creado_en > COALESCE(
+                           (SELECT max(ms.creado_en)
+                              FROM intelligence.mensaje ms
+                             WHERE ms.id_conversacion = c.id_conversacion
+                               AND ms.direccion = 'saliente'),
+                           '-infinity'::timestamptz)) AS sin_responder
               FROM intelligence.conversacion c
               LEFT JOIN general.gener_negocio n      ON n.id_negocio = c.id_negocio
               LEFT JOIN platform.persona_negocio pn  ON pn.id_persona_negocio = c.id_persona_negocio
+              -- Segundo intento de ponerle NOMBRE a quien escribe: por TELEFONO.
+              --
+              -- La columna id_persona_negocio existe desde que existe la tabla y en produccion
+              -- esta en NULL en las 345 conversaciones: nada la llena, asi que el join de arriba
+              -- no encuentra nunca nada y la bandeja enseñaba numeros pelados. El directorio de
+              -- Clientes si tiene los nombres (1.154 personas en un solo negocio) y la llave que
+              -- de verdad comparten es el telefono.
+              --
+              -- Igualdad simple y no regexp: la conversacion guarda 573001234567 y el directorio
+              -- +573001234567, asi que basta anteponer el mas. Importa porque
+              -- uq_persona_negocio_telefono es un indice UNICO sobre (id_negocio, telefono_e164):
+              -- con la igualdad se usa, y normalizando los dos lados con regexp no se puede usar
+              -- ninguno y hay que recorrer el directorio entero por cada conversacion (medido en
+              -- produccion: ~940 ms con LIMIT 30, y esto se sondea cada 5 s). La igualdad ademas
+              -- cruza MAS filas que el regexp: 208 frente a 203.
+              --
+              -- Al ser UNICO hay como mucho una persona por telefono y negocio: no hace falta
+              -- LATERAL ni desempate. Y va SIEMPRE acotado por id_negocio — el mismo telefono
+              -- puede ser cliente de dos inquilinos, cada uno con su nombre para el.
+              LEFT JOIN platform.persona_negocio pt
+                     ON c.id_persona_negocio IS NULL
+                    AND pt.id_negocio = c.id_negocio
+                    AND pt.telefono_e164 = '+' || c.id_externo
              WHERE ${filtro.sql}
                ${soloEscaladas ? 'AND c.estado = :handoff AND c.atendida_en IS NULL' : ''}
              -- Por fecha. Anclar arriba las que esperan respuesta se probó y se retiró el mismo día
@@ -1295,6 +1378,7 @@ module.exports = {
     pausarAsistente,
     leerPreparacion,
     listarConversaciones,
+    contarPendientes,
     detalleConversacion,
     archivoDeMensaje,
     responder,

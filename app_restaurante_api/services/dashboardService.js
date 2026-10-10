@@ -423,7 +423,7 @@ async function verificarAccesoRestaurante(idUsuario) {
                     attributes: ['id_paleta', 'nombre', 'colores'],
                 },
             ],
-            attributes: ['id_negocio', 'nombre', 'id_tipo_negocio', 'id_paleta', 'permite_multipago', 'permite_pago_domicilio', 'permite_descuento', 'pregunta_cobro_envio', 'permite_cuentas_cliente', 'controla_inventario', 'muestra_iconos_productos'],
+            attributes: ['id_negocio', 'nombre', 'id_tipo_negocio', 'id_paleta', 'permite_multipago', 'permite_pago_domicilio', 'permite_descuento', 'pregunta_cobro_envio', 'permite_cuentas_cliente', 'controla_inventario', 'muestra_iconos_productos', 'id_negocio_padre'],
         }],
     });
 
@@ -483,6 +483,10 @@ async function verificarAccesoRestaurante(idUsuario) {
         return {
             id_negocio: negocio.id_negocio,
             nombre: negocio.nombre,
+            // De qué matriz cuelga, cuando este negocio es una sede. El selector del header lo
+            // usa para no enseñar «Pizzería Feliz» dos veces sin decir cuál es cuál. Es una
+            // etiqueta: el aislamiento sigue siendo por `id_negocio`.
+            id_negocio_padre: negocio.id_negocio_padre ?? null,
             tipo_negocio: negocio.tipoNegocio
                 ? negocio.tipoNegocio.nombre
                 : null,
