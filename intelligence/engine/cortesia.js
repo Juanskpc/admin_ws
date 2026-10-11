@@ -7,17 +7,31 @@
  * cliente volvió a escribir «Gracias», contestó otra vez «¡Con gusto!» — cada vez con una llamada
  * al modelo. No aporta nada al cliente y cuesta créditos. La regla:
  *
- *   1. La PRIMERA cortesía de cierre que trae un agradecimiento se contesta una sola vez, con una
- *      frase fija ($0, sin modelo). Un «ok», un sticker o un emoji suelto no se contestan.
- *   2. Las siguientes se ignoran (silencio), hasta que el cliente escriba algo con contenido.
- *   3. Si el último mensaje del asistente fue una PREGUNTA, la cortesía puede ser la respuesta
- *      («¿la quieres para recoger?» → «ok»): esa NO se toca y sigue su camino normal.
- *   4. Con una tarea a medias (un pedido, una cita, una confirmación pendiente) no se toca nada:
+ *   1. Una cortesía de cierre no se contesta: silencio, hasta que el cliente escriba algo con
+ *      contenido. Da igual que agradezca, que asienta o que mande un sticker.
+ *   2. Si el último mensaje del asistente fue una PREGUNTA, la cortesía puede ser la respuesta
+ *      («¿la quieres para recoger?» → «ok»): esa NO se toca y sigue su camino normal. Un sticker o
+ *      una reacción nunca contestan una pregunta, así que no se salvan por aquí.
+ *   3. Con una tarea a medias (un pedido, una cita, una confirmación pendiente) no se toca nada:
  *      ahí «ok» o «listo» significan algo y los lee el flujo.
  *
+ * ## Por qué el «¡Con gusto!» también se calló (2026-10-10)
+ *
+ * Hasta el 2026-10-10 el PRIMER agradecimiento de cierre sí se contestaba, una vez, con una frase
+ * fija. Tenía sentido cuando el mensaje era gratis: costaba $0 de modelo y dejaba la conversación
+ * cerrada con educación. Ya no lo es. La auditoría de Zona Burger de ese día contó **47 «¡Con
+ * gusto! 😊» en seis días**, el 4 % de todo lo que mandó el asistente, y el número iba camino de
+ * pasarse del techo de mensajes del plan a fin de mes. Los 47 llegaron detrás de un «Gracias» o un
+ * «Muchas gracias» a secas, con la conversación ya terminada.
+ *
+ * Callar ahí no es descortesía: en WhatsApp nadie contesta al «gracias» final, el cliente ve el
+ * visto, y el propio módulo ya callaba el segundo «gracias» y cualquier «ok». Lo que se hizo fue
+ * quitar la excepción, no inventar una regla. Si algún día el techo deja de ser el límite y se
+ * quiere recuperar la frase, está en `RESPUESTA` y el único cambio es volver a devolverla.
+ *
  * El silencio aquí es deliberado y es la excepción a la regla de `manejadorEscalera.js` («el
- * modo de fallo caro es el silencio»): ese silencio es el de un cliente que preguntó algo; este
- * es el de no contestarle a un «gracias» por tercera vez.
+ * modo de fallo caro es el silencio»): ese silencio es el de un cliente que preguntó algo y se
+ * quedó esperando; este es el de no contestarle nada a un «gracias» con el que ya se despidió.
  */
 'use strict';
 
@@ -58,40 +72,50 @@ const PIDE_ALGO =
 
 /**
  * ¿El mensaje (toda la ráfaga) es solo cortesía? Cada línea tiene que serlo.
- * @returns {{cortesia: boolean, agradece: boolean}}
+ *
+ * `soloMedio` dice que no había **ni una palabra**: solo stickers o reacciones. Importa porque un
+ * sticker no contesta una pregunta (ver `decidir`).
+ *
+ * @returns {{cortesia: boolean, agradece: boolean, soloMedio: boolean}}
  */
 function leer(texto) {
     const lineas = String(texto || '')
         .split('\n')
         .map((l) => l.trim())
         .filter(Boolean);
-    if (lineas.length === 0) return { cortesia: false, agradece: false };
+    if (lineas.length === 0) return { cortesia: false, agradece: false, soloMedio: false };
 
     let agradece = false;
+    let palabrasVistas = 0;
     for (const linea of lineas) {
         if (MEDIO_COMO_CORTESIA.test(linea)) continue;
-        if (/^\[[a-z_]+\]$/i.test(linea)) return { cortesia: false, agradece: false };
+        if (/^\[[a-z_]+\]$/i.test(linea)) return { cortesia: false, agradece: false, soloMedio: false };
         // Un número es un DATO —un teléfono, el número de la casa, una cantidad—, nunca una
         // cortesía. Zona Burger, 2026-10-02: «3218245714» quedaba sin palabras al quitarle lo que
         // no son letras, contaba como cortesía, y el bot se calló con un pedido a medias.
-        if (/\d/.test(linea)) return { cortesia: false, agradece: false };
+        if (/\d/.test(linea)) return { cortesia: false, agradece: false, soloMedio: false };
         const palabras = normalizar(linea)
             // Emojis, signos y números fuera: un «🙏🙏» o un «👍» es cortesía, y no son palabras.
             .replace(/[^a-zñ\s]/g, ' ')
             .split(/\s+/)
             .filter(Boolean);
-        if (palabras.length > MAX_PALABRAS) return { cortesia: false, agradece: false };
+        if (palabras.length > MAX_PALABRAS) return { cortesia: false, agradece: false, soloMedio: false };
         for (const p of palabras) {
-            if (!PALABRA_CORTES.has(p) && !RUIDO.test(p)) return { cortesia: false, agradece: false };
+            if (!PALABRA_CORTES.has(p) && !RUIDO.test(p)) return { cortesia: false, agradece: false, soloMedio: false };
             if (/^(g+r+a+c+i+a+s+|grs|grax|thanks|bendiciones|bendiga|pague)$/.test(p)) agradece = true;
         }
+        palabrasVistas += palabras.length;
     }
-    return { cortesia: true, agradece };
+    return { cortesia: true, agradece, soloMedio: palabrasVistas === 0 };
 }
 
-/** Variable de sesión: ya se contestó una cortesía y no ha habido nada útil desde entonces. */
+/** Variable de sesión: ya se vio una cortesía de cierre y no ha habido nada útil desde entonces. */
 const MARCA = 'cortesia_contestada';
 
+/**
+ * La frase con la que se contestaba el primer agradecimiento hasta el 2026-10-10. Ya no se manda
+ * (ver la cabecera); se conserva porque es el único cambio que hay que deshacer para recuperarla.
+ */
 const RESPUESTA = '¡Con gusto! 😊';
 
 /**
@@ -104,11 +128,11 @@ const RESPUESTA = '¡Con gusto! 😊';
  */
 async function decidir(ctx, { hayTarea, ultimoDelAsistente }) {
     const variables = ctx.conversacion?.variables || {};
-    const { cortesia, agradece } = leer(ctx.texto);
+    const { cortesia, soloMedio } = leer(ctx.texto);
 
     if (!cortesia) {
-        // Algo con contenido: se olvida la marca para que el próximo «gracias» vuelva a tener
-        // su respuesta. Se muta a propósito (como la tarea caducada en `manejadorEscalera`): el
+        // Algo con contenido: se olvida la marca para que la conversación vuelva a empezar
+        // limpia. Se muta a propósito (como la tarea caducada en `manejadorEscalera`): el
         // turno que sigue copia estas variables.
         if (variables[MARCA] && ctx.conversacion) {
             const { [MARCA]: _fuera, ...resto } = variables;
@@ -131,38 +155,35 @@ async function decidir(ctx, { hayTarea, ultimoDelAsistente }) {
     }
     // «¿La quieres para recoger?» → «ok»: eso es una respuesta, no una despedida. Cualquier
     // pregunta en el último mensaje cuenta, aunque detrás venga una nota («_El total es…_»).
-    if (!ultimo || /[?¿]/.test(ultimo)) return null;
-    // Lo mismo cuando el asistente PIDIÓ algo sin signo de pregunta: «Para mandártelo necesito un
-    // número de contacto 📱». Lo que llega después es la respuesta, no una despedida.
-    if (PIDE_ALGO.test(normalizar(ultimo))) return null;
-
-    if (variables[MARCA] || !agradece) {
-        return {
-            pasos: [{
-                tipo: 'regla',
-                decision: 'cortesia_sin_respuesta',
-                motivo: {
-                    nivel: 'determinista',
-                    por_que: 'Cortesía de cierre ya contestada o sin agradecimiento: contestarla no ' +
-                        'le aporta nada al cliente y gasta un turno (pedido del dueño, 2026-10-01).',
-                },
-            }],
-            respuestas: [],
-            variables: { ...variables, [MARCA]: true },
-            resultado: 'sin_respuesta',
-            nivel: 'determinista',
-        };
+    //
+    // Un sticker o una reacción NO entran por aquí (2026-10-10): no contestan una pregunta. En la
+    // auditoría de Zona Burger, 5 de los 22 stickers del periodo despertaron al asistente porque
+    // el mensaje anterior llevaba un «?», y lo que salió fue un «😊 ¿Te muestro algo del menú?»
+    // que nadie había pedido. Con una tarea a medias el flujo ya lo ha leído antes (`hayTarea`),
+    // así que el 👍 que confirma un pedido sigue llegando a quien lo entiende.
+    if (!soloMedio) {
+        if (!ultimo || /[?¿]/.test(ultimo)) return null;
+        // Lo mismo cuando el asistente PIDIÓ algo sin signo de pregunta: «Para mandártelo necesito
+        // un número de contacto 📱». Lo que llega después es la respuesta, no una despedida.
+        if (PIDE_ALGO.test(normalizar(ultimo))) return null;
+    } else if (!ultimo) {
+        return null;
     }
 
     return {
         pasos: [{
             tipo: 'regla',
-            decision: 'cortesia_contestada',
-            motivo: { nivel: 'determinista', por_que: 'Primer agradecimiento de cierre: una frase fija, sin modelo.' },
+            decision: 'cortesia_sin_respuesta',
+            motivo: {
+                nivel: 'determinista',
+                por_que: 'Cortesía de cierre: contestarla no le aporta nada al cliente y gasta un ' +
+                    'mensaje facturado del número (pedido del dueño 2026-10-01, ampliado al ' +
+                    'agradecimiento el 2026-10-10 por el techo de mensajes).',
+            },
         }],
-        respuestas: [RESPUESTA],
+        respuestas: [],
         variables: { ...variables, [MARCA]: true },
-        resultado: 'resuelto',
+        resultado: 'sin_respuesta',
         nivel: 'determinista',
     };
 }

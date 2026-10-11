@@ -55,6 +55,16 @@ pedido. Con los 1.000 gratis eso son **unos 115 pedidos al mes** antes de que Me
 cobrar. Es la equivalencia que hay que enseñarle al dueño —él cuenta pedidos, no mensajes— y la
 que usan los paquetes de [`asistente-economia.md`](asistente-economia.md) §6.
 
+**Vuelto a medir el 2026-10-10 sobre el mes completo: 9,1** (entre 7,3 y 10,3 según el día). No
+bajó con los cambios del 07, y es **el número que decide el cupo**: a 9,1 el techo de 6.000 del plan
+da para ~660 pedidos al mes, y Zona Burger iba camino de ~6.300 mensajes a fin de mes. Los recortes
+del 10-10 ([`sesion-2026-10-10-menos-mensajes-zona-burger.md`](sesion-2026-10-10-menos-mensajes-zona-burger.md))
+quitan un 6,3 %, que compra margen pero no mueve el 9,1: lo que queda por apretar es el resumen de
+confirmación (14,8 % de lo saliente) y la bienvenida + carta (12 %).
+
+> ⚠️ **Dos techos, no uno.** Los 1.000 de Meta deciden la factura **del inquilino**; los 6.000 del
+> plan deciden cuándo el freno degrada **nuestro** asistente. El segundo es el que aprieta primero.
+
 Medido sobre el catálogo real de D'ALEX (17 servicios en 4 categorías, 10 profesionales, horario de
 09:00 a 19:00 en pasos de 30 min), antes del 2026-10-02 una cita costaba **9 o 10 mensajes**:
 categorías → servicios → «Ver más» → días → jornada → horas → nombre → profesional → resumen →
@@ -103,9 +113,26 @@ camino de pasarse **con tiempo para hacer algo**.
 ## 4. Las reglas que salen de aquí, y hay que aplicar sin que nadie lo pida
 
 1. **Un aviso y una pregunta van en el mismo mensaje.** Dos mensajes cuestan dos y se leen peor: el
-   aviso llega suelto, sin la cosa a la que se refiere al lado. Lo hace `unirRespuestas` en
-   `adapters/reserva/flujoCita.js`, en un solo sitio y para todas las ramas — en cada rama por
-   separado sería olvidarlo en la que nadie probó, y aquí el olvido se paga.
+   aviso llega suelto, sin la cosa a la que se refiere al lado. Lo hace `unirRespuestas`, y desde el
+   **2026-10-10 vive en `engine/unirRespuestas.js` y lo aplica el motor** al encolar: así vale para
+   todos los flujos, todos los verticales y el turno del modelo.
+
+   > Nació en `adapters/reserva/flujoCita.js` el 2026-10-02 con esta misma nota —«en un solo sitio y
+   > para todas las ramas, porque en cada rama por separado sería olvidarlo en la que nadie probó»— y
+   > el olvido ocurrió igual, un nivel más arriba: nadie la llevó al vertical **restaurante**, que es
+   > el que más mensajes manda. La auditoría del 10-10 encontró allí 9 turnos partidos en dos, 8 de
+   > ellos el mismo par (la respuesta del modelo y, suelto, el «¿Lo confirmo?» de
+   > `manejadorEscalera.conSiPendiente`). **La lección no es la regla, es dónde ponerla:** una regla
+   > de plataforma dentro de un adaptador solo se aplica al adaptador que la escribió.
+
+5. **Una cortesía de cierre no se contesta.** Ni el «gracias» final. Era una excepción de la época en
+   que el mensaje era gratis y se quitó el 2026-10-10: eran 47 «¡Con gusto! 😊» en seis días, el 4 %
+   de todo lo saliente de Zona Burger. Ver `engine/cortesia.js`.
+
+6. **Un aviso automático que se repite necesita su propio silencio, no solo un texto más corto.**
+   Acortar el aviso de «local cerrado» arregló la longitud y dejó la cuenta igual: 12 de 33 avisos
+   salieron a menos de cinco minutos del anterior. `SILENCIO_CERRADO_MS` en
+   `adapters/restaurante/flujo.js`.
 2. **Antes de partir un menú en dos, comprobar si cabe enumerado.** Un listado de hasta 24 opciones
    en un mensaje es más barato **y** mejor que tres menús paginados: el cliente ve todo de una vez.
    Por encima de eso, agrupar sí ayuda (`seEnumera`).

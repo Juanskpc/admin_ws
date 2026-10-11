@@ -302,6 +302,22 @@ const ESTADOS_SIN_SERVICIO = new Set(['fuera_de_horario', 'aun_no_abre', 'cerrad
 const AVISO_CERRADO_MS = 30 * 60 * 1000;
 
 /**
+ * Y si el aviso CORTO salió hace menos que esto, el siguiente no sale: silencio.
+ *
+ * El aviso corto arregló la longitud y se olvidó de la cuenta. Zona Burger, 2026-10-08 17:12: un
+ * cliente escribió tres veces seguidas y recibió tres veces la misma frase en 35 segundos. En la
+ * ventana auditada (2026-10-05 → 10-10) fueron **12 de los 33 avisos de cerrado**, todos a menos
+ * de cinco minutos del anterior, y cada uno es un mensaje facturado que repite lo que el cliente
+ * acaba de leer.
+ *
+ * Callar aquí es seguro y es la excepción consciente a «el modo de fallo caro es el silencio»
+ * (`manejadorEscalera.js`), por lo mismo que la cortesía repetida: la respuesta ya está en la
+ * pantalla del cliente, a unos segundos de distancia. Pasados los cinco minutos vuelve a salir,
+ * porque entonces ya puede ser otra persona o otra intención.
+ */
+const SILENCIO_CERRADO_MS = 5 * 60 * 1000;
+
+/**
  * ¿Está el negocio fuera de servicio para ESTE mensaje? Devuelve el estado, o `null` si no.
  *
  * ## Por qué existe (Zona Burger, 2026-10-02, 23:02)
@@ -351,6 +367,8 @@ async function fueraDeServicio(
  * - Primer mensaje (o vuelve tras un rato): la bienvenida entera, que ya dice el estado.
  * - Ya se le avisó hace poco: una línea, sin repetirle el enlace — tres mensajes seguidos de un
  *   cliente con hambre no merecen tres veces la carta.
+ * - Y si esa línea salió hace menos de `SILENCIO_CERRADO_MS`: nada. Tres mensajes seguidos
+ *   tampoco merecen tres veces la línea.
  * - Si no: el estado y la carta, sin volver a saludar.
  */
 async function avisoFueraDeServicio(ctx, estado, { proximaApertura = horarioService.proximaApertura } = {}) {
@@ -369,6 +387,26 @@ async function avisoFueraDeServicio(ctx, estado, { proximaApertura = horarioServ
     const cuandoAbre = await cuandoAbreDe(ctx, estado, proximaApertura);
     const avisadoEn = Date.parse(previas.aviso_cerrado_en || '');
     const reciente = Number.isFinite(avisadoEn) && ctx.ahora().getTime() - avisadoEn < AVISO_CERRADO_MS;
+
+    // La línea corta ya salió hace nada: no se repite. Las variables sí se guardan (el turno
+    // cuenta), para que `aviso_cerrado_en` siga midiendo desde el aviso largo y la carta vuelva
+    // a salir a la media hora como siempre.
+    const cortoEn = Date.parse(previas.aviso_cerrado_corto_en || '');
+    if (reciente && Number.isFinite(cortoEn) && ctx.ahora().getTime() - cortoEn < SILENCIO_CERRADO_MS) {
+        return {
+            pasos: [paso('fuera_de_servicio', { estado, repetido: true })],
+            respuestas: [],
+            variables: conMemoria(ctx.conversacion, {
+                enlace_menu: previas.enlace_menu ?? null,
+                aviso_cerrado_en: previas.aviso_cerrado_en,
+                aviso_cerrado_corto_en: previas.aviso_cerrado_corto_en,
+            }),
+            tarea: null,
+            resultado: 'sin_respuesta',
+            nivel: 'determinista',
+        };
+    }
+
     const texto = reciente
         ? [
               estado === 'fuera_de_horario'
@@ -385,6 +423,9 @@ async function avisoFueraDeServicio(ctx, estado, { proximaApertura = horarioServ
             enlace_menu: previas.enlace_menu ?? null,
             // El sello solo se renueva con el aviso largo: así cada media hora vuelve a ir la carta.
             aviso_cerrado_en: reciente ? previas.aviso_cerrado_en : sello.aviso_cerrado_en,
+            // Este sí se renueva siempre: mide cuándo se le dijo esto por última vez, sea la
+            // línea corta o la larga, que es lo que decide el silencio del próximo.
+            aviso_cerrado_corto_en: sello.aviso_cerrado_en,
         }),
         tarea: null,
         resultado: 'resuelto',

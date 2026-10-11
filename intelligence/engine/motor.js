@@ -58,6 +58,7 @@ const reporteAutomatico = require('./reporteAutomatico');
 // Que el asistente no le conteste sin fin a otro bot. Mira la conversación entera, que es lo
 // que ningún flujo ve: ver la cabecera del módulo.
 const cortacircuito = require('./cortacircuito');
+const { unirRespuestas } = require('./unirRespuestas');
 
 const sequelize = Models.sequelize;
 
@@ -716,7 +717,12 @@ async function decidir({ conversacion, mensajes, turno, transaction }) {
                 );
             }
 
-            for (const cruda of decision.respuestas || []) {
+            // Lo que el manejador decidió decir en varios mensajes sale en los menos posibles.
+            // Va aquí, después del cortacircuito —que necesita ver las respuestas tal como las
+            // pensó el manejador para detectar el bucle— y antes de encolar: desde el 2026-10-01
+            // cada saliente tiene precio, y dos mensajes para la misma cosa se leen peor.
+            // Ver `unirRespuestas.js`.
+            for (const cruda of (unirRespuestas(decision).respuestas || [])) {
                 // Se normaliza aquí, en el núcleo, y no en cada adaptador: el manejador puede
                 // devolver una cadena suelta, pero lo que se guarda y lo que viaja al canal es
                 // siempre la forma canónica de ADR-017 (texto + opciones en abstracto).

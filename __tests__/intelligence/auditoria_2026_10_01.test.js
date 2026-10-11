@@ -21,17 +21,21 @@ describe('cortesías de cierre (pedido del dueño)', () => {
     const conv = (variables = { turnos: 4 }) => ({ conversacion: { variables: { ...variables } } });
     const dijo = (texto) => async () => texto;
 
-    test('«Gracias» tras un cierre: una respuesta fija, sin modelo', async () => {
+    // Hasta el 2026-10-10 este caso contestaba `cortesia.RESPUESTA` («¡Con gusto! 😊») una vez.
+    // Se calló cuando la auditoría contó 47 de esos en seis días —el 4 % de todo lo saliente— con
+    // el número camino de pasarse del techo del plan. Ver la cabecera de `engine/cortesia.js`.
+    test('«Gracias» tras un cierre: silencio, ni modelo ni mensaje', async () => {
         const d = await cortesia.decidir(
             { ...conv(), texto: 'Gracias' },
             { hayTarea: false, ultimoDelAsistente: dijo('¡Listo! Tu pedido quedó tomado. El número es ORD-7550.') }
         );
-        expect(d.respuestas).toEqual([cortesia.RESPUESTA]);
+        expect(d.respuestas).toEqual([]);
+        expect(d.resultado).toBe('sin_respuesta');
         expect(d.nivel).toBe('determinista');
         expect(d.variables[cortesia.MARCA]).toBe(true);
     });
 
-    test('el segundo «Gracias» ya no se contesta', async () => {
+    test('el segundo «Gracias» tampoco se contesta', async () => {
         const d = await cortesia.decidir(
             { ...conv({ turnos: 5, [cortesia.MARCA]: true }), texto: 'Gracias' },
             { hayTarea: false, ultimoDelAsistente: dijo(cortesia.RESPUESTA) }

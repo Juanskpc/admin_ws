@@ -71,6 +71,7 @@ const confirmacion = require('../../engine/confirmacion');
 // correo, `avisos/escalado.js`). `resultado: 'handoff'` a secas solo cuenta en el Ledger: un
 // mensaje que dice «le aviso al negocio» sin este estado es una promesa que nadie cumple.
 const { ESTADO_HANDOFF } = require('../../engine/handoff');
+const { unirRespuestas } = require('../../engine/unirRespuestas');
 
 /** Pasos de la tarea de agendar. Enum-like: se registran en el Ledger y se miden. */
 const PASO = {
@@ -504,46 +505,12 @@ function paso(decision, motivo = {}) {
 }
 
 /**
- * Tope del cuerpo de un mensaje interactivo de WhatsApp (1024 de Meta), con margen; y del de un
- * mensaje de texto suelto (4096), también con margen. Son del canal, pero la decisión de **juntar
- * o no** es de aquí: ver `unirRespuestas`.
+ * Juntar en un mensaje las respuestas que caben juntas se decide en el motor desde el 2026-10-10
+ * (`engine/unirRespuestas.js`): la regla nacio aqui, pero el vertical restaurante seguia saliendo
+ * partido en dos mensajes porque nadie la habia llevado alla. Se sigue llamando desde este flujo
+ * porque `anteponer` y `conRastro` necesitan la decision ya unida ANTES de devolverla; el motor la
+ * vuelve a pasar al encolar, y es idempotente.
  */
-const TOPE_CUERPO = 950;
-const TOPE_TEXTO = 3500;
-
-/**
- * ── Dos mensajes que podían ser uno ──────────────────────────────────────────────────────
- *
- * Varias ramas devuelven un aviso y después una pregunta: «no pude agendar esa hora» + las horas
- * que quedan, «no hay agenda» + «le aviso al negocio», el saludo + el menú. Eran dos mensajes
- * porque daba igual: salían gratis. Desde el 1 de octubre de 2026 Meta cobra los service messages
- * pasada la asignación mensual, así que el aviso suelto tiene precio — y leerlo pegado a la
- * pregunta no es peor, es mejor: una notificación en lugar de dos para la misma cosa.
- *
- * Se junta **lo que cabe** y solo hacia delante: una respuesta con opciones no absorbe a la
- * siguiente, porque el menú tiene que quedar al final, que es donde el canal lo pinta. El tope
- * depende de dónde acabe el texto, porque un cuerpo interactivo admite mucho menos que un texto
- * suelto; cuando no cabe, se mandan los dos mensajes como antes.
- */
-function unirRespuestas(decision) {
-    const respuestas = decision?.respuestas || [];
-    if (respuestas.length <= 1) return decision;
-
-    const unidas = [];
-    for (const cruda of respuestas) {
-        const actual = typeof cruda === 'string' ? { texto: cruda } : { ...cruda };
-        const previa = unidas[unidas.length - 1];
-        if (previa && !previa.opciones?.length && typeof actual.texto === 'string') {
-            const juntas = `${previa.texto}\n\n${actual.texto}`;
-            if (juntas.length <= (actual.opciones?.length ? TOPE_CUERPO : TOPE_TEXTO)) {
-                unidas[unidas.length - 1] = { ...actual, texto: juntas };
-                continue;
-            }
-        }
-        unidas.push(actual);
-    }
-    return { ...decision, respuestas: unidas };
-}
 
 /**
  * ¿Es un «hola», un «menú» o cualquier otro comando?
