@@ -20,6 +20,7 @@ const ConfiguracionController = require('../controllers/configuracionController'
 const BarrioController = require('../controllers/barrioController');
 const CajaController       = require('../controllers/cajaController');
 const PuntoCajaController  = require('../controllers/puntoCajaController');
+const RubroController      = require('../controllers/rubroController');
 const MetodoPagoController = require('../controllers/metodoPagoController');
 const CartaDisenoController = require('../controllers/cartaDisenoController');
 const TiqueteDisenoController = require('../controllers/tiqueteDisenoController');
@@ -722,14 +723,30 @@ router.post('/proveedores/:id/insumos', [
 ], ProveedorController.crearInsumo);
 
 // --- Reportes ---
+//
+// `id_producto` acepta lista (`?id_producto=3&id_producto=7`) o CSV (`?id_producto=3,7`), y hoy
+// solo lo lee 'rendimiento_usuarios': con productos elegidos el reporte contesta quién vende
+// más de ESO, y sus columnas cambian. El tope de 20 lo pone el servicio.
+const TIPOS_REPORTE = [
+	'ventas_periodo', 'productos_mas_vendidos', 'rendimiento_mesas',
+	'rendimiento_usuarios', 'estado_cocina', 'ventas_rubro', 'ventas_dia_semana',
+];
+
 router.get('/reportes', [
-	query('tipo').optional().isIn(['ventas_periodo', 'productos_mas_vendidos', 'rendimiento_mesas', 'rendimiento_usuarios', 'estado_cocina']),
+	query('tipo').optional().isIn(TIPOS_REPORTE),
 	query('id_negocio').optional().isInt({ min: 1 }),
 	query('fecha_desde').optional().isISO8601(),
 	query('fecha_hasta').optional().isISO8601(),
 	query('page').optional().isInt({ min: 1 }),
 	query('page_size').optional().isInt({ min: 1, max: 100 }),
+	query('id_producto').optional(),
 ], ReporteController.getReportes);
+
+// El catálogo para el selector de productos de «ventas por usuario». Plano y sin paginar: a
+// la escala de una carta de restaurante, filtrar en memoria es más rápido que ir y volver.
+router.get('/reportes/productos', [
+	query('id_negocio').optional().isInt({ min: 1 }),
+], ReporteController.getCatalogoProductos);
 
 router.get('/reportes/ventas/:id_orden/detalle', [
 	param('id_orden').isInt({ min: 1 }),
@@ -737,12 +754,53 @@ router.get('/reportes/ventas/:id_orden/detalle', [
 ], ReporteController.getDetalleVentaPeriodo);
 
 router.get('/reportes/exportar', [
-	query('tipo').optional().isIn(['ventas_periodo', 'productos_mas_vendidos', 'rendimiento_mesas', 'rendimiento_usuarios', 'estado_cocina']),
+	query('tipo').optional().isIn(TIPOS_REPORTE),
 	query('id_negocio').optional().isInt({ min: 1 }),
 	query('fecha_desde').optional().isISO8601(),
 	query('fecha_hasta').optional().isISO8601(),
 	query('formato').optional().isIn(['xlsx', 'pdf']),
+	query('id_producto').optional(),
 ], ReporteController.exportarReporte);
+
+// --- Sectores de ingreso (rubros) ---
+//
+// Un rubro agrupa categorías de la carta para contestar «cuánto deja la parrilla y cuánto el
+// sushi» aunque la mesa pida de los dos y pague una sola vez. NO son las cajas de más abajo:
+// la caja es de la orden (turno y arqueo) y el rubro es del ítem. Ver `rubroService`.
+//
+// Leer no exige subnivel —los informes y el cierre de caja necesitan la lista para pintarse—;
+// escribir exige `caja_gestionar`, que lo comprueba el servicio.
+router.get('/rubros', [
+	query('id_negocio').isInt({ min: 1 }),
+], RubroController.listar);
+
+router.post('/rubros', [
+	body('id_negocio').isInt({ min: 1 }),
+	body('nombre').isString().trim().isLength({ min: 2, max: 60 }),
+	body('descripcion').optional({ nullable: true }).isString().isLength({ max: 160 }),
+	body('color').optional({ nullable: true, checkFalsy: true }).matches(/^#[0-9a-fA-F]{6}$/),
+], RubroController.crear);
+
+router.put('/rubros/:id_rubro', [
+	param('id_rubro').isInt({ min: 1 }),
+	body('id_negocio').isInt({ min: 1 }),
+	body('nombre').optional().isString().trim().isLength({ min: 2, max: 60 }),
+	body('descripcion').optional({ nullable: true }).isString().isLength({ max: 160 }),
+	body('color').optional({ nullable: true, checkFalsy: true }).matches(/^#[0-9a-fA-F]{6}$/),
+	body('estado').optional().isIn(['A', 'I']),
+], RubroController.actualizar);
+
+router.put('/rubros/:id_rubro/categorias', [
+	param('id_rubro').isInt({ min: 1 }),
+	body('id_negocio').isInt({ min: 1 }),
+	body('id_categorias').optional().isArray(),
+	body('id_categorias.*').isInt({ min: 1 }),
+], RubroController.fijarCategorias);
+
+router.delete('/rubros/:id_rubro', [
+	param('id_rubro').isInt({ min: 1 }),
+	query('id_negocio').isInt({ min: 1 }),
+], RubroController.eliminar);
 
 // --- Cajas del negocio (rubros de ingreso) ---
 //

@@ -72,6 +72,9 @@ function ocultarImportesCaja(caja) {
         egresos: null,
         monto_esperado: null,
         ingresos_por_metodo: [],
+        // El desglose por sector ES una cifra de venta: sin `caja_ver_ingresos` se va entero,
+        // igual que el de formas de pago. Dejarlo sería contar la plata del turno por otra vía.
+        venta_por_rubro: null,
         importes_ocultos: true,
     };
 }

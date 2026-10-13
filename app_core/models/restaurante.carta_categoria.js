@@ -8,6 +8,9 @@ module.exports = (sequelize, DataTypes) => {
         imagen_url:     { type: DataTypes.STRING(500) },
         orden:          { type: DataTypes.INTEGER, defaultValue: 0 },
         visible:        { type: DataTypes.BOOLEAN, defaultValue: true },
+        // Sector de ingreso al que pertenece la categoría. NULL = «General»: se vende en
+        // todos los sectores (bebidas, mecato). Ver restaurante.rest_rubro.
+        id_rubro:       { type: DataTypes.INTEGER, allowNull: true },
         estado:         { type: DataTypes.CHAR(1), defaultValue: 'A' },
         fecha_creacion: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
     }, {
@@ -18,6 +21,7 @@ module.exports = (sequelize, DataTypes) => {
 
     CartaCategoria.associate = (models) => {
         CartaCategoria.belongsTo(models.GenerNegocio, { foreignKey: 'id_negocio', as: 'negocio' });
+        CartaCategoria.belongsTo(models.RestRubro, { foreignKey: 'id_rubro', as: 'rubro' });
         CartaCategoria.hasMany(models.CartaProducto, { foreignKey: 'id_categoria', as: 'productos' });
     };
 

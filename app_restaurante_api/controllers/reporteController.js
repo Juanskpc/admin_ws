@@ -41,6 +41,8 @@ async function getReportes(req, res) {
             fechaHasta: req.query.fecha_hasta,
             page: req.query.page,
             pageSize: req.query.page_size,
+            // Lista o CSV: el frontend los pone en la URL para que el reporte sea enlazable.
+            idsProducto: req.query.id_producto,
         });
 
         return Respuesta.success(res, 'Reporte generado', data);
@@ -64,6 +66,7 @@ async function exportarReporte(req, res) {
             tipo: req.query.tipo,
             fechaDesde: req.query.fecha_desde,
             fechaHasta: req.query.fecha_hasta,
+            idsProducto: req.query.id_producto,
         });
 
         const slugNegocio = buildSlugFromNegocio(payload.negocio.nombre);
@@ -115,8 +118,28 @@ async function getDetalleVentaPeriodo(req, res) {
     }
 }
 
+async function getCatalogoProductos(req, res) {
+    if (getValidationError(req, res)) return;
+
+    try {
+        const data = await reporteService.getCatalogoProductos({
+            idUsuario: req.usuario.id_usuario,
+            idNegocio: req.query.id_negocio,
+        });
+
+        return Respuesta.success(res, 'Catalogo de productos', data);
+    } catch (error) {
+        const status = getErrorStatus(error);
+        if (status >= 500) {
+            console.error('[Restaurante][Reportes] Error getCatalogoProductos:', error.message);
+        }
+        return Respuesta.error(res, getErrorMessage(error, 'No se pudo cargar el catalogo de productos.'), status);
+    }
+}
+
 module.exports = {
     getReportes,
     exportarReporte,
     getDetalleVentaPeriodo,
+    getCatalogoProductos,
 };

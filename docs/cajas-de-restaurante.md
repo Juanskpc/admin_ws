@@ -2,7 +2,27 @@
 
 **Estado:** análisis y plan · **Fecha:** 2026-10-08 ·
 **Implementado y en PROD desde:** 2026-09-23 (`migrate_restaurante_cajas.js`) ·
-**Relacionado:** [`precios-y-planes.md`](precios-y-planes.md) (el tope de cajas), [`secciones-de-mesas.md`](secciones-de-mesas.md)
+**Relacionado:** [`precios-y-planes.md`](precios-y-planes.md) (el tope de cajas), [`secciones-de-mesas.md`](secciones-de-mesas.md), [`sectores-de-ingreso.md`](sectores-de-ingreso.md)
+
+> ## ⚠️ Corrección del 2026-10-10 — leer antes del §5
+>
+> Este doc dice que «una caja es un rubro de ingreso» y propone ligarle el catálogo por
+> categoría (§5, opción A). Para el caso que lo motivó —restaurante **más** mini-tienda, dos
+> arqueos separados— sigue siendo correcto y la fase 0 del §6 sigue pendiente.
+>
+> **Pero las cajas no sirven para partir los ingresos de un negocio que cobra todo junto.** Un
+> restaurante con tres tipos de comida en el que una mesa pide de los tres y paga **una sola
+> vez** no se puede representar con cajas: `pedid_orden.id_punto_caja` es NOT NULL, así que una
+> orden cae entera en una caja y habría que partir la cuenta en tres. Y las cajas cuentan contra
+> el tope del plan, o sea que separar tres tipos de comida costaría dos complementos.
+>
+> Para eso se añadió un segundo eje, **`rest_rubro` (sectores de ingreso)**, que se pega al
+> **ítem** vía `carta_categoria.id_rubro` en vez de a la orden. Caja y sector coexisten y no se
+> estorban: la caja es el cajón y el turno, el sector es la cuenta de resultados. El detalle
+> está en [`sectores-de-ingreso.md`](sectores-de-ingreso.md).
+>
+> Al leer «rubro» más abajo en este documento, entender **caja**: la palabra se quedó de antes de
+> que existieran las dos cosas.
 
 > Preguntas de origen: «¿los productos/categorías deben ir ligados a una caja? ¿al tomar el
 > pedido el mesero debe elegir caja y según eso ver categorías/productos? ¿funcionan bien hoy

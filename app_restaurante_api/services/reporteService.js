@@ -1,10 +1,20 @@
 const Models = require('../../app_core/models/conection');
 const DashboardService = require('./dashboardService');
+const rubroService = require('./rubroService');
 
 const MAX_PAGE_SIZE = 100;
 const EXPORT_MAX_ROWS = 5000;
 const DEFAULT_PAGE_SIZE = 20;
 const DEFAULT_RANGE_DAYS = 30;
+
+/** Cuántos productos se pueden cruzar a la vez en «ventas por usuario». */
+const MAX_PRODUCTOS_FILTRO = 20;
+
+/** ISODOW de postgres: 1 = lunes … 7 = domingo. */
+const DIAS_SEMANA = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
+
+/** La fila de las categorías sin sector: se vende en todos (bebidas, mecato). */
+const RUBRO_GENERAL = 'General';
 
 const REPORT_TYPES = {
     ventas_periodo: {
@@ -49,6 +59,27 @@ const REPORT_TYPES = {
             { key: 'ultima_venta', label: 'Ultima venta', type: 'date' },
         ],
     },
+    ventas_rubro: {
+        titulo: 'Ventas por sector',
+        columns: [
+            { key: 'rubro', label: 'Sector', type: 'text' },
+            { key: 'unidades', label: 'Unidades', type: 'number' },
+            { key: 'ordenes', label: 'Pedidos', type: 'number' },
+            { key: 'ingresos', label: 'Venta', type: 'currency' },
+            { key: 'participacion', label: 'Participacion', type: 'text' },
+        ],
+    },
+    ventas_dia_semana: {
+        titulo: 'Ventas por dia de la semana',
+        columns: [
+            { key: 'dia', label: 'Dia', type: 'text' },
+            { key: 'dias_en_rango', label: 'Veces en el rango', type: 'number' },
+            { key: 'ordenes', label: 'Pedidos', type: 'number' },
+            { key: 'ventas_totales', label: 'Ventas', type: 'currency' },
+            { key: 'promedio_por_dia', label: 'Promedio por dia', type: 'currency' },
+            { key: 'ticket_promedio', label: 'Ticket promedio', type: 'currency' },
+        ],
+    },
     estado_cocina: {
         titulo: 'Estado de cocina',
         columns: [
@@ -61,11 +92,54 @@ const REPORT_TYPES = {
     },
 };
 
+/**
+ * Columnas de «ventas por usuario» cuando se cruza con una selección de productos.
+ *
+ * Con productos elegidos la pregunta cambia —de «cuánto cobró cada uno» a «quién vende más
+ * hamburguesas»— y la plata de la tabla deja de ser el total del pedido para ser solo la de
+ * esos productos. Mezclar las dos cosas en las mismas columnas invitaría a sumar peras con
+ * manzanas, así que se cambian.
+ */
+const COLUMNAS_USUARIOS_PRODUCTO = [
+    { key: 'cajero', label: 'Usuario', type: 'text' },
+    { key: 'unidades', label: 'Unidades', type: 'number' },
+    { key: 'ordenes', label: 'Pedidos', type: 'number' },
+    { key: 'ingresos', label: 'Venta de lo seleccionado', type: 'currency' },
+    { key: 'precio_promedio', label: 'Precio promedio', type: 'currency' },
+];
+
+function columnsFor(tipo, { idsProducto = [] } = {}) {
+    if (tipo === 'rendimiento_usuarios' && idsProducto.length > 0) {
+        return COLUMNAS_USUARIOS_PRODUCTO;
+    }
+    return REPORT_TYPES[tipo].columns;
+}
+
 function createHttpError(message, statusCode = 500, code = 'REPORTES_ERROR') {
     const error = new Error(message);
     error.statusCode = statusCode;
     error.code = code;
     return error;
+}
+
+/**
+ * Los ids de producto del filtro, saneados. Llegan como lista o como CSV (`?id_producto=3,7`)
+ * porque el frontend los pone en la URL para que el reporte sea enlazable.
+ */
+function parseIdsProducto(raw) {
+    if (raw == null || raw === '') return [];
+    const crudos = Array.isArray(raw) ? raw : String(raw).split(',');
+    const ids = [...new Set(
+        crudos.map((v) => Number(String(v).trim())).filter((n) => Number.isInteger(n) && n > 0),
+    )];
+    if (ids.length > MAX_PRODUCTOS_FILTRO) {
+        throw createHttpError(
+            `Puedes cruzar hasta ${MAX_PRODUCTOS_FILTRO} productos a la vez.`,
+            422,
+            'DEMASIADOS_PRODUCTOS',
+        );
+    }
+    return ids;
 }
 
 /**
@@ -194,12 +268,44 @@ function normalizeRows(tipo, rows) {
     }
 
     if (tipo === 'rendimiento_usuarios') {
+        // Dos formas de fila según haya o no productos seleccionados (ver COLUMNAS_USUARIOS_
+        // PRODUCTO). Se coercionan las claves que existan en cada caso.
         return rows.map((row) => ({
             ...row,
             ordenes_cerradas: toNumber(row.ordenes_cerradas),
             ticket_promedio: toNumber(row.ticket_promedio),
             ventas_totales: toNumber(row.ventas_totales),
+            ...(row.unidades !== undefined ? {
+                unidades: toNumber(row.unidades),
+                ordenes: toNumber(row.ordenes),
+                ingresos: toNumber(row.ingresos),
+                precio_promedio: toNumber(row.precio_promedio),
+            } : {}),
             ultima_venta: toNullableDate(row.ultima_venta),
+        }));
+    }
+
+    if (tipo === 'ventas_rubro') {
+        return rows.map((row) => ({
+            ...row,
+            unidades: toNumber(row.unidades),
+            ordenes: toNumber(row.ordenes),
+            ingresos: toNumber(row.ingresos),
+            // Texto y no número: es un porcentaje del total del período, no una cifra que se
+            // pueda volver a sumar. Dejarlo numérico invitaría a promediarlo.
+            participacion: `${toNumber(row.participacion).toFixed(1)}%`,
+        }));
+    }
+
+    if (tipo === 'ventas_dia_semana') {
+        return rows.map((row) => ({
+            ...row,
+            dia: DIAS_SEMANA[toNumber(row.dow) - 1] || 'Sin dia',
+            dias_en_rango: toNumber(row.dias_en_rango),
+            ordenes: toNumber(row.ordenes),
+            ventas_totales: toNumber(row.ventas_totales),
+            promedio_por_dia: toNumber(row.promedio_por_dia),
+            ticket_promedio: toNumber(row.ticket_promedio),
         }));
     }
 
@@ -245,11 +351,38 @@ function mapResumenItems(tipo, resumenRow, rangoFechas) {
     }
 
     if (tipo === 'rendimiento_usuarios') {
+        // Con productos seleccionados los KPI hablan de esos productos, no del pedido entero.
+        if (resumenRow.unidades_vendidas !== undefined) {
+            return [
+                { key: 'usuarios_activos', label: 'Usuarios que lo vendieron', value: toNumber(resumenRow.usuarios_activos), type: 'number' },
+                { key: 'unidades_vendidas', label: 'Unidades vendidas', value: toNumber(resumenRow.unidades_vendidas), type: 'number' },
+                { key: 'ingresos_brutos', label: 'Venta de lo seleccionado', value: toNumber(resumenRow.ingresos_brutos), type: 'currency' },
+                { key: 'ordenes_cerradas', label: 'Pedidos que lo incluyen', value: toNumber(resumenRow.ordenes_cerradas), type: 'number' },
+            ];
+        }
         return [
             { key: 'usuarios_activos', label: 'Usuarios con ventas', value: toNumber(resumenRow.usuarios_activos), type: 'number' },
             { key: 'ordenes_cerradas', label: 'Ordenes cerradas', value: toNumber(resumenRow.ordenes_cerradas), type: 'number' },
             { key: 'ventas_totales', label: 'Ventas totales', value: toNumber(resumenRow.ventas_totales), type: 'currency' },
             { key: 'ticket_promedio', label: 'Ticket promedio', value: toNumber(resumenRow.ticket_promedio), type: 'currency' },
+        ];
+    }
+
+    if (tipo === 'ventas_rubro') {
+        return [
+            { key: 'venta_productos', label: 'Venta de productos', value: toNumber(resumenRow.venta_productos), type: 'currency' },
+            { key: 'total_cobrado', label: 'Total cobrado', value: toNumber(resumenRow.total_cobrado), type: 'currency' },
+            { key: 'sectores_con_venta', label: 'Sectores con venta', value: toNumber(resumenRow.sectores_con_venta), type: 'number' },
+            { key: 'rango', label: 'Periodo', value: `${rangoFechas.startDate} al ${rangoFechas.endDate}`, type: 'text' },
+        ];
+    }
+
+    if (tipo === 'ventas_dia_semana') {
+        return [
+            { key: 'mejor_dia', label: 'Dia que mas vende', value: resumenRow.mejor_dia || '--', type: 'text' },
+            { key: 'peor_dia', label: 'Dia que menos vende', value: resumenRow.peor_dia || '--', type: 'text' },
+            { key: 'promedio_por_dia', label: 'Promedio por dia abierto', value: toNumber(resumenRow.promedio_por_dia), type: 'currency' },
+            { key: 'ventas_totales', label: 'Ventas totales', value: toNumber(resumenRow.ventas_totales), type: 'currency' },
         ];
     }
 
@@ -566,7 +699,168 @@ async function runRendimientoMesasQuery({ idNegocio, startDate, endDate, page, p
     };
 }
 
-async function runRendimientoUsuariosQuery({ idNegocio, startDate, endDate, page, pageSize, offset, exportMode }) {
+/**
+ * «Ventas por usuario» cruzado con una selección de productos: quién vende más hamburguesas.
+ *
+ * Es otro reporte, no un filtro del anterior. Las cifras salen de `pedid_detalle` y no de la
+ * orden, así que un pedido de $80.000 en el que el mesero puso una gaseosa de $4.000 aporta
+ * $4.000 y no $80.000. Por eso las columnas cambian (ver COLUMNAS_USUARIOS_PRODUCTO): sumar
+ * estas cifras con las del pedido entero no significaría nada.
+ *
+ * El usuario es `pedid_orden.id_usuario`, quien TOMÓ el pedido. Es la pregunta que se hace
+ * («quién lo vendió»), no quién lo cobró.
+ */
+async function runRendimientoUsuariosPorProductoQuery({
+    idNegocio, startDate, endDate, page, pageSize, offset, exportMode, idsProducto,
+}) {
+    const limit = exportMode ? EXPORT_MAX_ROWS : pageSize;
+    const repl = { idNegocio, startDate, endDate, ids: idsProducto };
+
+    const base = `
+        FROM restaurante.pedid_detalle d
+        INNER JOIN restaurante.pedid_orden o ON o.id_orden = d.id_orden
+        INNER JOIN general.gener_usuario u ON u.id_usuario = o.id_usuario
+        WHERE o.id_negocio = :idNegocio
+          AND o.estado = 'CERRADA'
+          AND o.fecha_cierre >= CAST(:startDate AS date)
+          AND o.fecha_cierre < CAST(:endDate AS date) + INTERVAL '1 day'
+          AND d.id_producto = ANY(ARRAY[:ids]::int[])
+    `;
+
+    const seleccion = `
+        SELECT o.id_usuario,
+               TRIM(CONCAT(u.primer_nombre, ' ', u.primer_apellido)) AS cajero,
+               SUM(d.cantidad)::int                  AS unidades,
+               COUNT(DISTINCT o.id_orden)::int       AS ordenes,
+               COALESCE(SUM(d.subtotal), 0)::numeric AS ingresos,
+               COALESCE(AVG(d.precio_unitario), 0)::numeric AS precio_promedio,
+               MAX(o.fecha_cierre)                   AS ultima_venta
+        ${base}
+        GROUP BY o.id_usuario, u.primer_nombre, u.primer_apellido
+    `;
+
+    const [filas, conteo, resumen, productos, matriz, grafica] = await Promise.all([
+        Models.sequelize.query(
+            `${seleccion} ORDER BY unidades DESC, ingresos DESC
+             LIMIT :limit OFFSET :offset`,
+            {
+                replacements: { ...repl, limit, offset: exportMode ? 0 : offset },
+                type: Models.sequelize.QueryTypes.SELECT,
+            },
+        ),
+        Models.sequelize.query(
+            `SELECT COUNT(*)::int AS total FROM (${seleccion}) g`,
+            { replacements: repl, type: Models.sequelize.QueryTypes.SELECT },
+        ),
+        Models.sequelize.query(
+            `SELECT COUNT(DISTINCT o.id_usuario)::int    AS usuarios_activos,
+                    COALESCE(SUM(d.cantidad), 0)::numeric AS unidades_vendidas,
+                    COALESCE(SUM(d.subtotal), 0)::numeric AS ingresos_brutos,
+                    COUNT(DISTINCT o.id_orden)::int       AS ordenes_cerradas
+             ${base}`,
+            { replacements: repl, type: Models.sequelize.QueryTypes.SELECT },
+        ),
+        // Los nombres se leen de la carta y no de las ventas: un producto seleccionado que no
+        // vendió nada en el rango tiene que salir igual, con su columna en cero. Si solo
+        // apareciera cuando vendió, el administrador no podría distinguir «nadie lo vendió»
+        // de «me equivoqué al seleccionarlo». El filtro por negocio es lo que impide que por
+        // la API entre el id de un producto de otro inquilino.
+        Models.sequelize.query(
+            `SELECT p.id_producto, p.nombre
+               FROM restaurante.carta_producto p
+              WHERE p.id_negocio = :idNegocio AND p.id_producto = ANY(ARRAY[:ids]::int[])
+              ORDER BY p.nombre`,
+            { replacements: repl, type: Models.sequelize.QueryTypes.SELECT },
+        ),
+        exportMode ? Promise.resolve([]) : Models.sequelize.query(
+            `SELECT o.id_usuario,
+                    TRIM(CONCAT(u.primer_nombre, ' ', u.primer_apellido)) AS usuario,
+                    d.id_producto,
+                    SUM(d.cantidad)::int                  AS unidades,
+                    COALESCE(SUM(d.subtotal), 0)::numeric AS ingresos
+             ${base}
+             GROUP BY o.id_usuario, u.primer_nombre, u.primer_apellido, d.id_producto`,
+            { replacements: repl, type: Models.sequelize.QueryTypes.SELECT },
+        ),
+        // Las gráficas van sobre TODO el rango, no sobre la página de la tabla.
+        exportMode ? Promise.resolve([]) : Models.sequelize.query(
+            `${seleccion} ORDER BY ingresos DESC, unidades DESC LIMIT 12`,
+            { replacements: repl, type: Models.sequelize.QueryTypes.SELECT },
+        ),
+    ]);
+
+    const total = Number(conteo[0]?.total || 0);
+
+    // La matriz usuario × producto: es la respuesta visual a «quién vende más de qué». Se
+    // arma aquí y no en el frontend para que la exportación y la pantalla miren lo mismo.
+    const columnasProducto = productos.map((p) => ({
+        id_producto: Number(p.id_producto),
+        nombre: p.nombre,
+    }));
+    const porUsuario = new Map();
+    for (const celda of matriz) {
+        const id = Number(celda.id_usuario);
+        if (!porUsuario.has(id)) {
+            porUsuario.set(id, { id_usuario: id, usuario: celda.usuario, unidades: 0, ingresos: 0, celdas: new Map() });
+        }
+        const fila = porUsuario.get(id);
+        const unidades = toNumber(celda.unidades);
+        const ingresos = toNumber(celda.ingresos);
+        fila.unidades += unidades;
+        fila.ingresos += ingresos;
+        fila.celdas.set(Number(celda.id_producto), { unidades, ingresos });
+    }
+    const filasMatriz = [...porUsuario.values()]
+        .sort((a, b) => b.unidades - a.unidades || b.ingresos - a.ingresos)
+        .slice(0, 12)
+        .map((fila) => ({
+            id_usuario: fila.id_usuario,
+            usuario: fila.usuario,
+            unidades: fila.unidades,
+            ingresos: fila.ingresos,
+            // Una celda por producto seleccionado, en el mismo orden que las columnas, con
+            // ceros donde no hubo venta: la tabla se pinta sin que el frontend busque nada.
+            celdas: columnasProducto.map((col) => ({
+                id_producto: col.id_producto,
+                ...(fila.celdas.get(col.id_producto) || { unidades: 0, ingresos: 0 }),
+            })),
+        }));
+
+    return {
+        rows: filas,
+        total,
+        page,
+        pageSize: exportMode ? total || limit : pageSize,
+        resumen: resumen[0] || {},
+        // Fuera de `graficas` a propósito: la exportación no recibe gráficas y necesita los
+        // nombres para poder decir de qué productos son las cifras.
+        productosSeleccionados: columnasProducto,
+        graficas: exportMode ? null : {
+            // Avisa al frontend de que las cifras son de los productos elegidos y no del
+            // pedido entero, para que las etiquetas de las gráficas no mientan.
+            modo_producto: true,
+            productos_seleccionados: columnasProducto,
+            por_usuario: grafica.map((f) => ({
+                usuario: f.cajero,
+                ordenes: toNumber(f.ordenes),
+                ventas: toNumber(f.ingresos),
+                unidades: toNumber(f.unidades),
+                // Aquí «ticket» es el precio medio al que ese usuario vendió lo seleccionado,
+                // no el valor del pedido: con productos elegidos es lo único comparable.
+                ticket_promedio: toNumber(f.precio_promedio),
+            })),
+            matriz: { productos: columnasProducto, filas: filasMatriz },
+        },
+    };
+}
+
+async function runRendimientoUsuariosQuery({ idNegocio, startDate, endDate, page, pageSize, offset, exportMode, idsProducto = [] }) {
+    if (idsProducto.length > 0) {
+        return runRendimientoUsuariosPorProductoQuery({
+            idNegocio, startDate, endDate, page, pageSize, offset, exportMode, idsProducto,
+        });
+    }
+
     const limit = exportMode ? EXPORT_MAX_ROWS : pageSize;
 
     const dataQuery = `
@@ -657,6 +951,248 @@ async function runRendimientoUsuariosQuery({ idNegocio, startDate, endDate, page
     };
 }
 
+/**
+ * Ventas por sector de ingreso (rubro).
+ *
+ * El ingreso se atribuye por ÍTEM —la categoría del producto dice de qué sector es—, no por
+ * pedido. Es lo que deja repartir solo una mesa que pidió de los tres sectores y pagó una
+ * sola vez, que es justo el caso para el que existe la función. Lo que no es producto
+ * (domicilio, impuesto, descuento) vive en la orden y **no se prorratea**: va en líneas
+ * aparte dentro de `graficas.conciliacion`, para que cada cifra de la tabla sea una que el
+ * administrador pueda verificar contra sus tiquetes.
+ */
+async function runVentasRubroQuery({ idNegocio, startDate, endDate, page, pageSize, offset, exportMode }) {
+    const limit = exportMode ? EXPORT_MAX_ROWS : pageSize;
+    const repl = { idNegocio, startDate, endDate, general: RUBRO_GENERAL };
+
+    // El rubro NO se filtra por estado: un sector desactivado tiene que seguir saliendo
+    // separado en el histórico, o los meses anteriores cambiarían de cifras al desactivarlo.
+    const base = `
+        FROM restaurante.pedid_detalle d
+        INNER JOIN restaurante.pedid_orden o     ON o.id_orden = d.id_orden
+        INNER JOIN restaurante.carta_producto p  ON p.id_producto = d.id_producto
+        INNER JOIN restaurante.carta_categoria c ON c.id_categoria = p.id_categoria
+        LEFT  JOIN restaurante.rest_rubro r      ON r.id_rubro = c.id_rubro
+        WHERE o.id_negocio = :idNegocio
+          AND o.estado = 'CERRADA'
+          AND o.fecha_cierre >= CAST(:startDate AS date)
+          AND o.fecha_cierre < CAST(:endDate AS date) + INTERVAL '1 day'
+    `;
+
+    // La participación sale de una ventana sobre TODOS los grupos, así que no depende de la
+    // página: la fila dice su peso en el período, no en la página que se está mirando.
+    const agrupado = `
+        SELECT COALESCE(r.id_rubro, 0)             AS id_rubro,
+               COALESCE(r.nombre, :general)        AS rubro,
+               MAX(r.color)                        AS color,
+               SUM(d.cantidad)::int                AS unidades,
+               COUNT(DISTINCT o.id_orden)::int     AS ordenes,
+               COALESCE(SUM(d.subtotal), 0)::numeric AS ingresos,
+               (100.0 * COALESCE(SUM(d.subtotal), 0)
+                      / NULLIF(SUM(SUM(d.subtotal)) OVER (), 0))::numeric AS participacion
+        ${base}
+        GROUP BY COALESCE(r.id_rubro, 0), COALESCE(r.nombre, :general)
+    `;
+
+    const [filas, todos, conciliacion] = await Promise.all([
+        Models.sequelize.query(
+            `SELECT * FROM (${agrupado}) g ORDER BY g.ingresos DESC LIMIT :limit OFFSET :offset`,
+            {
+                replacements: { ...repl, limit, offset: exportMode ? 0 : offset },
+                type: Models.sequelize.QueryTypes.SELECT,
+            },
+        ),
+        // La lista completa sirve para dos cosas a la vez: el conteo de la paginación y la
+        // gráfica de participación, que tiene que ver todos los sectores y no una página.
+        Models.sequelize.query(
+            `SELECT * FROM (${agrupado}) g ORDER BY g.ingresos DESC`,
+            { replacements: repl, type: Models.sequelize.QueryTypes.SELECT },
+        ),
+        // El cuadre va sobre la ORDEN, no sobre el ítem: aquí cada pedido cuenta una vez.
+        Models.sequelize.query(
+            `SELECT COALESCE(SUM(o.subtotal), 0)::numeric        AS venta_productos,
+                    COALESCE(SUM(o.impuesto), 0)::numeric        AS impuestos,
+                    COALESCE(SUM(o.valor_domicilio), 0)::numeric AS domicilios,
+                    COALESCE(SUM(o.descuento), 0)::numeric       AS descuentos,
+                    COALESCE(SUM(o.total), 0)::numeric           AS total_cobrado,
+                    COUNT(*)::int                                AS ordenes
+               FROM restaurante.pedid_orden o
+              WHERE o.id_negocio = :idNegocio
+                AND o.estado = 'CERRADA'
+                AND o.fecha_cierre >= CAST(:startDate AS date)
+                AND o.fecha_cierre < CAST(:endDate AS date) + INTERVAL '1 day'`,
+            { replacements: repl, type: Models.sequelize.QueryTypes.SELECT },
+        ),
+    ]);
+
+    const cuadre = conciliacion[0] || {};
+    const ventaItems = todos.reduce((suma, r) => suma + toNumber(r.ingresos), 0);
+    const totalCobrado = toNumber(cuadre.total_cobrado);
+    const impuestos = toNumber(cuadre.impuestos);
+    const domicilios = toNumber(cuadre.domicilios);
+    const descuentos = toNumber(cuadre.descuentos);
+
+    return {
+        rows: filas,
+        total: todos.length,
+        page,
+        pageSize: exportMode ? todos.length || limit : pageSize,
+        // El cuadre viaja también en el resumen y no solo en las gráficas: la exportación no
+        // recibe gráficas, y un Excel de ventas por sector sin las líneas que lo cuadran
+        // contra el total cobrado sería justo el documento que nadie puede auditar.
+        resumen: {
+            venta_productos: ventaItems,
+            total_cobrado: totalCobrado,
+            sectores_con_venta: todos.length,
+            impuestos,
+            domicilios,
+            descuentos,
+            ordenes: toNumber(cuadre.ordenes),
+        },
+        graficas: exportMode ? null : {
+            por_rubro: todos.map((r) => ({
+                id_rubro: Number(r.id_rubro),
+                rubro: r.rubro,
+                color: r.color || null,
+                unidades: toNumber(r.unidades),
+                ordenes: toNumber(r.ordenes),
+                ingresos: toNumber(r.ingresos),
+            })),
+            conciliacion: {
+                venta_productos: ventaItems,
+                impuestos,
+                domicilios,
+                descuentos,
+                total_cobrado: totalCobrado,
+                // Debería ser 0 siempre: `pedid_orden.total` se calcula como
+                // subtotal + impuesto + domicilio − descuento (pedidoService:466) y
+                // `subtotal` es la suma de los detalles. Se enseña cuando no cuadra en vez de
+                // esconderlo: un descuadre aquí es un dato roto, y verlo es el aviso.
+                descuadre: Math.round(
+                    (totalCobrado - (ventaItems + impuestos + domicilios - descuentos)) * 100,
+                ) / 100,
+                ordenes: toNumber(cuadre.ordenes),
+            },
+        },
+    };
+}
+
+/**
+ * Ventas por día de la semana: qué día vende más y cuál menos.
+ *
+ * La cifra que de verdad compara es `promedio_por_dia`, no el total: un rango de 30 días trae
+ * cinco lunes y cuatro martes, y el total del lunes sale más alto solo por eso. `dias_en_rango`
+ * cuenta cuántas veces cayó ese día en el rango —incluidos los que no vendieron nada, que es
+ * lo que hace honesto el promedio— y va como columna para que el número se pueda rehacer a mano.
+ */
+async function runVentasDiaSemanaQuery({ idNegocio, startDate, endDate, exportMode }) {
+    const repl = { idNegocio, startDate, endDate };
+
+    const filtroOrden = `
+        WHERE o.id_negocio = :idNegocio
+          AND o.estado = 'CERRADA'
+          AND o.fecha_cierre >= CAST(:startDate AS date)
+          AND o.fecha_cierre < CAST(:endDate AS date) + INTERVAL '1 day'
+    `;
+
+    const [filas, resumen, serie] = await Promise.all([
+        Models.sequelize.query(
+            `WITH dias AS (
+                 SELECT EXTRACT(ISODOW FROM g.dia)::int AS dow, COUNT(*)::int AS dias_en_rango
+                   FROM generate_series(CAST(:startDate AS date), CAST(:endDate AS date),
+                                        INTERVAL '1 day') AS g(dia)
+                  GROUP BY 1
+             ),
+             ventas AS (
+                 SELECT EXTRACT(ISODOW FROM o.fecha_cierre)::int AS dow,
+                        COUNT(*)::int                        AS ordenes,
+                        COALESCE(SUM(o.total), 0)::numeric   AS ventas_totales,
+                        COALESCE(AVG(o.total), 0)::numeric   AS ticket_promedio
+                   FROM restaurante.pedid_orden o
+                   ${filtroOrden}
+                  GROUP BY 1
+             )
+             SELECT d.dow,
+                    d.dias_en_rango,
+                    COALESCE(v.ordenes, 0)                 AS ordenes,
+                    COALESCE(v.ventas_totales, 0)::numeric AS ventas_totales,
+                    COALESCE(v.ticket_promedio, 0)::numeric AS ticket_promedio,
+                    (COALESCE(v.ventas_totales, 0) / NULLIF(d.dias_en_rango, 0))::numeric
+                                                           AS promedio_por_dia
+               FROM dias d
+               LEFT JOIN ventas v ON v.dow = d.dow
+              ORDER BY d.dow`,
+            { replacements: repl, type: Models.sequelize.QueryTypes.SELECT },
+        ),
+        Models.sequelize.query(
+            `SELECT COALESCE(SUM(o.total), 0)::numeric AS ventas_totales,
+                    COUNT(*)::int                      AS ordenes,
+                    COUNT(DISTINCT o.fecha_cierre::date)::int AS dias_con_venta
+               FROM restaurante.pedid_orden o
+               ${filtroOrden}`,
+            { replacements: repl, type: Models.sequelize.QueryTypes.SELECT },
+        ),
+        // La evolución día a día del rango: aquí sí es la gráfica que toca, porque la pregunta
+        // de la pestaña es cuánto se vende cada día.
+        exportMode ? Promise.resolve([]) : Models.sequelize.query(
+            `SELECT to_char(g.dia, 'YYYY-MM-DD')      AS fecha,
+                    COALESCE(SUM(o.total), 0)::numeric AS ventas,
+                    COUNT(o.id_orden)::int             AS ordenes
+               FROM generate_series(CAST(:startDate AS date), CAST(:endDate AS date),
+                                    INTERVAL '1 day') AS g(dia)
+               LEFT JOIN restaurante.pedid_orden o
+                      ON o.id_negocio = :idNegocio
+                     AND o.estado = 'CERRADA'
+                     AND o.fecha_cierre >= g.dia
+                     AND o.fecha_cierre < g.dia + INTERVAL '1 day'
+              GROUP BY g.dia
+              ORDER BY g.dia`,
+            { replacements: repl, type: Models.sequelize.QueryTypes.SELECT },
+        ),
+    ]);
+
+    // Mejor y peor día se deciden por el promedio y solo entre los días que de verdad cayeron
+    // en el rango. Sin ese filtro, un rango de 3 días declararía «el peor día es el domingo»
+    // por un domingo que no existió.
+    const conDatos = filas.filter((f) => toNumber(f.dias_en_rango) > 0);
+    const ordenados = [...conDatos].sort(
+        (a, b) => toNumber(b.promedio_por_dia) - toNumber(a.promedio_por_dia),
+    );
+    const etiqueta = (fila) => (fila ? DIAS_SEMANA[toNumber(fila.dow) - 1] : null);
+    const hayVentas = ordenados.some((f) => toNumber(f.ventas_totales) > 0);
+    const total = resumen[0] || {};
+    const diasConVenta = toNumber(total.dias_con_venta);
+
+    return {
+        rows: filas,
+        total: filas.length,
+        page: 1,
+        pageSize: filas.length || 7,
+        resumen: {
+            mejor_dia: hayVentas ? etiqueta(ordenados[0]) : null,
+            peor_dia: hayVentas ? etiqueta(ordenados[ordenados.length - 1]) : null,
+            ventas_totales: toNumber(total.ventas_totales),
+            promedio_por_dia: diasConVenta > 0 ? toNumber(total.ventas_totales) / diasConVenta : 0,
+        },
+        graficas: exportMode ? null : {
+            por_dia_semana: filas.map((f) => ({
+                dow: toNumber(f.dow),
+                dia: DIAS_SEMANA[toNumber(f.dow) - 1] || 'Sin dia',
+                dias_en_rango: toNumber(f.dias_en_rango),
+                ordenes: toNumber(f.ordenes),
+                ventas: toNumber(f.ventas_totales),
+                promedio_por_dia: toNumber(f.promedio_por_dia),
+                ticket_promedio: toNumber(f.ticket_promedio),
+            })),
+            serie_diaria: serie.map((r) => ({
+                fecha: r.fecha,
+                ventas: toNumber(r.ventas),
+                ordenes: toNumber(r.ordenes),
+            })),
+        },
+    };
+}
+
 async function runEstadoCocinaQuery({ idNegocio, startDate, endDate, page, pageSize, offset, exportMode }) {
     const limit = exportMode ? EXPORT_MAX_ROWS : pageSize;
 
@@ -730,10 +1266,71 @@ async function runReportQuery(tipo, params) {
     if (tipo === 'rendimiento_usuarios') {
         return runRendimientoUsuariosQuery(params);
     }
+    if (tipo === 'ventas_rubro') {
+        return runVentasRubroQuery(params);
+    }
+    if (tipo === 'ventas_dia_semana') {
+        return runVentasDiaSemanaQuery(params);
+    }
     return runEstadoCocinaQuery(params);
 }
 
-async function getReporte({ idUsuario, idNegocio, tipo = 'ventas_periodo', fechaDesde, fechaHasta, page = 1, pageSize = DEFAULT_PAGE_SIZE }) {
+/**
+ * Los productos que se pueden cruzar en «ventas por usuario».
+ *
+ * Lista plana con su categoría y su sector: el selector del frontend filtra en memoria, que a
+ * la escala de una carta de restaurante es más rápido que ir y volver por cada letra escrita.
+ */
+async function getCatalogoProductos({ idUsuario, idNegocio }) {
+    const negocioContext = await resolveNegocioContext(idUsuario, idNegocio);
+
+    const filas = await Models.sequelize.query(
+        `SELECT p.id_producto, p.nombre,
+                c.id_categoria, c.nombre AS categoria,
+                r.id_rubro, r.nombre AS rubro
+           FROM restaurante.carta_producto p
+           INNER JOIN restaurante.carta_categoria c ON c.id_categoria = p.id_categoria
+           LEFT  JOIN restaurante.rest_rubro r      ON r.id_rubro = c.id_rubro
+          WHERE p.id_negocio = :idNegocio AND p.estado = 'A'
+          ORDER BY c.orden, c.nombre, p.nombre`,
+        {
+            replacements: { idNegocio: negocioContext.idNegocio },
+            type: Models.sequelize.QueryTypes.SELECT,
+        },
+    );
+
+    return {
+        negocio: { id_negocio: negocioContext.idNegocio, nombre: negocioContext.negocioNombre },
+        max_seleccion: MAX_PRODUCTOS_FILTRO,
+        rows: filas.map((f) => ({
+            id_producto: Number(f.id_producto),
+            nombre: f.nombre,
+            id_categoria: Number(f.id_categoria),
+            categoria: f.categoria,
+            id_rubro: f.id_rubro == null ? null : Number(f.id_rubro),
+            rubro: f.rubro || null,
+        })),
+    };
+}
+
+/**
+ * «Ventas por sector» solo existe para el negocio que separa sectores.
+ *
+ * El frontend ya esconde la pestaña cuando no hay rubros, pero la API es alcanzable con un
+ * token y esto no debe contestar una tabla de una sola fila «General» que parecería la
+ * función funcionando a medias.
+ */
+async function exigirRubros(idNegocio) {
+    if (!(await rubroService.negocioUsaRubros(idNegocio))) {
+        throw createHttpError(
+            'Este negocio no separa sus ingresos por sector. Crea los sectores en Configuracion -> Sectores.',
+            422,
+            'RUBROS_NO_CONFIGURADOS',
+        );
+    }
+}
+
+async function getReporte({ idUsuario, idNegocio, tipo = 'ventas_periodo', fechaDesde, fechaHasta, page = 1, pageSize = DEFAULT_PAGE_SIZE, idsProducto }) {
     if (!REPORT_TYPES[tipo]) {
         throw createHttpError('Tipo de reporte no soportado.', 422, 'REPORTE_TIPO_INVALIDO');
     }
@@ -741,17 +1338,22 @@ async function getReporte({ idUsuario, idNegocio, tipo = 'ventas_periodo', fecha
     const negocioContext = await resolveNegocioContext(idUsuario, idNegocio);
     const rangoFechas = buildDateRange(fechaDesde, fechaHasta);
     const pagination = buildPagination(page, pageSize);
+    const productos = parseIdsProducto(idsProducto);
+
+    if (tipo === 'ventas_rubro') await exigirRubros(negocioContext.idNegocio);
 
     const reportResult = await runReportQuery(tipo, {
         idNegocio: negocioContext.idNegocio,
         startDate: rangoFechas.startDate,
         endDate: rangoFechas.endDate,
         ...pagination,
+        idsProducto: productos,
         exportMode: false,
     });
 
     const normalizedRows = normalizeRows(tipo, reportResult.rows || []);
-    const totalPages = Math.max(1, Math.ceil((reportResult.total || 0) / pagination.pageSize));
+    const pageSizeEfectivo = reportResult.pageSize || pagination.pageSize;
+    const totalPages = Math.max(1, Math.ceil((reportResult.total || 0) / pageSizeEfectivo));
 
     return {
         tipo,
@@ -763,27 +1365,33 @@ async function getReporte({ idUsuario, idNegocio, tipo = 'ventas_periodo', fecha
         filtros: {
             fecha_desde: rangoFechas.startDate,
             fecha_hasta: rangoFechas.endDate,
+            ...(productos.length > 0 ? { id_productos: productos } : {}),
         },
-        columns: REPORT_TYPES[tipo].columns,
+        columns: columnsFor(tipo, { idsProducto: productos }),
         resumen: mapResumenItems(tipo, reportResult.resumen || {}, rangoFechas),
         ...(reportResult.graficas ? { graficas: reportResult.graficas } : {}),
         rows: normalizedRows,
         pagination: {
-            page: pagination.page,
-            page_size: pagination.pageSize,
+            // «Ventas por dia de la semana» trae siempre las 7 filas de una vez y devuelve su
+            // propio tamaño de pagina: paginar un reporte de 7 filas no tiene sentido.
+            page: reportResult.page || pagination.page,
+            page_size: pageSizeEfectivo,
             total: reportResult.total || 0,
             total_pages: totalPages,
         },
     };
 }
 
-async function getExportPayload({ idUsuario, idNegocio, tipo = 'ventas_periodo', fechaDesde, fechaHasta }) {
+async function getExportPayload({ idUsuario, idNegocio, tipo = 'ventas_periodo', fechaDesde, fechaHasta, idsProducto }) {
     if (!REPORT_TYPES[tipo]) {
         throw createHttpError('Tipo de reporte no soportado.', 422, 'REPORTE_TIPO_INVALIDO');
     }
 
     const negocioContext = await resolveNegocioContext(idUsuario, idNegocio);
     const rangoFechas = buildDateRange(fechaDesde, fechaHasta);
+    const productos = parseIdsProducto(idsProducto);
+
+    if (tipo === 'ventas_rubro') await exigirRubros(negocioContext.idNegocio);
 
     const reportResult = await runReportQuery(tipo, {
         idNegocio: negocioContext.idNegocio,
@@ -792,6 +1400,7 @@ async function getExportPayload({ idUsuario, idNegocio, tipo = 'ventas_periodo',
         page: 1,
         pageSize: EXPORT_MAX_ROWS,
         offset: 0,
+        idsProducto: productos,
         exportMode: true,
     });
 
@@ -808,11 +1417,30 @@ async function getExportPayload({ idUsuario, idNegocio, tipo = 'ventas_periodo',
         throw createHttpError('No hay datos para exportar en el rango seleccionado.', 422, 'REPORTE_SIN_DATOS');
     }
 
-    const columns = REPORT_TYPES[tipo].columns;
+    const columns = columnsFor(tipo, { idsProducto: productos });
     const resumen = mapResumenItems(tipo, reportResult.resumen || {}, rangoFechas).reduce((acc, item) => {
         acc[item.label] = item.value;
         return acc;
     }, {});
+
+    // Las líneas que cuadran la suma de sectores contra el total cobrado. Solo van en la
+    // exportación: en pantalla las pinta su propia tarjeta a partir de `graficas.conciliacion`.
+    if (tipo === 'ventas_rubro') {
+        const crudo = reportResult.resumen || {};
+        Object.assign(resumen, {
+            'Impuestos': toNumber(crudo.impuestos),
+            'Domicilios': toNumber(crudo.domicilios),
+            'Descuentos': toNumber(crudo.descuentos),
+            'Pedidos cobrados': toNumber(crudo.ordenes),
+        });
+    }
+
+    // Qué productos se cruzaron: sin esto el Excel de «ventas por usuario» con selección es un
+    // listado de cifras sin decir de qué son.
+    if (productos.length > 0 && reportResult.productosSeleccionados?.length) {
+        resumen['Productos cruzados'] = reportResult.productosSeleccionados
+            .map((p) => p.nombre).join(', ');
+    }
 
     return {
         tipo,
@@ -986,7 +1614,10 @@ async function getDetalleVentaPeriodo({ idUsuario, idNegocio, idOrden }) {
 
 module.exports = {
     REPORT_TYPES,
+    DIAS_SEMANA,
+    MAX_PRODUCTOS_FILTRO,
     getReporte,
     getExportPayload,
     getDetalleVentaPeriodo,
+    getCatalogoProductos,
 };

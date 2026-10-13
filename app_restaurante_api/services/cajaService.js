@@ -4,6 +4,7 @@ const Models = require('../../app_core/models/conection');
 const { usuarioTieneSubnivel } = require('../../app_core/helpers/permisoSubnivel');
 const { avisar, TEMAS } = require('./avisoService');
 const puntoCajaService = require('./puntoCajaService');
+const rubroService = require('./rubroService');
 
 const SUBNIVEL_ANULAR_PEDIDO = 'caja_eliminar_pedido';
 
@@ -230,6 +231,107 @@ async function getDesglosePorMetodo(idCaja) {
         nombre:         r.nombre ?? 'Manual / Sin orden',
         total:          Number(r.total ?? 0),
     }));
+}
+
+/**
+ * Qué se vendió en este turno, partido por sector de ingreso (rubro).
+ *
+ * **No es un segundo arqueo.** El arqueo es `ingresos_por_metodo`, que cuadra el cajón. Esto
+ * contesta otra pregunta: «de lo que cobré en este turno, cuánto fue parrilla y cuánto sushi».
+ *
+ * ## Qué pedidos cuentan, y por qué no `pedid_orden.id_caja`
+ *
+ * Los que tienen un INGRESO vigente EN ESTE TURNO, con el mismo criterio que
+ * `getDesglosePorMetodo`: del par anulado no cuenta ninguna de las dos filas. Anclarlo al
+ * movimiento y no a `o.id_caja` ata el corte a la plata que de verdad entró, que es la
+ * pregunta de quien cierra; `o.id_caja` se escribe al cobrar y puede quedar apuntando a un
+ * turno sin su movimiento detrás (pasa con datos cargados en bloque), y entonces el panel
+ * enseñaría una venta por sector treinta veces mayor que el cajón.
+ *
+ * ## La atribución es por ÍTEM
+ *
+ * Vía la categoría del producto: así una mesa que pidió de tres sectores y pagó una sola vez
+ * se reparte sola. Lo que no es producto —impuesto, domicilio, descuento— vive en la orden y
+ * **no se prorratea**: vuelve en campos propios para que la pantalla lo enseñe en líneas
+ * aparte y la suma cuadre contra el total de esos pedidos.
+ *
+ * La suma sigue sin tener que coincidir con el cajón, y eso está bien: en el cajón también hay
+ * abonos y egresos manuales sin productos detrás, y la parte de un pedido que pagó una
+ * tiquetera no entró como plata. La pantalla lo dice.
+ *
+ * Devuelve `null` cuando el negocio no tiene sectores: la pantalla no pinta nada.
+ */
+async function getDesglosePorRubro(idCaja, idNegocio) {
+    if (!(await rubroService.negocioUsaRubros(idNegocio))) return null;
+
+    // Los pedidos con ingreso vigente en el turno. `estado = 'CERRADA'` deja fuera los
+    // anulados (pasan a 'ANULADA'), igual que en los informes; el NOT EXISTS deja fuera los
+    // movimientos reversados y las propias filas compensatorias.
+    const ordenesDelTurno = `
+        SELECT DISTINCT m.id_orden
+          FROM restaurante.rest_movimiento_caja m
+         WHERE m.id_caja = :idCaja
+           AND m.tipo = 'INGRESO'
+           AND m.id_orden IS NOT NULL
+           AND m.id_movimiento_anula IS NULL
+           AND NOT EXISTS (
+               SELECT 1 FROM restaurante.rest_movimiento_caja a
+                WHERE a.id_movimiento_anula = m.id_movimiento
+           )
+    `;
+
+    const [porRubro, totales] = await Promise.all([
+        Models.sequelize.query(
+            `WITH ordenes AS (${ordenesDelTurno})
+             SELECT COALESCE(r.id_rubro, 0)              AS id_rubro,
+                    COALESCE(r.nombre, 'General')        AS nombre,
+                    MAX(r.color)                         AS color,
+                    SUM(d.cantidad)::int                 AS unidades,
+                    COALESCE(SUM(d.subtotal), 0)::numeric AS ingresos
+               FROM ordenes t
+               INNER JOIN restaurante.pedid_orden o     ON o.id_orden = t.id_orden
+                                                       AND o.id_negocio = :idNegocio
+                                                       AND o.estado = 'CERRADA'
+               INNER JOIN restaurante.pedid_detalle d   ON d.id_orden = o.id_orden
+               INNER JOIN restaurante.carta_producto p  ON p.id_producto = d.id_producto
+               INNER JOIN restaurante.carta_categoria c ON c.id_categoria = p.id_categoria
+               LEFT  JOIN restaurante.rest_rubro r      ON r.id_rubro = c.id_rubro
+              GROUP BY COALESCE(r.id_rubro, 0), COALESCE(r.nombre, 'General')
+              ORDER BY ingresos DESC`,
+            { replacements: { idCaja, idNegocio }, type: Models.sequelize.QueryTypes.SELECT },
+        ),
+        Models.sequelize.query(
+            `WITH ordenes AS (${ordenesDelTurno})
+             SELECT COALESCE(SUM(o.subtotal), 0)::numeric        AS venta_productos,
+                    COALESCE(SUM(o.impuesto), 0)::numeric        AS impuestos,
+                    COALESCE(SUM(o.valor_domicilio), 0)::numeric AS domicilios,
+                    COALESCE(SUM(o.descuento), 0)::numeric       AS descuentos,
+                    COALESCE(SUM(o.total), 0)::numeric           AS total_pedidos,
+                    COUNT(*)::int                                AS ordenes
+               FROM ordenes t
+               INNER JOIN restaurante.pedid_orden o ON o.id_orden = t.id_orden
+                                                   AND o.id_negocio = :idNegocio
+                                                   AND o.estado = 'CERRADA'`,
+            { replacements: { idCaja, idNegocio }, type: Models.sequelize.QueryTypes.SELECT },
+        ),
+    ]);
+
+    const t = totales[0] || {};
+    return {
+        rubros: porRubro.map((r) => ({
+            id_rubro: Number(r.id_rubro) || null,
+            nombre: r.nombre,
+            color: r.color || null,
+            unidades: Number(r.unidades || 0),
+            ingresos: Number(r.ingresos || 0),
+        })),
+        venta_productos: Number(t.venta_productos || 0),
+        impuestos: Number(t.impuestos || 0),
+        domicilios: Number(t.domicilios || 0),
+        descuentos: Number(t.descuentos || 0),
+        total_pedidos: Number(t.total_pedidos || 0),
+        ordenes: Number(t.ordenes || 0),
+    };
 }
 
 async function getResumenDomiciliarios(idNegocio, { idPuntoCaja = null, idUsuario = null } = {}) {
@@ -524,14 +626,19 @@ async function getCajaAbierta(idNegocio, { idPuntoCaja = null, idUsuario = null 
 
     const { ingresos, egresos } = totalesDeMovimientos(caja.movimientos);
 
-    const [json, desglose] = await Promise.all([
+    // Esta función lleva sus propios totales en vez de pasar por `calcularTotalesCaja` (tiene
+    // los movimientos ya incluidos y se ahorra la consulta), así que lo que se añada allí hay
+    // que añadirlo aquí también. `/caja/abierta` es la pantalla principal de Caja.
+    const [json, desglose, porRubro] = await Promise.all([
         Promise.resolve(caja.toJSON()),
         getDesglosePorMetodo(caja.id_caja),
+        getDesglosePorRubro(caja.id_caja, idNegocio),
     ]);
     json.ingresos            = ingresos;
     json.egresos             = egresos;
     json.monto_esperado      = Number(caja.monto_apertura) + ingresos - egresos;
     json.ingresos_por_metodo = desglose;
+    json.venta_por_rubro     = porRubro;
     // Qué caja se está mirando, para que la pantalla pueda titularlo sin otra consulta.
     json.punto               = { id_punto_caja: Number(punto.id_punto_caja), nombre: punto.nombre };
     delete json.movimientos;
@@ -601,6 +708,9 @@ async function calcularTotalesCaja(caja) {
     json.egresos             = egresos;
     json.monto_esperado      = Number(caja.monto_apertura) + ingresos - egresos;
     json.ingresos_por_metodo = await getDesglosePorMetodo(caja.id_caja);
+    // `null` cuando el negocio no separa sectores, que son todos hasta que alguien cree el
+    // primero. La pantalla no pinta el bloque y nadie ve una función que no pidió.
+    json.venta_por_rubro     = await getDesglosePorRubro(caja.id_caja, caja.id_negocio);
     delete json.movimientos;
     return json;
 }
@@ -1491,5 +1601,6 @@ module.exports = {
     resolverMetodoPagoDomicilio,
     registrarIngresoOrden,
     getDesglosePorMetodo,
+    getDesglosePorRubro,
     validarPendientesCierre,
 };
