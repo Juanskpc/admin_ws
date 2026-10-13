@@ -168,6 +168,21 @@ app.use(
     })
 );
 
+// Las imágenes de las promociones (F2). Esta carpeta tiene que ser pública por una razón distinta
+// a las demás: **la descarga un servidor de Meta**, no un navegador. Al enviar una plantilla con
+// encabezado de imagen se le pasa un `link`, y Meta va a buscarlo desde internet — si la carpeta no
+// está servida o la URL es relativa, la promoción sale sin imagen y el 400 llega tarde.
+// Ver `promocionController.postImagen`.
+app.use(
+    '/uploads/promociones',
+    express.static(path.join(__dirname, 'uploads', 'promociones'), {
+        maxAge: '7d',
+        setHeaders(res) {
+            res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+        },
+    })
+);
+
 // Logos, fotos de servicio y fotos de profesional del vertical `reserva`. Igual que el menú: se
 // exponen SOLO estas subcarpetas, nunca `/uploads/reserva` entero — ahí viven los comprobantes
 // de pago, que son privados. Cross-origin porque la página pública se sirve desde otro dominio.
@@ -312,6 +327,16 @@ app.use(errorHandler);
             // Importación de calendarios de Airbnb/Booking para alojamientos (cada 15 min). Sin
             // calendarios configurados no hace nada; se apaga con RESERVA_ICAL_ENABLED=false.
             require('./app_reserva_api/services/estancia/icalService').iniciar();
+
+            // Despachador de promociones (F2). Saca las campañas con ritmo —el tier de Meta, no la
+            // velocidad de la API, es lo que manda— y devuelve los créditos de lo que no se
+            // entregó. Sin ninguna campaña en marcha no hace nada; se apaga con
+            // PROMOS_DESPACHADOR_ENABLED=false.
+            if (process.env.PROMOS_DESPACHADOR_ENABLED !== 'false') {
+                require('./app_core/promociones/despachador').iniciar();
+            } else {
+                console.log('[promociones] Despachador apagado por PROMOS_DESPACHADOR_ENABLED=false.');
+            }
 
             // Modo de autorización multi-inquilino (ADR-002, ADR-010). Se anuncia siempre:
             // creer que se está bloqueando cuando solo se observa es el peor error posible aquí.

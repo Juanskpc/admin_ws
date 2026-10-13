@@ -101,6 +101,9 @@ function reconstruir(filas) {
                 origen: f.origen || 'manual',
                 token,
                 coexistencia: f.coexistencia === true,
+                // La WABA del negocio. Hace falta para crear plantillas en SU cuenta (F2 de las
+                // promociones): el id de la plantilla cuelga de la WABA, no del numero.
+                wabaId: f.waba_id ? String(f.waba_id) : null,
             });
         }
     }
@@ -227,6 +230,20 @@ function negocioDeWaba(wabaId) {
     return porWaba.get(String(wabaId)) ?? null;
 }
 
+/**
+ * La WABA del negocio, que es donde viven SUS plantillas. `null` si no la tenemos.
+ *
+ * Es la dirección contraria a `negocioDeWaba`, y sirve para otra cosa: aquella atribuye un
+ * webhook, esta decide en qué cuenta se crea una plantilla. Para el negocio de alta manual
+ * —que cuelga de NUESTRA WABA— devuelve la nuestra, y por eso quien crea plantillas de
+ * marketing tiene que comprobar antes el `origen`: crearlas en la WABA compartida le pondría
+ * a EscalApp la factura y la calificación de otro.
+ */
+function wabaDeNegocio(idNegocio) {
+    if (!idNegocio) return null;
+    return porNegocio.get(Number(idNegocio))?.wabaId ?? null;
+}
+
 /** ¿El número del negocio vive también en la app WhatsApp Business (coexistencia)? */
 function coexistenciaDeNegocio(idNegocio) {
     if (!idNegocio) return false;
@@ -263,6 +280,7 @@ module.exports = {
     tokenDeNegocio,
     origenDeNegocio,
     negocioDeWaba,
+    wabaDeNegocio,
     coexistenciaDeNegocio,
     listar,
     CANAL,

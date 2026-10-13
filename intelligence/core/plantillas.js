@@ -143,7 +143,85 @@ const CATALOGO = {
             'Hola {{1}}, tu pedido {{2}} de {{3}} ya está listo y el domiciliario va en camino. ' +
             'Si necesitas algo, respóndenos a este mensaje.',
     },
+
+    /**
+     * La promoción, sin imagen (F2 de `docs/promociones-masivas.md`).
+     *
+     * ## Las tres cosas que la separan de todo lo anterior de este catálogo
+     *
+     * 1. **Es `MARKETING`.** Cuesta **15 veces** más que una `UTILITY` (US$0,0125 frente a
+     *    US$0,0008 a un número colombiano), **no entra** en la asignación de 1.000 mensajes de
+     *    servicio gratis y se cobra desde el primero. Presentar esto como `UTILITY` para pagar
+     *    menos no es una optimización: es lo que hace que Meta rechace la plantilla o degrade la
+     *    cuenta.
+     * 2. **Se crea en la WABA DEL INQUILINO**, no en la nuestra. El texto es código —igual que el
+     *    de `recordatorio_cita`— y `app_core/promociones/plantillasMeta.js` lo somete a cada WABA
+     *    con **este mismo nombre e idioma**. Así no puede haber deriva: no se copia a Meta a mano.
+     * 3. **Lleva la salida dentro.** El `pie` con «responde: no promos» es lo que sustituye a la
+     *    pregunta que se decidió no hacerle a nadie (§4), y el botón de respuesta rápida es la
+     *    misma salida en un toque. Las palabras del botón **tienen que casar** con
+     *    `engine/bajaPromociones.PALABRAS_BAJA`, porque lo que vuelve de ese botón es un mensaje
+     *    de texto normal: si no casan, el cliente pulsa «no quiero promociones» y no pasa nada.
+     *
+     * ## Por qué el cuerpo dice de dónde salió
+     *
+     * «Recibes este mensaje porque has pedido con nosotros» no es relleno. Es lo que exige la
+     * política de Meta —que quede claro quién escribe y por qué— y es lo que hace que el cliente
+     * reconozca al negocio en vez de reportar el número. El reporte no lo paga EscalApp: lo paga
+     * la calificación del número del inquilino, que es por donde le entra el 39 % de los pedidos.
+     *
+     * Dos reglas de Meta que esto respeta: **no termina en variable** y el pie cabe en 60
+     * caracteres.
+     */
+    promocion_texto: {
+        nombre: 'promocion_texto',
+        idioma: 'es_CO',
+        categoria: 'MARKETING',
+        parametros: ['cliente', 'negocio', 'oferta'],
+        texto:
+            'Hola {{1}}, te escribimos de {{2}} 👋\n\n'
+            + '{{3}}\n\n'
+            + 'Recibes este mensaje porque has pedido con nosotros. '
+            + 'Si te interesa, respóndenos por aquí y te atendemos.',
+        pie: 'Si no quieres promociones, responde: no promos',
+        botones: [{ tipo: 'QUICK_REPLY', texto: 'No quiero promociones' }],
+    },
+
+    /**
+     * La misma promoción con una imagen arriba, que es como la quiere cualquiera que vende comida.
+     *
+     * ## El precio de la imagen: un `handle`, no una URL
+     *
+     * Para **crear** una plantilla con encabezado de imagen, Meta no acepta un enlace: exige un
+     * `header_handle` de su API de subidas. O sea que hay que subirle una imagen de ejemplo antes
+     * de poder someterla (`plantillasMeta.subirEjemplo`). Al **enviar** sí se manda un `link`, que
+     * es la imagen de verdad de cada campaña.
+     *
+     * La consecuencia práctica, y por eso existen las dos plantillas: `promocion_texto` se puede
+     * aprobar sin tener ninguna imagen, así que un negocio siempre tiene un camino para enviar
+     * aunque la de imagen esté pendiente o rechazada.
+     */
+    promocion_imagen: {
+        nombre: 'promocion_imagen',
+        idioma: 'es_CO',
+        categoria: 'MARKETING',
+        parametros: ['cliente', 'negocio', 'oferta'],
+        /** El encabezado es media: su «parámetro» es la imagen de la campaña, no un texto. */
+        encabezado: 'IMAGE',
+        texto:
+            'Hola {{1}}, te escribimos de {{2}} 👋\n\n'
+            + '{{3}}\n\n'
+            + 'Recibes este mensaje porque has pedido con nosotros. '
+            + 'Si te interesa, respóndenos por aquí y te atendemos.',
+        pie: 'Si no quieres promociones, responde: no promos',
+        botones: [{ tipo: 'QUICK_REPLY', texto: 'No quiero promociones' }],
+    },
 };
+
+/** Las de marketing, que son las que se crean en la WABA de cada inquilino. */
+function deMarketing() {
+    return Object.values(CATALOGO).filter((p) => p.categoria === 'MARKETING');
+}
 
 /** La plantilla, o `null` si no está en el catálogo. Nunca lanza: quien decide es el que envía. */
 function obtener(nombre) {
@@ -163,4 +241,4 @@ function renderizarTexto(nombre, parametros = {}) {
     return componer(plantilla, parametros);
 }
 
-module.exports = { CATALOGO, obtener, renderizarTexto, componer };
+module.exports = { CATALOGO, obtener, renderizarTexto, componer, deMarketing };

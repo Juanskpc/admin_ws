@@ -1,4 +1,7 @@
 const express = require('express');
+const fs = require('fs');
+const path = require('path');
+const multer = require('multer');
 const { body, param, query } = require('express-validator');
 const router = express.Router();
 
@@ -31,6 +34,7 @@ const FeConfiguracionController = require('../controllers/feConfiguracionControl
 const CanalWhatsappController = require('../controllers/canalWhatsappController');
 const CobranzaController = require('../controllers/cobranzaController');
 const AdquirirController = require('../controllers/adquirirController');
+const PromocionController = require('../controllers/promocionController');
 const { verificarToken, requireSuperAdmin } = require('../../app_core/middleware/auth');
 // Límite estrecho para las rutas donde se prueban credenciales. Va aquí y no en `app.js` porque
 // la clave del cubo incluye la identificación que viene en el cuerpo, y el parser JSON corre
@@ -285,6 +289,74 @@ router.patch('/usuarios/admin/:id/estado', UsuarioAdminController.usuarioAdminVa
 router.delete('/usuarios/admin/:id', UsuarioAdminController.usuarioAdminValidators.remove, UsuarioAdminController.deleteUsuario);
 router.get('/usuarios/admin/:id/permisos', UsuarioAdminController.usuarioAdminValidators.getPermisosUsuario, UsuarioAdminController.getPermisosUsuario);
 router.get('/usuarios/admin/:id/historial', requireSuperAdmin, UsuarioAdminController.usuarioAdminValidators.historial, UsuarioAdminController.getHistorialUsuario);
+
+// --- Promociones (F1: audiencia, segmentos y simulador; todavía no envía) ---
+//
+// Transversales a propósito, igual que `/usuarios/admin/*`: la misma pantalla servirá a reserva
+// cambiando el adaptador de hechos. **Sin `requireSuperAdmin`** y acotadas por negocio dentro del
+// controlador con `alcanceAdmin` sobre `req.principal` — las usa `negocio_app`, o sea el dueño del
+// restaurante sobre su propia clientela.
+router.get('/promociones/disponible', PromocionController.promocionValidators.disponible, PromocionController.getDisponible);
+router.get('/promociones/audiencia', PromocionController.promocionValidators.audiencia, PromocionController.getAudiencia);
+router.get('/promociones/destinatarios', PromocionController.promocionValidators.destinatarios, PromocionController.getDestinatarios);
+router.post('/promociones/simular', PromocionController.promocionValidators.simular, PromocionController.postSimular);
+router.post('/promociones/clientes/:id/baja', PromocionController.promocionValidators.baja, PromocionController.postBaja);
+router.post('/promociones/clientes/:id/readmitir', PromocionController.promocionValidators.readmitir, PromocionController.postReadmitir);
+
+// ───────── Multer: la imagen de una promoción ─────────
+//
+// ⚠️ **La diferencia con las imágenes de la carta: esta la descarga META, no el navegador.** Las
+// del menú se sirven con ruta relativa porque las pide el cliente desde la misma web; aquí el que
+// va a buscar el archivo es un servidor de Meta desde internet, así que la URL tiene que ser
+// **absoluta** y la carpeta tiene que estar servida estáticamente (ver `app.js`). Una ruta
+// relativa aquí es una plantilla que sale sin imagen y un 400 que llega tarde.
+const PROMO_IMG_BASE = path.resolve(path.join(__dirname, '..', '..', 'uploads', 'promociones'));
+const promoImgStorage = multer.diskStorage({
+    destination(req, _file, cb) {
+        const idNegocio = String(req.params.id_negocio || '').replace(/[^\d]/g, '') || 'misc';
+        const dir = path.join(PROMO_IMG_BASE, idNegocio);
+        fs.mkdirSync(dir, { recursive: true });
+        cb(null, dir);
+    },
+    filename(_req, file, cb) {
+        const ext = file.mimetype === 'image/png' ? '.png' : '.jpg';
+        // Con la hora dentro: una promoción nueva no puede pisar la imagen de una que ya salió —
+        // Meta puede volver a pedirla, y el informe de la vieja seguiría enseñándola.
+        cb(null, `promo-${Date.now()}${ext}`);
+    },
+});
+const uploadPromoImg = multer({
+    storage: promoImgStorage,
+    fileFilter: (_req, file, cb) => {
+        // Solo JPG y PNG: son los que Meta acepta en el encabezado de una plantilla. Un WEBP se
+        // sube bien y falla al enviar, que es el peor momento para descubrirlo.
+        if (['image/jpeg', 'image/png'].includes(file.mimetype)) cb(null, true);
+        else cb(Object.assign(new Error('Meta solo acepta imágenes JPG o PNG'), { statusCode: 400 }));
+    },
+    limits: { fileSize: 5 * 1024 * 1024 },
+});
+
+// F2: las plantillas en la WABA del inquilino, la compuerta y las campañas.
+//
+// ⚠️ El orden importa: `/campanas/:id` iría a parar a `/campanas` si estuviera después, y
+// `/plantillas/asegurar` a `/plantillas`. Las rutas fijas van antes que las paramétricas.
+router.get('/promociones/plantillas', PromocionController.promocionValidators.plantillas, PromocionController.getPlantillas);
+router.post('/promociones/plantillas/asegurar', PromocionController.promocionValidators.asegurarPlantillas, PromocionController.postAsegurarPlantillas);
+router.post('/promociones/plantillas/sincronizar', PromocionController.promocionValidators.sincronizarPlantillas, PromocionController.postSincronizarPlantillas);
+router.get('/promociones/elegibilidad', PromocionController.promocionValidators.elegibilidadCampana, PromocionController.getElegibilidad);
+router.get('/promociones/campanas', PromocionController.promocionValidators.campanas, PromocionController.getCampanas);
+router.post('/promociones/campanas', PromocionController.promocionValidators.crearCampana, PromocionController.postCrearCampana);
+router.get('/promociones/campanas/:id', PromocionController.promocionValidators.verCampana, PromocionController.getCampana);
+router.post('/promociones/campanas/:id/prueba', PromocionController.promocionValidators.pruebaCampana, PromocionController.postPrueba);
+router.post('/promociones/campanas/:id/enviar', PromocionController.promocionValidators.enviarCampana, PromocionController.postEnviar);
+router.post('/promociones/campanas/:id/pausar', PromocionController.promocionValidators.pausarCampana, PromocionController.postPausar);
+router.post('/promociones/campanas/:id/cancelar', PromocionController.promocionValidators.porCampana, PromocionController.postCancelar);
+router.post(
+    '/promociones/:id_negocio/imagen',
+    [param('id_negocio').isInt({ min: 1 })],
+    uploadPromoImg.single('imagen'),
+    PromocionController.postImagen,
+);
 
 router.get('/roles/admin/lista', UsuarioAdminController.getRoles);
 router.get('/roles/admin/:id/permisos', UsuarioAdminController.usuarioAdminValidators.getPermisosRol, UsuarioAdminController.getPermisosRol);

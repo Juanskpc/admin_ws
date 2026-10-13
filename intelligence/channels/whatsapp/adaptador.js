@@ -833,7 +833,7 @@ function renderizar({ texto, opciones = [], plantilla = null }) {
  * un JSON no es un contrato. Mandarlos en otro orden no da error — da un mensaje que dice que la
  * cita es «de las 3 de Ana» en vez de «de Ana a las 3».
  */
-function renderizarPlantilla({ nombre, idioma, parametros = {} }) {
+function renderizarPlantilla({ nombre, idioma, parametros = {}, encabezado_url: encabezadoUrl = null }) {
     const definicion = plantillas.obtener(nombre);
     if (!definicion) {
         // No es reintentable: una plantilla que no está en el catálogo no aparece por insistir.
@@ -848,13 +848,37 @@ function renderizarPlantilla({ nombre, idioma, parametros = {} }) {
         text: String(parametros[clave] ?? '').trim(),
     }));
 
+    const componentes = [];
+
+    // El encabezado de imagen (F2: las promociones). Al ENVIAR va un `link`, no el `handle` que
+    // Meta exige al crear la plantilla: son dos cosas distintas y confundirlas da un 400 con un
+    // mensaje que no ayuda. Ver `app_core/promociones/plantillasMeta.js`.
+    if (definicion.encabezado === 'IMAGE') {
+        if (!encabezadoUrl) {
+            // Sin imagen no se puede mandar esta plantilla, y no es cosa de reintentar: la URL la
+            // puso (o no) quien armó la campaña.
+            const e = new Error(`La plantilla "${nombre}" necesita una imagen y no la trae.`);
+            e.code = 'WHATSAPP_PLANTILLA_SIN_IMAGEN';
+            e.reintentable = false;
+            throw e;
+        }
+        componentes.push({
+            type: 'header',
+            parameters: [{ type: 'image', image: { link: encabezadoUrl } }],
+        });
+    }
+
+    if (valores.length) componentes.push({ type: 'body', parameters: valores });
+
     return {
         type: 'template',
         template: {
             name: definicion.nombre,
             language: { code: idioma || definicion.idioma },
-            // Una plantilla sin huecos no lleva `components`: mandarlo vacío es un 400.
-            ...(valores.length ? { components: [{ type: 'body', parameters: valores }] } : {}),
+            // Una plantilla sin huecos no lleva `components`: mandarlo vacío es un 400. Y el pie y
+            // los botones NO van aquí: no tienen variables, así que viajan en la plantilla
+            // aprobada y mandarlos otra vez sería un 400.
+            ...(componentes.length ? { components: componentes } : {}),
         },
     };
 }

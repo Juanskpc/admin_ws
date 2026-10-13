@@ -38,6 +38,10 @@ const confirmacion = require('./confirmacion');
 // La baja (STOP/BAJA) va por encima de la tabla de enrutado: no es una decisión de costo, es una
 // obligación legal, y ninguna otra regla puede ganarle. Ver la cabecera de `optout.js`.
 const optout = require('./optout');
+// La baja BLANDA de publicidad («no promos»). No es lo mismo que `optout`: aquella bloquea la
+// conversación para siempre, esta solo saca al cliente de las promociones y deja el canal vivo.
+// Ver la cabecera de `bajaPromociones.js`.
+const bajaPromociones = require('./bajaPromociones');
 const cortesia = require('./cortesia');
 const repositorio = require('./repositorio');
 // Para cuando ningún peldaño tiene nada que decir. Un turno sin respuesta es el fallo caro de
@@ -99,6 +103,21 @@ function tareaCaducada(conversacion, ahora = Date.now()) {
  * @param {Function} [deps.llm]        — el Nivel 4. Ausente = escalera de un peldaño, que es
  *                                       exactamente el sistema de F5 y sigue siendo válido.
  */
+/**
+ * Con qué palabras pidió la baja, para guardarlo con la ficha.
+ *
+ * No es telemetría: es lo único que se puede enseñar si un día alguien pregunta por qué dejó de
+ * recibir promociones —o peor, por qué siguió recibiéndolas—. El `id_turno` ancla el mensaje en el
+ * Ledger, así que desde la ficha se puede llegar a la conversación entera.
+ */
+function pruebaDeBaja(ctx) {
+    return {
+        wamid: ctx?.turno?.id_turno ?? null,
+        texto: ctx?.texto ?? null,
+        canal: ctx?.conversacion?.canal ?? null,
+    };
+}
+
 function crearManejadorEscalera({
     determinista = null,
     llm = null,
@@ -117,6 +136,19 @@ function crearManejadorEscalera({
      * necesite una base de datos con facturación dentro.
      */
     cupoAgotado = null,
+    /**
+     * La audiencia de promociones (`app_core/promociones/audiencia`), que es quien apunta las
+     * bajas.
+     *
+     * A diferencia de `cupoAgotado`, su valor por defecto es **el real** y no `null`: una baja que
+     * no se apunta es una baja que no existe, y dejarla depender de que la composición se acuerde
+     * de cablearla es poner una obligación legal en manos de un olvido. Se inyecta solo para que
+     * un test pueda mirar qué se escribió sin levantar una base.
+     *
+     * `excluirPorTelefono` no lanza nunca (ver su cabecera), así que no hace falta protegerla
+     * aquí.
+     */
+    audiencia = require('../../app_core/promociones/audiencia'),
 } = {}) {
     /**
      * El contador de turnos de la conversación, puesto en UN solo sitio.
@@ -149,7 +181,35 @@ function crearManejadorEscalera({
         // Antes de enrutar, antes de leer la tarea, antes de todo. Un turno que pide la baja no se
         // enruta a ningún peldaño: se bloquea y se calla (F8-A, master-plan §Fase 8).
         if (optout.pedida(ctx.texto)) {
+            // Y se le saca también de las promociones (2026-10-12). Hasta hoy no se hacía, y era
+            // un agujero de verdad: la conversación quedaba `bloqueada` pero la ficha seguía
+            // contactable, así que una campaña —que no mira conversaciones, mira fichas— le
+            // habría escrito a quien acababa de pedir que no le escribieran más. Se espera
+            // (`await`) porque es una obligación legal, no una mejora: un turno un poco más lento
+            // es aceptable; una baja a medias no.
+            await audiencia.excluirPorTelefono({
+                idNegocio: ctx.idNegocio ?? ctx.conversacion?.id_negocio,
+                telefono: ctx.principal?.telefono_verificado ?? null,
+                prueba: pruebaDeBaja(ctx),
+            });
             return optout.decision(ctx.conversacion);
+        }
+
+        // ── La baja BLANDA de publicidad ────────────────────────────────────────────────────
+        //
+        // Va aquí, pegada a la dura, por las mismas dos razones que ella: no hay peldaño que
+        // elegir —no es una decisión de costo— y es exactamente lo que el cliente pidió. Y antes
+        // de `cortesia` y del flujo, que no sabrían qué hacer con estas palabras.
+        //
+        // Es lo ÚNICO que el asistente hace con las promociones: no pregunta nada a nadie (ver la
+        // cabecera de `bajaPromociones.js`), así que el flujo de un pedido no se toca.
+        if (bajaPromociones.bajaPedida(ctx.texto)) {
+            await audiencia.excluirPorTelefono({
+                idNegocio: ctx.idNegocio ?? ctx.conversacion?.id_negocio,
+                telefono: ctx.principal?.telefono_verificado ?? null,
+                prueba: pruebaDeBaja(ctx),
+            });
+            return bajaPromociones.decision(ctx.conversacion);
         }
 
         // «Gracias» → «¡Con gusto!» → «Gracias»: la segunda no se contesta, y la primera sale

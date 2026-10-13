@@ -55,6 +55,13 @@ module.exports = (sequelize, DataTypes) => {
          */
         permite_domicilio_personal: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
         /**
+         * ¿Este negocio tiene las promociones masivas? Opt-in, y a diferencia del resto de los
+         * `permite_*` **no lo decide el dueño**: lo enciende EscalApp negocio por negocio. Es la
+         * lista blanca de `app_core/promociones/habilitado.js`; apagado, el módulo no existe —ni
+         * menú, ni API, ni campaña en curso—. Mientras sea un piloto se enciende con un UPDATE.
+         */
+        permite_promociones: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+        /**
          * De qué forma de pago sale el pago al domiciliario (el EGRESO que deja
          * `valor_domicilio` al cobrar). NULL = sale de la misma con la que pagó el
          * cliente, que es el comportamiento anterior a esta columna.

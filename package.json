@@ -140,6 +140,9 @@
     "migrate:restaurante-conversaciones": "node migrations/migrate_restaurante_conversaciones.js",
     "migrate:recarga-ia": "node migrations/migrate_recarga_ia.js",
     "migrate:registro-migraciones": "node migrations/migrate_registro_migraciones.js",
+    "migrate:promociones-audiencia": "node migrations/migrate_promociones_audiencia.js",
+    "migrate:promociones-modulo": "node migrations/migrate_promociones_modulo.js",
+    "migrate:promociones-campanas": "node migrations/migrate_promociones_campanas.js",
     "migrar": "node scripts/migrar.js"
   },
   "keywords": [],

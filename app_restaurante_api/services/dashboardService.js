@@ -423,7 +423,7 @@ async function verificarAccesoRestaurante(idUsuario) {
                     attributes: ['id_paleta', 'nombre', 'colores'],
                 },
             ],
-            attributes: ['id_negocio', 'nombre', 'id_tipo_negocio', 'id_paleta', 'permite_multipago', 'permite_pago_domicilio', 'permite_descuento', 'pregunta_cobro_envio', 'permite_cuentas_cliente', 'controla_inventario', 'muestra_iconos_productos', 'id_negocio_padre'],
+            attributes: ['id_negocio', 'nombre', 'id_tipo_negocio', 'id_paleta', 'permite_multipago', 'permite_pago_domicilio', 'permite_descuento', 'pregunta_cobro_envio', 'permite_cuentas_cliente', 'controla_inventario', 'muestra_iconos_productos', 'permite_promociones', 'id_negocio_padre'],
         }],
     });
 
@@ -498,6 +498,10 @@ async function verificarAccesoRestaurante(idUsuario) {
             permite_cuentas_cliente: !!negocio.permite_cuentas_cliente,
             controla_inventario: negocio.controla_inventario !== false,
             muestra_iconos_productos: negocio.muestra_iconos_productos !== false,
+            // Las promociones masivas son lista blanca de EscalApp, no un permiso que el dueño se
+            // pueda dar (`app_core/promociones/habilitado.js`). Viaja en la sesión para que el menú
+            // no pinte una pantalla que la API va a cerrar con un 403.
+            permite_promociones: negocio.permite_promociones === true,
             features: featuresMap.get(Number(negocio.id_negocio)) ?? [],
             roles,
             permisos_vista: permisosVista,
