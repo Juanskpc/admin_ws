@@ -187,7 +187,11 @@ describe('el cupo cuenta lo ASIGNADO, no lo cobrado', () => {
     // añadir a nadie sin que ninguna prueba lo notara.
     test('limitesNegocio suma `cantidad` (asignados) y no `cantidad_facturable` (cobrados)', () => {
         const fuente = fs.readFileSync(path.join(__dirname, '../../app_core/helpers/limitesNegocio.js'), 'utf8');
-        expect(fuente).toMatch(/SUM\(sc\.cantidad\)/);
-        expect(fuente).not.toMatch(/SUM\(sc\.cantidad_facturable\)/);
+        // `\b` y no `\)`: la consulta pasó a ser `SUM(sc.cantidad * c.amplia_cantidad)` para que
+        // un complemento que trae 5 usuarios cuente 5 y no 1, y el paréntesis pegado dejó el
+        // test rojo sin que nada se hubiera roto. El límite de palabra sigue descartando
+        // `cantidad_facturable` (el `_` es carácter de palabra), que es lo que vigila esto.
+        expect(fuente).toMatch(/SUM\(sc\.cantidad\b/);
+        expect(fuente).not.toMatch(/SUM\(sc\.cantidad_facturable\b/);
     });
 });
