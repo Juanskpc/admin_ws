@@ -11,7 +11,13 @@
  */
 'use strict';
 
-const { principalDeContacto, normalizarTelefono } = require('../../intelligence/engine/identidad');
+const {
+    principalDeContacto,
+    normalizarTelefono,
+    telefonoVerificadoDe,
+    registrarCanalConIdentidad,
+    limpiarCanalesConIdentidad,
+} = require('../../intelligence/engine/identidad');
 const { TIPO } = require('../../app_core/authz/principal');
 
 describe('Identity Resolver — Principal de contacto', () => {
@@ -83,5 +89,40 @@ describe('Identity Resolver — normalización de teléfono', () => {
         ['00000000000000000', 'demasiado largo'],
     ])('devuelve null ante %p (%s) en vez de inventar', (entrada) => {
         expect(normalizarTelefono(entrada)).toBeNull();
+    });
+});
+
+/**
+ * El teléfono PROBADO sale del `id_externo`, y en WhatsApp ese `id_externo` no siempre es un
+ * teléfono: desde el BSUID (`CO.1084…`) quien escribe sin enseñar su número llega así.
+ *
+ * Lo que se sostiene aquí es que un BSUID **nunca** se convierta en un número probado. Si lo
+ * hiciera, el fallo no daría error: el bot creería tener el teléfono del cliente, no se lo
+ * preguntaría, y el pedido quedaría con un contacto que no existe.
+ */
+describe('Identity Resolver — un BSUID no es un teléfono probado', () => {
+    beforeEach(() => {
+        limpiarCanalesConIdentidad();
+        registrarCanalConIdentidad('whatsapp');
+    });
+    afterAll(() => limpiarCanalesConIdentidad());
+
+    const conv = (idExterno, canal = 'whatsapp') => ({ canal, id_externo: idExterno });
+
+    test('un número de verdad sí se prueba', () => {
+        expect(telefonoVerificadoDe(conv('573114682492'))).toBe('+573114682492');
+    });
+
+    test.each([
+        ['CO.1084387837819952', '16 dígitos: ya daba null, pero por el largo'],
+        ['CO.111294712345', '12 dígitos: este SÍ se colaba como +111294712345'],
+        ['CO.1112947', '7 dígitos: se habría colado en cuanto cambiara el largo'],
+        ['co.573114682492', 'ni aunque los dígitos sean un móvil real'],
+    ])('%s no prueba nada (%s)', (idExterno) => {
+        expect(telefonoVerificadoDe(conv(idExterno))).toBeNull();
+    });
+
+    test('un canal sin identidad no prueba ningún número, tenga la forma que tenga', () => {
+        expect(telefonoVerificadoDe(conv('573114682492', 'webchat'))).toBeNull();
     });
 });

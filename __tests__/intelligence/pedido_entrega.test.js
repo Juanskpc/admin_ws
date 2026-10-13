@@ -358,6 +358,23 @@ describe('la confirmación enumera los productos', () => {
         expect(domicilio).toMatch(/no incluye el domicilio/i);
     });
 
+    test('el teléfono que ESCRIBIÓ el cliente se le lee de vuelta antes del «sí»', async () => {
+        // Viene del formulario de la carta (2026-10-12) o de una respuesta por chat, y hasta ahora
+        // nadie se lo repetía: un dígito mal escrito ahí es el domiciliario llamando a un número
+        // que no existe, y el cliente no se enteraba hasta que no le llegó la comida.
+        const con = await preguntar({
+            tipo_entrega: 'DOMICILIO',
+            direccion: 'Carrera 3e 19 a',
+            cliente_telefono: '300 123 4567',
+        });
+        expect(con).toContain('300 123 4567');
+        expect(con).toMatch(/📞/u);
+
+        // Sin teléfono dicho (lo normal: el canal probó el suyo) no hay línea que leer.
+        const sin = await preguntar({ tipo_entrega: 'DOMICILIO', direccion: 'Carrera 3e 19 a' });
+        expect(sin).not.toMatch(/📞/u);
+    });
+
     test('si un producto ya no está en la carta, se degrada al recuento y NO miente', async () => {
         // La alternativa mala sería enumerar los que sí encuentra: un pedido de tres líneas
         // confirmado con dos es peor que uno confirmado sin detalle.

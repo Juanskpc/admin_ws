@@ -122,9 +122,28 @@ function limpiarCanalesConIdentidad() {
  * El teléfono que el canal probó para esta conversación, o `null`.
  *
  * Nunca mira `conversacion.variables`: eso es lo que la persona **dijo**, y decir no es probar.
+ *
+ * ## El `id_externo` tiene que PARECER un teléfono (2026-10-12)
+ *
+ * En un canal con identidad el `id_externo` casi siempre es el número, pero no siempre: desde el
+ * BSUID de WhatsApp quien escribe sin enseñar su número llega como `CO.1084387837819952`, y ahí
+ * no hay teléfono que probar. `normalizarTelefono` solo mira los dígitos, así que un BSUID de
+ * entre 11 y 15 dígitos se convertía en un `+1112947…` con toda la pinta de un número probado:
+ * el bot no le preguntaba el suyo —creía tenerlo— y el pedido se guardaba con un contacto que no
+ * existe, que es exactamente el domicilio que se pierde en la puerta.
+ *
+ * Así que primero se exige la FORMA de un teléfono (`+` opcional y de 7 a 15 dígitos, sin letras
+ * ni puntos) y solo entonces se normaliza. Lo que no la tenga vale `null`, y `null` aquí significa
+ * **no lo sabemos**: el flujo pregunta el número, que es lo correcto para quien llega sin él.
  */
+function pareceTelefono(entrada) {
+    const texto = String(entrada ?? '').replace(/[\s()-]/g, '');
+    return /^\+?\d{7,15}$/.test(texto);
+}
+
 function telefonoVerificadoDe(conversacion) {
     if (!conversacion || !CANALES_CON_IDENTIDAD.has(conversacion.canal)) return null;
+    if (!pareceTelefono(conversacion.id_externo)) return null;
     return normalizarTelefono(conversacion.id_externo);
 }
 
@@ -305,6 +324,7 @@ module.exports = {
     registrarCanalConIdentidad,
     limpiarCanalesConIdentidad,
     telefonoVerificadoDe,
+    pareceTelefono,
     normalizarTelefono,
     buscarPersonaPorTelefono,
     nombreLegible,

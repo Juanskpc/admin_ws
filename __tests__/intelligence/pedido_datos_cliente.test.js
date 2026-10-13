@@ -7,8 +7,12 @@
  *   1. el LECTOR (`datosCliente.js`): bloque completo, parcial, con basura, y que una etiqueta no
  *      se puede inyectar desde dentro del valor de otra (la nota);
  *   2. el FLUJO: con el bloque completo el bot no pregunta nada y va directo a la confirmación
- *      («carrito → confirmación → sí»). El teléfono no viaja en el formulario (2026-09-27): lo
- *      prueba el canal, y el nombre del formulario manda sobre el recordado.
+ *      («carrito → confirmación → sí»), y el nombre del formulario manda sobre el recordado.
+ *
+ * El teléfono vuelve al formulario el 2026-10-12 (se había quitado el 2026-09-27) y con una
+ * precedencia que no negocia: si el canal probó un número, gana el probado y el escrito se
+ * descarta; el del formulario es para quien llega SIN número (BSUID), que antes obligaba al bot
+ * a preguntarlo por chat.
  */
 'use strict';
 
@@ -66,8 +70,22 @@ describe('datosCliente.leerBloque', () => {
         expect(leido.telefono).toBeUndefined();
     });
 
-    it('el teléfono NO se lee del mensaje, ni de una carta anterior que aún lo mande', () => {
-        expect(datosCliente.leerBloque('Nombre: Ana\nTeléfono: 3001234567')).toEqual({ nombre: 'Ana' });
+    it('el teléfono se lee tal cual lo escribe la gente (con espacios o guiones)', () => {
+        expect(datosCliente.leerBloque('Nombre: Ana\nTeléfono: 3001234567')).toEqual({
+            nombre: 'Ana',
+            telefono: '3001234567',
+        });
+        expect(datosCliente.leerBloque('Teléfono: 300 123 4567').telefono).toBe('300 123 4567');
+        expect(datosCliente.leerBloque('Teléfono: +57 300-123-4567').telefono).toBe('+57 300-123-4567');
+    });
+
+    it('lo que no puede ser un teléfono no se siembra: el bot lo pregunta como si no viniera', () => {
+        // Se cuentan DÍGITOS, no caracteres: así «300 123 4567» pasa y «no tengo» no.
+        for (const malo of ['no tengo', '12345', '', '   ', '0'.repeat(16)]) {
+            expect(datosCliente.leerBloque(`Nombre: Ana\nTeléfono: ${malo}`).telefono).toBeUndefined();
+        }
+        expect(datosCliente.telefonoLegible('3001234567')).toBe('3001234567');
+        expect(datosCliente.telefonoLegible('llámame al fijo')).toBeNull();
     });
 
     it('la PRIMERA aparición de una etiqueta manda; una repetida después se ignora', () => {
@@ -167,11 +185,25 @@ describe('el flujo siembra los datos de la carta y no vuelve a preguntar', () =>
         expect(d.tarea.datos.args.cliente_telefono).toBeUndefined(); // manda el del canal, no se manda otro
     });
 
-    it('sin teléfono probado, un «Teléfono:» del mensaje tampoco se toma: el bot lo pregunta', async () => {
+    it('SIN teléfono probado (cliente sin número visible), el del formulario se usa y no se pregunta nada', async () => {
+        // Es el caso que justifica el campo: el canal no probó ningún número, así que antes de
+        // 2026-10-12 aquí había una pregunta del bot, una respuesta del cliente y dos mensajes de
+        // WhatsApp gastados. Ahora pasa directo a la confirmación.
         const d = await decir(
             crear(),
             conversacion(),
-            mensaje(['Nombre: Ana', 'Teléfono: 3001234567', 'Dirección: Cra 3 #21-10']),
+            mensaje(['Nombre: Ana', 'Teléfono: 300 123 4567', 'Dirección: Cra 3 #21-10']),
+        );
+        expect(d.tarea.nombre).toBe('confirmar_mutacion');
+        expect(d.tarea.datos.args.cliente_telefono).toBe('300 123 4567');
+        expect(d.respuestas).toHaveLength(1);
+    });
+
+    it('un «Teléfono:» que no puede ser un número no cuela: el bot lo pregunta', async () => {
+        const d = await decir(
+            crear(),
+            conversacion(),
+            mensaje(['Nombre: Ana', 'Teléfono: no tengo', 'Dirección: Cra 3 #21-10']),
         );
         expect(d.tarea.datos.paso).toBe(PASO_PEDIDO.TELEFONO);
         expect(d.tarea.datos.telefono).toBeUndefined();

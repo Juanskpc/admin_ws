@@ -526,6 +526,15 @@ detrás de los productos:
   cuenta de otra mesa.
 - **Cerrado no se pregunta nada.** Con el negocio fuera de horario, la carta se ve y los botones
   quedan desactivados; el selector no aparece.
+- **Cómo pide NO se recuerda; los productos sí, 2 horas (2026-10-12).** Hasta esa fecha la elección
+  se guardaba 4 horas en `localStorage` (`escalapp.pedido.<id>`), por simetría con el carrito. La
+  simetría estaba mal: los productos son trabajo que el cliente hizo y perderlo molesta; «a
+  domicilio» es una decisión de ESTE pedido, y la de la visita anterior es una suposición —con un
+  recargo y una dirección heredados que el cliente no ve hasta pagarlos—. Ahora **cada carga de la
+  página vuelve a preguntar** (recargar, cerrar el navegador, volver al día siguiente: siempre), la
+  clave vieja se borra al iniciar el carrito, y lo único que se preselecciona sigue siendo la mesa
+  del QR (`?mesa=`). El carrito mantiene sus productos 2 horas y pasadas se vacía, así que quien
+  entra después empieza un pedido completamente nuevo. Decisión del dueño.
 
 Barrios: tabla `restaurante.rest_barrio_domicilio` (`npm run migrate:restaurante-barrios-domicilio`),
 CRUD en `GET/POST/PUT/DELETE /restaurante/barrios-domicilio` (escribe solo el administrador) y
@@ -599,19 +608,35 @@ datos viajan en un bloque de etiquetas FIJAS, antes de la línea `#P…`:
 
 ```
 Nombre: Ana Pérez
+Teléfono: 300 123 4567
 Dirección: Cra 3 #21-10, apto 201
 Nota: sin cebolla en todo
 
 #P12-4x1~m=D~z=7
 ```
 
-> **Actualizado 2026-09-27:** el formulario ya NO pide teléfono en ninguna modalidad (el cliente
-> llega por su WhatsApp y el canal prueba el número; uno escrito a mano solo podía contradecirlo), y
-> el **nombre del formulario manda sobre el que el bot recordaba** de otras conversaciones. Antes
-> `sembrarDatosCliente` solo aceptaba el nombre si `datos.nombre` estaba vacío, y como el flujo lo
-> precargaba desde la memoria, un pedido hecho «a nombre de Ana» salía a nombre del recordado.
-> Un «Teléfono:» que aún mande una carta vieja se ignora (ya no es una etiqueta del parser).
-> Las filas de más abajo que hablen de teléfono describen el diseño del 2026-09-25.
+> **Actualizado 2026-09-27:** el **nombre del formulario manda sobre el que el bot recordaba** de
+> otras conversaciones. Antes `sembrarDatosCliente` solo aceptaba el nombre si `datos.nombre`
+> estaba vacío, y como el flujo lo precargaba desde la memoria, un pedido hecho «a nombre de Ana»
+> salía a nombre del recordado.
+
+> **Actualizado 2026-10-12 — el teléfono vuelve al formulario, y ahora es obligatorio.**
+> El 2026-09-27 se había quitado: el cliente llega por su WhatsApp, el canal prueba su número y
+> uno escrito a mano solo podía contradecirlo. El argumento era correcto y el caso que no cubría
+> es el que importa: desde el BSUID de WhatsApp **hay clientes que llegan sin número** (ni `from`
+> ni `wa_id`), y a esos el bot tenía que preguntárselo por chat —un mensaje suyo, uno del cliente
+> y a veces un turno de IA—, justo lo que este bloque existe para ahorrar. Y cuando el modelo se
+> lo saltaba, el restaurante recibía un domicilio sin nadie a quien llamar.
+>
+> La carta **no puede saber** si quien la mira enseña su número: es una página pública, ahí no hay
+> identidad de WhatsApp. Así que se pregunta siempre (obligatorio en domicilio y recoger, no en
+> mesa), que cuesta un campo del formulario y **cero mensajes**.
+>
+> La jerarquía no cambia: lo del formulario es **contacto**, nunca identidad. `sembrarDatosCliente`
+> lo descarta en cuanto `ctx.telefonoProbado` tiene valor, y la pertenencia de un pedido sigue
+> colgando solo de `principal.telefono_verificado`. Lo que se siembra viaja como
+> `cliente_telefono` y ahora **se le lee de vuelta al cliente en la confirmación** (`📞 Contacto:`),
+> porque un dígito mal escrito en un formulario no lo ve nadie más.
 
 | Lado | Archivo |
 |---|---|
@@ -624,8 +649,13 @@ Qué se pide según la modalidad (la nota especial es OPCIONAL en las tres desde
 | Modalidad | Nombre | Teléfono | Dirección | Nota |
 |---|---|---|---|---|
 | Domicilio | obligatorio | obligatorio | obligatoria | opcional |
-| Recoger | obligatorio | opcional | — | opcional |
+| Recoger | obligatorio | obligatorio | — | opcional |
 | En el local (mesa) | obligatorio | — | — | opcional |
+
+En mesa no se pide el teléfono a propósito: quien está sentado no necesita que lo llamen ni que le
+avisen (y ahí la carta ni arma pedido — lo toma un mesero). En los otros dos se pide por motivos
+distintos, y el bot usa el motivo de verdad cuando tiene que preguntarlo él: en domicilio «para que
+el domiciliario te llame al llegar», para recoger «para avisarte en cuanto esté listo».
 
 **Reglas del contrato:**
 
@@ -640,10 +670,11 @@ Qué se pide según la modalidad (la nota especial es OPCIONAL en las tres desde
   pregunta nada y pasa directo a la CONFIRMACIÓN —camino feliz: carrito → confirmación → «sí», dos
   intercambios—; el «sí» del cliente sigue siendo obligatorio (ADR-010), y es ahí donde puede
   corregir lo que haya venido mal.
-- **El teléfono se normaliza con el país del negocio** (`normalizarE164`, `gener_negocio.pais`).
-  Si no da un móvil válido, se ignora: se sigue usando el que probó el canal, o se pregunta.
-  **Nunca pisa un teléfono que el canal ya probó** — ese es el que autoriza; decir uno distinto en
-  el formulario no lo cambia.
+- **El teléfono se valida por dígitos y nunca pisa al probado.** `telefonoLegible` exige entre 7 y
+  15 dígitos —«300 123 4567» vale, «no tengo» no—, y `sembrarDatosCliente` lo descarta entero si
+  el canal ya probó un número: ese es el que autoriza, y decir otro en el formulario no lo cambia.
+  No se normaliza a E.164: es un dato de contacto para que alguien marque, no una identidad con
+  la que se busque nada.
 - **Se sanea:** se recortan longitudes, se quitan saltos de línea y caracteres de control dentro
   de cada valor, y no hay forma de repetir una etiqueta con un valor distinto.
 - **Nada de esto viaja dentro de la línea `#P`.**

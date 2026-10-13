@@ -898,14 +898,20 @@ function seguirOConfirmar(ctx, datos, pasos, { apertura = '', solicitarConfirmac
  *    el cliente acaba de escribir para ESTE pedido (puede pedir a nombre de otra persona). Antes
  *    ganaba el recordado y el pedido salía a nombre equivocado.
  *  - La nota y la dirección, igual: son de este pedido.
- *  - El teléfono no viaja en el formulario: lo prueba el canal (`telefonoProbado`) o, si no hay,
- *    se pregunta como siempre.
+ *  - El teléfono **solo si el canal no probó ninguno** (2026-10-12). Es la única regla de
+ *    precedencia que no la decide el formulario: el número que prueba la red por la que escribe
+ *    el cliente gana siempre sobre uno escrito a mano, que es lo que dice ADR-010 de la identidad.
+ *    El del formulario es para el cliente que llega **sin número** (BSUID de WhatsApp): antes
+ *    había que preguntárselo por chat —un mensaje del bot, uno suyo y a veces un turno de IA— y,
+ *    cuando el modelo se lo saltaba, el restaurante recibía un domicilio sin nadie a quien llamar.
+ *    Sigue siendo dato de CONTACTO: viaja como `cliente_telefono` y no autoriza nada.
  */
 function sembrarDatosCliente(ctx, datos) {
     const bloque = datosCliente.leerBloque(ctx.texto);
     if (bloque.nombre) datos.nombre = bloque.nombre;
     if (bloque.direccion) datos.direccion = bloque.direccion;
     if (bloque.nota) datos.nota = bloque.nota;
+    if (bloque.telefono && !ctx.telefonoProbado) datos.telefono = bloque.telefono;
 }
 
 async function sembrarExclusiones(ctx, datos) {

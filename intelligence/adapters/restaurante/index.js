@@ -1477,6 +1477,14 @@ function registrarCapacidades() {
                     // preguntaba («Alameda 2, entrada al barrio»), tiene que ver que quedó.
                     const nota = String(args.nota || '').trim();
 
+                    // Y el teléfono de contacto, por lo mismo (2026-10-12): `cliente_telefono` es
+                    // el que el cliente ESCRIBIÓ —en el formulario de la carta o por chat—, y
+                    // hasta ahora nadie se lo leía de vuelta. Un dígito de menos ahí es el
+                    // domiciliario llamando a un número que no existe. El que prueba el canal no
+                    // aparece: ese no lo escribió nadie, y repetírselo sería ruido.
+                    const contacto = String(args.cliente_telefono || '').trim();
+                    const lineaContacto = contacto && !enMesa ? [`📞 _Contacto: ${contacto}_`] : [];
+
                     // El empaque va como línea propia, igual que el domicilio: es lo que se le va a
                     // cobrar. Si ya está sumado, el aviso de «puede variar por el empaque» sobra.
                     const empaques = await empaqueService.calcular({
@@ -1505,6 +1513,7 @@ function registrarCapacidades() {
                         ...lineasEmpaque,
                         ...lineaDomicilio,
                         ...avisoQuitar,
+                        ...lineaContacto,
                         ...(nota ? [`📝 _Nota: ${nota}_`] : []),
                         '',
                         `*Total: ${enPesos(total)}*`,
