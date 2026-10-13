@@ -510,7 +510,7 @@ el texto del anexo hay que tenerlo listo antes de F2.
 
 ---
 
-## 11. F0 — lo que quedó construido (2026-10-12, SIN desplegar)
+## 11. F0 — lo que quedó construido (2026-10-12, en PROD desde 2026-10-13)
 
 > **En una frase.** La audiencia de un negocio son **todos** sus clientes con teléfono, sin
 > preguntarle nada a nadie; lo que F0 construye es **la salida** (y su prueba) y el **conteo
@@ -601,7 +601,7 @@ el usuario que lo hizo.
 
 ---
 
-## 12. F1 — lo que quedó construido (2026-10-12, SIN desplegar)
+## 12. F1 — lo que quedó construido (2026-10-12, en PROD desde 2026-10-13)
 
 > **En una frase.** La vista `/promociones` ya enseña a cuántos clientes se le puede escribir, los
 > parte en grupos con una recomendación para cada uno, y dice lo que costaría — **sin enviar nada**.
@@ -716,7 +716,7 @@ En orden de riesgo, no de esfuerzo:
 
 ---
 
-## 13. F2 — el envío (2026-10-13, SIN desplegar · migración pendiente)
+## 13. F2 — el envío (2026-10-13, en PROD · ver §14 para el alcance)
 
 > **En una frase.** Ya se puede mandar: plantillas creadas y aprobadas en la WABA **del
 > inquilino**, compuerta con prueba real al dueño antes de cobrar nada, envío con ritmo —el tier de
@@ -826,9 +826,8 @@ culpa de nadie. Todavía **no hay precio** —eso es F3—: lo que se cuenta son
 
 ### 13.7 Lo que quedó pendiente, y es poco pero hay que saberlo
 
-1. **La migración no se ha corrido**: el túnel a la base de desarrollo se cayó a mitad de la sesión.
-   `node scripts/migrar.js promociones-campanas` y listo. **Nada de F2 funciona hasta eso**, porque
-   las tres tablas no existen.
+1. ~~La migración no se ha corrido~~ — **corrida en desarrollo y en producción el 2026-10-13**
+   (`promociones-audiencia`, `promociones-modulo`, `promociones-campanas`).
 2. **Nada de F2 se ha probado contra Meta.** Las 32 pruebas corren sin red: comprueban el *payload*
    que se le manda, no que Meta lo acepte. La primera campaña real es lo que valida el camino
    completo, y el orden correcto es: pedir las plantillas → esperar la aprobación → prueba al dueño
@@ -847,15 +846,22 @@ culpa de nadie. Todavía **no hay precio** —eso es F3—: lo que se cuenta son
    30 días previos. Es honesto y suficiente para la primera campaña; afinarlo es media hora cuando
    haya datos que lo pidan.
 
-### 13.8 Para desplegarlo
+### 13.8 El despliegue (hecho el 2026-10-13)
 
-1. `git pull` en el VPS → **backup** → `node scripts/migrar.js promociones-campanas` →
-   `sudo systemctl restart escalapp-api`.
-2. Comprobar en el arranque: `[promociones] Despachador iniciado — …`. Se apaga con
-   `PROMOS_DESPACHADOR_ENABLED=false`.
+1. Backup (`backup.sh`) → `git pull` → `npm install --omit=dev` → las cuatro migraciones en orden
+   (`restaurante-rubros`, `promociones-audiencia`, `promociones-modulo`, `promociones-campanas`) →
+   `sudo systemctl restart escalapp-api`. **Las migraciones van antes del reinicio**: el modelo
+   Sequelize ya declara `permite_promociones`, y un arranque sin la columna rompe toda consulta a
+   `gener_negocio`.
+2. En el arranque se leyó: `[promociones] Despachador iniciado — sondeo cada 15000ms, lote 20,
+   franja 8:00–21:00.` Se apaga con `PROMOS_DESPACHADOR_ENABLED=false`.
 3. Build y subida de `negocio_app` (con su `cp index.csr.html index.html`).
-4. Y lo que no es código: **reescribir el §2.5 del anexo de encargado** (§4.1), que hoy le hace
-   prometer al cliente no usar el asistente para comunicaciones no solicitadas.
+4. Comprobado contra la base de producción, con el código de producción: la lista blanca da `true`
+   solo para el negocio 12, `canalDe(12)` pasa con la WABA de EscalApp, `canalDe(13)` niega, y la
+   sesión de un administrador del 13 no trae ni la bandera ni la vista.
+5. Y lo que no es código, **todavía pendiente**: **reescribir el §2.5 del anexo de encargado**
+   (§4.1), que hoy le hace prometer al cliente no usar el asistente para comunicaciones no
+   solicitadas. Hace falta antes del primer envío de un cliente que no sea el piloto.
 
 ---
 
