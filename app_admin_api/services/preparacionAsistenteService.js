@@ -37,8 +37,9 @@ async function uno(sql, replacements) {
 const APP_RESTAURANTE = 'App del restaurante';
 const APP_RESERVA = 'App de reservas';
 const BANDEJA = 'Aquí, en WhatsApp';
-// Desde 2026-10-02 los ajustes del asistente viven en su propia ventana, no en la cabecera.
-const CONFIG_ASISTENTE = `${BANDEJA} → Configuración del asistente`;
+// Desde 2026-10-02 los ajustes del asistente viven en su propia ventana, y desde 2026-10-13 esa
+// ventana es «Tu asistente», con la revisión y el informe en otras pestañas.
+const CONFIG_ASISTENTE = `${BANDEJA} → Tu asistente → Ajustes`;
 
 /** Comprobaciones comunes a cualquier vertical. */
 function comunes() {
@@ -112,7 +113,8 @@ function deRestaurante() {
         {
             clave: 'horario',
             titulo: 'Horario de atención',
-            donde: `${APP_RESTAURANTE} → Horarios`,
+            // Horarios es una pestaña de Configuración desde 2026-10-13.
+            donde: `${APP_RESTAURANTE} → Configuración → Horarios`,
             async revisar({ idNegocio }) {
                 const f = await uno(
                     `SELECT count(*)::int AS n FROM restaurante.rest_horario
