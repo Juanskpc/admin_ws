@@ -55,6 +55,17 @@ async function procesarAvisosDeVencimiento(dias) {
         let emailEnviado = false;
         let notificacionCreada = false;
 
+        // ¿Se le cobra solo? Entonces el aviso no le pide pagar: le dice a qué tarjeta se cobrará.
+        // Pedirle «paga ya» a quien tiene débito automático es invitarlo a pagar dos veces.
+        let pagoAutomatico = null;
+        try {
+            const PagoAutomatico = require('./pagoAutomaticoService');
+            const activo = await PagoAutomatico.metodoActivoDe(negocio.id_negocio);
+            pagoAutomatico = activo ? PagoAutomatico.describirMetodo(activo.metodo) : null;
+        } catch (err) {
+            console.error(`Error consultando pago automático del negocio ${negocio.id_negocio}:`, err.message);
+        }
+
         try {
             const usuariosNegocio = negocio.usuarios || [];
             const emailsDestino = new Set();
@@ -70,7 +81,8 @@ async function procesarAvisosDeVencimiento(dias) {
                     nombreNegocio: negocio.nombre,
                     nombrePlan: plan.nombre,
                     fechaVencimiento: fechaFinStr,
-                    diasRestantes: dias
+                    diasRestantes: dias,
+                    pagoAutomatico,
                 });
                 emailEnviado = true;
                 correosEnviados++;

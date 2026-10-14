@@ -136,6 +136,23 @@ async function conciliarIntento(intento, { via }) {
         const factura = await Dao.getFactura(intento.id_factura);
         if (!factura) return { resultado: 'sin_factura' };
 
+        // Un DÉBITO AUTOMÁTICO rechazado (tarjeta guardada) cuenta para la morosidad, y quien lo
+        // cuenta es `resolverEstadoReal` al cerrar el intento él mismo, de forma atómica. Si se
+        // cerrara aquí primero, allí ya no estaría pendiente y el rechazo no contaría nunca.
+        if (
+            elegida.estado === 'rechazada' &&
+            factura.estado === 'pendiente' &&
+            intento.payload?.modo === 'fuente-de-pago'
+        ) {
+            await WebhookService.resolverEstadoReal({
+                pasarela: intento.pasarela,
+                factura,
+                estadoReal: elegida,
+                via,
+            });
+            return { resultado: 'rechazada' };
+        }
+
         if (elegida.estado === 'rechazada') {
             // El intento queda rechazado tanto si la factura sigue pendiente como si ya la pagó otro.
             await cerrarPorId(intento.id_transaccion, 'rechazada', {

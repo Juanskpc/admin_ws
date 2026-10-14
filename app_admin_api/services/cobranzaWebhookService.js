@@ -90,8 +90,9 @@ async function buscarFactura({ referencia, idExterno, pasarela }) {
  *   al_iniciar_sesion· el admin concilia los pagos pendientes del usuario al iniciar sesión / abrir la app
  *   al_volver        · ídem al volver a la pestaña
  *   manual           · un super admin pega el id en «Verificar pago Wompi»
+ *   cron_cobro       · el cobro automático pregunta por un pago en curso antes de cobrar otra vez
  */
-const VIAS = ['webhook', 'retorno', 'al_iniciar_sesion', 'al_volver', 'manual'];
+const VIAS = ['webhook', 'retorno', 'al_iniciar_sesion', 'al_volver', 'manual', 'cron_cobro'];
 
 /** La referencia BASE de una referencia de intento: `EA-13-202609-mug6p57y` → `EA-13-202609`. */
 function baseDeReferencia(referencia) {
@@ -173,6 +174,45 @@ function motivoDeDesajuste({ pasarela, factura, estadoReal, intentos = [] }) {
     if (centavos == null || centavos !== esperado) return 'monto';
     if (!p.currency || p.currency !== factura.moneda) return 'moneda';
     return null;
+}
+
+/**
+ * Cierra como rechazado el intento de DÉBITO AUTOMÁTICO (tarjeta guardada) al que se refiere este
+ * rechazo, si seguía pendiente. Devuelve true si lo cerró ESTA llamada.
+ *
+ * Es un UPDATE … RETURNING y no un SELECT seguido de un UPDATE a propósito: si el webhook y el
+ * conciliador llegan a la vez con el mismo rechazo, solo uno de los dos cambia la fila, y solo ese
+ * cuenta el intento fallido. Con «mirar y luego cerrar» los dos lo verían pendiente y el cliente
+ * sumaría dos reintentos por un solo rechazo — y con tres se suspende.
+ */
+async function cerrarDebitoAutomatico({ idFactura, pasarela, estadoReal }) {
+    const p = estadoReal.payload ?? {};
+    const referencia = p.reference ?? p.order_id ?? null;
+    if (!referencia && !estadoReal.idExterno) return false;
+
+    const filas = await sequelize.query(
+        `UPDATE cobranza.cob_transaccion
+            SET estado = 'rechazada',
+                id_externo = COALESCE(:idExterno, id_externo),
+                codigo_respuesta = COALESCE(:codigo, codigo_respuesta),
+                mensaje = COALESCE(:mensaje, mensaje)
+          WHERE id_factura = :idFactura AND pasarela = :pasarela AND estado = 'pendiente'
+            AND payload->>'modo' = 'fuente-de-pago'
+            AND (payload->>'reference' = :referencia OR id_externo = :idExterno)
+        RETURNING id_transaccion;`,
+        {
+            replacements: {
+                idFactura,
+                pasarela,
+                referencia,
+                idExterno: estadoReal.idExterno ?? null,
+                codigo: estadoReal.codigoRespuesta ?? null,
+                mensaje: estadoReal.mensaje ?? null,
+            },
+            type: sequelize.QueryTypes.SELECT,
+        }
+    );
+    return filas.length > 0;
 }
 
 /**
@@ -260,6 +300,17 @@ async function resolverEstadoReal({ pasarela, factura, estadoReal, via = 'webhoo
         // recargar tres veces la página de un pago rechazado sumaba tres reintentos y SUSPENDÍA
         // al cliente. Los rechazos que sí son morosidad —los del cobro automático con tarjeta
         // guardada— ya se cuentan en `cobranzaService.cobrarFactura`, que es donde ocurren.
+        //
+        // Con UNA excepción (2026-10-14): el cobro automático que Wompi deja en PENDING y rechaza
+        // minutos después. `cobrarFactura` solo vio el PENDING, así que el rechazo llega por aquí y
+        // SÍ es morosidad. Se reconoce porque el intento abierto lo creó el débito automático
+        // (`payload.modo = 'fuente-de-pago'`), y se cuenta solo si seguía pendiente: el webhook
+        // repetido o el conciliador que llegan después lo encuentran cerrado y no suman otra vez.
+        const debitoPendiente = await cerrarDebitoAutomatico({
+            idFactura: factura.id_factura,
+            pasarela,
+            estadoReal,
+        });
         await cerrarIntento({
             idFactura: factura.id_factura,
             pasarela,
@@ -279,6 +330,15 @@ async function resolverEstadoReal({ pasarela, factura, estadoReal, via = 'webhoo
                 via,
             },
         });
+        if (debitoPendiente) {
+            const suscripcion = await Dao.getSuscripcionPorNegocio(factura.id_negocio);
+            if (suscripcion) {
+                await CobranzaService._interno.registrarIntentoFallido(suscripcion, factura, {
+                    mensaje: estadoReal.mensaje ?? null,
+                    codigoRespuesta: estadoReal.codigoRespuesta ?? null,
+                });
+            }
+        }
         return { accion: 'cobro_rechazado', referencia: factura.referencia };
     }
 

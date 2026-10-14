@@ -532,7 +532,7 @@ async function sendAlertaAdminEmail({ asunto, texto }) {
 // Correo de advertencia de vencimiento de plan
 // ============================================================
 
-function buildPlanExpiryHtml(nombreNegocio, nombrePlan, fechaVencimiento, diasRestantes, logoUrl) {
+function buildPlanExpiryHtml(nombreNegocio, nombrePlan, fechaVencimiento, diasRestantes, logoUrl, pagoAutomatico = null) {
     const esUrgente = diasRestantes <= 1;
     const colorAccent = esUrgente ? '#e53e3e' : '#dd6b20';
     const colorBg = esUrgente ? '#fff5f5' : '#fffaf0';
@@ -590,13 +590,17 @@ function buildPlanExpiryHtml(nombreNegocio, nombrePlan, fechaVencimiento, diasRe
           <div class="fecha">Vence el: ${fechaVencimiento}</div>
         </div>
         <p>
-          ${esUrgente
-            ? '<strong>¡Tu plan vence mañana!</strong> Paga tu mensualidad ahora para evitar la interrupción del servicio.'
-            : 'Tu cobro de renovación ya está listo. Págalo con PSE, Nequi o tarjeta antes del vencimiento y tu plan se extiende solo.'
+          ${pagoAutomatico
+            // Con pago automático no hay nada que hacer, y decirle «paga ya» lo llevaría a pagar
+            // dos veces (el enlace y el débito).
+            ? `Tienes el <strong>pago automático</strong> activado: el día del vencimiento cobraremos la mensualidad a tu <strong>${pagoAutomatico}</strong> y tu plan se extiende solo. No tienes que hacer nada.`
+            : esUrgente
+              ? '<strong>¡Tu plan vence mañana!</strong> Paga tu mensualidad ahora para evitar la interrupción del servicio.'
+              : 'Tu cobro de renovación ya está listo. Págalo con PSE, Nequi o tarjeta antes del vencimiento y tu plan se extiende solo.'
           }
         </p>
         <div class="btn-wrap">
-          <a class="btn" href="${process.env.FRONTEND_URL || 'https://escalapp.cloud'}/pagar">Pagar mi mensualidad →</a>
+          <a class="btn" href="${process.env.FRONTEND_URL || 'https://escalapp.cloud'}/pagar">${pagoAutomatico ? 'Ver mis pagos' : 'Pagar mi mensualidad'} →</a>
         </div>
         <hr class="divider" />
         <p style="font-size:12px;color:#a0aec0;">
@@ -646,12 +650,114 @@ async function sendPlanExpiryWarningEmail(email, datos) {
         from,
         to: email,
         subject: `Tu plan ${datos.nombrePlan} vence en ${datos.diasRestantes} ${datos.diasRestantes === 1 ? 'día' : 'días'} — EscalApp`,
-        text: `EscalApp — Aviso de vencimiento\n\nTu plan "${datos.nombrePlan}" para "${datos.nombreNegocio}" vence el ${datos.fechaVencimiento}.\n\nFaltan ${datos.diasRestantes} ${datos.diasRestantes === 1 ? 'día' : 'días'}.\n\nPaga tu mensualidad en: ${process.env.FRONTEND_URL || 'https://escalapp.cloud'}/pagar`,
-        html: buildPlanExpiryHtml(datos.nombreNegocio, datos.nombrePlan, datos.fechaVencimiento, datos.diasRestantes, logoSrc),
+        text: `EscalApp — Aviso de vencimiento\n\nTu plan "${datos.nombrePlan}" para "${datos.nombreNegocio}" vence el ${datos.fechaVencimiento}.\n\nFaltan ${datos.diasRestantes} ${datos.diasRestantes === 1 ? 'día' : 'días'}.\n\n` +
+            (datos.pagoAutomatico
+                ? `Tienes el pago automático activado: el día del vencimiento cobraremos la mensualidad a tu ${datos.pagoAutomatico}. No tienes que hacer nada.`
+                : `Paga tu mensualidad en: ${process.env.FRONTEND_URL || 'https://escalapp.cloud'}/pagar`),
+        html: buildPlanExpiryHtml(datos.nombreNegocio, datos.nombrePlan, datos.fechaVencimiento, datos.diasRestantes, logoSrc, datos.pagoAutomatico ?? null),
         attachments,
     });
 
     console.info(`✉️  Aviso de vencimiento enviado a ${email} — messageId: ${info.messageId}`);
+}
+
+// ============================================================
+// Avisos del pago automático (activado, desactivado, cobro rechazado)
+// ============================================================
+
+/**
+ * Un solo molde para los avisos del pago automático: título, párrafos y, si hace falta, un botón.
+ * Los párrafos llevan HTML propio (negritas) y los escribe el servidor, nunca el cliente.
+ *
+ * @param {object} aviso
+ * @param {string} aviso.titulo
+ * @param {string[]} aviso.parrafos
+ * @param {{texto: string, url: string}} [aviso.boton]
+ * @param {'ok'|'info'|'error'} [aviso.tono]
+ */
+function buildAvisoCobroHtml({ titulo, parrafos, boton, tono = 'info' }, logoUrl) {
+    const acento = { ok: '#2f855a', info: '#4361ee', error: '#c53030' }[tono] || '#4361ee';
+    return `<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1.0" />
+  <title>${titulo} · EscalApp</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f0f2f5; margin: 0; padding: 0; }
+    .wrapper { padding: 40px 16px; }
+    .container { max-width: 480px; margin: 0 auto; background: #ffffff; border-radius: 12px; box-shadow: 0 4px 16px rgba(0,0,0,.08); overflow: hidden; }
+    .header { background: #0d1b2a; padding: 28px 32px; text-align: center; }
+    .header img { max-height: 52px; width: auto; display: inline-block; }
+    .header-title { color: #ffffff; font-size: 13px; letter-spacing: 1px; text-transform: uppercase; margin: 10px 0 0; opacity: .7; }
+    .body { padding: 36px 32px; }
+    .body h1 { font-size: 20px; color: ${acento}; margin: 0 0 20px; }
+    .body p { color: #4a5568; font-size: 14px; line-height: 1.7; margin: 0 0 16px; }
+    .btn-wrap { text-align: center; margin: 24px 0 8px; }
+    .btn { display: inline-block; background: ${acento}; color: #ffffff !important; text-decoration: none; padding: 14px 36px; border-radius: 8px; font-weight: 700; font-size: 15px; }
+    .footer { background: #f7f9ff; padding: 18px 32px; text-align: center; }
+    .footer p { font-size: 11px; color: #a0aec0; margin: 0; line-height: 1.6; }
+    .footer strong { color: #718096; }
+  </style>
+</head>
+<body>
+  <div class="wrapper">
+    <div class="container">
+      <div class="header">
+        ${logoUrl
+            ? `<img src="${logoUrl}" alt="EscalApp" />`
+            : `<span style="color:#ffffff;font-size:22px;font-weight:800;letter-spacing:1px;">EscalApp</span>`
+        }
+        <p class="header-title">Tu mensualidad</p>
+      </div>
+      <div class="body">
+        <h1>${titulo}</h1>
+        ${parrafos.map((p) => `<p>${p}</p>`).join('\n        ')}
+        ${boton ? `<div class="btn-wrap"><a class="btn" href="${boton.url}">${boton.texto} →</a></div>` : ''}
+      </div>
+      <div class="footer">
+        <p>
+          © ${new Date().getFullYear()} <strong>EscalApp</strong> · Todos los derechos reservados<br />
+          Este correo fue generado automáticamente, por favor no respondas a este mensaje.
+        </p>
+      </div>
+    </div>
+  </div>
+</body>
+</html>`;
+}
+
+async function sendAvisoCobroEmail(email, aviso) {
+    const from = process.env.MAIL_FROM || '"EscalApp" <escalappsystem@gmail.com>';
+
+    if (!process.env.MAIL_USER || !process.env.MAIL_PASS) {
+        if (process.env.NODE_ENV !== 'production') {
+            console.warn(`⚠️  MAIL sin configurar. Aviso de cobro (dev) para ${email}:`, aviso.titulo);
+            return;
+        }
+        throw new Error('Configuración de correo incompleta');
+    }
+
+    const attachments = [];
+    let logoSrc = '';
+    if (fs.existsSync(LOGO_PATH)) {
+        attachments.push({ filename: 'escalapplogo.png', path: LOGO_PATH, cid: 'escalapplogo' });
+        logoSrc = 'cid:escalapplogo';
+    }
+
+    const texto = [aviso.titulo, '', ...aviso.parrafos.map((p) => p.replace(/<[^>]+>/g, ''))]
+        .concat(aviso.boton ? ['', `${aviso.boton.texto}: ${aviso.boton.url}`] : [])
+        .join('\n');
+
+    const info = await transporter.sendMail({
+        from,
+        to: email,
+        subject: aviso.asunto,
+        text: texto,
+        html: buildAvisoCobroHtml(aviso, logoSrc),
+        attachments,
+    });
+    console.info(`✉️  Aviso de cobro «${aviso.titulo}» enviado a ${email} — messageId: ${info.messageId}`);
 }
 
 // ============================================================
@@ -830,4 +936,4 @@ async function sendHtmlEmail({ to, subject, text, html, replyTo, attachments }) 
     return true;
 }
 
-module.exports = { sendPasswordResetEmail, sendRegistroVerificationEmail, sendWelcomeEmail, sendAdminNotificationEmail, sendAlertaAdminEmail, sendPlanExpiryWarningEmail, sendConversacionEscaladaEmail, sendHtmlEmail, verifyTransport };
+module.exports = { sendPasswordResetEmail, sendRegistroVerificationEmail, sendWelcomeEmail, sendAdminNotificationEmail, sendAlertaAdminEmail, sendPlanExpiryWarningEmail, sendAvisoCobroEmail, sendConversacionEscaladaEmail, sendHtmlEmail, verifyTransport };

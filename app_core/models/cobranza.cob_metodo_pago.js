@@ -5,7 +5,7 @@
  * para que el cliente reconozca su medio en pantalla («Visa ···4242»). Eso mantiene el alcance
  * PCI en SAQ-A.
  *
- * Nace vacía y sigue vacía hasta F1: el modo manual no tokeniza nada.
+ * Se llena cuando un negocio activa el pago automático en «Mis pagos» (opcional, desde 2026-10-14).
  */
 module.exports = (sequelize, DataTypes) => {
     const CobMetodoPago = sequelize.define(
@@ -25,6 +25,12 @@ module.exports = (sequelize, DataTypes) => {
 
             estado: { type: DataTypes.CHAR(1), defaultValue: 'A' },
             creado_en: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
+
+            // La constancia de quién autorizó el débito automático, cuándo y desde dónde: si un
+            // cliente desconoce un cargo ante su banco, es la prueba de que lo pidió.
+            autorizado_por: DataTypes.INTEGER,
+            autorizado_en: DataTypes.DATE,
+            ip_autorizacion: DataTypes.STRING(64),
         },
         {
             tableName: 'cob_metodo_pago',

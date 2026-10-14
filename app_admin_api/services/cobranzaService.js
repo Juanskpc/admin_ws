@@ -838,8 +838,13 @@ async function aplicarPagoAprobado(factura, suscripcion, datos, transaction) {
         {
             estado: 'activa',
             reintentos: 0,
+            // Solo hay próximo cobro AUTOMÁTICO si hay con qué cobrar: una tarjeta guardada. Antes
+            // bastaba con que la pasarela lo admitiera, y todo el que pagaba por Wompi quedaba con
+            // fecha de cobro sin tener medio guardado (con el cron encendido, un intento diario).
             proximo_cobro:
-                adaptador.soportaRecurrente && !suscripcion.es_retenedor ? sumarDia(finCubierto) : null,
+                adaptador.soportaRecurrente && !suscripcion.es_retenedor && suscripcion.id_metodo_pago
+                    ? sumarDia(finCubierto)
+                    : null,
             ...(cumplioSolicitud
                 ? { id_plan: Number(factura.id_plan), id_plan_solicitado: null }
                 : {}),
@@ -1046,6 +1051,18 @@ async function registrarIntentoFallido(suscripcion, factura, resultado) {
         reintentos,
         // Se reintenta cada 3 días; el cron mira esta fecha.
         proximo_cobro: estado === 'en_gracia' ? sumarDias(hoyBogota(), 3) : null,
+    });
+
+    // El cliente se entera el mismo día, con el motivo del banco y la fecha del reintento. Sin esto
+    // la primera noticia de una tarjeta vencida era la pantalla de plan suspendido. Se carga aquí y
+    // no arriba porque `pagoAutomaticoService` depende de este archivo (ciclo de require).
+    await require('./pagoAutomaticoService').avisarCobroFallido({
+        idNegocio: factura.id_negocio,
+        monto: factura.total,
+        moneda: factura.moneda,
+        motivo: resultado?.mensaje ?? null,
+        suspendida: estado === 'suspendida',
+        reintentoEn: estado === 'en_gracia' ? sumarDias(hoyBogota(), 3) : null,
     });
 
     setAuditNegocio(factura.id_negocio);

@@ -188,12 +188,39 @@ async function getAcceptanceToken() {
 }
 
 /**
+ * Los DOS documentos que el pagador tiene que aceptar antes de guardar su medio de pago, con su
+ * enlace para leerlos y el token que prueba que se presentaron.
+ *
+ * Wompi exige los dos al crear una fuente de pago: el reglamento de uso (`acceptance_token`) y la
+ * autorización de tratamiento de datos personales (`accept_personal_auth`). Antes solo se mandaba
+ * el primero — el código se escribió contra la documentación de 2026-09-08 y nunca llegó a
+ * guardar una tarjeta real. Los tokens caducan, así que se piden justo antes de mostrar la casilla.
+ */
+async function getTerminos() {
+    exigirConfiguracion();
+    const datos = await llamar(`/merchants/${process.env.WOMPI_PUBLIC_KEY}`, { privada: false });
+    const d = datos?.data ?? {};
+    return {
+        acceptanceToken: d.presigned_acceptance?.acceptance_token ?? null,
+        permalink: d.presigned_acceptance?.permalink ?? null,
+        personalAuthToken: d.presigned_personal_data_auth?.acceptance_token ?? null,
+        personalPermalink: d.presigned_personal_data_auth?.permalink ?? null,
+    };
+}
+
+/**
  * Guarda el medio de pago y devuelve el id reutilizable.
  *
  * `tokenTarjeta` lo produce el widget de Wompi EN EL NAVEGADOR: aquí nunca entra un número de
  * tarjeta, y por eso el alcance PCI se queda en SAQ-A.
  */
-async function tokenizarMetodo({ tokenTarjeta, acceptanceToken, email, tipo = 'CARD' }) {
+async function tokenizarMetodo({
+    tokenTarjeta,
+    acceptanceToken,
+    personalAuthToken,
+    email,
+    tipo = 'CARD',
+}) {
     exigirConfiguracion();
     if (!tokenTarjeta) {
         const e = new Error('Falta el token de la tarjeta generado por el widget de Wompi.');
@@ -209,6 +236,7 @@ async function tokenizarMetodo({ tokenTarjeta, acceptanceToken, email, tipo = 'C
             token: tokenTarjeta,
             customer_email: email,
             acceptance_token: acceptanceToken || (await getAcceptanceToken()),
+            ...(personalAuthToken ? { accept_personal_auth: personalAuthToken } : {}),
         },
     });
 
@@ -291,16 +319,28 @@ async function cobrar({ referencia, monto, moneda = 'COP', token, email, urlReto
         };
     }
 
+    // Cobro contra la fuente de pago guardada (el débito automático).
+    //
+    // La referencia lleva sufijo por la misma razón que el checkout: Wompi exige una referencia
+    // ÚNICA por transacción, y el reintento a los 3 días de una tarjeta rechazada reusaba
+    // `EA-17-202610` y fallaba por referencia repetida. El webhook y la conciliación ya recortan el
+    // sufijo para encontrar la factura.
+    //
+    // `recurrent: true` marca el cobro como suscripción (COF) ante Visa y Mastercard: el banco lo
+    // trata como un cargo pactado y no como una compra nueva sin el cliente delante. Wompi lo
+    // ignora sin error si la tarjeta o el procesador no lo admiten.
     const centavos = aCentavos(monto);
+    const referenciaIntento = `${referencia}-${Date.now().toString(36)}`;
     const datos = await llamar('/transactions', {
         metodo: 'POST',
         cuerpo: {
             amount_in_cents: centavos,
             currency: moneda,
             customer_email: email,
-            reference: referencia,
+            reference: referenciaIntento,
             payment_source_id: Number(token),
-            signature: firmaIntegridad(referencia, centavos, moneda),
+            recurrent: true,
+            signature: firmaIntegridad(referenciaIntento, centavos, moneda),
         },
     });
 
@@ -310,7 +350,12 @@ async function cobrar({ referencia, monto, moneda = 'COP', token, email, urlReto
         idExterno: tx?.id ? String(tx.id) : null,
         codigoRespuesta: tx?.status ?? null,
         mensaje: tx?.status_message || null,
-        payload: { id: tx?.id, status: tx?.status, reference: tx?.reference },
+        payload: {
+            id: tx?.id,
+            status: tx?.status,
+            reference: tx?.reference ?? referenciaIntento,
+            modo: 'fuente-de-pago',
+        },
     };
 }
 
@@ -422,6 +467,7 @@ module.exports = {
     soportaRecurrente: true,
     estaConfigurada,
     getAcceptanceToken,
+    getTerminos,
     tokenizarMetodo,
     cobrar,
     consultarTransaccion,

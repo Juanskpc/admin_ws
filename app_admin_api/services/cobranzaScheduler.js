@@ -34,6 +34,7 @@ const cron = require('node-cron');
 
 const Models = require('../../app_core/models/conection');
 const CobranzaService = require('./cobranzaService');
+const Conciliacion = require('./cobranzaConciliacionService');
 const { getAdaptador } = require('../../app_core/cobranza');
 
 const sequelize = Models.sequelize;
@@ -59,12 +60,40 @@ async function suscripcionesPorCobrar() {
            AND s.es_retenedor = false
            AND p.estado = 'A'
            AND p.soporta_recurrente = true
+           -- El débito automático es OPCIONAL (2026-10-14): solo se cobra a quien guardó una
+           -- tarjeta y la tiene activa. Sin esto, cualquier suscripción de Wompi con fecha de
+           -- próximo cobro recibía un intento diario sin tener con qué pagar.
+           AND s.id_metodo_pago IS NOT NULL
+           AND EXISTS (SELECT 1 FROM cobranza.cob_metodo_pago m
+                        WHERE m.id_metodo_pago = s.id_metodo_pago AND m.estado = 'A')
            AND s.proximo_cobro IS NOT NULL
            AND s.proximo_cobro <= CURRENT_DATE
          ORDER BY s.proximo_cobro ASC;
         `,
         { type: sequelize.QueryTypes.SELECT }
     );
+}
+
+/**
+ * Concilia los intentos pendientes del negocio y dice si alguno SIGUE en curso en la pasarela.
+ * Un intento sin transacción (abrió el checkout y no pagó) no bloquea: no hay dinero en camino.
+ * Si la pasarela no responde, se asume en curso: ante la duda, no se cobra hoy.
+ */
+async function hayPagoEnCurso(idNegocio) {
+    const intentos = await Conciliacion.intentosPendientes([idNegocio]);
+    for (const intento of intentos) {
+        try {
+            const r = await Conciliacion.conciliarIntento(intento, { via: 'cron_cobro' });
+            if (r.resultado === 'pendiente') return true;
+        } catch (err) {
+            console.warn(
+                `[Cobranza/cron] negocio ${idNegocio}: no se pudo consultar un pago en curso:`,
+                err.message
+            );
+            return true;
+        }
+    }
+    return false;
 }
 
 async function ejecutarCicloDeCobro() {
@@ -85,6 +114,15 @@ async function ejecutarCicloDeCobro() {
                 console.warn(
                     `[Cobranza/cron] negocio ${s.id_negocio}: '${s.pasarela}' sin credenciales, omitida.`
                 );
+                continue;
+            }
+
+            // ANTES de cobrar: ¿hay un pago de este negocio todavía en curso en la pasarela? Un
+            // débito de ayer que Wompi dejó en PENDING, o un PSE que el cliente empezó por su
+            // cuenta. Se le pregunta a la pasarela: si se aprobó, se aplica y la factura queda
+            // pagada; si sigue en curso, hoy no se cobra. Cobrar encima sería el cobro doble.
+            if (await hayPagoEnCurso(s.id_negocio)) {
+                console.info(`[Cobranza/cron] negocio ${s.id_negocio}: pago en curso, se espera.`);
                 continue;
             }
 
@@ -132,4 +170,4 @@ function iniciar() {
     );
 }
 
-module.exports = { iniciar, ejecutarCicloDeCobro, suscripcionesPorCobrar };
+module.exports = { iniciar, ejecutarCicloDeCobro, suscripcionesPorCobrar, hayPagoEnCurso };

@@ -33,6 +33,7 @@ const DatosFiscalesController = require('../controllers/datosFiscalesController'
 const FeConfiguracionController = require('../controllers/feConfiguracionController');
 const CanalWhatsappController = require('../controllers/canalWhatsappController');
 const CobranzaController = require('../controllers/cobranzaController');
+const PagoAutomaticoController = require('../controllers/pagoAutomaticoController');
 const AdquirirController = require('../controllers/adquirirController');
 const PromocionController = require('../controllers/promocionController');
 const { verificarToken, requireSuperAdmin } = require('../../app_core/middleware/auth');
@@ -791,6 +792,40 @@ router.post('/cobranza/conciliar-pendientes', [
     body('id_negocio').optional({ nullable: true }).isInt({ min: 1 }).withMessage('id_negocio inválido'),
     body('origen').optional().isIn(['al_iniciar_sesion', 'al_volver']).withMessage('Origen inválido'),
 ], CobranzaController.conciliarPendientes);
+
+// ── Pago automático (débito mensual OPCIONAL con tarjeta guardada en Wompi) ──
+// El dueño del negocio lo ve, lo activa y lo desactiva en «Mis pagos». Activar es solo del
+// administrador del negocio (la autorización del débito es suya); el super admin ve y desactiva.
+// La tarjeta nunca pasa por aquí: llega un token de un solo uso que generó el widget de Wompi.
+const limitePagoAutomatico = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 10,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { success: false, message: 'Varios intentos seguidos con la tarjeta. Espera unos minutos.' },
+});
+
+router.get('/cobranza/pago-automatico', [
+    query('id_negocio').isInt({ min: 1 }).withMessage('id_negocio inválido'),
+], PagoAutomaticoController.getEstado);
+
+router.get('/cobranza/pago-automatico/terminos', [
+    query('id_negocio').isInt({ min: 1 }).withMessage('id_negocio inválido'),
+], PagoAutomaticoController.getTerminos);
+
+router.post('/cobranza/pago-automatico', limitePagoAutomatico, [
+    body('id_negocio').isInt({ min: 1 }).withMessage('id_negocio inválido'),
+    body('token').isString().trim().isLength({ min: 5, max: 120 }).withMessage('Tarjeta inválida'),
+    body('tipo').optional().isIn(['CARD', 'NEQUI']).withMessage('Medio de pago inválido'),
+    body('acceptance_token').isString().isLength({ min: 10, max: 2000 })
+        .withMessage('Debes aceptar el reglamento de Wompi'),
+    body('personal_auth_token').isString().isLength({ min: 10, max: 2000 })
+        .withMessage('Debes autorizar el tratamiento de datos'),
+], PagoAutomaticoController.activar);
+
+router.post('/cobranza/pago-automatico/desactivar', [
+    body('id_negocio').isInt({ min: 1 }).withMessage('id_negocio inválido'),
+], PagoAutomaticoController.desactivar);
 
 router.post('/cobranza/facturas/:id/pagar', [
     param('id').isInt({ min: 1 }).withMessage('ID de factura inválido'),
