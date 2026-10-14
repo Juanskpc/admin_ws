@@ -767,6 +767,58 @@ Código: `app_admin_api/services/comprobanteService.js` (datos + PDF + correo) �
 `admin_app_v21` → `admin/features/mis-pagos/` (pestaña, tabla, ficha de detalle y modal de envío).
 Pruebas: `__tests__/cobranza/comprobante.test.js` (sin base).
 
+### Pago automático OPCIONAL con tarjeta o Nequi (2026-10-14)
+
+Decisión del dueño: el débito automático es **opcional**. Quien registra su medio de pago en
+«Mis pagos» → «Pagar mi plan» → **Pago automático** no vuelve a pensar en pagar; quien no, sigue con
+el enlace como hasta ahora. Las dos vías terminan en `aplicarPagoAprobado`.
+
+**Cómo entra el medio de pago** (`app_admin_api/services/pagoAutomaticoService.js`):
+
+1. `GET /cobranza/pago-automatico/terminos` → llave pública + los dos tokens de aceptación de Wompi.
+2. El navegador abre el widget en modo tokenize:
+   `new WidgetCheckout({ publicKey, widgetOperation: 'tokenize' }).open(cb)`. El cliente escribe la
+   tarjeta (o su Nequi) **en el widget**, que además le pide aceptar el reglamento y la autorización
+   de datos. El callback trae `{ payment_source: { token, type } }`. El número nunca toca nuestros
+   servidores (PCI SAQ-A). Esta forma de uso no está en la documentación: se sacó del propio
+   `widget.js` (`finishtokenization` → `widgetCallback({ payment_source })`).
+3. `POST /cobranza/pago-automatico` → el servidor crea la fuente de pago con la llave privada
+   (`acceptance_token` + `accept_personal_auth`), la guarda en `cob_metodo_pago` con la
+   **constancia** (`autorizado_por`, `autorizado_en`, `ip_autorizacion`) y deja la suscripción con
+   `id_metodo_pago` y `proximo_cobro` = día siguiente al vencimiento. Si ya debía, cobra en el acto.
+
+Activar es **solo del administrador del negocio** (la autorización del débito es suya); el super
+admin ve y desactiva. Solo Colombia (Wompi): dLocal no guarda medios para cobrar sin el cliente.
+
+**El cron** (`cobranzaScheduler`, 08:15) solo mira suscripciones con medio **activo** y fecha
+vencida. Antes de cobrar concilia cualquier pago en curso del negocio (`hayPagoEnCurso`): si el
+débito de ayer se aprobó, se aplica y no se vuelve a cobrar; si sigue en curso, hoy no se cobra.
+Después de conciliar relee la suscripción, porque la lista de pendientes ya está vieja.
+
+**Rechazos:** el que llega en la respuesta y el que llega tarde (PENDING → DECLINED, por webhook o
+por el conciliador) cuentan **una sola vez**: `cerrarDebitoAutomatico` cierra el intento con un
+`UPDATE … RETURNING` y solo cuenta quien lo cerró. Cada rechazo avisa por correo con el motivo del
+banco y la fecha del reintento (cada 3 días); al tercero, suspensión (salvo el negocio 6).
+
+**Lo que enseñó el sandbox** (probado de punta a punta el 2026-10-14 con las tarjetas de prueba
+4242, que aprueba, y 4111, que rechaza; el widget ofrece tarjeta **y Nequi**):
+
+- Con TARJETA, `POST /transactions` exige `payment_method: { installments: 1 }`; sin él responde
+  422 «No se especificó el número de cuotas». Nequi no lleva cuotas.
+- El cobro con fuente de pago vuelve **PENDING** y se resuelve segundos después: por eso la
+  conciliación previa del cron no es opcional.
+- Cada débito lleva referencia propia (`EA-17-202610-<sufijo>`): Wompi rechaza la repetida.
+- `public_data.brand` viene vacío en la fuente de pago: la pantalla muestra «Tarjeta ···4242».
+
+**Errores del código anterior que esto corrigió:** `aplicarPagoAprobado` ponía `proximo_cobro` a
+cualquier suscripción de Wompi aunque no tuviera medio (Zona Burger y El Callejero), y el cron no
+filtraba por medio: encendido, habría intentado cobrar cada mañana a negocios sin tarjeta.
+`npm run migrate:cobranza-pago-automatico` limpia esas fechas y añade la constancia.
+
+Pruebas: `__tests__/cobranza/pago_automatico.test.js` (13) y `wompi_debito.test.js` (4).
+
+---
+
 ## 7. Lo que este documento NO decide
 
 1. **Precio para Chile.** CLP 9.900 es un ejemplo. Decisión comercial del dueño.
