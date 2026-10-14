@@ -769,6 +769,9 @@ Pruebas: `__tests__/cobranza/comprobante.test.js` (sin base).
 
 ### Pago automático OPCIONAL con tarjeta o Nequi (2026-10-14)
 
+> **En producción desde 2026-10-14 16:49** con `COBRANZA_AUTO_ENABLED=true` (cron 08:15 Bogotá).
+> Despliegue, respaldos y cómo deshacer: [`sesion-2026-10-14-seguridad-y-cobro-automatico.md`](sesion-2026-10-14-seguridad-y-cobro-automatico.md) §4.
+
 Decisión del dueño: el débito automático es **opcional**. Quien registra su medio de pago en
 «Mis pagos» → «Pagar mi plan» → **Pago automático** no vuelve a pensar en pagar; quien no, sigue con
 el enlace como hasta ahora. Las dos vías terminan en `aplicarPagoAprobado`.
