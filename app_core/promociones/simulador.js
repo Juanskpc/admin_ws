@@ -13,10 +13,8 @@
  *
  * 1. **Lo que le cobra Meta**, por país del destinatario, con la fecha del *rate card*. No lo
  *    cobramos nosotros y no podemos revenderlo: su WABA es suya (`embedded-signup.md` §9.1).
- * 2. **Lo que cuesta en EscalApp**: créditos. En F1 todavía no hay precio publicado ni compra, así
- *    que se devuelve el **número de créditos** y el precio queda en `null` — lo pone F3, cuando el
- *    piloto haya medido la tasa de respuesta. Devolver un precio inventado ahora es la forma más
- *    rápida de que el dueño tome una decisión comercial sobre una cifra que nadie midió.
+ * 2. **Lo que cuesta en EscalApp**: un precio fijo por mensaje entregado (`PRECIO_ENVIO_COP`,
+ *    decidido el 2026-10-13). Por ahora solo se muestra: no hay compra ni descuento todavía (F3).
  * 3. **Cuántos pedidos tiene que traer para empatar.** Es lo único de aquí que el dueño de verdad
  *    quiere saber.
  *
@@ -36,6 +34,16 @@
 
 const tarifas = require('./tarifas');
 const cuota = require('../../intelligence/channels/whatsapp/cuota');
+
+/**
+ * Lo que cobra EscalApp por cada mensaje de promoción ENTREGADO, en pesos colombianos.
+ *
+ * Decidido por el dueño el 2026-10-13: **precio fijo por envío**, sin paquetes ni envíos incluidos
+ * en el plan. Por ahora **solo se muestra** —no se descuenta ni se cobra— y se dice así en la
+ * nota. Cambiar el precio es cambiar este número. Con otra moneda no se pinta (no hay tarifa
+ * definida fuera de Colombia) en vez de convertir una cifra que nadie fijó.
+ */
+const PRECIO_ENVIO_COP = 30;
 
 /** Margen bruto con el que se calcula el punto de equilibrio si nadie dice otro. */
 const MARGEN_POR_DEFECTO = 0.3;
@@ -116,10 +124,13 @@ function calcular(destinatarios = [], { margen = MARGEN_POR_DEFECTO, moneda = 'C
     const margenUsado = Number.isFinite(margen) && margen > 0 && margen <= 1 ? margen : MARGEN_POR_DEFECTO;
     const margenPorPedido = Math.round(ticketMedio * margenUsado);
 
-    // Punto de equilibrio contando SOLO lo de Meta: en F1 no hay precio nuestro todavía, y hay que
-    // decir cuál es la base del cálculo para que nadie lo lea como el total definitivo.
+    const precioEscalapp = moneda === 'COP' ? enviables * PRECIO_ENVIO_COP : null;
+
+    // El punto de equilibrio cuenta lo de Meta y lo nuestro: es lo que el dueño va a pagar en
+    // total. Sin precio nuestro en su moneda, solo lo de Meta, y se dice en `base`.
+    const costoTotal = costoLocal != null ? costoLocal + (precioEscalapp ?? 0) : null;
     const pedidosParaEmpatar =
-        margenPorPedido > 0 && costoLocal != null ? Math.ceil(costoLocal / margenPorPedido) : null;
+        margenPorPedido > 0 && costoTotal != null ? Math.ceil(costoTotal / margenPorPedido) : null;
 
     const conversacionesEsperadas = Math.round(enviables * TASA_RESPUESTA_SUPUESTA);
     const mensajesAsistente = Math.round(conversacionesEsperadas * MENSAJES_POR_CONVERSACION);
@@ -147,9 +158,12 @@ function calcular(destinatarios = [], { margen = MARGEN_POR_DEFECTO, moneda = 'C
         escalapp: {
             /** 1 crédito = 1 mensaje entregado. Lo fallido se devuelve (F2). */
             creditos: enviables,
-            /** Sin precio hasta F3: ver la cabecera. */
-            precio_local: null,
-            nota: 'El precio por crédito se define cuando el piloto mida la tasa de respuesta.',
+            /** Lo que costaría: `creditos × PRECIO_ENVIO_COP`. `null` fuera de Colombia. */
+            precio_local: precioEscalapp,
+            precio_unitario_local: moneda === 'COP' ? PRECIO_ENVIO_COP : null,
+            /** Todavía no se descuenta ni se cobra: la pantalla lo dice. */
+            se_cobra: false,
+            nota: 'Solo se cuenta lo que se entrega. Por ahora no se te cobra.',
         },
 
         retorno: {
@@ -158,7 +172,9 @@ function calcular(destinatarios = [], { margen = MARGEN_POR_DEFECTO, moneda = 'C
             margen_por_pedido: margenPorPedido,
             /** Lo único que el dueño quiere saber. `null` si estos clientes nunca gastaron nada. */
             pedidos_para_empatar: pedidosParaEmpatar,
-            base: 'solo el costo de Meta (todavía no hay precio de EscalApp)',
+            base: precioEscalapp != null
+                ? 'el costo de Meta más el de EscalApp'
+                : 'solo el costo de Meta (no hay precio de EscalApp en esta moneda)',
         },
 
         /**
@@ -206,6 +222,7 @@ async function calcularConCupo(destinatarios, opciones = {}) {
 
 module.exports = {
     MARGEN_POR_DEFECTO,
+    PRECIO_ENVIO_COP,
     MENSAJES_POR_CONVERSACION,
     TASA_RESPUESTA_SUPUESTA,
     calcular,

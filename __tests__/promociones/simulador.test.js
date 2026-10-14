@@ -95,9 +95,16 @@ describe('el costo de una campaña', () => {
         expect(r.meta.costo_usd).toBeCloseTo(5, 2);
         expect(r.meta.lo_cobra).toMatch(/Meta/);
         expect(r.meta.vigencia_tarifa).toBe(tarifas.VIGENCIA);
-        // 1 crédito = 1 mensaje entregable. El precio es de F3.
+        // 1 crédito = 1 mensaje entregable, a precio fijo. Todavía solo se muestra.
         expect(r.escalapp.creditos).toBe(400);
+        expect(r.escalapp.precio_local).toBe(400 * simulador.PRECIO_ENVIO_COP);
+        expect(r.escalapp.se_cobra).toBe(false);
+    });
+
+    test('fuera de Colombia no se inventa un precio de EscalApp', () => {
+        const r = simulador.calcular(colombianos(10), { moneda: 'CLP' });
         expect(r.escalapp.precio_local).toBeNull();
+        expect(r.retorno.base).toMatch(/solo el costo de Meta/);
     });
 
     test('un número de EE. UU. no se cuenta ni se cobra', () => {
@@ -146,8 +153,11 @@ describe('el punto de equilibrio', () => {
 
         expect(r.retorno.margen_por_pedido).toBe(Math.round(27321 * 0.3));
         expect(r.retorno.pedidos_para_empatar).toBeGreaterThan(1);
+        // Cuenta lo que paga en total: lo de Meta y lo de EscalApp.
         expect(r.retorno.pedidos_para_empatar).toBe(
-            Math.ceil(r.meta.costo_estimado_local / r.retorno.margen_por_pedido),
+            Math.ceil(
+                (r.meta.costo_estimado_local + r.escalapp.precio_local) / r.retorno.margen_por_pedido,
+            ),
         );
     });
 
