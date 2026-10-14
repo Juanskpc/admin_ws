@@ -419,3 +419,14 @@ Y una pregunta pendiente sobre reserva: ¿tus clientes de D'Alex ven un login po
 simplemente no te lo han mencionado, o de verdad llevan días sin escribir la contraseña? Si es lo
 segundo, hay algo en el flujo que no he encontrado y prefiero buscarlo antes de tocar nada. De la
 respuesta depende si el token deslizante es una función nueva o el arreglo de algo ya existente.
+
+## Avance — tercera tanda, 2026-10-14 (en producción)
+
+| Hecho | Cómo se comprobó |
+| --- | --- |
+| **`AUTHZ_MODO=bloqueo`** en el `.env` del VPS (15:19) | Arranque: «[authz] Modo BLOQUEO». `auditoria.audit_evento` tenía 0 eventos `authz` desde el 2026-09-30 (14 días limpios). Primeras ~170 peticiones tras el cambio: ningún 403. Respaldo del `.env`: `/home/escalapp/backups/env_antes_authz_*`. Revertir: `AUTHZ_MODO=observacion` + reinicio. |
+| **Límite de peticiones**: ya estaba ENCENDIDO | Desde la tanda de seguridad nace encendido (`RATE_LIMIT_ENABLED !== 'false'`); la respuesta trae `Ratelimit-Limit: 3000`. 0 respuestas 429 en 7 días. La casilla de «límite apagado» estaba desactualizada. |
+| **Cabeceras de seguridad en Caddy** | Snippet `(seguridad)` importado en los tres sitios: HSTS 1 año (sin `includeSubDomains`), `nosniff`, `Referrer-Policy`, `Permissions-Policy` sin cámara/micrófono/ubicación, sin cabecera `Server`. `X-Frame-Options: SAMEORIGIN` **solo en `/admin/*`**: la carta vive en `/restaurante/` y un negocio podría incrustarla. `caddy validate` antes de recargar; comprobado con `curl` en admin, restaurante, api y un subdominio de negocio. Respaldo: `/home/escalapp/backups/Caddyfile_antes_cabeceras_*`. |
+| **Monitor externo** (UptimeRobot, cuenta escalappsystem@gmail.com) | `https://api.escalapp.cloud/health` (toca la base) y `https://escalapp.cloud/restaurante/`, cada 5 min, aviso por correo. |
+| **Primera restauración de un respaldo** | `db_2026-10-14_0330.dump` en una base temporal del mismo VPS: 7 s, 0 errores, 147/147 tablas, 63.077 filas frente a 63.115 en vivo (las 38 de diferencia son pedidos, citas y caja posteriores a las 3:30). Base temporal borrada. Ojo: `postgres` no puede leer los `.dump` (dueño `escalapp`, 664): pasarle el archivo por stdin (`pg_restore ... < archivo`). |
+| Respaldo fuera del servidor | **Pendiente**: cuenta de Cloudflare R2 creada, falta activar la suscripción y el bucket. |
