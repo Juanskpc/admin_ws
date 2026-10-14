@@ -325,7 +325,9 @@ async function activar(
         }
     }
 
-    await avisar(correos, {
+    // Sin `await`: el correo sale por detrás. Esperarlo hacía que activar tardara ~10 s (dos envíos
+    // por SMTP) con el cliente mirando un spinner. `avisar` no lanza: cada fallo queda en el log.
+    void avisar(correos, {
         asunto: 'Activaste el pago automático — EscalApp',
         titulo: 'Pago automático activado',
         parrafos: [
@@ -376,7 +378,9 @@ async function desactivar(idNegocio, { idUsuario } = {}) {
     }
 
     const { correos, nombreNegocio } = await destinatarios(idNegocio, idUsuario);
-    await avisar(correos, {
+    // Sin `await`: el correo sale por detrás. Esperarlo hacía que activar tardara ~10 s (dos envíos
+    // por SMTP) con el cliente mirando un spinner. `avisar` no lanza: cada fallo queda en el log.
+    void avisar(correos, {
         asunto: 'Desactivaste el pago automático — EscalApp',
         titulo: 'Pago automático desactivado',
         parrafos: [

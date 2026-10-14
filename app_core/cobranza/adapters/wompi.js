@@ -296,7 +296,7 @@ function linkCheckout({ referencia, monto, moneda, email, urlRetorno }) {
     return { url: `https://checkout.wompi.co/p/?${params.toString()}`, referenciaIntento };
 }
 
-async function cobrar({ referencia, monto, moneda = 'COP', token, email, urlRetorno }) {
+async function cobrar({ referencia, monto, moneda = 'COP', token, tipoMetodo = 'CARD', email, urlRetorno }) {
     exigirConfiguracion();
 
     // Sin fuente de pago guardada no hay débito posible: se abre el checkout y el cliente paga
@@ -340,6 +340,10 @@ async function cobrar({ referencia, monto, moneda = 'COP', token, email, urlReto
             reference: referenciaIntento,
             payment_source_id: Number(token),
             recurrent: true,
+            // Con TARJETA Wompi exige el número de cuotas (sin él: 422 «No se especificó el número
+            // de cuotas», comprobado en el sandbox el 2026-10-14). La mensualidad va en una sola.
+            // Nequi no tiene cuotas.
+            ...(tipoMetodo === 'NEQUI' ? {} : { payment_method: { installments: 1 } }),
             signature: firmaIntegridad(referenciaIntento, centavos, moneda),
         },
     });

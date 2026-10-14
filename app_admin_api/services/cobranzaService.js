@@ -975,6 +975,7 @@ async function cobrarFactura(idFactura, { usarMetodoGuardado = true, urlRetorno 
         moneda: factura.moneda,
         pais: await paisDeNegocio(factura.id_negocio),
         token: metodo?.token_externo ?? null,
+        tipoMetodo: metodo?.tipo ?? undefined,
         email: negocio?.email_contacto ?? undefined,
         descripcion: `EscalApp ${factura.referencia}`,
         urlRetorno,

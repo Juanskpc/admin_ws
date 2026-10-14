@@ -81,7 +81,14 @@ test('cobrar con fuente de pago: referencia única por intento, firmada, y marca
     const c2 = cuerpoEnviado(1);
     expect(c1.reference).toMatch(/^EA-17-202610-[a-z0-9]+$/);
     expect(c2.reference).not.toBe(c1.reference);
-    expect(c1).toMatchObject({ payment_source_id: 1234, recurrent: true, amount_in_cents: 2799900, currency: 'COP' });
+    expect(c1).toMatchObject({
+        payment_source_id: 1234,
+        recurrent: true,
+        amount_in_cents: 2799900,
+        currency: 'COP',
+        // Con tarjeta, Wompi exige las cuotas (422 sin ellas, visto en el sandbox).
+        payment_method: { installments: 1 },
+    });
     const firma = crypto
         .createHash('sha256')
         .update(`${c1.reference}2799900COPtest_integrity_x`)
@@ -91,4 +98,10 @@ test('cobrar con fuente de pago: referencia única por intento, firmada, y marca
     // Lo que queda guardado permite a la conciliación y al webhook reconocer el débito.
     expect(a).toMatchObject({ estado: 'pendiente', idExterno: 'tx-1' });
     expect(a.payload).toMatchObject({ modo: 'fuente-de-pago' });
+});
+
+test('cobrar con Nequi guardado no manda cuotas', async () => {
+    fetchDevuelve({ data: { id: 'tx-3', status: 'PENDING', reference: 'z' } });
+    await wompi.cobrar({ referencia: 'EA-17-202610', monto: 27999, token: '99', tipoMetodo: 'NEQUI' });
+    expect(cuerpoEnviado()).not.toHaveProperty('payment_method');
 });

@@ -96,6 +96,21 @@ async function hayPagoEnCurso(idNegocio) {
     return false;
 }
 
+/** ¿Sigue esta suscripción con tarjeta activa y fecha de cobro vencida? (releída de la base) */
+async function sigueTocandoCobrar(idSuscripcion) {
+    const [fila] = await sequelize.query(
+        `SELECT 1
+           FROM cobranza.cob_suscripcion s
+           JOIN cobranza.cob_metodo_pago m ON m.id_metodo_pago = s.id_metodo_pago AND m.estado = 'A'
+          WHERE s.id_suscripcion = :idSuscripcion
+            AND s.estado IN ('activa', 'en_gracia')
+            AND s.proximo_cobro IS NOT NULL
+            AND s.proximo_cobro <= CURRENT_DATE;`,
+        { replacements: { idSuscripcion }, type: sequelize.QueryTypes.SELECT }
+    );
+    return Boolean(fila);
+}
+
 async function ejecutarCicloDeCobro() {
     const pendientes = await suscripcionesPorCobrar();
     if (pendientes.length === 0) {
@@ -125,6 +140,10 @@ async function ejecutarCicloDeCobro() {
                 console.info(`[Cobranza/cron] negocio ${s.id_negocio}: pago en curso, se espera.`);
                 continue;
             }
+            // La conciliación de arriba pudo APLICAR un pago (el débito de ayer se aprobó): entonces
+            // la suscripción ya tiene su próxima fecha y no hay nada que cobrar hoy. La lista de
+            // pendientes se leyó antes y está vieja, así que se vuelve a mirar la suscripción.
+            if (!(await sigueTocandoCobrar(s.id_suscripcion))) continue;
 
             const { factura } = await CobranzaService.generarFacturaPeriodo(s.id_negocio);
             if (factura.estado === 'pagada') continue;
