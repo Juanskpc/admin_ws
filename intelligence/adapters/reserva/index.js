@@ -247,7 +247,7 @@ async function citasDelCliente(idNegocio, contexto = {}) {
            FROM reserva.reserva_cita c
            LEFT JOIN reserva.reserva_profesional p ON p.id_profesional = c.id_profesional
           WHERE c.id_negocio = :idNegocio
-            AND c.estado = ANY(:estados)
+            AND c.estado = ANY(ARRAY[:estados]::text[])
             AND c.fecha_hora_inicio >= (now() AT TIME ZONE 'America/Bogota')
             AND (
                   (:idPersona::uuid IS NOT NULL AND c.id_persona_negocio = :idPersona::uuid)

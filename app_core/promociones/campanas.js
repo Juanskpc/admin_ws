@@ -67,6 +67,39 @@ function fallo(mensaje, { code, statusCode = 422, detalle = null }) {
     return e;
 }
 
+/**
+ * Congela la lista de una campaña, de una sola vez.
+ *
+ * `UNNEST` y no 400 INSERTs: un servidor de un núcleo nota la diferencia, y además así es una sola
+ * sentencia que no puede quedar a medias.
+ *
+ * ⚠️ `ARRAY[:ids]` y no `:ids::text[]`: Sequelize expande un array de `replacements` como valores
+ * sueltos separados por comas ('a', 'b'), no como un array de Postgres. Con `:ids::text[]` salía
+ * `UNNEST('a', 'b'::text[], …)` y Postgres contestaba «unnest(unknown) is not unique»: ninguna
+ * promoción se podía preparar, y se descubrió con la primera en producción (2026-10-13). Las pruebas
+ * no la vieron porque ninguna llegaba a la base; `__tests__/promociones/destinatarios_db.test.js` sí.
+ */
+async function insertarDestinatarios(idCampana, destinatarios, { transaction = null } = {}) {
+    if (!destinatarios.length) return;
+    await sequelize.query(
+        `INSERT INTO platform.campana_destinatario
+             (id_campana, id_persona_negocio, telefono_e164, segmento)
+         SELECT :idCampana, p.id::uuid, p.tel, p.seg
+           FROM UNNEST(ARRAY[:ids]::text[], ARRAY[:tels]::text[], ARRAY[:segs]::text[])
+                AS p(id, tel, seg)
+         ON CONFLICT (id_campana, id_persona_negocio) DO NOTHING;`,
+        {
+            replacements: {
+                idCampana,
+                ids: destinatarios.map((d) => d.id_persona_negocio),
+                tels: destinatarios.map((d) => d.telefono),
+                segs: destinatarios.map((d) => d.segmento ?? null),
+            },
+            transaction,
+        }
+    );
+}
+
 /** El texto de la oferta no puede traer saltos de línea: Meta rechaza una variable con ellos. */
 function limpiarParametro(valor) {
     return String(valor ?? '')
@@ -247,24 +280,7 @@ async function crear({
             }
         );
 
-        // La lista, de una sola vez. `UNNEST` y no 400 INSERTs: un servidor de un núcleo nota la
-        // diferencia, y además así es una sola sentencia que no puede quedar a medias.
-        await sequelize.query(
-            `INSERT INTO platform.campana_destinatario
-                 (id_campana, id_persona_negocio, telefono_e164, segmento)
-             SELECT :idCampana, p.id::uuid, p.tel, p.seg
-               FROM UNNEST(:ids::text[], :tels::text[], :segs::text[]) AS p(id, tel, seg)
-             ON CONFLICT (id_campana, id_persona_negocio) DO NOTHING;`,
-            {
-                replacements: {
-                    idCampana: campana.id_campana,
-                    ids: destinatarios.map((d) => d.id_persona_negocio),
-                    tels: destinatarios.map((d) => d.telefono),
-                    segs: destinatarios.map((d) => d.segmento ?? null),
-                },
-                transaction,
-            }
-        );
+        await insertarDestinatarios(campana.id_campana, destinatarios, { transaction });
 
         await auditHelper.registrarEvento({
             modulo: MODULO_AUDITORIA,
@@ -626,6 +642,7 @@ module.exports = {
     MAX_DESTINATARIOS,
     DIAS_ENTRE_CAMPANAS,
     limpiarParametro,
+    insertarDestinatarios,
     materializar,
     obtener,
     crear,
