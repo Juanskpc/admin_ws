@@ -100,6 +100,58 @@ async function insertarDestinatarios(idCampana, destinatarios, { transaction = n
     );
 }
 
+/**
+ * Lo que dice el saludo cuando el cliente no tiene nombre guardado: «Hola de nuevo, te escribimos
+ * de…». Se lee natural y no inventa un nombre.
+ */
+const CLIENTE_SIN_NOMBRE = 'de nuevo';
+
+/** El primer nombre, para el saludo: «Hola Ana», no «Hola ANA MARÍA GÓMEZ RUIZ». */
+function primerNombre(nombre) {
+    const limpio = limpiarParametro(nombre);
+    if (!limpio || /^sin nombre$/i.test(limpio)) return '';
+    const primero = limpio.split(' ')[0];
+    return primero.charAt(0).toLocaleUpperCase('es') + primero.slice(1).toLocaleLowerCase('es');
+}
+
+/**
+ * Rellena los huecos que el dueño no escribe: el nombre del cliente y el del negocio.
+ *
+ * ⚠️ Meta rechaza una plantilla con un parámetro VACÍO (#131008, «Required parameter is
+ * missing»), y la pantalla solo manda la oferta. Hasta el 2026-10-13 nadie rellenaba `cliente` ni
+ * `negocio`: la prueba salía con el negocio en blanco y fallaba, y el envío a los clientes habría
+ * fallado entero. Se hace aquí, al materializar cada mensaje, y no al crear la campaña, para que
+ * cada destinatario lleve SU nombre y para que las campañas ya creadas también salgan bien.
+ *
+ * Lo que ya venga escrito se respeta (la prueba manda su propio `cliente`).
+ */
+async function completarParametros({ idNegocio, idPersonaNegocio = null, parametros = {} }, { transaction } = {}) {
+    const completos = { ...parametros };
+
+    if (!limpiarParametro(completos.negocio)) {
+        const [negocio] = await sequelize.query(
+            'SELECT nombre FROM general.gener_negocio WHERE id_negocio = :idNegocio LIMIT 1;',
+            { replacements: { idNegocio: Number(idNegocio) }, ...SELECT, transaction }
+        );
+        completos.negocio = limpiarParametro(negocio?.nombre) || 'tu restaurante de confianza';
+    }
+
+    if (!limpiarParametro(completos.cliente)) {
+        let nombre = '';
+        if (idPersonaNegocio) {
+            const [persona] = await sequelize.query(
+                `SELECT nombre_mostrado FROM platform.persona_negocio
+                  WHERE id_persona_negocio = :id AND id_negocio = :idNegocio LIMIT 1;`,
+                { replacements: { id: idPersonaNegocio, idNegocio: Number(idNegocio) }, ...SELECT, transaction }
+            );
+            nombre = primerNombre(persona?.nombre_mostrado);
+        }
+        completos.cliente = nombre || CLIENTE_SIN_NOMBRE;
+    }
+
+    return completos;
+}
+
 /** El texto de la oferta no puede traer saltos de línea: Meta rechaza una variable con ellos. */
 function limpiarParametro(valor) {
     return String(valor ?? '')
@@ -120,13 +172,18 @@ function limpiarParametro(valor) {
  * pendiente hasta caducar, ensuciando la cola y el Ledger con algo que no va a salir.
  */
 async function materializar(
-    { idNegocio, telefono, plantilla, parametros, imagenUrl },
+    { idNegocio, idPersonaNegocio = null, telefono, plantilla, parametros: crudos, imagenUrl },
     { transaction }
 ) {
     const definicion = catalogo.obtener(plantilla);
     if (!definicion) {
         throw fallo(`No existe la plantilla "${plantilla}".`, { code: 'PROMOS_PLANTILLA_DESCONOCIDA' });
     }
+
+    const parametros = await completarParametros(
+        { idNegocio, idPersonaNegocio, parametros: crudos },
+        { transaction }
+    );
 
     const conversacion = await repositorio.asegurarConversacion(
         {
@@ -643,6 +700,7 @@ module.exports = {
     DIAS_ENTRE_CAMPANAS,
     limpiarParametro,
     insertarDestinatarios,
+    completarParametros,
     materializar,
     obtener,
     crear,

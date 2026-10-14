@@ -89,3 +89,45 @@ describe('congelar la lista de una campaña', () => {
         ).resolves.toBeUndefined();
     });
 });
+
+// Meta rechaza un parámetro vacío (#131008) y la pantalla solo manda la oferta: la primera prueba
+// en producción salió con el nombre del negocio en blanco (2026-10-13).
+describe('los huecos que el dueño no escribe', () => {
+    test('el negocio sale de su ficha y el cliente de la suya, con el primer nombre', async () => {
+        const [[p]] = await sequelize.query(
+            `SELECT pn.id_persona_negocio, pn.id_negocio, pn.nombre_mostrado, n.nombre AS negocio
+               FROM platform.persona_negocio pn
+               JOIN general.gener_negocio n ON n.id_negocio = pn.id_negocio
+              WHERE coalesce(trim(pn.nombre_mostrado), '') <> ''
+              LIMIT 1;`
+        );
+        if (!p) return console.warn('[destinatarios_db] no hay personas con nombre');
+
+        const r = await campanas.completarParametros({
+            idNegocio: p.id_negocio,
+            idPersonaNegocio: p.id_persona_negocio,
+            parametros: { oferta: '2x1', cliente: '', negocio: '' },
+        });
+        expect(r.oferta).toBe('2x1');
+        expect(r.negocio).toBe(p.negocio.trim());
+        const primero = p.nombre_mostrado.trim().split(/\s+/)[0];
+        expect(r.cliente.toLowerCase()).toBe(primero.toLowerCase());
+    });
+
+    test('sin cliente conocido el saludo no queda vacío, y lo ya escrito se respeta', async () => {
+        const [[n]] = await sequelize.query('SELECT id_negocio FROM general.gener_negocio LIMIT 1;');
+        const sinNadie = await campanas.completarParametros({
+            idNegocio: n.id_negocio,
+            parametros: { oferta: 'x', cliente: '', negocio: '' },
+        });
+        expect(sinNadie.cliente).toBe('de nuevo');
+        expect(sinNadie.negocio).not.toBe('');
+
+        const prueba = await campanas.completarParametros({
+            idNegocio: n.id_negocio,
+            parametros: { oferta: 'x', cliente: 'Prueba', negocio: 'Mi local' },
+        });
+        expect(prueba.cliente).toBe('Prueba');
+        expect(prueba.negocio).toBe('Mi local');
+    });
+});

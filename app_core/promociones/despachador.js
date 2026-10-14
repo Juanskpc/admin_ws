@@ -219,6 +219,8 @@ async function drenarCampana(campana, { ahora = new Date() } = {}) {
             const { bloqueada, idMensaje } = await campanas.materializar(
                 {
                     idNegocio: campana.id_negocio,
+                    // Para el saludo con su nombre: sin él, Meta rechaza el mensaje (#131008).
+                    idPersonaNegocio: destinatario.id_persona_negocio,
                     telefono: destinatario.telefono_e164,
                     plantilla: campana.plantilla,
                     parametros: campana.parametros,
