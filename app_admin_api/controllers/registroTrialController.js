@@ -3,7 +3,7 @@
  *
  * POST /auth/registro/prueba/verificar
  *   Verifica el OTP y, si es válido, crea automáticamente la cuenta trial:
- *   usuario con cédula como contraseña temporal + sucursal + plan 7 días.
+ *   usuario con cédula como contraseña temporal + sucursal + plan 30 días.
  */
 
 const { body, validationResult } = require('express-validator');

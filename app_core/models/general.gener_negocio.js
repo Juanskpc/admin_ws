@@ -55,6 +55,13 @@ module.exports = (sequelize, DataTypes) => {
          */
         permite_domicilio_personal: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
         /**
+         * Opt-in: los productos pueden ofrecer adiciones (toppings, extras…) que se pagan aparte y
+         * quedan ligadas al plato en el pedido. `termino_adiciones` es cómo las llama el negocio
+         * (catálogo en `app_core/helpers/terminosAdicion.js`).
+         */
+        permite_adiciones: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+        termino_adiciones: { type: DataTypes.STRING(20), allowNull: false, defaultValue: 'ADICION' },
+        /**
          * ¿Este negocio tiene las promociones masivas? Opt-in, y a diferencia del resto de los
          * `permite_*` **no lo decide el dueño**: lo enciende EscalApp negocio por negocio. Es la
          * lista blanca de `app_core/promociones/habilitado.js`; apagado, el módulo no existe —ni

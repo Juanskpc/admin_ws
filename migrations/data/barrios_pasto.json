@@ -1,0 +1,2401 @@
+{
+ "ciudad": "Pasto",
+ "departamento": "Nariño",
+ "fuente": "barriosPasto.xlsx (2026-10-15)",
+ "zonas": [
+  {
+   "tipo": "COMUNA",
+   "nombre": "Comuna 1",
+   "lugares": [
+    {
+     "tipo": "BARRIO",
+     "nombre": "Avenida Santander"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Bombona"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Avenida Boyacá"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Caracha"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Centro"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Condominio Santiago"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "El Churo"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "El Cilindro"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "El Parque"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "El Portalito"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Hullaguanga"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "La Panadería"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Las Américas"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Los Dos Puentes"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Marcos De La Rosa"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "San Agustín Centro"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "San Andrés"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "San Andresito"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "San José"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "San José Obrero"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Santiago"
+    }
+   ]
+  },
+  {
+   "tipo": "COMUNA",
+   "nombre": "Comuna 2",
+   "lugares": [
+    {
+     "tipo": "BARRIO",
+     "nombre": "Aire Libre"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Alhambra"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Atahualpa"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Avenida Boyacá"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Avenida Champagnath"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Avenida Colombia"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Bella Vista"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Casa Bella"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Coliseo Cubierto"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "El Olivo"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "El Prado"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "El Recuerdo"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Fátima"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Javeriano"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Julián Bucheli"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "La Gran Colombia"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Las lunas I"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "las lunas II"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Las Violetas I"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Las Violetas II"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Las Violetas III"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Las Violetas IV"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Los Abedules"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Los Álamos"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Los Balcones"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Los Olivos"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Medardo Bucheli"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Navarrete"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Normandía"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Parque Bolívar"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Salomón"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "San Miguel"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Sector San Juan Bosco"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Villa Lucia"
+    }
+   ]
+  },
+  {
+   "tipo": "COMUNA",
+   "nombre": "Comuna 3",
+   "lugares": [
+    {
+     "tipo": "BARRIO",
+     "nombre": "iAlejandría"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Arnulfo Guerrero"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Caicedonia"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Camilo Torres"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Casa Loma"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "El Ejido"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Guamuez"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "José Antonio Galán"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "La Esmeralda"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "La Estrella"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Las Brisas"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Las Lajas"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Las Mercedes"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Los Pinos"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Mercedario"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Pie De Cuesta"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Pinar Del Rio"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Popular"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Pucalpa I"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Pucalpa II"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Pucalpa III"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Rosal Del Oriente"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Santa Bárbara"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Santa Catalina"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Santa Mónica"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Villa Oriente"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Villaflor I"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Villaflor II"
+    }
+   ]
+  },
+  {
+   "tipo": "COMUNA",
+   "nombre": "Comuna 4",
+   "lugares": [
+    {
+     "tipo": "BARRIO",
+     "nombre": "Albergue Del Sol"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Altos De Lorenzo"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Altos Del Campo"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Avenida Idema"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Belén"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Bernal"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Betania"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Chile"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Doce De Octubre I"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Doce De Octubre II"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "El Porvenir"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "El Rosario"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "El Tejar"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "El Triunfo"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "La Paz"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Laureano Gómez"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Lorenzo De Aldana"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Los Elíseos"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Miraflores I"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Miraflores II"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Praga"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Puerta Del Sol"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Rincón Colonial"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "San Germán"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "San Juan De Los Pastos"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Santa Fe I"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Santa Fe II"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Santacruz"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Sendoya"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Siete De Agosto"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Villa Olímpica"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Villa Victoria"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Villadocente"
+    }
+   ]
+  },
+  {
+   "tipo": "COMUNA",
+   "nombre": "Comuna 5",
+   "lugares": [
+    {
+     "tipo": "BARRIO",
+     "nombre": "Altos De Chapalito I"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Altos De Chapalito II"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Altos De Chapalito III"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Antonio Nariño"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Cantarana"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Chambú I"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Chambú II"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Chapal"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Chapal II"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "El Pilar"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "El Progreso"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "El Remanso"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Emilio Botero I"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Emilio Botero II"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Emilio Botero III"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Emilio Botero IV"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "La Minga"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "La Rosa"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "La Vega"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Las Ferias"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Los Cristales"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Los Robles"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Madrigal"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "María Isabel I"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "María Isabel II"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "María Isabel III"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Potrerillo"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Prados Del Sur"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Salida Al Sur- Urbano"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "San Martin"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Santa Clara"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Venecia"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Villa Del Rio"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Vivienda Cristiana"
+    }
+   ]
+  },
+  {
+   "tipo": "COMUNA",
+   "nombre": "Comuna 6",
+   "lugares": [
+    {
+     "tipo": "BARRIO",
+     "nombre": "Agualongo"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Altamira"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Bachue"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Caicedo"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Ciudad Jardín"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Cooperativa Popular Nariñense"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "El Estadio"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "El Libertador"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Gilberto Pabón"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Granada I"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Granada II"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Granada III"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Granada IV"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Inem"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Jerusalén"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "La Cruz"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "La Palma"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Los Fundadores"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Luis Carlos Galán"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Mijitayo II"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Mijitayo"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Mijitayo Bajo"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Mirador De Niza"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Niza I"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Niza II"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Niza III"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Nueva Colombia"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Prados Del Niza"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Quillacinga"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Quito López I"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Quito López II"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Quito López III"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "San Carlos"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "San Miguel De Jongovito"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "San Sebastián"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Santa Isabel"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Santanita"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Sumatambo"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Tamasagra I"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Tamasagra II"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Tequendama"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Valle Lili"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Villa De Los Ríos"
+    }
+   ]
+  },
+  {
+   "tipo": "COMUNA",
+   "nombre": "Comuna 7",
+   "lugares": [
+    {
+     "tipo": "BARRIO",
+     "nombre": "Achalay"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Avenida Panamericana"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Capusigra"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Castillos Del Norte"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Conjunto El Parque"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "El Bosque"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "El Edén"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "El Rincón De La Aurora"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "El Rincón De La Panamericana"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Francisco De La Villota"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "La Aurora"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "La Primavera"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Las Acacias"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Las Camelias"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Los Andes"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Los Hexágonos"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Rosales II"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Rosales I"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "San Felipe"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "San Ignacio"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Santa María"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Villa Aurora"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Villa Campanela"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Villa Sofía"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Villa Vergel"
+    }
+   ]
+  },
+  {
+   "tipo": "COMUNA",
+   "nombre": "Comuna 8",
+   "lugares": [
+    {
+     "tipo": "BARRIO",
+     "nombre": "Altamira – San Vicente"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Altavista"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Altos de la Colina"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Anganoy"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Arcos Iris"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Avenida Panamericana"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Balcones de Mariluz"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Bello Horizonte"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Colón"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Colpatria"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Conjunto San Diego"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "El Remanso del Norte"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Gualcaloma"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Jorge Giraldo"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "La Castellana"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "La Cuesta"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "La Pradera"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Las Margaritas"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Los Frailejones"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Los Héroes"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Los Laureles"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Los Urapanes"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Mariluz I"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Mariluz II"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Mariluz III"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Mirador de San Juan"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Miravalle"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Montemor"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Panamericano"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Panamericano II"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Panamericano I"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Portal de la Colina"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Prados del Oeste"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Quintas de San Pedro"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Remansos del Norte"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Salazar Mejía"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "San Diego"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "San Juan de Anganoy"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "San Juan de Dios I"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "San Juan de Dios II"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "San Pedro"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "San Vicente"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Sindamanoy"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Torres de Pubenza"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Veracruz"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Villa Jardín"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Villas de San Rafael"
+    }
+   ]
+  },
+  {
+   "tipo": "COMUNA",
+   "nombre": "Comuna 9",
+   "lugares": [
+    {
+     "tipo": "BARRIO",
+     "nombre": "Alto Juanoy"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Avenida Los Estudiantes"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Briceño"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Calatrava"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Camino Real"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Castilla"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Chapultepec"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Colonial"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Condominio Morasurco"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Conjunto Torobajo"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "El Aljibe"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "El Cerámico"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "El Dorado"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "El Mirador"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "El Polvorín"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "El Refugio"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Figueroa"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "José Ignacio Zarama"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Juan XXIII"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Juanoy"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "La Colina"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "La Riviera"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Las Cuadras"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "La Victoria"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Los Nogales"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Los Sauces"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Luis Brand"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Manaca"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Maridiaz"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Marsella"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Morasurco"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Nuevo Amanecer"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Palermo"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Pandiaco"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Parana"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Parque Infantil"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Pinos Del Norte"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Portal De La Colina"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Riviera"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "San Antonio De Juanoy"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Santa Ana"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Santa Rita"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Sañudo"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Tequendama"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Terranova"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Terrazas De Briceño"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Titán"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Torobajo"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Universitario"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Uranización Zarama"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Valle De Atriz"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Versalles"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Villa María"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Villa Campestre"
+    }
+   ]
+  },
+  {
+   "tipo": "COMUNA",
+   "nombre": "Comuna 10",
+   "lugares": [
+    {
+     "tipo": "BARRIO",
+     "nombre": "Aranda"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Avenida Aranda"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Avenida Oriental"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Avenida Oriental Rio Pasto"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Buenos Aires"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Cementerio"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Condominio Bellavista"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Corazón De Jesús II"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Cra 27 A Del Barrio Centenario"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Destechados"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "El Futuro"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "El Portal De Aranda"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "El Portal Del Norte"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "El Rincón De Pasto"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "El Rincón Del Rosario"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Juan Pablo II"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "La Esperanza"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "La Floresta"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Libertad"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Loma Del Carmen (Marquetalia)"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Marquetalia"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Niño Jesús De Praga"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Nueva Aranda"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Nuevo Horizonte"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Nuevo Sol"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Ocho De Marzo"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Prados Del Norte"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Quebrada Gallinacera 2da Parte"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Quillotocto"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Rincón De Aranda"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Rio Blanco"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Rio Blanco Que Termina Ojo De Agua"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "San Albano"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Santa Matilde"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Sector Pedagógico Avenida Oriental"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Sol De Oriente"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Termina Sector Peatonal 28"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Tescual"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Villa Del Rosario"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Villa Guerrero - Villas Del Norte"
+    }
+   ]
+  },
+  {
+   "tipo": "COMUNA",
+   "nombre": "Comuna 11",
+   "lugares": [
+    {
+     "tipo": "BARRIO",
+     "nombre": "Alameda"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Alameda II"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Aquine I"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Aquine II"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Aquine III"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Aquine Alto"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Aquine IV"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Aquine Reservado"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Belalcázar"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Centenario"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Chico"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Ciudad Real"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Corazón De Jesús"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "El Calvario"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "El Común"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "El Corralito"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Hospital Civil"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "La Floresta"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "La Lomita"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Los Alcázares"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Rincón Del Paraíso"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Salsipuedes"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Villa Elena"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Villa Jazmín"
+    }
+   ]
+  },
+  {
+   "tipo": "COMUNA",
+   "nombre": "Comuna 12",
+   "lugares": [
+    {
+     "tipo": "BARRIO",
+     "nombre": "Altos De La Carolina"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Balcones Del Este"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Campiña De Oriente"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Carlos Pizarro"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Cujacal Bajo"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "El Manantial"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "El Paraíso"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Fray Ezequiel Moreno Díaz"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Gualcala"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "La Carolina"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "La Florida"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "La Josefina"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Las Orquídeas"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "María Paz"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "María Paz II"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Monserrat"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Parque De Baviera"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "San Diego Norte"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "San Mateo"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "SENA"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Simón Bolívar"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Sindagua"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Villa Colombia"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Villa Adriana María"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Villa Ángela"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Villa del Prado"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Villa Recreo"
+    },
+    {
+     "tipo": "BARRIO",
+     "nombre": "Villa Rocío"
+    }
+   ]
+  },
+  {
+   "tipo": "CORREGIMIENTO",
+   "nombre": "Catambuco",
+   "lugares": [
+    {
+     "tipo": "VEREDA",
+     "nombre": "Catambuco Centro (Cabecera)"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "El Campanero"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Bellavista"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Botana"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "La Merced"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Botanilla"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "La Victoria"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "San Antonio de Acuyuyo"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Guadalupe"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "San José de Casanare"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "San Antonio de Casanare"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Chavez"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Alto Casanare"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "San José de Catambuco"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Cruz de Amarillo"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Santamaría"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Cubiján Bajo"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Cubijan Alto"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Fray Ezequiel"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "San Isidro"
+    }
+   ]
+  },
+  {
+   "tipo": "CORREGIMIENTO",
+   "nombre": "Gualmatán",
+   "lugares": [
+    {
+     "tipo": "VEREDA",
+     "nombre": "Gualmatán"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Huertecillas"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Nueva Betania"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Vocacional"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Gualmatán Alto"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Gualmatán Centro"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Gualmatan bajo y Avenida Fátima"
+    }
+   ]
+  },
+  {
+   "tipo": "CORREGIMIENTO",
+   "nombre": "Genoy",
+   "lugares": [
+    {
+     "tipo": "VEREDA",
+     "nombre": "Genoy (Cabecera)"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "El Edén"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "La Cocha"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Pullitopamba"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Aguapamba"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Castillo Loma"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Nueva Campiña"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Charguayaco"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Bella vista"
+    }
+   ]
+  },
+  {
+   "tipo": "CORREGIMIENTO",
+   "nombre": "Mapachico",
+   "lugares": [
+    {
+     "tipo": "VEREDA",
+     "nombre": "Mapachico Centro (Cabecera)"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Villa María"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "El Rosal"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Briceño"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "La Victoria"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "San Cayetano"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "San Francisco Briceño"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Los LiRíos"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "San Juan De Anganoy Y Anganoy"
+    }
+   ]
+  },
+  {
+   "tipo": "CORREGIMIENTO",
+   "nombre": "Obonuco",
+   "lugares": [
+    {
+     "tipo": "VEREDA",
+     "nombre": "Obonuco Centro (Cabecera)"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Santander"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "San Felipe Alto"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "San Felipe Bajo"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "San Antonio"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Bellavista"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "La Playa"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Mosquera"
+    }
+   ]
+  },
+  {
+   "tipo": "CORREGIMIENTO",
+   "nombre": "Santa Bárbara",
+   "lugares": [
+    {
+     "tipo": "VEREDA",
+     "nombre": "Jurado"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Santa Barbara"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Concepción"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Los Ángeles"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "La Esperanza"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Las Encinas"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Cerotal"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Los Alisales"
+    }
+   ]
+  },
+  {
+   "tipo": "CORREGIMIENTO",
+   "nombre": "La Laguna",
+   "lugares": [
+    {
+     "tipo": "VEREDA",
+     "nombre": "La Laguna Centro (Cabecera)"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Aguapamba"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "San Luis"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Alto San Pedro"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "El Barbero y la Playa"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "San Fernando Alto"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "San Fernando Bajo"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Dolores Centro"
+    }
+   ]
+  },
+  {
+   "tipo": "CORREGIMIENTO",
+   "nombre": "Buesaquillo",
+   "lugares": [
+    {
+     "tipo": "VEREDA",
+     "nombre": "Buesaquillo Centro (Cabecera)"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "La Alianza"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "San José"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "San Francisco"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "La Huecada"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Pejendino Reyes"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "El Carmelo"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Tamboloma"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Buesaquillo alto"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Cujacal Centro"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "La Josefina"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Cujacal san Isidro"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Cujacal alto villa julia"
+    }
+   ]
+  },
+  {
+   "tipo": "CORREGIMIENTO",
+   "nombre": "Morasurco",
+   "lugares": [
+    {
+     "tipo": "VEREDA",
+     "nombre": "Daza (Cabecera)"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "San Juan Alto"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "San Juan Bajo"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Tosoabi"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Chachatoy"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Pinasaco"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Tescual"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "San Antonio de Aranda"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "La Josefina"
+    }
+   ]
+  },
+  {
+   "tipo": "CORREGIMIENTO",
+   "nombre": "La Caldera",
+   "lugares": [
+    {
+     "tipo": "VEREDA",
+     "nombre": "Caldera Centro (Cabecera)"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Alto Caldera"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "San Antonio"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Pradera Bajo"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Arrayán Alto"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Los Arrayanes"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Villa Campiña"
+    }
+   ]
+  },
+  {
+   "tipo": "CORREGIMIENTO",
+   "nombre": "El Encano",
+   "lugares": [
+    {
+     "tipo": "VEREDA",
+     "nombre": "El Encano Centro (Cabecera)"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Ramos"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Romerillo"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Motilón"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Carrizo"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Casapamba"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "El Socorro"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Bellavista"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "El Puerto"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "San José"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Campo Alegre"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Santa Clara"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Santa Rosa"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Mojondinoy"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Naranjal"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "El Estero"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Santa Isabel"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Santa Teresita y Santa Lucía"
+    }
+   ]
+  },
+  {
+   "tipo": "CORREGIMIENTO",
+   "nombre": "Cabrera",
+   "lugares": [
+    {
+     "tipo": "VEREDA",
+     "nombre": "Cabrera Centro (Cabecera)"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Buenavista"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Duarte"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "La Paz y El Purgatorio."
+    }
+   ]
+  },
+  {
+   "tipo": "CORREGIMIENTO",
+   "nombre": "San Fernando",
+   "lugares": [
+    {
+     "tipo": "VEREDA",
+     "nombre": "San Fernando Centro Vereda (Cabecera)"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Dolores Retén"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "El Común"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Alto San Fernando"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "La Cadena"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Camino Real y Caracolito."
+    }
+   ]
+  },
+  {
+   "tipo": "CORREGIMIENTO",
+   "nombre": "Mocondino",
+   "lugares": [
+    {
+     "tipo": "VEREDA",
+     "nombre": "Mocondino Centro (Cabecera)"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Canchala"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Puerres"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Mocondino y Dolores"
+    }
+   ]
+  },
+  {
+   "tipo": "CORREGIMIENTO",
+   "nombre": "Jamondino",
+   "lugares": [
+    {
+     "tipo": "VEREDA",
+     "nombre": "Jamondino Centro (Cabecera)"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "El Rosario"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Santa Helena y Jamondino"
+    }
+   ]
+  },
+  {
+   "tipo": "CORREGIMIENTO",
+   "nombre": "Jongovito",
+   "lugares": [
+    {
+     "tipo": "VEREDA",
+     "nombre": "Jongovito Centro"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Chuquimarca"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Cruz Loma"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Josefina"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Armenia"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "San Pedro"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "San Francisco"
+    }
+   ]
+  },
+  {
+   "tipo": "CORREGIMIENTO",
+   "nombre": "El Socorro",
+   "lugares": [
+    {
+     "tipo": "VEREDA",
+     "nombre": "El Socorro"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "El Carmen"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "Bajo Casanare"
+    },
+    {
+     "tipo": "VEREDA",
+     "nombre": "San Gabriel"
+    }
+   ]
+  }
+ ]
+}

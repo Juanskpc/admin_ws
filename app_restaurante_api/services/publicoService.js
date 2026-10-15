@@ -20,6 +20,9 @@ async function getNegocioPublico(idNegocio) {
             // devuelve crudos: van ya resueltos dentro de `carta`.
             'colores',
             'id_paleta',
+            // La carta ofrece las adiciones de cada producto y las nombra como el negocio.
+            'permite_adiciones',
+            'termino_adiciones',
         ],
         include: [{
             model: Models.GenerPaletaColor,

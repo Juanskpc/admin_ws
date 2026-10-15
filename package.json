@@ -137,6 +137,8 @@
     "migrate:restaurante-cajas": "node migrations/migrate_restaurante_cajas.js",
     "migrate:restaurante-rubros": "node migrations/migrate_restaurante_rubros.js",
     "migrate:restaurante-para-servir": "node migrations/migrate_restaurante_para_servir.js",
+    "migrate:restaurante-adiciones": "node migrations/migrate_restaurante_adiciones.js",
+    "migrate:restaurante-zonas-domicilio": "node migrations/migrate_restaurante_zonas_domicilio.js",
     "migrate:restaurante-proveedores": "node migrations/migrate_restaurante_proveedores.js",
     "migrate:restaurante-conversaciones": "node migrations/migrate_restaurante_conversaciones.js",
     "migrate:recarga-ia": "node migrations/migrate_recarga_ia.js",

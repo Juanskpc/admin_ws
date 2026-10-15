@@ -390,6 +390,8 @@ describe('canalEmbeddedSignup — conecta, y el canal lo lee de verdad', () => {
 
     let idNegocio;
 
+    let pausaOriginal;
+
     /**
      * Doble de la Graph API. Sin `listarNumeros` a propósito (salvo que un test lo pase): así se
      * ejercita el camino de «Meta no devolvió la lista», que sigue con el id del navegador.
@@ -423,6 +425,11 @@ describe('canalEmbeddedSignup — conecta, y el canal lo lee de verdad', () => {
         );
         if (!fila[0]) throw new Error('No hay negocio activo. Corre scripts/seed_dev_local.js.');
         idNegocio = fila[0].id_negocio;
+        const [pausa] = await sequelize.query(
+            `SELECT asistente_pausado, asistente_pausado_en FROM general.gener_negocio WHERE id_negocio = :idNegocio;`,
+            { replacements: { idNegocio }, type: sequelize.QueryTypes.SELECT }
+        );
+        pausaOriginal = pausa;
     });
 
     afterEach(async () => {
@@ -435,7 +442,61 @@ describe('canalEmbeddedSignup — conecta, y el canal lo lee de verdad', () => {
     });
 
     afterAll(async () => {
+        // conectar() pausa el asistente en la primera conexión: se devuelve el negocio como estaba.
+        await sequelize.query(
+            `UPDATE general.gener_negocio
+                SET asistente_pausado = :pausado, asistente_pausado_en = :desde
+              WHERE id_negocio = :idNegocio;`,
+            {
+                replacements: {
+                    idNegocio,
+                    pausado: pausaOriginal.asistente_pausado,
+                    desde: pausaOriginal.asistente_pausado_en,
+                },
+                logging: false,
+            }
+        );
         await sequelize.close();
+    });
+
+    const pausado = async () => {
+        const [f] = await sequelize.query(
+            `SELECT asistente_pausado FROM general.gener_negocio WHERE id_negocio = :idNegocio;`,
+            { replacements: { idNegocio }, type: sequelize.QueryTypes.SELECT }
+        );
+        return f.asistente_pausado;
+    };
+
+    test('conectar() por primera vez deja el asistente en pausa; reconectar no lo toca', async () => {
+        await sequelize.query(
+            `UPDATE general.gener_negocio SET asistente_pausado = false, asistente_pausado_en = NULL
+              WHERE id_negocio = :idNegocio;`,
+            { replacements: { idNegocio } }
+        );
+        const primera = await canalEmbeddedSignup.conectar({
+            idNegocio,
+            code: 'code-1',
+            phoneNumberId: 'PHONE-P1',
+            api: apiFalsa(),
+        });
+        expect(primera.asistentePausado).toBe(true);
+        expect(await pausado()).toBe(true);
+
+        // El dueño revisa la carta, lo reanuda, y luego desconecta y vuelve a conectar.
+        await sequelize.query(
+            `UPDATE general.gener_negocio SET asistente_pausado = false, asistente_pausado_en = NULL
+              WHERE id_negocio = :idNegocio;`,
+            { replacements: { idNegocio } }
+        );
+        await canalEmbeddedSignup.desconectar({ idNegocio });
+        const segunda = await canalEmbeddedSignup.conectar({
+            idNegocio,
+            code: 'code-2',
+            phoneNumberId: 'PHONE-P1',
+            api: apiFalsa(),
+        });
+        expect(segunda.asistentePausado).toBe(false);
+        expect(await pausado()).toBe(false);
     });
 
     test('conectar() guarda el token cifrado, y numeros.js/config.js lo leen tras recargar', async () => {
@@ -451,6 +512,7 @@ describe('canalEmbeddedSignup — conecta, y el canal lo lee de verdad', () => {
             wabaId: 'WABA-DE-PRUEBA',
             coexistencia: false,
             sincronizacion: null,
+            asistentePausado: true,
         });
 
         await numeros.asegurarCargado({ forzar: true });

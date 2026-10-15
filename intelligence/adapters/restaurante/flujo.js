@@ -49,6 +49,7 @@ const identidadReal = require('../../engine/identidad');
 const horarioService = require('../../../app_restaurante_api/services/horarioService');
 const barrioService = require('../../../app_restaurante_api/services/barrioService');
 const exclusiones = require('./exclusiones');
+const adiciones = require('./adiciones');
 const mesaPublicaService = require('../../../app_restaurante_api/services/mesaPublicaService');
 const datosCliente = require('./datosCliente');
 const pago = require('./pago');
@@ -804,14 +805,32 @@ function pregunta(paso, datos, ctx) {
         case PASO_PEDIDO.DATOS:
             return preguntaCombinada(datos, ctx);
         case PASO_PEDIDO.BARRIO: {
-            const lista = (ctx?.barrios?.barrios || [])
-                .map((b) => `• ${b.nombre} — ${enPesos(b.valor)}`)
+            const barrios = ctx?.barrios?.barrios || [];
+            // Pocos barrios: se listan todos con su precio, como siempre. Una ciudad entera
+            // cargada por comunas (~550) no cabe en un mensaje de WhatsApp: se resume por zona y
+            // se le pide el nombre, que `elegirBarrio` busca.
+            if (barrios.length <= MAX_BARRIOS_EN_LISTA) {
+                const lista = barrios.map((b) => `• ${nombreConZona(b)} — ${enPesos(b.valor)}`).join('\n');
+                return {
+                    texto:
+                        '¿En qué barrio estás? 📍 Esto es lo que cuesta el domicilio a cada uno:\n\n' +
+                        `${lista}\n\n` +
+                        'Escríbeme el tuyo, o *otro* si no aparece: el restaurante te confirma el valor.',
+                };
+            }
+            const zonas = resumenPorZona(barrios)
+                .map((z) =>
+                    z.minimo === z.maximo
+                        ? `• ${z.zona} — ${enPesos(z.minimo)}`
+                        : `• ${z.zona} — desde ${enPesos(z.minimo)}`
+                )
                 .join('\n');
             return {
                 texto:
-                    '¿En qué barrio estás? 📍 Esto es lo que cuesta el domicilio a cada uno:\n\n' +
-                    `${lista}\n\n` +
-                    'Escríbeme el tuyo, o *otro* si no aparece: el restaurante te confirma el valor.',
+                    '¿En qué barrio o vereda estás? 📍 Escríbeme el nombre y te digo lo que cuesta ' +
+                    'el domicilio. Esto es lo que vale por zona:\n\n' +
+                    `${zonas}\n\n` +
+                    'Si no aparece, escríbeme *otro*: el restaurante te confirma el valor.',
             };
         }
         case PASO_PEDIDO.MESA: {
@@ -937,11 +956,16 @@ async function sembrarExclusiones(ctx, datos) {
     }
 }
 
-/** Los items del pedido tal como los recibe `tomar_pedido`: `exclusiones` viaja como `sin: "12.15"`. */
+/**
+ * Los items del pedido tal como los recibe `tomar_pedido`: `exclusiones` viaja como `sin: "12.15"`
+ * y las adiciones como `con: "31.31.40"` (el motor de argumentos no anida listas).
+ */
 function itemsParaArgumentos(items) {
-    return (items || []).map(({ exclusiones: quitadas, ...resto }) =>
-        quitadas?.length ? { ...resto, sin: exclusiones.escribirSin(quitadas) } : resto
-    );
+    return (items || []).map(({ exclusiones: quitadas, adiciones: agregadas, ...resto }) => ({
+        ...resto,
+        ...(quitadas?.length ? { sin: exclusiones.escribirSin(quitadas) } : {}),
+        ...(agregadas?.length ? { con: adiciones.escribirCon(agregadas) } : {}),
+    }));
 }
 
 /**
@@ -973,7 +997,7 @@ async function sembrarEleccionDelMenu(ctx, pedido, datos) {
                         idBarrio: pedido.idBarrio,
                     });
                     datos.id_barrio = barrio.id_barrio;
-                    datos.barrio_nombre = barrio.nombre;
+                    datos.barrio_nombre = nombreConZona(barrio);
                     pasosEleccion.push(paso('pedido_barrio_del_menu', { id_barrio: barrio.id_barrio }));
                 } catch (error) {
                     if (error.code !== 'ZONA_INVALIDA') throw error;
@@ -1247,7 +1271,28 @@ function seguirPedido(ctx, { solicitarConfirmacion }) {
             break;
         }
         case PASO_PEDIDO.BARRIO: {
-            const barrio = elegirBarrio(dicho, ctx.barrios?.barrios || []);
+            const barrio = elegirBarrio(dicho, ctx.barrios?.barrios || [], datos.barrio_opciones);
+            // Varios con ese nombre («San José» está en tres zonas): se pregunta cuál, numerados.
+            if (barrio && barrio.ambiguos) {
+                const opciones = barrio.ambiguos.slice(0, MAX_OPCIONES_BARRIO);
+                const lista = opciones
+                    .map((b, k) => `${k + 1}. ${nombreConZona(b)} — ${enPesos(b.valor)}`)
+                    .join('\n');
+                return {
+                    pasos: [paso('pedido_barrio_ambiguo', { dijo: dicho.slice(0, 40), opciones: opciones.length })],
+                    respuestas: [
+                        {
+                            texto:
+                                `Tengo varios con ese nombre 📍 ¿Cuál es el tuyo?\n\n${lista}\n\n` +
+                                'Escríbeme el número, o *otro* si no es ninguno.',
+                        },
+                    ],
+                    variables: conMemoria(ctx.conversacion),
+                    tarea: tareaPedido({ ...datos, barrio_opciones: opciones.map((b) => b.id_barrio) }),
+                    resultado: 'resuelto',
+                    nivel: 'determinista',
+                };
+            }
             if (barrio === null) {
                 const q = pregunta(PASO_PEDIDO.BARRIO, datos, ctx);
                 return {
@@ -1264,13 +1309,14 @@ function seguirPedido(ctx, { solicitarConfirmacion }) {
                     nivel: 'determinista',
                 };
             }
+            delete conLoDicho.barrio_opciones;
             if (barrio === OTRO_BARRIO) {
                 conLoDicho.barrio_otro = true;
                 apertura = 'Listo, el restaurante te confirma el valor del domicilio. ';
             } else {
                 conLoDicho.id_barrio = barrio.id_barrio;
-                conLoDicho.barrio_nombre = barrio.nombre;
-                apertura = `${barrio.nombre}, anotado. `;
+                conLoDicho.barrio_nombre = nombreConZona(barrio);
+                apertura = `${nombreConZona(barrio)} (${enPesos(barrio.valor)} de domicilio), anotado. `;
             }
             break;
         }
@@ -1374,6 +1420,11 @@ function leerTelefono(texto) {
 /** Lo que devuelve `elegirBarrio` cuando el cliente dice que su barrio no está en la lista. */
 const OTRO_BARRIO = Symbol('otro_barrio');
 
+/** Hasta cuántos barrios se listan enteros al preguntar; con más, se resume por zona. */
+const MAX_BARRIOS_EN_LISTA = 25;
+/** Cuántos candidatos se le dan a elegir cuando el nombre no basta. */
+const MAX_OPCIONES_BARRIO = 8;
+
 /**
  * El barrio que nombra el cliente, entre los que el negocio atiende.
  *
@@ -1382,11 +1433,28 @@ const OTRO_BARRIO = Symbol('otro_barrio');
  * que sea **una sola coincidencia**: con dos posibles no se elige, se vuelve a preguntar. Elegir
  * por el cliente un barrio equivocado es cobrarle un domicilio que no es.
  */
-function elegirBarrio(texto, barrios) {
+function elegirBarrio(texto, barrios, opciones = null) {
     const t = normalizar(texto).trim();
     if (!t) return null;
-    const exacto = barrios.find((b) => normalizar(b.nombre).trim() === t);
-    if (exacto) return exacto;
+
+    // Contestando a «¿cuál de estos?»: por número («2») o por la zona («el de la comuna 1»).
+    if (Array.isArray(opciones) && opciones.length > 0) {
+        const pool = opciones.map((id) => barrios.find((b) => b.id_barrio === id)).filter(Boolean);
+        const numero = /^(?:el |la |opcion |numero )?(\d{1,2})\.?$/.exec(t);
+        if (numero && pool[Number(numero[1]) - 1]) return pool[Number(numero[1]) - 1];
+        const porZona = pool.filter((b) => b.zona && contieneFrase(t, normalizar(b.zona)));
+        if (porZona.length === 1) return porZona[0];
+    }
+
+    // «San José comuna 1»: el nombre y la zona en la misma frase.
+    const conZona = barrios.filter(
+        (b) => b.zona && contieneFrase(t, normalizar(b.nombre)) && contieneFrase(t, normalizar(b.zona))
+    );
+    if (conZona.length === 1) return conZona[0];
+
+    const exactos = barrios.filter((b) => normalizar(b.nombre).trim() === t);
+    if (exactos.length === 1) return exactos[0];
+    if (exactos.length > 1) return { ambiguos: exactos };
     if (/^(otro|otra|ninguno|ninguna)\b|\b(no aparece|no esta|no sale|otro barrio)\b/.test(t)) {
         return OTRO_BARRIO;
     }
@@ -1395,7 +1463,38 @@ function elegirBarrio(texto, barrios) {
         const n = normalizar(b.nombre).trim();
         return n.includes(t) || t.includes(n);
     });
-    return parciales.length === 1 ? parciales[0] : null;
+    if (parciales.length === 1) return parciales[0];
+    // Pocos candidatos: se le dan a elegir. Muchos («la»): mejor que lo escriba completo.
+    if (parciales.length > 1 && parciales.length <= MAX_OPCIONES_BARRIO) return { ambiguos: parciales };
+    return null;
+}
+
+/** ¿La frase `aguja` aparece en `texto` como palabras enteras? («comuna 1» no está en «comuna 10»). */
+function contieneFrase(texto, aguja) {
+    if (!aguja) return false;
+    const escapada = aguja.replace(/[.*+?^${}()|[\]\\]/g, (c) => '\\' + c);
+    return new RegExp(`(^|[^a-z0-9])${escapada}([^a-z0-9]|$)`).test(texto);
+}
+
+/** «San José (Comuna 1)»; un barrio suelto, solo su nombre. */
+function nombreConZona(barrio) {
+    return barrio.zona ? `${barrio.nombre} (${barrio.zona})` : barrio.nombre;
+}
+
+/**
+ * El precio por zona, para no listar 550 barrios: `[{zona, minimo, maximo}]` en el orden en que
+ * llegan. Los barrios sueltos (sin zona) van cada uno con su nombre.
+ */
+function resumenPorZona(barrios) {
+    const zonas = new Map();
+    for (const b of barrios) {
+        const clave = b.zona || b.nombre;
+        const z = zonas.get(clave) || { zona: clave, minimo: Infinity, maximo: -Infinity };
+        z.minimo = Math.min(z.minimo, Number(b.valor));
+        z.maximo = Math.max(z.maximo, Number(b.valor));
+        zonas.set(clave, z);
+    }
+    return [...zonas.values()];
 }
 
 /** La mesa que nombra el cliente: por número («5», «mesa 5») o por nombre exacto. */
@@ -2623,6 +2722,7 @@ module.exports = {
     leerTelefono,
     leerEntrega,
     elegirBarrio,
+    resumenPorZona,
     elegirMesa,
     OTRO_BARRIO,
     // Expuestos para las pruebas, como `tareaCaducada` en la escalera: son las dos piezas de

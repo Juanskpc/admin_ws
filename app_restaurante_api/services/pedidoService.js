@@ -1,6 +1,7 @@
 const Models = require('../../app_core/models/conection');
 const cajaService = require('./cajaService');
 const puntoCajaService = require('./puntoCajaService');
+const adicionService = require('./adicionService');
 const { avisar, avisarTrasCommit, TEMAS } = require('./avisoService');
 const cuentaService = require('./cuentaService');
 const horarioService = require('./horarioService');
@@ -344,6 +345,11 @@ async function consumirIngredientesPorItems({ idNegocio, items, permitirStockNeg
     // leyendo `disponible` tal cual, sin que un pedido la toque jamás.
 }
 
+/**
+ * Crea las líneas del pedido. Las adiciones de un ítem (ya resueltas por
+ * `adicionService.resolverItems`, con su precio de la base) van como líneas propias que apuntan a
+ * la del plato con `id_detalle_padre`, y con la cantidad TOTAL: 2 hamburguesas con queso → queso ×2.
+ */
 async function crearDetallesOrden({ idOrden, items, transaction }) {
     for (const item of items) {
         const detalle = await Models.PedidDetalle.create({
@@ -355,6 +361,19 @@ async function crearDetallesOrden({ idOrden, items, transaction }) {
             nota: item.nota || null,
             estado: 'PENDIENTE',
         }, { transaction });
+
+        for (const adicion of item.adiciones || []) {
+            const cantidad = adicion.cantidad * Number(item.cantidad || 1);
+            await Models.PedidDetalle.create({
+                id_orden: idOrden,
+                id_producto: adicion.id_producto,
+                cantidad,
+                precio_unitario: adicion.precio_unitario,
+                subtotal: adicion.precio_unitario * cantidad,
+                id_detalle_padre: detalle.id_detalle,
+                estado: 'PENDIENTE',
+            }, { transaction });
+        }
 
         if (item.exclusiones && item.exclusiones.length > 0) {
             const exclusiones = item.exclusiones.map(idIng => ({
@@ -527,9 +546,12 @@ async function crearOrden({
 
         const numeroOrden = await generarNumeroOrden(idNegocio);
 
+        // Las adiciones se validan y se les pone precio de la base ANTES de tocar el inventario.
+        items = await adicionService.resolverItems({ idNegocio, items, transaction: t });
+
         await consumirIngredientesPorItems({
             idNegocio,
-            items,
+            items: adicionService.aplanar(items),
             permitirStockNegativo,
             transaction: t,
         });
@@ -540,11 +562,8 @@ async function crearOrden({
             transaction: t,
         });
 
-        // Calcular totales
-        let subtotal = 0;
-        items.forEach(item => {
-            subtotal += item.precio_unitario * item.cantidad;
-        });
+        // Calcular totales (las adiciones suman: son líneas del pedido como cualquier otra).
+        const subtotal = adicionService.subtotalItems(items);
         const impuesto = Math.round(subtotal * porcentajeImpuesto * 100) / 100;
 
         // Valor del domicilio (opt-in por negocio). Se cobra al cliente dentro del
@@ -717,16 +736,18 @@ async function agregarItemsOrden({
             transaction: t,
         });
 
+        const conAdiciones = await adicionService.resolverItems({ idNegocio, items, transaction: t });
+
         await consumirIngredientesPorItems({
             idNegocio,
-            items,
+            items: adicionService.aplanar(conAdiciones),
             permitirStockNegativo,
             transaction: t,
         });
 
         await crearDetallesOrden({
             idOrden,
-            items,
+            items: conAdiciones,
             transaction: t,
         });
 
@@ -865,14 +886,16 @@ async function agregarItemsPorCliente(
         throw e;
     }
 
+    const conAdiciones = await adicionService.resolverItems({ idNegocio, items, transaction });
+
     await consumirIngredientesPorItems({
         idNegocio,
-        items,
+        items: adicionService.aplanar(conAdiciones),
         permitirStockNegativo: false,
         transaction,
     });
 
-    await crearDetallesOrden({ idOrden, items, transaction });
+    await crearDetallesOrden({ idOrden, items: conAdiciones, transaction });
 
     // Sin impuesto ni domicilio ni descuento nuevos: `recalcularTotalesOrden` relee lo que la
     // orden ya tenía pactado y solo suma el subtotal de lo recién agregado. Es la misma
@@ -943,17 +966,41 @@ async function quitarItemsOrden({ idOrden, idNegocio, items, porcentajeImpuesto 
             exclusionesMap.get(e.id_detalle).push(e.id_ingrediente);
         }
 
-        const claveDe = (idProducto, exclusiones, nota) => {
+        // Las adiciones de cada plato, POR UNIDAD: es lo que el POS manda en `adiciones`.
+        const hijosPorPadre = new Map();
+        for (const d of detalles) {
+            if (!d.id_detalle_padre) continue;
+            if (!hijosPorPadre.has(d.id_detalle_padre)) hijosPorPadre.set(d.id_detalle_padre, []);
+            hijosPorPadre.get(d.id_detalle_padre).push(d);
+        }
+        const firmaGuardada = (d) => {
+            const unidades = Number(d.cantidad) || 1;
+            return (hijosPorPadre.get(d.id_detalle) || [])
+                .map((h) => ({ id_producto: h.id_producto, cantidad: Math.round(Number(h.cantidad) / unidades) }));
+        };
+        const firmaAdiciones = (adiciones) =>
+            adicionService
+                .normalizarPedidas(adiciones)
+                .map((a) => `${a.id_producto}x${a.cantidad}`)
+                .sort()
+                .join('.');
+
+        // La clave es la misma con la que el frontend agrupa: producto + exclusiones + nota +
+        // adiciones. Un plato «con queso» y uno sin nada son líneas distintas.
+        const claveDe = (idProducto, exclusiones, nota, adiciones) => {
             const excl = [...new Set(exclusiones || [])].sort((a, b) => a - b).join(',');
-            return `${idProducto}|${excl}|${String(nota || '').trim()}`;
+            return `${idProducto}|${excl}|${String(nota || '').trim()}|${firmaAdiciones(adiciones)}`;
         };
 
         const porClave = new Map();
         for (const d of detalles) {
+            // Una adición no se quita sola: va y viene con su plato.
+            if (d.id_detalle_padre) continue;
             const clave = claveDe(
                 d.id_producto,
                 exclusionesMap.get(d.id_detalle) || [],
                 d.nota,
+                firmaGuardada(d),
             );
             if (!porClave.has(clave)) porClave.set(clave, []);
             porClave.get(clave).push(d);
@@ -963,21 +1010,33 @@ async function quitarItemsOrden({ idOrden, idNegocio, items, porcentajeImpuesto 
             let restante = Number(item.cantidad || 0);
             if (restante <= 0) continue;
 
-            const clave = claveDe(item.id_producto, item.exclusiones, item.nota);
+            const clave = claveDe(item.id_producto, item.exclusiones, item.nota, item.adiciones);
             const candidatos = porClave.get(clave) || [];
 
             for (const detalle of candidatos) {
                 if (restante <= 0) break;
                 const cantidadActual = Number(detalle.cantidad);
+                const hijos = hijosPorPadre.get(detalle.id_detalle) || [];
                 if (cantidadActual <= restante) {
                     await Models.PedidDetalleExclu.destroy({
                         where: { id_detalle: detalle.id_detalle },
                         transaction: t,
                     });
+                    // Las adiciones se van con el plato (también las borraría el ON DELETE
+                    // CASCADE; se hace explícito para no depender de la base).
+                    for (const hijo of hijos) await hijo.destroy({ transaction: t });
                     await detalle.destroy({ transaction: t });
                     restante -= cantidadActual;
                 } else {
                     const nuevaCantidad = cantidadActual - restante;
+                    // Cada adición baja en proporción: sigue siendo la misma por unidad.
+                    for (const hijo of hijos) {
+                        const porUnidad = Math.round(Number(hijo.cantidad) / cantidadActual) || 1;
+                        await hijo.update({
+                            cantidad: porUnidad * nuevaCantidad,
+                            subtotal: Number(hijo.precio_unitario) * porUnidad * nuevaCantidad,
+                        }, { transaction: t });
+                    }
                     await detalle.update({
                         cantidad: nuevaCantidad,
                         subtotal: Number(detalle.precio_unitario) * nuevaCantidad,
@@ -1015,6 +1074,8 @@ async function quitarItemsOrden({ idOrden, idNegocio, items, porcentajeImpuesto 
 async function getOrdenById(idOrden, { transaction = null } = {}) {
     return Models.PedidOrden.findByPk(idOrden, {
         transaction,
+        // Las líneas en el orden en que se crearon: cada adición queda justo debajo de su plato.
+        order: [[{ model: Models.PedidDetalle, as: 'detalles' }, 'id_detalle', 'ASC']],
         include: [{
             model: Models.PedidDetalle,
             as: 'detalles',
@@ -1119,7 +1180,7 @@ async function getOrdenesDespacho({ idNegocio, idUsuario }) {
                 { model: Models.GenerUsuario, as: 'usuario', attributes: ['id_usuario', 'primer_nombre', 'primer_apellido'] },
                 { model: Models.GenerUsuario, as: 'domiciliario', attributes: ['id_usuario', 'primer_nombre', 'primer_apellido'], required: false },
                             { model: Models.PedidDetalle, as: 'detalles',
-                                attributes: ['id_detalle', 'cantidad', 'precio_unitario', 'nota'],
+                                attributes: ['id_detalle', 'cantidad', 'precio_unitario', 'nota', 'id_detalle_padre'],
                                 // Los ingredientes que el cliente pidió quitar. Sin esto Despacho
                                 // los perdía: la orden se guardaba bien, pero la tarjeta, el
                                 // tiquete y «Editar pedido» la veían como si se hubiera pedido
@@ -1142,7 +1203,7 @@ async function getOrdenesDespacho({ idNegocio, idUsuario }) {
                 { model: Models.RestPagoOrden, as: 'pagos',
                     attributes: ['id_pago', 'id_metodo_pago', 'valor'], required: false },
             ],
-            order: [['fecha_creacion', 'DESC']],
+            order: [['fecha_creacion', 'DESC'], [{ model: Models.PedidDetalle, as: 'detalles' }, 'id_detalle', 'ASC']],
         }),
         // `buscar` y no `resolverOCrear`: mirar el despacho no debe crear nada. Un negocio que
         // nunca ha usado el asistente devuelve `null`, y entonces ninguna orden es suya.
@@ -1461,7 +1522,8 @@ async function getOrdenesCocina(idNegocio) {
             attributes: ['id_mesa', 'nombre', 'numero'],
             required: false,
         }],
-        order: [['fecha_creacion', 'ASC']],
+        // Cada adición justo debajo de su plato (se crean seguidas).
+        order: [['fecha_creacion', 'ASC'], [{ model: Models.PedidDetalle, as: 'detalles' }, 'id_detalle', 'ASC']],
     });
 }
 
@@ -1472,6 +1534,11 @@ async function marcarDetalleCompleto(idDetalle) {
     const detalle = await Models.PedidDetalle.findByPk(idDetalle);
     if (!detalle) return null;
     await detalle.update({ estado: 'LISTO' });
+    // Sus adiciones salen con él: no son un plato aparte que la cocina tenga que marcar.
+    await Models.PedidDetalle.update(
+        { estado: 'LISTO' },
+        { where: { id_detalle_padre: detalle.id_detalle } }
+    );
 
     // El detalle no guarda el negocio: cuelga de la orden.
     const orden = await Models.PedidOrden.findByPk(detalle.id_orden, { attributes: ['id_negocio'] });

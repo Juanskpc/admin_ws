@@ -1,5 +1,6 @@
 const Models = require('../../app_core/models/conection');
 const DashboardService = require('./dashboardService');
+const TerminosAdicion = require('../../app_core/helpers/terminosAdicion');
 
 function esRolAdministrador(descripcion = '') {
     return String(descripcion).toUpperCase().includes('ADMIN');
@@ -115,6 +116,8 @@ async function getConfiguracionNegocio(idUsuario, idNegocio = null) {
             'controla_inventario',
             'muestra_iconos_productos',
             'permite_domicilio_personal',
+            'permite_adiciones',
+            'termino_adiciones',
             'fecha_registro',
         ],
         include: [
@@ -165,6 +168,8 @@ async function getConfiguracionNegocio(idUsuario, idNegocio = null) {
         controla_inventario: negocio.controla_inventario !== false,
         muestra_iconos_productos: negocio.muestra_iconos_productos !== false,
         permite_domicilio_personal: !!negocio.permite_domicilio_personal,
+        permite_adiciones: !!negocio.permite_adiciones,
+        termino_adiciones: negocio.termino_adiciones || TerminosAdicion.POR_DEFECTO,
         fecha_registro: negocio.fecha_registro,
         roles: acceso.roles,
         can_edit: acceso.canEdit,
@@ -296,6 +301,24 @@ async function updateConfiguracionNegocio(idUsuario, payload = {}) {
     if (payload.permite_domicilio_personal !== undefined) {
         patch.permite_domicilio_personal =
             payload.permite_domicilio_personal === true || payload.permite_domicilio_personal === 'true';
+    }
+
+    // Opt-in: los productos pueden ofrecer adiciones (toppings, extras…). Apagarlo no borra
+    // nada: los productos marcados como adición vuelven a comportarse como productos normales.
+    if (payload.permite_adiciones !== undefined) {
+        patch.permite_adiciones =
+            payload.permite_adiciones === true || payload.permite_adiciones === 'true';
+    }
+
+    if (payload.termino_adiciones !== undefined) {
+        const codigo = String(payload.termino_adiciones || '').toUpperCase();
+        if (!TerminosAdicion.CODIGOS.includes(codigo)) {
+            const error = new Error('Ese nombre para las adiciones no está en la lista.');
+            error.code = 'TERMINO_ADICION_INVALIDO';
+            error.statusCode = 400;
+            throw error;
+        }
+        patch.termino_adiciones = codigo;
     }
 
     if (payload.id_paleta !== undefined) {

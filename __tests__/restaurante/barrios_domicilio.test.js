@@ -133,7 +133,7 @@ describe('barrios de domicilio', () => {
             .rejects.toMatchObject({ code: 'ZONA_INVALIDA' });
     });
 
-    it('la lectura pública solo lleva id, nombre y valor, y depende de permite_pago_domicilio', async () => {
+    it('la lectura pública solo lleva id, nombre, valor y zona, y depende de permite_pago_domicilio', async () => {
         await llamar(Barrios.crear, { body: { id_negocio: idNegocio, nombre: 'TEST-Oeste', valor: 2000 } });
 
         await sequelize.query(
@@ -149,7 +149,8 @@ describe('barrios de domicilio', () => {
         const pub = await BarrioService.listarPublico(idNegocio);
         expect(pub.habilitado).toBe(true);
         const oeste = pub.barrios.find((b) => b.nombre === 'TEST-Oeste');
-        expect(Object.keys(oeste).sort()).toEqual(['id_barrio', 'nombre', 'valor']);
+        expect(Object.keys(oeste).sort()).toEqual(['id_barrio', 'nombre', 'valor', 'zona']);
+        expect(oeste.zona).toBeNull();
         expect(typeof Publico.getBarrios).toBe('function');
     });
 });

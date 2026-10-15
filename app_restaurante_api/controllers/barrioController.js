@@ -54,4 +54,77 @@ async function eliminar(req, res) {
     } catch (err) { return fallo(res, err, 'eliminar'); }
 }
 
-module.exports = { listar, crear, editar, eliminar };
+// ── Zonas, listado de la ciudad, ajuste general y plantilla (2026-10-15) ──
+
+async function listarZonas(req, res) {
+    if (invalido(req, res)) return;
+    try {
+        const data = await BarrioService.listarZonas(req.usuario.id_usuario, idNegocioDe(req));
+        return Respuesta.success(res, 'Zonas obtenidas', data);
+    } catch (err) { return fallo(res, err, 'listarZonas'); }
+}
+
+async function editarZona(req, res) {
+    if (invalido(req, res)) return;
+    try {
+        const data = await BarrioService.editarZona(req.usuario.id_usuario, Number(req.params.id), req.body);
+        return Respuesta.success(res, 'Zona actualizada', data);
+    } catch (err) { return fallo(res, err, 'editarZona'); }
+}
+
+async function eliminarZona(req, res) {
+    if (invalido(req, res)) return;
+    try {
+        const data = await BarrioService.eliminarZona(req.usuario.id_usuario, Number(req.params.id), idNegocioDe(req));
+        return Respuesta.success(res, 'Zona quitada', data);
+    } catch (err) { return fallo(res, err, 'eliminarZona'); }
+}
+
+async function importarCatalogo(req, res) {
+    if (invalido(req, res)) return;
+    try {
+        const data = await BarrioService.importarCatalogo(req.usuario.id_usuario, req.body);
+        return Respuesta.success(res, 'Listado cargado', data);
+    } catch (err) { return fallo(res, err, 'importarCatalogo'); }
+}
+
+async function ajustarPrecios(req, res) {
+    if (invalido(req, res)) return;
+    try {
+        const data = await BarrioService.ajustarPrecios(req.usuario.id_usuario, req.body);
+        return Respuesta.success(res, 'Precios ajustados', data);
+    } catch (err) { return fallo(res, err, 'ajustarPrecios'); }
+}
+
+/** GET /barrios-domicilio/plantilla — responde el .xlsx, no JSON. */
+async function descargarPlantilla(req, res) {
+    if (invalido(req, res)) return;
+    try {
+        const buffer = await BarrioService.exportarPlantilla(req.usuario.id_usuario, {
+            id_negocio: idNegocioDe(req),
+            ciudad: req.query.ciudad || null,
+        });
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', 'attachment; filename="barrios-domicilio.xlsx"');
+        return res.send(Buffer.from(buffer));
+    } catch (err) { return fallo(res, err, 'descargarPlantilla'); }
+}
+
+/** POST /barrios-domicilio/plantilla — multipart, con el archivo en el campo `archivo`. */
+async function subirPlantilla(req, res) {
+    if (invalido(req, res)) return;
+    try {
+        if (!req.file?.buffer) return Respuesta.error(res, 'Adjunta el archivo de Excel.', 400);
+        const data = await BarrioService.importarPlantilla(req.usuario.id_usuario, {
+            id_negocio: req.body.id_negocio ? Number(req.body.id_negocio) : null,
+            buffer: req.file.buffer,
+        });
+        return Respuesta.success(res, 'Precios cargados', data);
+    } catch (err) { return fallo(res, err, 'subirPlantilla'); }
+}
+
+module.exports = {
+    listar, crear, editar, eliminar,
+    listarZonas, editarZona, eliminarZona, importarCatalogo, ajustarPrecios,
+    descargarPlantilla, subirPlantilla,
+};

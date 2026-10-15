@@ -95,7 +95,12 @@ async function getMesasDashboard(idNegocio) {
             'fecha_inicio_servicio',
             [Models.Sequelize.literal(elapsedMinutesExpr), 'minutos_servicio'],
         ],
-        order: [['numero', 'ASC']],
+        // Las líneas en el orden en que se crearon: así cada adición (topping, extra…) queda justo
+        // debajo de su plato.
+        order: [
+            ['numero', 'ASC'],
+            [{ model: Models.PedidOrden, as: 'ordenes' }, { model: Models.PedidDetalle, as: 'detalles' }, 'id_detalle', 'ASC'],
+        ],
         include: [INCLUIR_SECCION, {
             model: Models.PedidOrden,
             as: 'ordenes',
@@ -105,7 +110,7 @@ async function getMesasDashboard(idNegocio) {
             include: [{
                 model: Models.PedidDetalle,
                 as: 'detalles',
-                attributes: ['id_detalle', 'cantidad', 'nota'],
+                attributes: ['id_detalle', 'cantidad', 'nota', 'id_detalle_padre'],
                 include: [{
                     model: Models.CartaProducto,
                     as: 'producto',
@@ -149,6 +154,9 @@ async function getMesasDashboard(idNegocio) {
                 price: Number(d.producto.precio ?? 0),
                 cantidad: Number(d.cantidad ?? 1),
                 nota: d.nota ?? null,
+                // Es una adición (topping, extra…) del plato de la línea anterior: Mesas la pinta
+                // como «+ Queso» debajo de él.
+                es_adicion: d.id_detalle_padre != null,
                 // «Sin cebolla»: lo que el cliente pidió quitar. La cocina ya lo veía; la mesa, no.
                 sin: (d.exclusiones ?? [])
                     .map((e) => e.ingrediente?.nombre)

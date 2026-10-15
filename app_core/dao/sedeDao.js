@@ -50,6 +50,7 @@ async function getMatriz(idNegocio, transaction = null) {
                 n.permite_multipago, n.permite_pago_domicilio, n.permite_descuento,
                 n.pregunta_cobro_envio, n.permite_cuentas_cliente, n.controla_inventario,
                 n.asistente_mira_stock, n.muestra_iconos_productos, n.permite_domicilio_personal,
+                n.permite_adiciones, n.termino_adiciones,
                 t.nombre AS aplicativo
            FROM general.gener_negocio n
            LEFT JOIN general.gener_tipo_negocio t ON t.id_tipo_negocio = n.id_tipo_negocio
@@ -133,7 +134,7 @@ function errorDominio(mensaje, code, statusCode) {
  * @param {number} idNegocioPadre
  * @param {Object} payload
  * @param {Object} payload.sede                 { nombre, direccion?, telefono?, email_contacto?, nit? }
- * @param {Object} [payload.plan]               { id_plan?, meses?, fecha_inicio? } — sin plan, prueba de 7 días.
+ * @param {Object} [payload.plan]               { id_plan?, meses?, fecha_inicio? } — sin plan, prueba de 30 días.
  * @param {Object} [payload.admin]              Usuario NUEVO que la administra.
  * @param {number} [payload.id_usuario_existente] O un usuario que ya existe.
  *   Sin ninguno de los dos, la sede hereda los administradores de la matriz, que es lo normal.
@@ -208,7 +209,7 @@ async function crearSede(idNegocioPadre, {
         }
     }
 
-    // La sede es un cliente pagador propio: plan pagado de N meses o prueba de 7 días.
+    // La sede es un cliente pagador propio: plan pagado de N meses o prueba de 30 días.
     const vigencia = await negocioDao.resolverVigencia({
         idPlan: plan?.id_plan || null,
         meses: plan?.meses,
@@ -253,6 +254,8 @@ async function crearSede(idNegocioPadre, {
             asistente_mira_stock: matriz.asistente_mira_stock,
             muestra_iconos_productos: matriz.muestra_iconos_productos,
             permite_domicilio_personal: matriz.permite_domicilio_personal,
+            permite_adiciones: matriz.permite_adiciones,
+            termino_adiciones: matriz.termino_adiciones,
             estado: 'A',
         }, { transaction });
         const idSede = nueva.id_negocio;

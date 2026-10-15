@@ -1528,7 +1528,7 @@ async function getItemsOrden({ idOrden, idNegocio }) {
         include: [{
             model: Models.PedidDetalle,
             as: 'detalles',
-            attributes: ['id_detalle', 'cantidad', 'precio_unitario', 'subtotal', 'nota'],
+            attributes: ['id_detalle', 'cantidad', 'precio_unitario', 'subtotal', 'nota', 'id_detalle_padre'],
             include: [
                 {
                     model: Models.CartaProducto,
@@ -1573,6 +1573,8 @@ async function getItemsOrden({ idOrden, idNegocio }) {
             precio_unitario: Number(d.precio_unitario || 0),
             subtotal: Number(d.subtotal || 0),
             nota: d.nota || null,
+            // Es una adición (topping, extra…) del plato de la línea anterior.
+            es_adicion: d.id_detalle_padre != null,
             sin: (d.exclusiones || [])
                 .map((e) => e.ingrediente?.nombre)
                 .filter(Boolean),

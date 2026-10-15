@@ -28,6 +28,7 @@ const HorarioController    = require('../controllers/horarioController');
 const ProveedorController  = require('../controllers/proveedorController');
 const FacturacionController = require('../controllers/facturacionController');
 const { verificarToken }   = require('../../app_core/middleware/auth');
+const TerminosAdicion      = require('../../app_core/helpers/terminosAdicion');
 const Respuesta            = require('../../app_core/helpers/respuesta');
 const { paisesParaSeleccion } = require('../../app_core/helpers/paises');
 
@@ -264,6 +265,8 @@ router.patch('/configuracion', [
 	body('permite_cuentas_cliente').optional().isBoolean(),
 	body('controla_inventario').optional().isBoolean(),
 	body('muestra_iconos_productos').optional().isBoolean(),
+	body('permite_adiciones').optional().isBoolean(),
+	body('termino_adiciones').optional().isIn(TerminosAdicion.CODIGOS),
 	body('id_paleta').optional({ nullable: true }).isInt({ min: 1 }),
 ], ConfiguracionController.updateConfiguracion);
 
@@ -282,6 +285,16 @@ router.patch('/negocios/:id/paleta', [
 // negocio y para eso necesita el buffer. Es el mismo archivo y la misma columna que usa la
 // agenda, así que el negocio tiene un solo logo en toda la plataforma. El recorte llega del
 // navegador ya en WebP; 3 MB solo cubre un PNG sin comprimir.
+// La plantilla de barrios en Excel: en memoria (se lee y se descarta) y pequeña.
+const uploadPlantillaBarrios = multer({
+	storage: multer.memoryStorage(),
+	fileFilter(_req, file, cb) {
+		if (/\.xlsx$/i.test(file.originalname || '')) cb(null, true);
+		else cb(Object.assign(new Error('Sube la plantilla en formato .xlsx.'), { statusCode: 400 }));
+	},
+	limits: { fileSize: 2 * 1024 * 1024 },
+});
+
 const uploadLogoCarta = multer({
 	storage: multer.memoryStorage(),
 	fileFilter(_req, file, cb) {
@@ -490,18 +503,50 @@ router.get('/barrios-domicilio', [query('id_negocio').optional().isInt({ min: 1 
 router.post('/barrios-domicilio', [
 	body('id_negocio').optional({ nullable: true }).isInt({ min: 1 }),
 	body('nombre').isString().trim().isLength({ min: 2, max: 100 }),
-	body('valor').isFloat({ min: 0, max: 1000000 }),
+	// null = el de su zona (solo con id_zona_domicilio).
+	body('valor').optional({ nullable: true }).isFloat({ min: 0, max: 1000000 }),
+	body('id_zona_domicilio').optional({ nullable: true }).isInt({ min: 1 }),
 ], BarrioController.crear);
 router.put('/barrios-domicilio/:id', [
 	param('id').isInt({ min: 1 }),
 	body('id_negocio').optional({ nullable: true }).isInt({ min: 1 }),
 	body('nombre').optional().isString().trim().isLength({ min: 2, max: 100 }),
-	body('valor').optional().isFloat({ min: 0, max: 1000000 }),
+	// null = que use el de su comuna/corregimiento.
+	body('valor').optional({ nullable: true }).isFloat({ min: 0, max: 1000000 }),
 ], BarrioController.editar);
 router.delete('/barrios-domicilio/:id', [
 	param('id').isInt({ min: 1 }),
 	query('id_negocio').optional().isInt({ min: 1 }),
 ], BarrioController.eliminar);
+
+// Comunas/corregimientos con precio, el listado de la ciudad, el ajuste general y la plantilla.
+router.get('/zonas-domicilio', [query('id_negocio').optional().isInt({ min: 1 })], BarrioController.listarZonas);
+router.put('/zonas-domicilio/:id', [
+	param('id').isInt({ min: 1 }),
+	body('id_negocio').optional({ nullable: true }).isInt({ min: 1 }),
+	body('valor').optional({ nullable: true }).isFloat({ min: 0, max: 1000000 }),
+	body('aplicar_a_todos').optional().isBoolean(),
+], BarrioController.editarZona);
+router.delete('/zonas-domicilio/:id', [
+	param('id').isInt({ min: 1 }),
+	query('id_negocio').optional().isInt({ min: 1 }),
+], BarrioController.eliminarZona);
+router.post('/barrios-domicilio/catalogo', [
+	body('id_negocio').optional({ nullable: true }).isInt({ min: 1 }),
+	body('ciudad').isString().trim().isLength({ min: 2, max: 80 }),
+], BarrioController.importarCatalogo);
+router.post('/barrios-domicilio/ajuste', [
+	body('id_negocio').optional({ nullable: true }).isInt({ min: 1 }),
+	body('monto').isInt({ min: -1000000, max: 1000000 }),
+], BarrioController.ajustarPrecios);
+router.get('/barrios-domicilio/plantilla', [
+	query('id_negocio').optional().isInt({ min: 1 }),
+	query('ciudad').optional().isString().isLength({ max: 80 }),
+], BarrioController.descargarPlantilla);
+// El id_negocio viaja en el cuerpo multipart: multer va antes del validador.
+router.post('/barrios-domicilio/plantilla', uploadPlantillaBarrios.single('archivo'), [
+	body('id_negocio').optional({ nullable: true }).isInt({ min: 1 }),
+], BarrioController.subirPlantilla);
 
 // --- Horarios (del negocio y de sus domiciliarios) ---
 router.get('/horarios', [query('id_negocio').isInt({ min: 1 })], HorarioController.listar);

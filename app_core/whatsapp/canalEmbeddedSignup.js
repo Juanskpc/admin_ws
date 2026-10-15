@@ -164,7 +164,9 @@ async function auditar(accion, { idNegocio, idUsuario = null, resultado = 'ok', 
  * @param {string|null} [opciones.businessId] — del evento del SDK; no es dato de seguridad.
  * @param {'coexistencia'|'nuevo'} [opciones.modo]
  * @returns {Promise<{idExterno: string, numeroE164: string|null, wabaId: string,
- *           coexistencia: boolean, sincronizacion: {contactos: boolean, historial: boolean}|null}>}
+ *           coexistencia: boolean, sincronizacion: {contactos: boolean, historial: boolean}|null,
+ *           asistentePausado: boolean}>} — `asistentePausado`: true si era la primera conexión del
+ *           negocio y el asistente quedó en pausa hasta que lo reanuden desde la Bandeja.
  */
 async function conectar({
     idNegocio,
@@ -279,6 +281,18 @@ async function conectar({
 
     const tokenCifrado = cifrar(accessToken);
 
+    // ¿Es la primera vez que este negocio conecta un número? Entonces el asistente nace en pausa:
+    // un negocio recién ligado todavía no tiene la carta ni la configuración revisadas, y si el bot
+    // contesta desde el primer mensaje ofrece lo que no hay. El dueño lo reanuda desde la Bandeja,
+    // que le enseña la revisión de preparación. Una reconexión NO lo toca: ese negocio ya estaba
+    // atendiendo y conserva lo que tuviera.
+    const conexionesPrevias = await Models.sequelize.query(
+        `SELECT 1 FROM platform.numero_canal
+          WHERE canal = :canal AND id_negocio = :idNegocio LIMIT 1;`,
+        { replacements: { canal: CANAL, idNegocio }, type: Models.sequelize.QueryTypes.SELECT }
+    );
+    const primeraConexion = conexionesPrevias.length === 0;
+
     const t = await Models.sequelize.transaction();
     try {
         await Models.sequelize.query(
@@ -312,6 +326,14 @@ async function conectar({
                 transaction: t,
             }
         );
+        if (primeraConexion) {
+            await Models.sequelize.query(
+                `UPDATE general.gener_negocio
+                    SET asistente_pausado = true, asistente_pausado_en = now()
+                  WHERE id_negocio = :idNegocio;`,
+                { replacements: { idNegocio }, transaction: t }
+            );
+        }
         await t.commit();
     } catch (error) {
         await t.rollback();
@@ -362,10 +384,18 @@ async function conectar({
             coexistencia,
             modo_pedido: modo,
             sincronizacion,
+            asistente_pausado_al_conectar: primeraConexion,
         },
     });
 
-    return { idExterno, numeroE164: numeroResuelto, wabaId, coexistencia, sincronizacion };
+    return {
+        idExterno,
+        numeroE164: numeroResuelto,
+        wabaId,
+        coexistencia,
+        sincronizacion,
+        asistentePausado: primeraConexion,
+    };
 }
 
 /**

@@ -7,7 +7,7 @@
  *      b) Recupera datos del solicitante (nombre, cédula, tipo_negocio)
  *      c) Crea usuario (cédula = contraseña temporal, debe_cambiar_password = true)
  *      d) Crea una sucursal (negocio) asociada al usuario
- *      e) Asigna Plan Básico por 7 días sin auto-renovación
+ *      e) Asigna Plan Básico por 30 días sin auto-renovación
  *      f) Envía correo de bienvenida y notificación al admin
  */
 
@@ -26,7 +26,8 @@ const { generarSlugUnico } = require('../../app_core/helpers/slug');
 
 const TIPO        = 'REGISTRO';
 const MAX_ATTEMPTS = parseInt(process.env.OTP_MAX_ATTEMPTS || '5', 10);
-const TRIAL_DAYS    = 7;
+// La misma duración que la prueba que asigna el super admin al crear un negocio a mano.
+const { DIAS_PRUEBA: TRIAL_DAYS } = require('../../app_core/dao/negocioDao');
 
 /**
  * Claves que mandaba la landing antes de que los rubros vivieran en la base (< 2026-09-10).
@@ -85,7 +86,7 @@ function parsearNombreCompleto(nombreCompleto) {
 
 /**
  * Verifica el OTP de registro y, si es válido, crea automáticamente la cuenta trial:
- * usuario + sucursal + plan de 7 días.
+ * usuario + sucursal + plan de 30 días.
  *
  * @param {string} email - Email verificado
  * @param {string} code  - OTP de 6 dígitos
@@ -253,7 +254,7 @@ async function verificarYCrearCuentaTrial(email, code) {
             console.warn('[RegistroTrial] Rol ADMINISTRADOR no encontrado para tipo_negocio', idTipoNegocio, '— usuario sin permisos.');
         }
 
-        // Asignar Plan Básico por 7 días (sin auto-renovación)
+        // Asignar Plan Básico por 30 días (sin auto-renovación)
         if (planBasico) {
             const fechaInicio = new Date();
             const fechaFin    = new Date(Date.now() + TRIAL_DAYS * 24 * 60 * 60 * 1000);

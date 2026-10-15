@@ -1256,7 +1256,7 @@ async function cobrosDeUsuario(idUsuario, { incluirSinSuscripcion = false } = {}
 
         // Sin suscripción de cobro no hay moneda ni ciclo guardados: se usan los del país, que son
         // los que tendría al crearla. Y «sin plan» es no tener NINGÚN plan vigente ni suscripción:
-        // un negocio en su prueba de 7 días no tiene suscripción pero sí plan, y no es lo mismo.
+        // un negocio en su prueba de 30 días no tiene suscripción pero sí plan, y no es lo mismo.
         n.sin_plan = !n.id_suscripcion && !v;
         if (!n.id_suscripcion) {
             n.moneda = MONEDA_POR_PAIS[n.pais] || 'COP';
@@ -1310,7 +1310,7 @@ async function cobrosDeUsuario(idUsuario, { incluirSinSuscripcion = false } = {}
             complementos: await getComplementosNegocio(n.id_negocio),
             pasarelas: await pasarelasParaPagar(await paisDeNegocio(n.id_negocio)),
             // Los planes entre los que puede elegir, con su precio en su moneda. La prueba de
-            // 7 días no está: no se elige ni se paga, se asigna al registrar el negocio.
+            // 30 días no está: no se elige ni se paga, se asigna al registrar el negocio.
             planes: await Dao.listarPlanesParaCliente({
                 moneda: n.moneda,
                 ciclo: n.ciclo,
@@ -1776,7 +1776,7 @@ function construirReferenciaAjuste(idNegocio, hoy, intento) {
  */
 async function precioMensual({ suscripcion, idPlan, complementos, catalogo }) {
     // Un plan sin precio en esta moneda vale cero aquí, y no es un error: es el caso de la prueba
-    // de 7 días. Cualquier plan pagado será «subir» frente a ella, que es justo lo que es.
+    // de 30 días. Cualquier plan pagado será «subir» frente a ella, que es justo lo que es.
     let precioPlan = 0;
     try {
         precioPlan = await Dao.getPrecio({

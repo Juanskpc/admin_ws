@@ -161,7 +161,7 @@ function fechaBogota(valor, finDeDia = false) {
 }
 
 /** Días que dura la prueba sin plan pagado. Los mismos que el registro trial de la landing. */
-const DIAS_PRUEBA = 7;
+const DIAS_PRUEBA = 30;
 
 /** El plan con el que corre una prueba —el mismo que asigna el registro trial—, por CÓDIGO. */
 const CODIGO_PLAN_PRUEBA = 'BASICO';
@@ -576,4 +576,5 @@ module.exports = {
     registrarCliente,
     resolverVigencia,
     contarSedesPorNegocio,
+    DIAS_PRUEBA,
 };

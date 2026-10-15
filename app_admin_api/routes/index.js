@@ -403,7 +403,7 @@ router.post('/negocios', requireSuperAdmin, [
 ], NegocioController.createNegocio);
 router.patch('/negocios/:id/plan', requireSuperAdmin, [
     param('id').isInt({ min: 1 }).withMessage('ID de negocio inválido'),
-    // `prueba: true` asigna la prueba de 7 días con el Plan Básico y no necesita id_plan.
+    // `prueba: true` asigna la prueba de 30 días con el Plan Básico y no necesita id_plan.
     body('prueba').optional().isBoolean().withMessage('«prueba» debe ser verdadero o falso'),
     body('id_plan')
         .if((_, { req }) => req.body.prueba !== true && req.body.prueba !== 'true')
@@ -641,7 +641,7 @@ router.post('/negocios/registrar-cliente', requireSuperAdmin, [
     body('negocio.pais').optional({ nullable: true }).isIn(PAISES).withMessage('País no soportado'),
     body('plan.id_plan').optional({ nullable: true }).isInt({ min: 1 }).withMessage('Plan inválido'),
     body('plan.meses').optional({ nullable: true }).isInt({ min: 1, max: 60 }).withMessage('Duración inválida'),
-    // Con plan: empieza aquí y dura `meses`. Sin plan: la prueba de 7 días empieza aquí.
+    // Con plan: empieza aquí y dura `meses`. Sin plan: la prueba de 30 días empieza aquí.
     body('plan.fecha_inicio').optional({ nullable: true }).isISO8601().withMessage('Fecha de inicio inválida'),
     // Modo A: usuario existente
     body('id_usuario_existente').optional({ nullable: true }).isInt({ min: 1 }).withMessage('ID de usuario inválido'),

@@ -75,8 +75,8 @@ describe('elegirBarrio y elegirMesa', () => {
     it('una parte del nombre vale solo si es UNA coincidencia', () => {
         expect(elegirBarrio('poblado', barrios).id_barrio).toBe(1);
         expect(elegirBarrio('norte', barrios).id_barrio).toBe(3);
-        // «Laur» coincide con dos: no se elige por el cliente.
-        expect(elegirBarrio('laur', barrios)).toBeNull();
+        // «Laur» coincide con dos: no se elige por el cliente, se le dan a escoger (2026-10-15).
+        expect(elegirBarrio('laur', barrios).ambiguos.map((b) => b.id_barrio)).toEqual([2, 3]);
     });
 
     it('«otro» y sus variantes', () => {

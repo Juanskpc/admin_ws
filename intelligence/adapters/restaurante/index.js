@@ -61,11 +61,12 @@ const cuentaService = require('../../../app_restaurante_api/services/cuentaServi
 const horarioService = require('../../../app_restaurante_api/services/horarioService');
 const barrioService = require('../../../app_restaurante_api/services/barrioService');
 const exclusiones = require('./exclusiones');
+const adiciones = require('./adiciones');
 const pago = require('./pago');
 const mesaPublicaService = require('../../../app_restaurante_api/services/mesaPublicaService');
 const usuarioAsistenteDao = require('../../../app_core/dao/usuarioAsistenteDao');
 const Models = require('../../../app_core/models/conection');
-const { enPesos, enlaceDelMenu, rangoEnPalabras, fraseDeApertura } = require('./flujo');
+const { enPesos, enlaceDelMenu, rangoEnPalabras, fraseDeApertura, resumenPorZona } = require('./flujo');
 const contextoNegocio = require('../../core/contextoNegocio');
 
 const VERTICAL = 'restaurante';
@@ -1250,10 +1251,22 @@ function registrarCapacidades() {
                               'el cliente mismo dice que es otro municipio o una vereda.',
                       }
                     : null,
-                domicilio_por_barrio: barrios.slice(0, 40).map((b) => ({
-                    barrio: b.nombre,
-                    valor: precio(b.valor),
-                })),
+                // Pocos barrios: cada uno con su precio. Una ciudad cargada por comunas (~550 barrios)
+                // no cabe: va el precio por zona, y el barrio exacto lo resuelve el pedido.
+                domicilio_por_barrio:
+                    barrios.length <= 40
+                        ? barrios.map((b) => ({
+                              barrio: b.zona ? `${b.nombre} (${b.zona})` : b.nombre,
+                              valor: precio(b.valor),
+                          }))
+                        : undefined,
+                domicilio_por_zona:
+                    barrios.length > 40
+                        ? resumenPorZona(barrios).map((z) => ({
+                              zona: z.zona,
+                              valor: z.minimo === z.maximo ? precio(z.minimo) : `desde ${precio(z.minimo)}`,
+                          }))
+                        : undefined,
                 tiempo_estimado_min: negocio.tiempo_estimado_min,
                 tiempo_estimado_max: negocio.tiempo_estimado_max,
                 // El de arriba es el de un DOMICILIO. Para recoger o comer en el local, este.
@@ -1494,17 +1507,27 @@ function registrarCapacidades() {
                     });
                     const descartadas = [];
 
+                    // Las adiciones de cada plato, con nombre y precio, para que el «sí» sea sobre
+                    // lo que de verdad se va a cobrar. Las valida `crearOrden` al ejecutar.
+                    const agregadas = await adiciones.describir({
+                        idNegocio,
+                        lineas: items.map((i) => adiciones.leerCon(i?.con)),
+                    });
+
                     let total = 0;
                     const lineas = items.map((i, k) => {
                         const p = porId.get(Number(i?.id_producto));
                         const cantidad = Number(i?.cantidad) || 1;
                         if (!p) throw new Error('un producto del pedido ya no está en la carta');
-                        const subtotal = Number(p.precio) * cantidad;
+                        const extra = agregadas[k].reduce((s, a) => s + a.precio * a.cantidad, 0);
+                        const subtotal = (Number(p.precio) + extra) * cantidad;
                         total += subtotal;
                         descartadas.push(...quitadas[k].descartadas);
-                        const sin = quitadas[k].validas.length
-                            ? ` (${quitadas[k].validas.map((v) => `sin ${v.nombre}`).join(', ')})`
-                            : '';
+                        const detalle = [
+                            ...quitadas[k].validas.map((v) => `sin ${v.nombre}`),
+                            ...(agregadas[k].length ? [adiciones.enTexto(agregadas[k])] : []),
+                        ];
+                        const sin = detalle.length ? ` (${detalle.join(', ')})` : '';
                         return `• ${cantidad} × ${p.nombre}${sin} — ${enPesos(subtotal)}`;
                     });
 
@@ -1653,6 +1676,10 @@ function registrarCapacidades() {
                     // («12.15»). Texto y no lista porque el motor de argumentos no anida listas
                     // de escalares; `ejecutar` los relee y solo guarda los removibles del producto.
                     sin: { tipo: 'string', requerido: false, max_longitud: 100 },
+                    // Adiciones de ESTA línea (toppings, extras…), ids de producto separados por
+                    // punto; un id repetido es una más por plato («31.31.40»). Las valida y les
+                    // pone precio `crearOrden`, no la conversación.
+                    con: { tipo: 'string', requerido: false, max_longitud: 300 },
                 },
             },
             // Nombres de lo que el flujo ya descartó al leer el código de la carta: solo para que
@@ -1830,6 +1857,9 @@ function registrarCapacidades() {
                 ...(quitadasOrden[k].validas.length
                     ? { exclusiones: quitadasOrden[k].validas.map((v) => v.id_ingrediente) }
                     : {}),
+                // Las adiciones van tal cual: `crearOrden` comprueba que el plato las ofrezca y
+                // les pone el precio de la carta (`adicionService.resolverItems`).
+                ...(i.con ? { adiciones: adiciones.leerCon(i.con) } : {}),
             }));
 
             // ── 2-ter. El empaque, calculado por el servidor ─────────────────────────────

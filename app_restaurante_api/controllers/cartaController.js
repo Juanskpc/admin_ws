@@ -1,4 +1,5 @@
 const CartaService = require('../services/cartaService');
+const adicionService = require('../services/adicionService');
 const Respuesta = require('../../app_core/helpers/respuesta');
 
 /**
@@ -12,17 +13,26 @@ async function getCategorias(req, res) {
         if (!idNegocio) return Respuesta.error(res, 'id_negocio requerido', 400);
 
         const categorias = await CartaService.getCategorias(idNegocio);
+        // Con adiciones encendidas, una adición no se vende sola en el POS: no cuenta, y la
+        // categoría que solo tenía adiciones no se ofrece.
+        const ocultar = await adicionService.negocioPermiteAdiciones(idNegocio);
 
         // Transformar para incluir conteo de productos
-        const data = categorias.map(c => ({
-            id_categoria: c.id_categoria,
-            nombre:       c.nombre,
-            descripcion:  c.descripcion,
-            icono:        c.icono,
-            imagen_url:   c.imagen_url,
-            orden:        c.orden,
-            total_productos: c.productos ? c.productos.length : 0,
-        }));
+        const data = [];
+        for (const c of categorias) {
+            const productos = c.productos || [];
+            const vendibles = ocultar ? productos.filter(p => !p.es_adicion) : productos;
+            if (productos.length > 0 && vendibles.length === 0) continue;
+            data.push({
+                id_categoria: c.id_categoria,
+                nombre:       c.nombre,
+                descripcion:  c.descripcion,
+                icono:        c.icono,
+                imagen_url:   c.imagen_url,
+                orden:        c.orden,
+                total_productos: vendibles.length,
+            });
+        }
 
         return Respuesta.success(res, 'Categorías obtenidas', data);
     } catch (err) {
@@ -40,7 +50,9 @@ async function getProductos(req, res) {
             return Respuesta.error(res, 'id_negocio e id_categoria requeridos', 400);
         }
 
-        const productos = await CartaService.getProductosByCategoria(idNegocio, idCategoria);
+        const ocultar = await adicionService.negocioPermiteAdiciones(idNegocio);
+        const productos = (await CartaService.getProductosByCategoria(idNegocio, idCategoria))
+            .filter(p => !(ocultar && p.es_adicion));
 
         const data = productos.map(p => ({
             id_producto:  p.id_producto,
@@ -77,7 +89,11 @@ async function buscarProductos(req, res) {
         if (!idNegocio) return Respuesta.error(res, 'id_negocio requerido', 400);
         if (!termino)   return Respuesta.success(res, 'Sin término de búsqueda', []);
 
-        const productos = await CartaService.buscarProductos(idNegocio, termino, { includeDisabled });
+        // El POS busca para vender: con adiciones encendidas, las adiciones no salen solas. (El
+        // asistente llama al servicio directamente y las sigue encontrando.)
+        const ocultar = await adicionService.negocioPermiteAdiciones(idNegocio);
+        const productos = (await CartaService.buscarProductos(idNegocio, termino, { includeDisabled }))
+            .filter(p => !(ocultar && p.es_adicion));
 
         const data = productos.map(p => ({
             id_producto:  p.id_producto,

@@ -7,6 +7,8 @@ module.exports = (sequelize, DataTypes) => {
         precio_unitario: { type: DataTypes.DECIMAL(12, 2), allowNull: false },
         subtotal:        { type: DataTypes.DECIMAL(12, 2), allowNull: false },
         nota:            { type: DataTypes.TEXT },
+        // La línea del plato al que va esta adición (topping, extra…). NULL = línea normal.
+        id_detalle_padre: { type: DataTypes.INTEGER, allowNull: true },
         estado:          { type: DataTypes.STRING(20), defaultValue: 'PENDIENTE' },
         fecha_creacion:  { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
     }, {

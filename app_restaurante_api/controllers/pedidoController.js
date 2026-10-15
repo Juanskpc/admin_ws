@@ -56,6 +56,9 @@ const crearOrdenValidators = [
     body('items.*.cantidad').isInt({ min: 1 }).withMessage('Cantidad mínima: 1'),
     body('items.*.precio_unitario').isFloat({ min: 0 }).withMessage('Precio inválido'),
     body('items.*.exclusiones').optional().isArray(),
+    // Adiciones (toppings, extras…) de cada ítem: `[{ id_producto, cantidad }]`, cantidad POR UNIDAD.
+    // El precio lo pone el servidor (`adicionService.resolverItems`), no el navegador.
+    body('items.*.adiciones').optional({ nullable: true }).isArray({ max: 30 }),
     body('porcentaje_impuesto').optional().isFloat({ min: 0, max: 1 }),
     body('tipo_pedido').optional().isIn(['MESA', 'LLEVAR', 'DOMICILIO']),
     body('contacto_nombre').optional({ nullable: true }).isString().isLength({ max: 160 }),
@@ -82,6 +85,9 @@ const agregarItemsOrdenValidators = [
     body('items.*.cantidad').isInt({ min: 1 }).withMessage('Cantidad mínima: 1'),
     body('items.*.precio_unitario').isFloat({ min: 0 }).withMessage('Precio inválido'),
     body('items.*.exclusiones').optional().isArray(),
+    // Adiciones (toppings, extras…) de cada ítem: `[{ id_producto, cantidad }]`, cantidad POR UNIDAD.
+    // El precio lo pone el servidor (`adicionService.resolverItems`), no el navegador.
+    body('items.*.adiciones').optional({ nullable: true }).isArray({ max: 30 }),
     body('porcentaje_impuesto').optional().isFloat({ min: 0, max: 1 }),
     body('valor_domicilio').optional({ nullable: true }).isFloat({ min: 0 }).withMessage('valor_domicilio inválido'),
     body('descuento').optional({ nullable: true }).isFloat({ min: 0 }).withMessage('descuento inválido'),
@@ -93,6 +99,9 @@ const quitarItemsOrdenValidators = [
     body('items.*.id_producto').isInt({ min: 1 }).withMessage('id_producto inválido'),
     body('items.*.cantidad').isInt({ min: 1 }).withMessage('Cantidad mínima: 1'),
     body('items.*.exclusiones').optional().isArray(),
+    // Adiciones (toppings, extras…) de cada ítem: `[{ id_producto, cantidad }]`, cantidad POR UNIDAD.
+    // El precio lo pone el servidor (`adicionService.resolverItems`), no el navegador.
+    body('items.*.adiciones').optional({ nullable: true }).isArray({ max: 30 }),
     body('items.*.nota').optional({ nullable: true }).isString(),
 ];
 

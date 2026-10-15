@@ -394,7 +394,7 @@ function buildWelcomeEmailHtml(nombre, numIdentificacion, loginUrl, logoUrl) {
         <p class="header-title">🎉 ¡Tu cuenta está lista!</p>
       </div>
       <div class="body">
-        <p>Hola, <strong>${nombre}</strong>. Tu prueba gratuita de 7 días en <strong>EscalApp</strong> ya está activa. Estas son tus credenciales de acceso:</p>
+        <p>Hola, <strong>${nombre}</strong>. Tu prueba gratuita de 30 días en <strong>EscalApp</strong> ya está activa. Estas son tus credenciales de acceso:</p>
         <div class="cred-box">
           <div class="cred-row">
             <span class="cred-label">Usuario</span>
@@ -417,7 +417,7 @@ function buildWelcomeEmailHtml(nombre, numIdentificacion, loginUrl, logoUrl) {
         </div>
         <hr class="divider" />
         <p style="font-size:12px;color:#a0aec0;">
-          Tu prueba gratuita dura <strong>7 días</strong> con acceso al Plan Básico.
+          Tu prueba gratuita dura <strong>30 días</strong> con acceso al Plan Básico.
           Al finalizar podrás elegir el plan que mejor se adapte a tu negocio.
         </p>
       </div>

@@ -95,9 +95,16 @@ const RESTAURANTE = [
         donde: "estado = 'A'",
     },
     {
+        // Las comunas/corregimientos con su precio, ANTES que los barrios que cuelgan de ellas.
+        tabla: 'restaurante.rest_zona_domicilio',
+        pk: 'id_zona_domicilio',
+        donde: "estado = 'A'",
+    },
+    {
         tabla: 'restaurante.rest_barrio_domicilio',
         pk: 'id_barrio',
         donde: "estado = 'A'",
+        enlaces: { id_zona_domicilio: 'restaurante.rest_zona_domicilio' },
     },
     {
         // El horario de atención del negocio. `id_usuario` apunta al turno de UNA persona, y el

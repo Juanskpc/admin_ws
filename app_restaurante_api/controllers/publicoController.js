@@ -215,6 +215,9 @@ async function getCartaCompleta(req, res) {
                 disponible: p.disponible !== false,
                 // Solo lo que el cliente puede quitar, sin cantidades ni stock ni costos.
                 ingredientes_removibles: p.removibles ?? [],
+                // Lo que se le puede agregar (toppings, extras…), con su precio. Vacío si el
+                // negocio no tiene las adiciones encendidas.
+                adiciones: p.adiciones ?? [],
             })),
         }));
 

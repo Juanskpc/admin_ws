@@ -37,6 +37,18 @@
  * comprueba que cada id sea removible de ese producto en este negocio (`exclusiones.js`).
  * Lo escribe `carrito.service.ts`.
  *
+ * ## Adiciones (desde 2026-10-15)
+ *
+ * Una línea puede llevar además `-a<id>.<id>…` DESPUÉS del `-r`: las adiciones (toppings, extras…)
+ * que el cliente le puso a ese plato. Un id repetido es una unidad más por plato:
+ *
+ *     #P12-4x2-r12-a31.31.40     2 × producto 4 sin el ingrediente 12, cada uno con 2 × adición 31
+ *                                y 1 × adición 40
+ *
+ * Igual que las exclusiones, son una SUGERENCIA: quien decide si el plato las ofrece, si están
+ * agotadas y cuánto cuestan es `crearOrden` (`adicionService.resolverItems`). Lo escribe
+ * `carrito.service.ts`.
+ *
  * ## Los modificadores opcionales (desde 2026-09-24)
  *
  * Después de los productos pueden venir modificadores `~<letra>=<valor>`, que llevan lo que el
@@ -74,13 +86,15 @@
  */
 'use strict';
 
+const adiciones = require('./adiciones');
+
 /**
  * `#P<negocio>-<id>x<cant>[,<id>x<cant>...]`
  *
  * Anclado al final de línea y admitiendo espacios alrededor: el cliente casi siempre escribe
  * algo antes de enviar, y el mensaje llega con saltos de línea de por medio.
  */
-const ITEM = String.raw`\d+x\d+(?:-r[0-9A-Za-z.]*)?`;
+const ITEM = String.raw`\d+x\d+(?:-r[0-9A-Za-z.]*)?(?:-a[0-9.]*)?`;
 const PATRON = new RegExp(String.raw`#P(\d+)-(${ITEM}(?:,${ITEM})*)((?:~[a-z]=[A-Za-z0-9]*)*)\s*$`, 'im');
 
 /**
@@ -155,21 +169,28 @@ function leer(texto) {
     const items = [];
 
     for (const par of encontrado[2].split(',')) {
-        const [cabeza, quitados] = par.split('-r');
+        const [sinAdiciones, agregadas] = par.split('-a');
+        const [cabeza, quitados] = sinAdiciones.split('-r');
         const [id, cantidad] = cabeza.split('x').map(Number);
         if (!Number.isInteger(id) || id <= 0) continue;
         if (!Number.isInteger(cantidad) || cantidad <= 0) continue;
-        items.push({ id_producto: id, cantidad, exclusiones: leerExclusiones(quitados) });
+        items.push({
+            id_producto: id,
+            cantidad,
+            exclusiones: leerExclusiones(quitados),
+            adiciones: adiciones.leerCon(agregadas),
+        });
     }
 
     if (items.length === 0 || items.length > MAX_ITEMS) return null;
 
     // Un mismo producto puede aparecer dos veces si el carrito se armó raro. Se suman en vez de
     // crear dos líneas —el cliente pidió tres, no dos y una—, pero SOLO si coinciden también en
-    // lo que se quita: «una sin cebolla» y «una con todo» son dos líneas.
+    // lo que se quita y lo que se agrega: «una sin cebolla», «una con queso» y «una con todo» son
+    // tres líneas.
     const sumados = new Map();
     for (const i of items) {
-        const clave = `${i.id_producto}:${i.exclusiones.join('.')}`;
+        const clave = `${i.id_producto}:${i.exclusiones.join('.')}:${adiciones.escribirCon(i.adiciones)}`;
         const previo = sumados.get(clave);
         if (previo) previo.cantidad += i.cantidad;
         else sumados.set(clave, { ...i });
@@ -179,10 +200,11 @@ function leer(texto) {
         idNegocio,
         // `exclusiones` solo aparece en la línea que la lleva: un código sin `-r` da el mismo
         // objeto de siempre.
-        items: [...sumados.values()].map(({ id_producto, cantidad, exclusiones }) => ({
+        items: [...sumados.values()].map(({ id_producto, cantidad, exclusiones, adiciones: agregadas }) => ({
             id_producto,
             cantidad,
             ...(exclusiones.length ? { exclusiones } : {}),
+            ...(agregadas.length ? { adiciones: agregadas } : {}),
         })),
         ...leerModificadores(encontrado[3]),
     };

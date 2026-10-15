@@ -15,6 +15,9 @@ module.exports = (sequelize, DataTypes) => {
         // Empaque que el asistente suma en pedidos para llevar / domicilio (ver empaqueService).
         id_producto_empaque: { type: DataTypes.INTEGER, allowNull: true },
         cantidad_empaque:    { type: DataTypes.SMALLINT, allowNull: false, defaultValue: 1 },
+        // Es una adición (topping, extra…): no se vende sola, se ofrece dentro de otros productos
+        // (`carta_producto_adicion`). Solo cuenta si el negocio tiene `permite_adiciones`.
+        es_adicion:          { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
         // Datos fiscales (FE-1). Todos opcionales: NULL = el impuesto por defecto del negocio.
         codigo_impuesto:    { type: DataTypes.STRING(4), allowNull: true },
         tarifa_impuesto:    { type: DataTypes.DECIMAL(5, 2), allowNull: true },
@@ -31,6 +34,7 @@ module.exports = (sequelize, DataTypes) => {
         CartaProducto.belongsTo(models.GenerNegocio, { foreignKey: 'id_negocio', as: 'negocio' });
         CartaProducto.belongsTo(models.CartaCategoria, { foreignKey: 'id_categoria', as: 'categoria' });
         CartaProducto.hasMany(models.CartaProductoIngred, { foreignKey: 'id_producto', as: 'ingredientes' });
+        CartaProducto.hasMany(models.CartaProductoAdicion, { foreignKey: 'id_producto', as: 'adiciones' });
     };
 
     return CartaProducto;

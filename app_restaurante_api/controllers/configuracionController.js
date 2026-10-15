@@ -43,6 +43,8 @@ const CAMPOS_EDITABLES = [
     'controla_inventario',
     'muestra_iconos_productos',
     'permite_domicilio_personal',
+    'permite_adiciones',
+    'termino_adiciones',
     'id_paleta',
 ];
 

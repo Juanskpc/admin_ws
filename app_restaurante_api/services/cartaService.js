@@ -1,4 +1,5 @@
 const Models = require('../../app_core/models/conection');
+const adicionService = require('./adicionService');
 
 /**
  * cartaService — Lógica de negocio para el menú / carta del restaurante.
@@ -96,7 +97,7 @@ async function getCategorias(idNegocio) {
             as: 'productos',
             where: { estado: 'A', disponible: true },
             required: false,
-            attributes: ['id_producto'],
+            attributes: ['id_producto', 'es_adicion'],
         }],
         order: [['orden', 'ASC']],
     });
@@ -200,7 +201,7 @@ async function getCartaPublicaCompleta(idNegocio, opciones = {}) {
             as: 'productos',
             where: whereProductos,
             required: false,
-            attributes: ['id_producto', 'nombre', 'descripcion', 'precio', 'imagen_url', 'icono', 'es_popular', 'disponible'],
+            attributes: ['id_producto', 'nombre', 'descripcion', 'precio', 'imagen_url', 'icono', 'es_popular', 'disponible', 'es_adicion'],
             include: controlaInventario ? [INCLUDE_INGREDIENTES_STOCK] : [],
         }],
         order: [
@@ -217,8 +218,10 @@ async function getCartaPublicaCompleta(idNegocio, opciones = {}) {
             categoria.productos = (categoria.productos || []).filter(alcanzaStockPara);
         }
     }
-    await adjuntarRemovibles(idNegocio, categorias);
-    return categorias;
+    // Con adiciones encendidas, las adiciones salen de la lista y van dentro de cada producto.
+    const conAdiciones = await adicionService.adjuntarACartaPublica(idNegocio, categorias);
+    await adjuntarRemovibles(idNegocio, conAdiciones);
+    return conAdiciones;
 }
 
 /**
@@ -262,7 +265,7 @@ async function adjuntarRemovibles(idNegocio, categorias) {
 async function getProductosByCategoria(idNegocio, idCategoria) {
     return Models.CartaProducto.findAll({
         where: { id_negocio: idNegocio, id_categoria: idCategoria, estado: 'A', disponible: true },
-        attributes: ['id_producto', 'nombre', 'descripcion', 'precio', 'imagen_url', 'icono', 'es_popular'],
+        attributes: ['id_producto', 'nombre', 'descripcion', 'precio', 'imagen_url', 'icono', 'es_popular', 'es_adicion'],
         include: [{
             model: Models.CartaProductoIngred,
             as: 'ingredientes',
@@ -346,7 +349,7 @@ async function buscarProductos(idNegocio, termino, options = {}) {
             estado: 'A',
             ...(includeDisabled ? {} : { disponible: true }),
         },
-        attributes: ['id_producto', 'nombre', 'descripcion', 'precio', 'imagen_url', 'icono', 'es_popular', 'id_categoria', 'disponible', 'visible'],
+        attributes: ['id_producto', 'nombre', 'descripcion', 'precio', 'imagen_url', 'icono', 'es_popular', 'id_categoria', 'disponible', 'visible', 'es_adicion'],
         include: [{
             model: Models.CartaCategoria,
             as: 'categoria',

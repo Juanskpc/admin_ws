@@ -1,4 +1,5 @@
 const Models = require('../../app_core/models/conection');
+const adicionService = require('./adicionService');
 
 /**
  * cartaAdminService — CRUD de categorías, productos e ingredientes del menú.
@@ -303,8 +304,17 @@ async function getProductosAdmin(idNegocio, idCategoria) {
             'id_producto_empaque', 'cantidad_empaque',
             // Datos fiscales: la pantalla de carta los enseña solo si el negocio factura.
             'codigo_impuesto', 'tarifa_impuesto', 'unidad_medida_dian', 'codigo_producto',
+            'es_adicion',
         ],
         include: [{
+            // Las adiciones que ofrece (ids, en orden). Los datos de cada una salen de este mismo
+            // listado: también son productos.
+            model: Models.CartaProductoAdicion,
+            as: 'adiciones',
+            where: { estado: 'A' },
+            required: false,
+            attributes: ['id_adicion', 'orden'],
+        }, {
             model: Models.CartaProductoIngred,
             as: 'ingredientes',
             where: { estado: 'A' },
@@ -316,7 +326,11 @@ async function getProductosAdmin(idNegocio, idCategoria) {
             }],
             attributes: ['id_producto_ingred', 'id_ingrediente', 'porcion', 'unidad_medida', 'es_removible'],
         }],
-        order: [['es_popular', 'DESC'], ['nombre', 'ASC']],
+        order: [
+            ['es_popular', 'DESC'],
+            ['nombre', 'ASC'],
+            [{ model: Models.CartaProductoAdicion, as: 'adiciones' }, 'orden', 'ASC'],
+        ],
     });
 }
 
@@ -382,9 +396,13 @@ async function validarImpuesto({ codigo_impuesto, tarifa_impuesto }, t) {
 
 const textoONull = (v) => (v === null || v === undefined || String(v).trim() === '' ? null : String(v).trim());
 
-async function crearProducto({ id_negocio, id_categoria, nombre, descripcion, precio, icono, imagen_url, es_popular, disponible, visible, ingredientes, id_producto_empaque, cantidad_empaque, codigo_impuesto, tarifa_impuesto, unidad_medida_dian, codigo_producto }) {
+async function crearProducto({ id_negocio, id_categoria, nombre, descripcion, precio, icono, imagen_url, es_popular, disponible, visible, ingredientes, id_producto_empaque, cantidad_empaque, codigo_impuesto, tarifa_impuesto, unidad_medida_dian, codigo_producto, es_adicion, adiciones }) {
     const t = await Models.sequelize.transaction();
     try {
+        const esAdicion = es_adicion === true || es_adicion === 'true';
+        // Una adición creada desde el producto que la ofrece no trae categoría: va a la del
+        // término del negocio («Toppings»), que se crea oculta si no existe.
+        const idCategoria = id_categoria || (esAdicion ? await adicionService.categoriaPorDefecto(id_negocio, { transaction: t }) : null);
         const impuesto = await validarImpuesto({ codigo_impuesto, tarifa_impuesto }, t);
         const empaque = await validarEmpaque(
             { idNegocio: id_negocio, idEmpaque: id_producto_empaque ?? null, cantidad: cantidad_empaque },
@@ -392,7 +410,8 @@ async function crearProducto({ id_negocio, id_categoria, nombre, descripcion, pr
         );
         const prod = await Models.CartaProducto.create({
             id_negocio,
-            id_categoria,
+            id_categoria: idCategoria,
+            es_adicion: esAdicion,
             nombre,
             descripcion: descripcion || null,
             precio,
@@ -414,6 +433,16 @@ async function crearProducto({ id_negocio, id_categoria, nombre, descripcion, pr
             await Models.CartaProductoIngred.bulkCreate(rows, { transaction: t });
         }
 
+        // Una adición no ofrece adiciones: no hay «topping del topping».
+        if (!esAdicion && Array.isArray(adiciones) && adiciones.length > 0) {
+            await adicionService.sincronizarDeProducto({
+                idNegocio: id_negocio,
+                idProducto: prod.id_producto,
+                ids: adiciones,
+                transaction: t,
+            });
+        }
+
         await t.commit();
         return prod;
     } catch (err) {
@@ -423,7 +452,7 @@ async function crearProducto({ id_negocio, id_categoria, nombre, descripcion, pr
 }
 
 /** Edita un producto y sincroniza su lista de ingredientes. */
-async function editarProducto(idProducto, { id_categoria, nombre, descripcion, precio, icono, imagen_url, es_popular, disponible, visible, ingredientes, id_producto_empaque, cantidad_empaque, codigo_impuesto, tarifa_impuesto, unidad_medida_dian, codigo_producto }) {
+async function editarProducto(idProducto, { id_categoria, nombre, descripcion, precio, icono, imagen_url, es_popular, disponible, visible, ingredientes, id_producto_empaque, cantidad_empaque, codigo_impuesto, tarifa_impuesto, unidad_medida_dian, codigo_producto, es_adicion, adiciones }) {
     const t = await Models.sequelize.transaction();
     try {
         const prod = await Models.CartaProducto.findByPk(idProducto);
@@ -447,8 +476,13 @@ async function editarProducto(idProducto, { id_categoria, nombre, descripcion, p
             );
         }
 
+        // `undefined` = la edición no habla de esto (la de la imagen, por ejemplo): no se toca.
+        const eraAdicion = prod.es_adicion === true;
+        const esAdicion = es_adicion === undefined ? eraAdicion : es_adicion === true || es_adicion === 'true';
+
         await prod.update({
             id_categoria: id_categoria ?? prod.id_categoria,
+            es_adicion: esAdicion,
             nombre:       nombre       ?? prod.nombre,
             descripcion:  descripcion  !== undefined ? descripcion  : prod.descripcion,
             precio:       precio       ?? prod.precio,
@@ -469,6 +503,22 @@ async function editarProducto(idProducto, { id_categoria, nombre, descripcion, p
         // crea sólo nuevos y desactiva los removidos.
         if (Array.isArray(ingredientes)) {
             await syncProductoIngredientes(idProducto, ingredientes, t);
+        }
+
+        if (eraAdicion && !esAdicion) {
+            // Vuelve a ser un producto normal: deja de ofrecerse dentro de otros.
+            await adicionService.retirarDeLosPlatos(idProducto, { transaction: t });
+        }
+        if (esAdicion) {
+            // Una adición no ofrece adiciones.
+            await adicionService.sincronizarDeProducto({ idNegocio: prod.id_negocio, idProducto, ids: [], transaction: t });
+        } else if (Array.isArray(adiciones)) {
+            await adicionService.sincronizarDeProducto({
+                idNegocio: prod.id_negocio,
+                idProducto,
+                ids: adiciones,
+                transaction: t,
+            });
         }
 
         await t.commit();

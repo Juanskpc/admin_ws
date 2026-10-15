@@ -43,7 +43,7 @@ async function listarPasarelas({ pais = 'CO' } = {}) {
 /**
  * Los planes entre los que un cliente puede elegir y pagar, con su precio en su moneda.
  *
- * Filtra `precio > 0` a propósito: la prueba de 7 días no es algo que se elija ni se pague, se
+ * Filtra `precio > 0` a propósito: la prueba de 30 días no es algo que se elija ni se pague, se
  * asigna al registrar el negocio. Si algún día hay un plan gratuito, tampoco tiene por qué
  * aparecer aquí (decisión del usuario, 2026-09-15).
  */
