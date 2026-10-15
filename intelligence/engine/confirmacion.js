@@ -38,7 +38,15 @@
 'use strict';
 
 const registryReal = require('../core/registry');
-const { COMANDO, esComando, esAfirmacion, esAfirmacionConEntrega, esPeticionConQue, normalizar } = require('./texto');
+const {
+    COMANDO,
+    esComando,
+    esAfirmacion,
+    esAfirmacionConEntrega,
+    esNegacion,
+    esPeticionConQue,
+    normalizar,
+} = require('./texto');
 
 /** Nombre de la tarea. Vive en el mismo espacio que `agendar_cita`, no en uno nuevo. */
 const TAREA = 'confirmar_mutacion';
@@ -90,7 +98,7 @@ function lineasParaAnotar(texto, { afirma }) {
         if (l.includes('?') || (EMPIEZA_PREGUNTA.test(t) && !esPeticionConQue(t))) return false;
         if (HABLA_DE_PRECIO.test(t)) return false;
         if (SOLO_ENTREGA.test(t) || (VA_EN_CAMINO.test(t) && palabras.length <= 6)) return false;
-        if (esAfirmacion(l) || esComando(l, COMANDO.NO) || esComando(l, COMANDO.CANCELAR)) return false;
+        if (esAfirmacion(l) || esNegacion(l) || esComando(l, COMANDO.CANCELAR)) return false;
         return true;
     });
 }
@@ -240,7 +248,7 @@ async function resolver(ctx, { gate, registry = registryReal, ahora = () => new 
 
     // «cancelar» cuenta como no. Es la palabra con la que se sale de cualquier flujo en Nivel 1,
     // y aquí además es la lectura literal: quien la escribe no quiere que se ejecute nada.
-    if (esComando(ctx.texto, COMANDO.NO) || esComando(ctx.texto, COMANDO.CANCELAR)) {
+    if (esNegacion(ctx.texto) || esComando(ctx.texto, COMANDO.CANCELAR)) {
         return cerrar({
             pasos: [paso('confirmacion_rechazada', { capacidad: datos.capacidad })],
             texto: 'Listo, no toco nada entonces. ¿Te ayudo con algo más?',

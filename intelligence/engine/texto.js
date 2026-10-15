@@ -105,6 +105,24 @@ function esAfirmacion(texto) {
 }
 
 /**
+ * ¿Es un «no», aunque venga adornado? El espejo de `esAfirmacion`: «no» y luego solo cortesías.
+ *
+ * Producción, 2026-10-12 (Zona Burger): a «Si Veci» se le enseñó en 10-01, a «No Veci» no. Ante
+ * el resumen de un pedido, «No Veci» se anotó como nota de cocina y se volvió a preguntar lo mismo.
+ * «No, sin cebolla» sigue sin ser un no limpio: trae un cambio y va por el camino de los añadidos.
+ */
+function esNegacion(texto) {
+    if (esComando(texto, COMANDO.NO)) return true;
+    const palabras = normalizar(ultimaLinea(texto))
+        .replace(/[^a-zñ\s]/g, ' ')
+        .split(/\s+/)
+        .filter(Boolean);
+    if (palabras.length < 2 || palabras.length > 6) return false;
+    if (!/^n+o+$/.test(palabras[0])) return false;
+    return palabras.slice(1).every((p) => CORTESIA.test(p));
+}
+
+/**
  * Palabras con las que se REPITE cómo se entrega el pedido que se está confirmando: «sí para
  * recoger», «dale, a mi casa», «sí, para servir aquí». No cambian nada —el resumen ya lo dice—,
  * solo lo reafirman.
@@ -267,6 +285,7 @@ module.exports = {
     esPeticionConQue,
     esAfirmacion,
     esAfirmacionConEntrega,
+    esNegacion,
     esSaludo,
     saludoPorLaHora,
 };
