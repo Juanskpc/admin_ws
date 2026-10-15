@@ -23,6 +23,20 @@ cosa. Cada apartado dice cómo deshacerlo.
   campo 14/400; mayúscula solo en la primera palabra (commit `6f84dcb`).
 - Detalle de las reglas en el `CLAUDE.md` del workspace (sección Angular patterns).
 
+## 1-bis. El mismo estándar en `admin_app-v21` (desplegado 22:49)
+
+Auditoría de las 18 pantallas de la consola y estándar aplicado: ancho completo en todas, `h1`
+24/700 (Configuración estrena el suyo; «Tipos de negocio» en vez de «Registrar — Tipos…»),
+títulos de tarjeta 16/700, botones y campos 14, etiquetas 12/600, pestañas y filtros con el
+mismo `_pestanas.scss` que el restaurante (adiós a las flechas en las pestañas de Terceros y
+Cartera), tarjetas de cifras de Cobranza e Intelligence alineadas, y **Cobranza dice «Vencido» /
+«Por pagar» cuando hay deuda** (antes «Al día» a La Esquina del Barril con ~50 días de deuda).
+Celular a 390 px: las 17 pantallas sin desborde lateral (las causas, en el `CLAUDE.md`).
+Commits `4e5f98a`, `39685d5`. Respaldo: `admin_front_antes_estandar_20261014_2249.tgz`.
+**Pendiente:** mirar en producción, con sesión, el chip «Vencido» de La Esquina del Barril.
+`restaurante_app` recibió el mismo ajuste del estándar (`3b60f54`) en GitHub, **sin desplegar**:
+trae encima la carta con sedes de Juan David, que él aún no ha publicado.
+
 ## 2. Una sola rama: `master` en los 7 repos
 
 `main` se borró de `restaurante_app`, `admin_app-v21`, `reserva_app`, `gym_app`,
