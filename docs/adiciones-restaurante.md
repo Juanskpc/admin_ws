@@ -73,7 +73,7 @@ Un código sin `-a` se lee exactamente igual que antes.
 node scripts/migrar.js restaurante-adiciones     # en el VPS, después del respaldo
 ```
 
-Aplicada en la local y en la compartida el 2026-10-15. **Pendiente en producción.**
+Aplicada en la local, la compartida y **producción** el 2026-10-15 (~10:35).
 Frontends: `restaurante_app` (todas las pantallas de arriba) y `admin_app-v21` (solo los puntos de
 abajo).
 

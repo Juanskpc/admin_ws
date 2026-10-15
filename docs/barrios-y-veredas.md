@@ -52,7 +52,7 @@ venga en el mensaje.
 node scripts/migrar.js restaurante-zonas-domicilio   # en el VPS, después del respaldo
 ```
 
-Aplicada en la local y en la compartida el 2026-10-15. **Pendiente en producción.** La siembra de
+Aplicada en la local, la compartida y **producción** el 2026-10-15 (~10:35). La siembra de
 Pasto va dentro de la misma migración (tarda ~2 min contra la compartida por la latencia del túnel).
 Otra ciudad = otro JSON en `migrations/data/` añadido a `CATALOGOS` en la migración.
 
