@@ -1492,6 +1492,18 @@ async function getOrdenesCocina(idNegocio) {
         where: {
             id_negocio: idNegocio,
             estado_cocina: { [Op.in]: ['PENDIENTE', 'EN_PREPARACION', 'LISTO'] },
+            // Una comanda que nadie avanzó en Cocina se quedaba en el tablero para siempre: en
+            // Zona Burger, que no usa Cocina, había 25 de mayo a octubre ya cobradas. CERRADA
+            // significa COBRADA, no servida —un pedido para llevar pagado al pedirlo se cierra
+            // de una y sigue en el fogón—, así que la cerrada se ve solo si entró en las últimas
+            // 12 h. Las canceladas y anuladas no se ven nunca.
+            [Op.or]: [
+                { estado: 'ABIERTA' },
+                {
+                    estado: 'CERRADA',
+                    fecha_creacion: { [Op.gte]: Models.Sequelize.literal("now() - interval '12 hours'") },
+                },
+            ],
         },
         include: [{
             model: Models.PedidDetalle,
