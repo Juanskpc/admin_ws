@@ -238,6 +238,17 @@ async function getProductosAdmin(req, res) {
             visible:      p.visible !== false,
             id_producto_empaque: p.id_producto_empaque ?? null,
             cantidad_empaque:    p.cantidad_empaque ?? 1,
+            // ⚠️ Este listado copia campo a campo: lo que no esté aquí no llega a la pantalla, y
+            // el formulario de Menú lo guarda VACÍO al editar. Le pasó a `es_adicion` (no se veía
+            // marcada) y a los datos fiscales (editar un producto le borraba su impuesto propio).
+            codigo_impuesto:    p.codigo_impuesto ?? null,
+            tarifa_impuesto:    p.tarifa_impuesto ?? null,
+            unidad_medida_dian: p.unidad_medida_dian ?? null,
+            codigo_producto:    p.codigo_producto ?? null,
+            es_adicion:   p.es_adicion === true,
+            // Las adiciones que ofrece (ids, en orden). Pedidos y Menú leen sus datos de este
+            // mismo listado: también son productos.
+            adiciones: (p.adiciones || []).map(a => ({ id_adicion: a.id_adicion, orden: a.orden })),
             ingredientes: (p.ingredientes || [])
                 .map(pi => {
                     const idIngrediente = pi.ingrediente?.id_ingrediente ?? pi.id_ingrediente;

@@ -222,6 +222,27 @@ describe('adiciones', () => {
         expect(productos.find((p) => p.id_producto === idQueso).es_adicion).toBe(true);
     });
 
+    test('la pantalla (por el CONTROLADOR) recibe es_adicion, las adiciones y los datos fiscales', async () => {
+        // 2026-10-15, en producción: el servicio sí lo traía, pero el controlador copiaba campo a
+        // campo y los dejaba fuera, así que Menú mostraba la casilla desmarcada. Una prueba por
+        // servicio daba verde con la pantalla rota: esta entra por donde entra la pantalla.
+        const CartaAdminController = require('../../app_restaurante_api/controllers/cartaAdminController');
+        const capturado = {};
+        const res = {
+            status(c) { capturado.status = c; return this; },
+            json(j) { capturado.cuerpo = j; return this; },
+        };
+        await CartaAdminController.getProductosAdmin({ query: { id_negocio: String(idNegocio) } }, res);
+        const lista = capturado.cuerpo.data;
+        expect(lista.find((p) => p.id_producto === idQueso).es_adicion).toBe(true);
+        const plato = lista.find((p) => p.id_producto === idPlato);
+        expect(plato.es_adicion).toBe(false);
+        expect(plato.adiciones.map((a) => a.id_adicion)).toEqual([idTocineta, idQueso]);
+        for (const campo of ['codigo_impuesto', 'tarifa_impuesto', 'unidad_medida_dian', 'codigo_producto']) {
+            expect(plato).toHaveProperty(campo);
+        }
+    });
+
     test('una adición no puede ofrecer adiciones, y no se liga lo que no es adición', async () => {
         await expect(
             cartaAdminService.editarProducto(idPlato, { adiciones: [idPlato + 0, 999999999] })
