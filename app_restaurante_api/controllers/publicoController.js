@@ -69,11 +69,23 @@ async function getNegocio(req, res) {
             }
         }
 
+        // Las sedes del grupo (la matriz incluida), para que la carta pueda preguntar dónde quiere
+        // pedir. Si esto falla —una base sin `id_negocio_padre`, por ejemplo— la carta sale como la
+        // de un negocio solo, que es exactamente lo que era antes de que existieran las sedes.
+        // Nunca se queda sin salir por esto.
+        let sedes = [];
+        try {
+            sedes = await PublicoService.listarSedes(idNegocio);
+        } catch (err) {
+            console.error('[Publico] Error sedes del grupo:', err.message);
+        }
+
         return Respuesta.success(res, 'Negocio obtenido', {
             ...datos,
             plan_activo: planActivo,
             carta,
             atencion,
+            sedes,
         });
     } catch (err) {
         console.error('[Publico] Error getNegocio:', err.message);
