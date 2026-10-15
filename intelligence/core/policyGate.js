@@ -213,6 +213,10 @@ async function ejecutar({
     dryRun = false,
     claveIdempotencia = null,
     confirmadoPor = null,
+    // El chat del que viene la petición. Lo pone la plataforma, nunca el modelo, y solo sirve
+    // para que una capacidad reconozca «esto se pidió en este mismo chat» (un cliente de
+    // WhatsApp sin número visible no tiene otra forma de probar que un pedido es suyo).
+    idConversacion = null,
 }) {
     const capacidad = registry.obtener(nombre);
 
@@ -379,7 +383,7 @@ async function ejecutar({
         const resultado = await capacidad.ejecutar({
             idNegocio,
             args: limpios,
-            contexto: { principal, politica, dryRun, transaction },
+            contexto: { principal, politica, dryRun, transaction, idConversacion },
         });
 
         if (usaClave) {

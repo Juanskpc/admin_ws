@@ -148,6 +148,12 @@ const PASAR_A_PERSONA = Object.freeze({
 });
 
 /**
+ * Denegaciones con las que el turno pasa directo a una persona en vez de volver al modelo: no
+ * hay nada que el modelo pueda corregir y lo único que sabría decir es «llama al restaurante».
+ */
+const A_PERSONA_SI_DENIEGA = new Set(['PEDIDO_NO_ES_DE_QUIEN_PIDE']);
+
+/**
  * El asistente dice que le pasa la conversación a una persona («te paso con alguien del equipo»,
  * «le aviso al equipo para que te escriba»). Sobre texto normalizado (sin tildes, minúsculas).
  */
@@ -452,6 +458,28 @@ function crearManejadorLlm({
                         ahora: ahora(),
                     });
                 }
+                // El cliente pregunta por un pedido que no se puede comprobar que sea suyo (lo
+                // pidió por teléfono, desde otro chat…): pasa a una persona en el acto, sin otra
+                // vuelta del modelo. Antes se le decía «llama al restaurante» —a un cliente que
+                // ya estaba escribiéndole al restaurante— y nadie se enteraba (Zona Burger,
+                // 2026-10-11/14). La persona sí puede ver el pedido y decidir; cuesta el mismo
+                // mensaje y el cliente queda atendido.
+                if (A_PERSONA_SI_DENIEGA.has(salida.codigo)) {
+                    pasos.push({
+                        tipo: 'handoff',
+                        decision: 'pedido_sin_comprobar',
+                        motivo: { capacidad: solicitada.capacidad },
+                    });
+                    return handoff.decisionAPersona(
+                        {
+                            pasos,
+                            invocaciones,
+                            variables: conversacion.variables || {},
+                            nivel: 'llm',
+                        },
+                        negocio
+                    );
+                }
                 resultados.push(salida);
             }
 
@@ -621,6 +649,7 @@ async function ejecutarSolicitud({
                 idNegocio,
                 args: solicitada.argumentos,
                 dryRun: true,
+                idConversacion: conversado?.idConversacion ?? null,
             });
             // Inalcanzable: el Gate y este manejador leen `requiere_confirmacion` del mismo
             // Registry. Si se llega aquí, la capacidad se ejecutó sin que nadie la confirmara y
@@ -693,6 +722,7 @@ async function ejecutarSolicitud({
             idNegocio,
             args: solicitada.argumentos,
             dryRun,
+            idConversacion: conversado?.idConversacion ?? null,
             ...(esMutacion && turno?.id_turno
                 ? {
                       claveIdempotencia: `${turno.id_turno}:${solicitada.capacidad}:${
@@ -736,6 +766,7 @@ async function ejecutarSolicitud({
         return {
             id: solicitada.id,
             error: true,
+            codigo: error.code ?? null,
             contenido: comoResultado({ error: error.code || 'ERROR', mensaje: error.message }),
         };
     }

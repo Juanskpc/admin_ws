@@ -437,6 +437,61 @@ const QUIERE_OTRO_PEDIDO = /\b(otr[oa]s?|nuevo pedido|pedido nuevo|aparte|adicio
 const HORAS_PEDIDO_YA_TOMADO = 2;
 
 /**
+ * ¿El pedido es de quien lo pregunta? Un cliente final solo ve, cancela o amplía LO SUYO: el
+ * número de orden es corto y secuencial, así que adivinarlo sí es una estrategia.
+ *
+ * Dos pruebas, cualquiera vale:
+ *   1. El teléfono que probó el canal coincide con el del pedido.
+ *   2. El pedido se tomó en ESTE chat. Zona Burger, 2026-10-11/14: los clientes de WhatsApp sin
+ *      número visible (el 18 % de los chats) pedían, y a la hora el bot les negaba su propio
+ *      pedido con «llama al restaurante». La prueba es el «El número es ORD-…» que la plataforma
+ *      escribe al ejecutar `tomar_pedido`, en el MISMO turno en que se creó de verdad: no vale
+ *      cualquier mensaje del bot con el número, porque el modelo puede repetir uno que el cliente
+ *      se inventó («no encuentro el ORD-5000») y con eso se abriría el de otro.
+ *
+ * Falla cerrada: sin chat, sin teléfono o ante un error de la consulta, no es suyo.
+ */
+async function esDeQuienPide(orden, contexto) {
+    const deQuienPide = normalizarE164Colombia(contexto.principal?.telefono_verificado);
+    const delPedido = normalizarE164Colombia(orden.contacto_telefono);
+    if (deQuienPide && delPedido && deQuienPide === delPedido) return true;
+
+    if (!contexto.idConversacion || !orden.numero_orden) return false;
+    try {
+        const [fila] = await Models.sequelize.query(
+            `SELECT 1 AS es
+               FROM intelligence.mensaje m
+               JOIN intelligence.invocacion_capacidad i
+                 ON i.id_turno = m.id_turno AND i.capacidad = 'tomar_pedido'
+                AND i.resultado = 'ok' AND NOT i.dry_run
+              WHERE m.id_conversacion = :c AND m.direccion = 'saliente'
+                -- Las dos tablas están particionadas por fecha: se lee solo la última semana.
+                AND m.creado_en >= now() - interval '7 days'
+                AND i.creado_en >= now() - interval '7 days'
+                AND m.contenido ~ (:patron)
+              LIMIT 1;`,
+            {
+                replacements: {
+                    c: contexto.idConversacion,
+                    // Literal: el número solo lleva letras, dígitos y guiones, pero se escapa
+                    // igual. ORD-757 no puede casar con ORD-7570.
+                    patron: `El número es ${String(orden.numero_orden).replace(
+                        /[^A-Za-z0-9]/g,
+                        (ch) => `\\${ch}`
+                    )}([^0-9]|$)`,
+                },
+                type: Models.sequelize.QueryTypes.SELECT,
+                transaction: contexto.transaction,
+            }
+        );
+        return Boolean(fila);
+    } catch (error) {
+        console.warn(`[restaurante] no se pudo comprobar de qué chat es el pedido: ${error.message}`);
+        return false;
+    }
+}
+
+/**
  * ¿Se está por crear un SEGUNDO pedido donde el cliente solo quería cambiar el primero?
  *
  * Zona Burger, 2026-10-05, 21:25: con el pedido ORD-7789 ya tomado, la clienta escribió «solo
@@ -1061,10 +1116,7 @@ function registrarCapacidades() {
             // Falla cerrada por lo mismo que allí: sin teléfono probado (WebChat) o sin
             // teléfono en el pedido (uno de mesa, que no tiene cliente asociado) se deniega.
             if (contexto.principal && contexto.principal.tipo === TIPO.CONTACTO) {
-                const deQuienPide = normalizarE164Colombia(contexto.principal.telefono_verificado);
-                const delPedido = normalizarE164Colombia(orden.contacto_telefono);
-
-                if (!deQuienPide || !delPedido || deQuienPide !== delPedido) {
+                if (!(await esDeQuienPide(orden, contexto))) {
                     const e = new Error(
                         'No puedo comprobar que ese pedido sea tuyo. Llama al restaurante y te dicen enseguida.'
                     );
@@ -2136,7 +2188,7 @@ function registrarCapacidades() {
             // no tiene por qué conocer (ADR-009).
             const orden = await Models.PedidOrden.findOne({
                 where: { id_negocio: idNegocio, numero_orden: String(args.numero_orden).trim() },
-                attributes: ['id_orden', 'contacto_telefono'],
+                attributes: ['id_orden', 'numero_orden', 'contacto_telefono'],
                 transaction: contexto.transaction,
             });
             if (!orden) {
@@ -2146,9 +2198,7 @@ function registrarCapacidades() {
                 throw e;
             }
             if (contexto.principal && contexto.principal.tipo === TIPO.CONTACTO) {
-                const deQuienPide = normalizarE164Colombia(contexto.principal.telefono_verificado);
-                const delPedido = normalizarE164Colombia(orden.contacto_telefono);
-                if (!deQuienPide || !delPedido || deQuienPide !== delPedido) {
+                if (!(await esDeQuienPide(orden, contexto))) {
                     const e = new Error(
                         'No puedo comprobar que ese pedido sea tuyo. Llama al restaurante y te lo cancelan.'
                     );
@@ -2268,7 +2318,7 @@ function registrarCapacidades() {
             // `consultar_estado_pedido`: el número de orden es corto y adivinable.
             const orden = await Models.PedidOrden.findOne({
                 where: { id_negocio: idNegocio, numero_orden: String(args.numero_orden).trim() },
-                attributes: ['id_orden', 'contacto_telefono', 'tipo_pedido'],
+                attributes: ['id_orden', 'numero_orden', 'contacto_telefono', 'tipo_pedido'],
                 transaction: contexto.transaction,
             });
             if (!orden) {
@@ -2278,9 +2328,7 @@ function registrarCapacidades() {
                 throw e;
             }
             if (contexto.principal && contexto.principal.tipo === TIPO.CONTACTO) {
-                const deQuienPide = normalizarE164Colombia(contexto.principal.telefono_verificado);
-                const delPedido = normalizarE164Colombia(orden.contacto_telefono);
-                if (!deQuienPide || !delPedido || deQuienPide !== delPedido) {
+                if (!(await esDeQuienPide(orden, contexto))) {
                     const e = new Error(
                         'No puedo comprobar que ese pedido sea tuyo. Llama al restaurante.'
                     );

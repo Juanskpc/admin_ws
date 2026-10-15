@@ -389,6 +389,7 @@ async function resolver(ctx, { gate, registry = registryReal, ahora = () => new 
             claveIdempotencia: ctx.turno?.id_turno ? String(ctx.turno.id_turno) : undefined,
             // La prueba. Sin esto el Gate deniega, y es lo único que hace que la regla exista.
             confirmadoPor: { idTurno: ctx.turno?.id_turno, texto: ctx.texto },
+            idConversacion: ctx.conversacion?.id_conversacion ?? null,
         });
         ctx.invocaciones?.push({
             capacidad: datos.capacidad,

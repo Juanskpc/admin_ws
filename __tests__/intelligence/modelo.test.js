@@ -538,6 +538,43 @@ describe('manejadorLlm', () => {
         expect(decision.respuestas).toEqual(['Perdón, ¿me repites el código?']);
     });
 
+    it('le pasa al Gate el chat del que viene la petición', async () => {
+        const gate = gateFalso();
+        const adaptador = adaptadorFalso([
+            {
+                razonFin: puerto.FIN.CAPACIDADES,
+                invocacionesSolicitadas: [{ id: 't1', capacidad: 'consultar_servicios', argumentos: {} }],
+            },
+            { texto: 'Tenemos corte.', razonFin: puerto.FIN.TURNO },
+        ]);
+        await correr(crearManejadorLlm({ ...DEPS_BASE, gate, adaptador }));
+        expect(gate.llamadas[0].idConversacion).toBe('conv-1');
+    });
+
+    it('un pedido que no se puede comprobar que sea suyo pasa a una persona, sin otra vuelta', async () => {
+        // Zona Burger, 2026-10-11/14: a un cliente sin número visible se le contestaba «llama al
+        // restaurante» mientras le escribía al restaurante. Ahora lo atiende el cajero.
+        const negado = new Error('No puedo comprobar que ese pedido sea tuyo.');
+        negado.code = 'PEDIDO_NO_ES_DE_QUIEN_PIDE';
+        negado.statusCode = 403;
+        const gate = gateFalso({ errores: { consultar_servicios: negado } });
+        const adaptador = adaptadorFalso([
+            {
+                razonFin: puerto.FIN.CAPACIDADES,
+                invocacionesSolicitadas: [{ id: 't1', capacidad: 'consultar_servicios', argumentos: {} }],
+            },
+            { texto: 'Llama al restaurante.', razonFin: puerto.FIN.TURNO },
+        ]);
+        const { decision } = await correr(crearManejadorLlm({ ...DEPS_BASE, gate, adaptador }));
+
+        expect(adaptador.peticiones).toHaveLength(1);
+        expect(decision.resultado).toBe('handoff');
+        expect(decision.estado).toBe('handoff_humano');
+        expect(decision.respuestas.join(' ')).not.toMatch(/llama/i);
+        expect(decision.pasos.some((p) => p.decision === 'pedido_sin_comprobar')).toBe(true);
+        expect(decision.invocaciones[0].errorCodigo).toBe('PEDIDO_NO_ES_DE_QUIEN_PIDE');
+    });
+
     it('cierra el bucle: pide capacidad, recibe resultado y contesta', async () => {
         const gate = gateFalso({ resultados: { consultar_servicios: { servicios: [{ nombre: 'Corte' }] } } });
         const adaptador = adaptadorFalso([
