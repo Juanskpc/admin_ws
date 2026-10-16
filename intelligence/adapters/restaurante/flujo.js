@@ -1678,6 +1678,36 @@ function elegirBarrio(texto, barrios, opciones = null) {
     return null;
 }
 
+/**
+ * El barrio que aparece DENTRO de un texto libre —la dirección o la nota de un pedido—, o `null`.
+ *
+ * Pregonchos, 2026-10-16: el modelo recibe «Barrio: Corazón de jesus» del formulario y lo copia en
+ * la dirección («Mz 1 cs 24, Corazón de jesus») o en la nota («Barrio: Betania»), pero no en el
+ * campo del barrio: el domicilio salía en $0. Copiar un dato de un sitio a otro no se le deja al
+ * modelo. Solo cuenta un nombre entero, y uno solo: si caben dos («Avenida Boyacá» de las comunas
+ * 1 y 2) y el texto no dice la comuna, no se elige — mejor $0 para que el cajero lo ajuste que
+ * cobrar el domicilio de otro barrio. Un nombre dentro de otro que también aparece («Praga» en
+ * «Niño Jesús de Praga») cede ante el largo.
+ */
+function barrioEnTexto(texto, barrios) {
+    const t = normalizar(texto || '');
+    if (!t.trim() || !Array.isArray(barrios) || barrios.length === 0) return null;
+    let hallados = barrios.filter((b) => contieneFrase(t, normalizar(b.nombre).trim()));
+    hallados = hallados.filter(
+        (b) =>
+            !hallados.some((o) => {
+                const corto = normalizar(b.nombre).trim();
+                const largo = normalizar(o.nombre).trim();
+                return largo.length > corto.length && largo.includes(corto);
+            })
+    );
+    if (hallados.length > 1) {
+        const conZona = hallados.filter((b) => b.zona && contieneFrase(t, normalizar(b.zona)));
+        if (conZona.length > 0) hallados = conZona;
+    }
+    return hallados.length === 1 ? hallados[0] : null;
+}
+
 /** ¿La frase `aguja` aparece en `texto` como palabras enteras? («comuna 1» no está en «comuna 10»). */
 function contieneFrase(texto, aguja) {
     if (!aguja) return false;
@@ -2971,6 +3001,7 @@ module.exports = {
     leerTelefono,
     leerEntrega,
     elegirBarrio,
+    barrioEnTexto,
     resumenPorZona,
     elegirMesa,
     OTRO_BARRIO,

@@ -679,3 +679,47 @@ describe('8. costo: mensajes del asistente por pedido', () => {
         expect(aMano.enviados).toHaveLength(5);
     });
 });
+
+// Pregonchos, 2026-10-16 (ORD-0085 y ORD-0087): con el formulario atendido por el modelo, el barrio
+// acababa en la dirección («Mz 1 cs 24, Corazón de jesus») o en la nota («Barrio: Betania») y el
+// domicilio salía en $0, aunque el barrio tiene precio. Ahora el servidor lo encuentra ahí.
+describe('4. el barrio dentro de la dirección o la nota (lo que deja el modelo)', () => {
+    const { barrioEnTexto } = flujoRestaurante;
+    const PASTO = [
+        { id_barrio: 90, nombre: 'Betania', valor: 5500, zona: 'Comuna 4' },
+        { id_barrio: 327, nombre: 'Corazón De Jesús II', valor: 7500, zona: 'Comuna 10' },
+        { id_barrio: 341, nombre: 'Niño Jesús De Praga', valor: 7500, zona: 'Comuna 10' },
+        { id_barrio: 342, nombre: 'Praga', valor: 7000, zona: 'Comuna 10' },
+        { id_barrio: 372, nombre: 'Corazón De Jesús', valor: 8500, zona: 'Comuna 11' },
+        { id_barrio: 1, nombre: 'Avenida Boyacá', valor: 4500, zona: 'Comuna 1' },
+        { id_barrio: 20, nombre: 'Avenida Boyacá', valor: 5000, zona: 'Comuna 2' },
+        { id_barrio: 200, nombre: 'Torobajo', valor: 6000, zona: 'Comuna 9' },
+        { id_barrio: 201, nombre: 'Conjunto Torobajo', valor: 6000, zona: 'Comuna 9' },
+    ];
+    const id = (t) => barrioEnTexto(t, PASTO)?.id_barrio ?? null;
+
+    it('EL CASO: «Mz 1 cs 24, Corazón de jesus. Indicaciones: …» → Corazón De Jesús (comuna 11), no el II', () => {
+        expect(id('Mz 1 cs 24, Corazón de jesus. Indicaciones: Subir al segundo piso por favor')).toBe(372);
+    });
+    it('EL CASO: «Barrio: Betania» en la nota', () => {
+        expect(id('Pago en efectivo. Barrio: Betania')).toBe(90);
+    });
+    it('«Udenar - Torobajo 205» → Torobajo, no el conjunto', () => {
+        expect(id('Udenar - Torobajo 205')).toBe(200);
+    });
+    it('el nombre largo gana al corto que lleva dentro («Niño Jesús de Praga» no es «Praga»)', () => {
+        expect(id('Cra 5, niño jesus de praga')).toBe(341);
+    });
+    it('el mismo nombre en dos comunas no se elige… salvo que diga la comuna', () => {
+        expect(id('Avenida Boyacá # 3-20')).toBeNull();
+        expect(id('Avenida Boyacá # 3-20, comuna 2')).toBe(20);
+    });
+    it('sin barrio reconocible, nada (el cajero lo ajusta)', () => {
+        expect(id('Calle 18 # 20-30, casa esquinera')).toBeNull();
+        expect(id('')).toBeNull();
+        expect(barrioEnTexto('Betania', [])).toBeNull();
+    });
+    it('solo nombres enteros: «Betanias» o «betaniaa» no cuentan', () => {
+        expect(id('Conjunto Betanias casa 4')).toBeNull();
+    });
+});

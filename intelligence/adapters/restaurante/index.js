@@ -74,6 +74,7 @@ const {
     fraseDeApertura,
     resumenPorZona,
     elegirBarrio,
+    barrioEnTexto,
     OTRO_BARRIO,
 } = require('./flujo');
 const contextoNegocio = require('../../core/contextoNegocio');
@@ -903,28 +904,14 @@ async function leerDomicilioRango(idNegocio, transaction) {
 }
 
 /**
- * El barrio que el cliente NOMBRA, entre los del negocio, con el mismo buscador que el pedido de
- * la carta (`elegirBarrio`). Devuelve `{ barrio }`, `{ ambiguos }` o `null`.
+ * Lo que `consultar_info_negocio` contesta sobre el barrio que nombró el cliente.
  *
  * Pregonchos, 2026-10-16: con 411 barrios el modelo solo recibe el precio por comuna, no sabía en
  * cuál está Betania y pasó la conversación a una persona por el valor del domicilio. Y aunque
  * hubiera sabido el precio, `tomar_pedido` solo aceptaba `id_barrio`, que el modelo nunca ve: un
  * domicilio pedido por chat nunca llevaba su valor. El nombre lo da el modelo; el id y el precio
- * los pone el servidor.
+ * los pone el servidor (`idBarrioDelPedido`).
  */
-async function barrioNombrado(idNegocio, texto) {
-    if (!texto || !String(texto).trim()) return null;
-    const { habilitado, barrios } = await barrioService
-        .listarPublico(idNegocio)
-        .catch(() => ({ habilitado: false, barrios: [] }));
-    if (!habilitado || barrios.length === 0) return null;
-    const r = elegirBarrio(String(texto), barrios);
-    if (!r || r === OTRO_BARRIO) return null;
-    if (r.ambiguos) return { ambiguos: r.ambiguos };
-    return { barrio: r };
-}
-
-/** Lo que `consultar_info_negocio` contesta sobre el barrio que nombró el cliente. */
 function domicilioAEseBarrio(texto, barrios) {
     const nombre = (b) => (b.zona ? `${b.nombre} (${b.zona})` : b.nombre);
     const r = elegirBarrio(String(texto), barrios);
@@ -943,12 +930,23 @@ function domicilioAEseBarrio(texto, barrios) {
     };
 }
 
-/** El `id_barrio` del pedido: el que venga, o el del barrio nombrado si es uno solo. */
+/**
+ * El `id_barrio` del pedido: el que venga; si no, el barrio nombrado en `barrio` (si es uno solo);
+ * si tampoco, el que aparezca en la dirección o en la nota (ver `barrioEnTexto`).
+ */
 async function idBarrioDelPedido(idNegocio, args) {
     if (args.id_barrio) return args.id_barrio;
-    if (args.tipo_entrega !== 'DOMICILIO' || !args.barrio) return null;
-    const r = await barrioNombrado(idNegocio, args.barrio);
-    return r?.barrio?.id_barrio ?? null;
+    if (args.tipo_entrega !== 'DOMICILIO') return null;
+    const { habilitado, barrios } = await barrioService
+        .listarPublico(idNegocio)
+        .catch(() => ({ habilitado: false, barrios: [] }));
+    if (!habilitado || barrios.length === 0) return null;
+    if (args.barrio) {
+        const r = elegirBarrio(String(args.barrio), barrios);
+        if (r && r !== OTRO_BARRIO && !r.ambiguos) return r.id_barrio;
+    }
+    const enTexto = barrioEnTexto(`${args.barrio || ''} . ${args.direccion || ''} . ${args.nota || ''}`, barrios);
+    return enTexto?.id_barrio ?? null;
 }
 
 function registrarCapacidades() {

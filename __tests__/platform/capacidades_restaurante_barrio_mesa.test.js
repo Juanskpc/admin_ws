@@ -272,6 +272,13 @@ describe('domicilio por barrio', () => {
             expect(Number((await ordenDe(resultado.numero_orden)).valor_domicilio)).toBe(0);
         });
 
+        it('EL CASO: sin `barrio`, el que el modelo dejó en la dirección o en la nota', async () => {
+            const a = await pedir({ tipo_entrega: 'DOMICILIO', direccion: 'Mz 1 cs 24, TEST-Barrio Cobro. Indicaciones: 2do piso' });
+            expect(Number((await ordenDe(a.resultado.numero_orden)).valor_domicilio)).toBe(4500);
+            const b = await pedir({ ...domicilio, nota: 'Pago en efectivo. Barrio: TEST-Barrio Cobro' });
+            expect(Number((await ordenDe(b.resultado.numero_orden)).valor_domicilio)).toBe(4500);
+        });
+
         it('si viene el id, manda el id', async () => {
             await expect(pedir({ ...domicilio, id_barrio: idBarrioRival, barrio: 'TEST-Barrio Cobro' }))
                 .rejects.toMatchObject({ code: 'ZONA_INVALIDA' });
