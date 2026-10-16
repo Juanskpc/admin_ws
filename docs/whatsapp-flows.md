@@ -89,6 +89,53 @@ cubrir, con conversación completa y no solo funciones:
    su token de Embedded Signup) y decidir si hace falta un interruptor en Configuración en vez de
    solo el script.
 
+### 0.3 La batería (2026-10-16): cuatro fallos encontrados y corregidos
+
+`__tests__/intelligence/formulario_entrega_suite.test.js` — 63 pruebas, conversaciones enteras
+(carta → formulario → resumen → «sí»/«no»), agrupadas por los puntos de §0.2. **15 fallan con el
+código desplegado esa madrugada (`cef2f6c`)** y pasan con el arreglo. Lo encontrado:
+
+1. **Grave — el formulario con un resumen esperando el sí iba a la nota de cocina.** El botón del
+   formulario sigue vivo en el chat: si el cliente escribía «domicilio» a mano, veía el resumen y
+   luego mandaba el formulario con «recoger», el pedido **seguía a domicilio** y la nota decía
+   «📋 Formulario enviado. Entrega: recoger». El siguiente «sí» mandaba la moto (el mismo error de
+   ORD-7877, por otra puerta). Ahora (`flujo.formularioConResumenEsperando`): si el formulario dice
+   lo mismo que el resumen (misma entrega y, a domicilio, misma dirección) se enseña el resumen otra
+   vez con la forma de pago; si dice otra cosa, **se suelta la confirmación** y el modelo rehace el
+   pedido con lo anotado + el formulario, que pasa otra vez por las guardias. Si lo que esperaba no
+   era un pedido (anular uno), solo se pide el sí otra vez.
+2. **La detección de «el modelo pregunta cómo lo recibe» (`preguntaComoLoRecibe`) se disparaba de
+   más.** Medido en producción contra los 2.935 mensajes del asistente de Zona Burger (10-01 →
+   10-16): la versión de `cef2f6c` saltaba en 450, unos 280 de ellos falsos (casi todos el resumen
+   «¿Confirmo tu pedido… para llevártelo a…? _no incluye el domicilio_», y frases como «tenemos
+   domicilio y también puedes recoger. ¿Qué se te antoja?»). Ahora mira **la frase que termina en
+   «?»**, más la plantilla «¿Cómo lo quieres? 🛵 *A domicilio*: … 🏃 *Para recoger*: …»: 168
+   detectados, todos preguntas de verdad, y ninguno que la vieja no viera. Script de la medición:
+   solo lectura, no quedó en el repo (patrón de `scripts/auditoria_*.js`).
+3. **El formulario esperaba 7 s** a que el cliente «siguiera escribiendo»
+   (`CONVERSACION_DEBOUNCE_TEXTO_MS=7000`): llega entero, ya no espera (`texto.puedeSeguirEscribiendo`).
+4. **Lecturas de la última línea antes que el formulario**: con el pedido a medias, unas
+   indicaciones que terminaran en «¿cuánto se demora?» se contestaban como pregunta de tiempo, y
+   un formulario enviado dos veces dejaba «Pago: Nequi. Pago: Efectivo». Ahora el formulario se lee
+   antes que todo eso, y el pago se reemplaza (`notaConPago`). Sin pedido abierto, el flujo lo
+   reclama y se lo pasa al modelo con una nota de qué es y de que el pago va en la nota.
+
+Comprobado sin cambios (ya lo cubrían las guardias): el formulario nunca ejecuta nada solo, «No
+veci» es un no, el «sí» tras escribir el cajero no ejecuta, `ENTREGA_SIN_DECIR` lee el formulario
+del hilo, `YA_HAY_PEDIDO` impide un segundo pedido si el formulario llega con el primero ya tomado,
+y los cinco casos de barrio. **Costo**: un domicilio con barrio único son 3 mensajes del asistente
+con formulario y 5 escribiéndolo (prueba 8).
+
+**Lo que la batería no puede comprobar** (sigue pendiente):
+
+- **Coexistencia (punto 7)**: que el Flow se envíe por el número de Zona Burger y cómo se ve en la
+  app del celular. Requiere publicar el Flow en su WABA con su token (`scripts/formulario_entrega_whatsapp.js 6`)
+  y una prueba real. Los Flows que mandamos por la API no vuelven como eco (los ecos son de lo que
+  el dueño escribe en el celular, y desde ahí no se mandan Flows).
+- **El modelo real (punto 5)**: lo que el modelo hace con la nota cuando se suelta el resumen. Medir
+  con `scripts/evaluar.js respuestas_restaurante` antes de encenderlo en Zona Burger.
+- **Despliegue a todos (punto 9)**: sigue siendo un script por negocio.
+
 ---
 
 ## 1. Cómo se ve para el cliente

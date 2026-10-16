@@ -211,10 +211,20 @@ function leer(texto) {
  * domicilio y la otra forma (recoger, llevar, aquí, servir). Prueba en producción del 2026-10-16:
  * «¿Las quieres para recoger, comer aquí o a domicilio?» salió sin botón porque el modelo
  * preguntó por su cuenta, antes de intentar tomar el pedido.
+ *
+ * Se mira **la frase que termina en «?»**, no el mensaje entero: «El domicilio a Las Cuadras vale
+ * $4.000. ¿Te lo anoto aquí?» no pregunta cómo lo recibe, aunque el mensaje nombre las dos cosas.
+ * La excepción es la frase que la plataforma le sugiere al modelo (`loQueFalta`): «¿Cómo lo
+ * quieres? 🛵 *A domicilio*: … 🏃 *Para recoger*: …» —la pregunta va sola y las opciones detrás—.
  */
+const NOMBRA_DOMICILIO = /domicilio/;
+const NOMBRA_LA_OTRA = /(recog|llevar|aqui|servir)/;
+const PREGUNTA_COMO = /\bcomo\b.*\b(quieres|quiere|recibes|recibe|prefieres|prefiere)\b/;
 function preguntaComoLoRecibe(texto) {
     const t = sinTildes(texto);
-    return t.includes('?') && /domicilio/.test(t) && /(recog|llevar|aqui|servir)/.test(t);
+    const preguntas = t.match(/[^.!?\n]*\?/g) || [];
+    if (preguntas.some((p) => NOMBRA_DOMICILIO.test(p) && NOMBRA_LA_OTRA.test(p))) return true;
+    return preguntas.some((p) => PREGUNTA_COMO.test(p)) && NOMBRA_DOMICILIO.test(t) && NOMBRA_LA_OTRA.test(t);
 }
 
 /**

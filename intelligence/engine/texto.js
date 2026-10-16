@@ -12,6 +12,8 @@
  */
 'use strict';
 
+const { ENCABEZADO_FORMULARIO } = require('../core/mensajeCanonico');
+
 /** Palabras que valen en cualquier paso. Son pocas a propósito: cada una hay que probarla. */
 const COMANDO = {
     /**
@@ -196,6 +198,7 @@ function puedeSeguirEscribiendo(texto) {
     if (esAlgunComando(crudo) || esAfirmacion(crudo) || esSaludo(crudo)) return false;
     if (/#p\d+-/i.test(crudo)) return false; // el pedido de la carta digital llega entero
     if (/^\[[a-z_]+\]$/i.test(crudo)) return false; // [image], [audio]…
+    if (crudo.startsWith(ENCABEZADO_FORMULARIO)) return false; // un formulario llega entero
     if (/^[a-z0-9]+(_[a-z0-9]+)+$/i.test(crudo)) return false; // el id de un botón
     if (/^[\d\s+.-]{7,}$/.test(crudo)) return false; // un teléfono suelto: es el dato que se le pidió
     return true;

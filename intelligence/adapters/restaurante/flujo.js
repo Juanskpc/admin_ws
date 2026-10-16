@@ -1133,6 +1133,12 @@ function seguirPedido(ctx, { solicitarConfirmacion }) {
     const datos = datosDelPedido(ctx.conversacion);
     const dicho = ultimaLinea(ctx.texto).trim();
 
+    // El formulario de entrega respondido: trae varias respuestas a la vez y se lee entero,
+    // antes que nada que mire solo la última línea (unas indicaciones que digan «cancelar» no
+    // cancelan el pedido).
+    const formulario = formularioEntrega.leer(ctx.texto);
+    if (formulario) return aplicarFormulario(ctx, datos, formulario, { solicitarConfirmacion });
+
     // «Cancelar» durante el pedido significa cancelar el pedido, no salir de la conversación.
     if (esComando(ctx.texto, COMANDO.CANCELAR)) {
         return {
@@ -1144,11 +1150,6 @@ function seguirPedido(ctx, { solicitarConfirmacion }) {
             nivel: 'determinista',
         };
     }
-
-    // El formulario de entrega respondido: trae varias respuestas a la vez y se lee entero,
-    // antes que nada que mire solo la última línea.
-    const formulario = formularioEntrega.leer(ctx.texto);
-    if (formulario) return aplicarFormulario(ctx, datos, formulario, { solicitarConfirmacion });
 
     if (!dicho) {
         const q = pregunta(datos.paso, datos, ctx);
@@ -1425,15 +1426,34 @@ function seguirPedido(ctx, { solicitarConfirmacion }) {
  *    nombre repetido se pregunta numerado, uno que no existe se repregunta—; si no, se pega a la
  *    dirección.
  */
+const ENTREGA_DEL_FORMULARIO = {
+    [formularioEntrega.ENTREGA.DOMICILIO]: ENTREGA.DOMICILIO,
+    [formularioEntrega.ENTREGA.RECOGER]: ENTREGA.RECOGER,
+    [formularioEntrega.ENTREGA.SERVIR]: ENTREGA.MESA,
+};
+
+/**
+ * La nota con «Pago: …» puesto, en vez del que ya tuviera: un formulario enviado dos veces con
+ * otra forma de pago no deja «Pago: Nequi. Pago: Efectivo» en la nota de caja.
+ */
+function notaConPago(nota, pago) {
+    const sinPago = String(nota || '')
+        .split(/\.\s+/)
+        .map((t) => t.trim().replace(/\.$/, ''))
+        .filter((t) => t && !/^pago:/i.test(t));
+    return [...sinPago, `Pago: ${pago}`].join('. ');
+}
+
+/** La entrega que eligió en el formulario (`DOMICILIO`, `LLEVAR`, `MESA`) o `null`. */
+function entregaDelFormulario(formulario) {
+    return (
+        ENTREGA_DEL_FORMULARIO[String(formulario?.entrega || '').toLowerCase()] ||
+        leerEntrega(formulario?.entrega || '')
+    );
+}
+
 function aplicarFormulario(ctx, datos, formulario, { solicitarConfirmacion }) {
-    const ENTREGA_DEL_FORMULARIO = {
-        [formularioEntrega.ENTREGA.DOMICILIO]: ENTREGA.DOMICILIO,
-        [formularioEntrega.ENTREGA.RECOGER]: ENTREGA.RECOGER,
-        [formularioEntrega.ENTREGA.SERVIR]: ENTREGA.MESA,
-    };
-    const entrega =
-        ENTREGA_DEL_FORMULARIO[String(formulario.entrega || '').toLowerCase()] ||
-        leerEntrega(formulario.entrega || '');
+    const entrega = entregaDelFormulario(formulario);
     const marca = paso('pedido_formulario_recibido', { campos: Object.keys(formulario) });
 
     if (!entrega || (entrega === ENTREGA.MESA && (ctx.mesas || []).length === 0)) {
@@ -1452,7 +1472,7 @@ function aplicarFormulario(ctx, datos, formulario, { solicitarConfirmacion }) {
     delete conLoDicho.direccion_dudosa;
     if (entrega === ENTREGA.MESA) conLoDicho.para_servir = true;
     if (formulario.pago) {
-        conLoDicho.nota = [datos.nota, `Pago: ${formulario.pago}`].filter(Boolean).join('. ');
+        conLoDicho.nota = notaConPago(datos.nota, formulario.pago);
     }
 
     if (entrega === ENTREGA.DOMICILIO) {
@@ -1486,6 +1506,102 @@ function aplicarFormulario(ctx, datos, formulario, { solicitarConfirmacion }) {
     }
 
     return seguirOConfirmar(ctx, conLoDicho, [marca], { apertura: '¡Anotado! ', solicitarConfirmacion });
+}
+
+/**
+ * El formulario de entrega llega con un resumen YA esperando el sí.
+ *
+ * Pasa porque el botón del formulario sigue vivo en el chat: el cliente escribió «domicilio» a
+ * mano, vio el resumen, y después tocó el formulario —o lo envió dos veces—. Hasta el
+ * 2026-10-16 sus líneas se anotaban en la nota de cocina («Entrega: recoger») y el resumen
+ * seguía igual: un domicilio esperando el sí con una nota que decía lo contrario, y el siguiente
+ * «sí» mandaba la moto. Es el mismo error que ORD-7877, por otra puerta.
+ *
+ *  - **Lo mismo que ya decía el resumen** (misma entrega y, a domicilio, misma dirección): se
+ *    enseña el resumen otra vez, con la forma de pago en la nota si es nueva. Nada más.
+ *  - **Otra cosa**: el resumen ya no es lo que quiere. Se suelta —no se ha enviado nada— y el
+ *    modelo rehace el pedido con lo anotado y el formulario, que pasa otra vez por las guardias.
+ */
+async function formularioConResumenEsperando(ctx, formulario) {
+    const datos = ctx.conversacion.tarea_datos || {};
+    const args = datos.args || {};
+    const pendiente = args.tipo_entrega ?? null;
+    const entrega = entregaDelFormulario(formulario);
+    const marca = paso('confirmacion_formulario_recibido', { de: pendiente, a: entrega });
+
+    const mismaDireccion =
+        entrega !== ENTREGA.DOMICILIO ||
+        (Boolean(formulario.direccion) &&
+            normalizar(args.direccion || '').includes(normalizar(formulario.direccion)));
+
+    // Lo que espera no es un pedido (anular uno, añadirle productos): el formulario no le dice
+    // nada. Se pide el sí otra vez, sin anotar sus líneas en ninguna parte.
+    if (!pendiente) {
+        return {
+            pasos: [marca, paso('confirmacion_formulario_ignorado', { capacidad: datos.capacidad ?? null })],
+            respuestas: [
+                {
+                    texto: 'Todavía no he enviado nada 🙏 ¿Confirmo lo de arriba? Respóndeme sí o no.',
+                    opciones: [
+                        { id: 'si', etiqueta: 'Sí, confirmo' },
+                        { id: 'no', etiqueta: 'No' },
+                    ],
+                },
+            ],
+            variables: conMemoria(ctx.conversacion),
+            tarea: { nombre: confirmacion.TAREA, datos },
+            resultado: 'resuelto',
+            nivel: 'determinista',
+        };
+    }
+
+    if (entrega === pendiente && mismaDireccion) {
+        const pagoNuevo =
+            Boolean(formulario.pago) &&
+            !normalizar(args.nota || '').includes(normalizar(`Pago: ${formulario.pago}`));
+        const nuevos = {
+            ...datos,
+            args: pagoNuevo ? { ...args, nota: notaConPago(args.nota, formulario.pago) } : args,
+            pregunta_abierta: false,
+            // El cliente ve el resumen otra vez: el siguiente «sí» es a ESTE.
+            preguntado_en: ctx.ahora().toISOString(),
+        };
+        return {
+            pasos: [marca, paso('confirmacion_formulario_igual', { pago_nuevo: pagoNuevo })],
+            respuestas: [
+                {
+                    texto:
+                        `Ya tenía esos datos 👍${pagoNuevo ? ` Anoté que pagas con ${formulario.pago}.` : ''}\n\n` +
+                        `${await confirmacion.textoDePregunta(nuevos.capacidad, nuevos.args, {
+                            idNegocio: ctx.conversacion.id_negocio ?? null,
+                        })} Respóndeme sí o no.`,
+                    opciones: [
+                        { id: 'si', etiqueta: 'Sí, confirmo' },
+                        { id: 'no', etiqueta: 'No' },
+                    ],
+                },
+            ],
+            variables: conMemoria(ctx.conversacion),
+            tarea: { nombre: confirmacion.TAREA, datos: nuevos },
+            resultado: 'resuelto',
+            nivel: 'determinista',
+        };
+    }
+
+    const antes = ENTREGA_EN_PALABRAS[pendiente] ? ` (${ENTREGA_EN_PALABRAS[pendiente]})` : '';
+    return {
+        ...delegar(ctx),
+        soltarTarea: true,
+        notaParaElModelo:
+            `[Nota del sistema, no del cliente: había un pedido esperando el sí${antes} y el cliente ` +
+            'acaba de enviar el formulario de entrega con otros datos (arriba). Esa confirmación se ' +
+            'DESCARTÓ: no se ha enviado nada. Vuelve a llamar la herramienta del pedido con TODO lo ' +
+            'que estaba anotado y lo que dice el formulario: cómo lo recibe, y si es a domicilio el ' +
+            'barrio, la dirección y las indicaciones; la forma de pago va en la nota como «Pago: …». ' +
+            'Si es para recoger o para servir, sin dirección. Lo que estaba anotado: ' +
+            `${JSON.stringify(args)}]`,
+        pasos: [marca, paso('confirmacion_soltada_por_formulario')],
+    };
 }
 
 /**
@@ -1863,6 +1979,8 @@ function mediaSuelta(texto) {
 function reclama(texto) {
     return (
         Boolean(codigoPedido.leer(texto)) ||
+        // El formulario de entrega: lo ofreció este flujo y lo lee él (o le deja la nota al modelo).
+        Boolean(formularioEntrega.leer(texto)) ||
         esPreguntaDeTiempo(texto) ||
         preguntaPorSuPedido(texto) ||
         preguntaPorEmpaque(texto) ||
@@ -2348,6 +2466,12 @@ function crearFlujoRestaurante({
         // `delegar`: turno sin respuesta, silencio, y un pedido que nunca se creó. Nadie lo vio
         // porque hasta hoy ninguna confirmación de restaurante llegó a abrirse.
         if (confirmacion.pendiente(conversacion)) {
+            // El formulario de entrega con un resumen ya esperando: no es un sí ni una nota de
+            // cocina (ver `formularioConResumenEsperando`). Va antes que todo lo que mira solo la
+            // última línea, que en un formulario es «Pago: …».
+            const formularioTardio = formularioEntrega.leer(texto);
+            if (formularioTardio) return formularioConResumenEsperando(ctx, formularioTardio);
+
             // Lo último que dijo el asistente fue una pregunta SUYA (la escalera lo marca con
             // `pregunta_abierta`): lo que llega ahora contesta esa pregunta, no la confirmación.
             // Un «sí» no ejecuta nada —se enseña el resumen otra vez, para que el sí sea a ESO—
@@ -2533,6 +2657,32 @@ function crearFlujoRestaurante({
             tienePedidoReciente,
         });
         if (cerrado) return avisoFueraDeServicio(ctx, cerrado, { proximaApertura });
+
+        // El formulario de entrega: con el pedido a medias lo lee el pedido, antes que las
+        // preguntas de tiempo o de domicilio —que miran la última línea, y unas indicaciones
+        // pueden terminar en «¿cuánto se demora?»—. Sin pedido abierto (lo ofreció el modelo) lo
+        // atiende el modelo, con una nota de qué es y de dónde va la forma de pago.
+        const formularioSuelto = formularioEntrega.leer(texto);
+        if (formularioSuelto && conversacion.tarea_actual === TAREA_PEDIDO) {
+            await conIdentidad(ctx);
+            await conCatalogo(ctx);
+            return seguirPedido(ctx, {
+                solicitarConfirmacion: (peticion) => confirmacion.solicitar(peticion),
+            });
+        }
+        if (formularioSuelto) {
+            return {
+                ...delegar(ctx),
+                notaParaElModelo:
+                    '[Nota del sistema, no del cliente: este mensaje es el formulario de entrega que ' +
+                    'llenó el cliente. Úsalo para el pedido que está armando: llama la herramienta del ' +
+                    'pedido con esa entrega y, si es a domicilio, ese barrio y esa dirección (las ' +
+                    'indicaciones van con la dirección); la forma de pago va en la nota como «Pago: …». ' +
+                    'No le vuelvas a preguntar lo que ya llenó. Si en la conversación no hay ningún ' +
+                    'pedido, pregúntale qué quiere pedir.]',
+                pasos: [paso('formulario_sin_pedido_al_modelo')],
+            };
+        }
 
         // ── «Cancelar» y pagar ──────────────────────────────────────────────────────────────
         // En Colombia «cancelar» es PAGAR. Con cualquier «cancel…» se pregunta qué quiere, con dos
