@@ -101,6 +101,17 @@ const FLOW_JSON = {
                                 required: false,
                                 'helper-text': 'Ej.: casa esquinera, reja negra',
                             },
+                            // Un domicilio sin un número al que llamar se pierde en la puerta, y
+                            // hay clientes de WhatsApp sin número visible (BSUID). Sin este campo,
+                            // a ellos se les preguntaba aparte: un mensaje más que con el texto.
+                            {
+                                type: 'TextInput',
+                                name: 'telefono',
+                                label: 'Teléfono',
+                                'input-type': 'phone',
+                                required: false,
+                                'helper-text': 'Para que el domiciliario te llame',
+                            },
                         ],
                     },
                     {
@@ -120,6 +131,7 @@ const FLOW_JSON = {
                                 barrio: '${form.barrio}',
                                 direccion: '${form.direccion}',
                                 indicaciones: '${form.indicaciones}',
+                                telefono: '${form.telefono}',
                                 pago: '${form.pago}',
                             },
                         },
@@ -228,11 +240,31 @@ function preguntaComoLoRecibe(texto) {
 }
 
 /**
+ * ¿Este texto del modelo le pide al cliente la dirección del domicilio? Pregonchos, 2026-10-16:
+ * «quiero unas empanadas a domicilio» → «Para mandártelas necesito dos cositas 👇 📍 La dirección…
+ * 📱 Un número de contacto» salió sin botón (ya sabía que era domicilio, no preguntó cómo lo
+ * recibe), y el cliente tuvo que escribirlo todo; la forma de pago la supuso el modelo.
+ *
+ * Medido contra los 2.935 mensajes del asistente de Zona Burger desde el 2026-10-01: 182 piden la
+ * dirección. Un botón de más no gasta nada (ni modelo ni un mensaje aparte: va en el mismo); uno
+ * de menos son dos o tres mensajes escritos.
+ */
+const PIDE_DATO = /\b(necesito|necesitare|pasame|mandame|enviame|regalame|escribeme|dime|comparteme|indicame|me faltan?|quedo pendiente|me (das|compartes|regalas|pasas|envias|mandas|dices|confirmas))\b/;
+const NO_LA_PIDE = /confirmo tu pedido|ya tenia esos datos|ya tengo (la|tu) direccion|(nuestra|la) direccion (es|del local|del restaurante|del negocio)|direccion del (local|restaurante|negocio)/;
+function pideLaDireccion(texto) {
+    const t = sinTildes(texto);
+    if (!/direccion/.test(t) || NO_LA_PIDE.test(t)) return false;
+    const preguntas = t.match(/[^.!?\n]*\?/g) || [];
+    return preguntas.some((p) => /direccion/.test(p)) || PIDE_DATO.test(t);
+}
+
+/**
  * La opción del formulario para pegar a una respuesta del modelo, o `null`. Solo por WhatsApp,
- * solo si el negocio lo encendió y solo si la respuesta pregunta cómo lo recibe.
+ * solo si el negocio lo encendió y solo si la respuesta pregunta cómo lo recibe o pide la dirección.
  */
 async function paraRespuesta({ texto, conversacion }) {
-    if (conversacion?.canal !== 'whatsapp' || !preguntaComoLoRecibe(texto)) return null;
+    if (conversacion?.canal !== 'whatsapp') return null;
+    if (!preguntaComoLoRecibe(texto) && !pideLaDireccion(texto)) return null;
     const flowId = await flowIdDe(conversacion.id_negocio);
     if (!flowId) return null;
     let conMesas = false;
@@ -256,5 +288,6 @@ module.exports = {
     pregunta,
     leer,
     preguntaComoLoRecibe,
+    pideLaDireccion,
     paraRespuesta,
 };

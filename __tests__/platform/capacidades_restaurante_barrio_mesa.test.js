@@ -294,7 +294,7 @@ describe('domicilio por barrio', () => {
             const r = await info.ejecutar({ idNegocio, args: { barrio: 'test-barrio cobro' }, contexto: {} });
             expect(r.domicilio_a_ese_barrio).toMatchObject({ barrio: 'TEST-Barrio Cobro' });
             expect(r.domicilio_a_ese_barrio.valor).toBe(4500);
-            expect(r.como_usar_los_barrios).toMatch(/nunca pases a una persona/);
+            expect(r.como_usar_los_barrios).toMatch(/nunca pases a una persona/i);
 
             const nada = await info.ejecutar({ idNegocio, args: { barrio: 'TEST-Barrio Ajeno' }, contexto: {} });
             expect(nada.domicilio_a_ese_barrio.no_esta).toBe('TEST-Barrio Ajeno');

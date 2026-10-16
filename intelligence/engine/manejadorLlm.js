@@ -634,6 +634,14 @@ async function ejecutarSolicitud({
     // cliente lo descubra después de haber dicho que sí. Es en seco de verdad pase lo que pase
     // dentro: la transacción se deshace siempre, así que no hay nada que perder por intentarlo.
     if (exigenConfirmacion.has(solicitada.capacidad)) {
+        // Lo que el modelo puso por su cuenta y no se le puede devolver a preguntar sin gastar
+        // otra vuelta —la forma de pago de un pedido anterior— lo quita la capacidad, sin modelo
+        // (`confirmacion.ajustar`). Va antes de todo: lo que se pregunta, se prueba en seco y se
+        // confirma son ya los argumentos ajustados.
+        const ajustar = registry.obtener(solicitada.capacidad)?.confirmacion?.ajustar;
+        if (conversado && typeof ajustar === 'function') {
+            solicitada = { ...solicitada, argumentos: ajustar({ args: solicitada.argumentos, ...conversado }) };
+        }
         // Antes de preguntar nada: ¿al modelo le falta un dato que solo puede dar el cliente y
         // que él rellenó por su cuenta? La capacidad lo declara (`confirmacion.falta`) mirando
         // lo que de verdad se ha dicho en el chat, que es lo que los argumentos no cuentan. El

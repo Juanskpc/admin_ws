@@ -1476,6 +1476,10 @@ function aplicarFormulario(ctx, datos, formulario, { solicitarConfirmacion }) {
     }
 
     if (entrega === ENTREGA.DOMICILIO) {
+        // El teléfono del formulario es de CONTACTO, como el escrito: solo hace falta si el canal
+        // no probó ninguno, y no autoriza nada.
+        const tel = leerTelefono(formulario.telefono);
+        if (tel && !ctx.telefonoProbado) conLoDicho.telefono = tel;
         const direccion = [formulario.direccion, formulario.indicaciones].filter(Boolean).join(' — ');
         const porBarrio = Boolean(ctx?.barrios?.habilitado) && (ctx.barrios.barrios || []).length > 0;
         if (direccion) {
@@ -2707,7 +2711,8 @@ function crearFlujoRestaurante({
                     '[Nota del sistema, no del cliente: este mensaje es el formulario de entrega que ' +
                     'llenó el cliente. Úsalo para el pedido que está armando: llama la herramienta del ' +
                     'pedido con esa entrega y, si es a domicilio, ese barrio (en `barrio`) y esa dirección (las ' +
-                    'indicaciones van con la dirección); la forma de pago va en la nota como «Pago: …». ' +
+                    'indicaciones van con la dirección; el teléfono, si viene, en `cliente_telefono`); ' +
+                    'la forma de pago va en la nota como «Pago: …». ' +
                     'No le vuelvas a preguntar lo que ya llenó. Si en la conversación no hay ningún ' +
                     'pedido, pregúntale qué quiere pedir.]',
                 pasos: [paso('formulario_sin_pedido_al_modelo')],

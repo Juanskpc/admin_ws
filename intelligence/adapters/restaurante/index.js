@@ -349,6 +349,34 @@ function entregaSinDecir({ args, cliente = [], asistente = [], hilo = [] }) {
     return !(loDijo || sePregunto);
 }
 
+/** Cómo se nombra un medio de pago, sobre texto sin tildes. */
+const MEDIO_DE_PAGO = /\b(efectivo|nequi|daviplata|transferencia|transferir|transfiero|tarjeta|datafono|bancolombia|consignacion|consigno|pago|pagar|pagare|pago con|cancelo|cash|billete)\b/;
+/** La parte de una nota que dice cómo se paga: «Pago en efectivo», «Pago: Nequi», «paga con tarjeta». */
+const FRASE_DE_PAGO = /\b(pago|paga|pagara|pagar)\b\s*:?\s*(en|con|por)?\s*(efectivo|nequi|daviplata|transferencia|tarjeta|datafono|bancolombia)\b/i;
+
+/**
+ * Quita de la nota la forma de pago si el cliente no habló de pagar en el pedido EN CURSO
+ * (`pedidoEnCurso`). Lo que el cliente dijo antes de la última frontera es de otro pedido. Sin el
+ * chat en orden no se toca nada: no hay con qué comprobarlo.
+ */
+function quitarPagoNoDicho(args, hilo) {
+    const nota = String(args?.nota || '');
+    if (!nota || !Array.isArray(hilo) || hilo.length === 0) return args;
+    if (!FRASE_DE_PAGO.test(normalizarTexto(nota))) return args;
+    const loDijo = pedidoEnCurso(hilo).some(
+        (m) => m.rol === 'cliente' && MEDIO_DE_PAGO.test(normalizarTexto(m.texto))
+    );
+    if (loDijo) return args;
+    const resto = nota
+        .split(/(?<=[.;])\s+|\s*[.;]\s*$/)
+        .map((s) => s.trim())
+        .filter((s) => s && !FRASE_DE_PAGO.test(normalizarTexto(s)))
+        .join(' ')
+        .trim();
+    const { nota: _quitada, ...sinNota } = args;
+    return resto ? { ...args, nota: resto } : sinNota;
+}
+
 /** ¿El negocio tiene mesas? Decide si el formulario ofrece «Para servir». Sin base, no. */
 async function negocioTieneMesas(idNegocio) {
     try {
@@ -1343,12 +1371,11 @@ function registrarCapacidades() {
                         : undefined,
                 ...(barrios.length > 0
                     ? {
+                          // Corto y sin pedir otra llamada: el resumen de tomar_pedido ya trae el valor.
                           como_usar_los_barrios:
-                              'El valor del domicilio de un barrio lo sabes tú: vuelve a llamar esta ' +
-                              'herramienta con `barrio` y te da el exacto. Al tomar el pedido, pon el ' +
-                              'barrio en `barrio` de tomar_pedido y el sistema suma el domicilio. Si un ' +
-                              'barrio no aparece, di que el restaurante confirma el valor y sigue con el ' +
-                              'pedido; nunca pases a una persona solo por el valor del domicilio.',
+                              'Al tomar el pedido pon el barrio en `barrio` de tomar_pedido: el resumen ' +
+                              'trae el valor del domicilio. Llama aquí con `barrio` solo si el cliente ' +
+                              'pregunta cuánto vale. Nunca pases a una persona por el valor del domicilio.',
                       }
                     : {}),
                 ...(barrios.length > 0 && args.barrio
@@ -1697,6 +1724,11 @@ function registrarCapacidades() {
             // común», «Hit de lulo si tiene») va a la nota del pedido, que es lo que lee la
             // cocina y el domiciliario. Antes se perdía (Zona Burger, 2026-10-01). Ver
             // `engine/confirmacion.js#lineasParaAnotar`. Tope de 500, el de `nota`.
+            // La forma de pago no se supone. Pregonchos, 2026-10-16 (ORD-0088): el modelo puso
+            // «Pago en efectivo» porque el cliente lo dijo en el pedido ANTERIOR. Devolvérselo para
+            // que pregunte costaría otra vuelta y otro mensaje; se quita, y el pago lo cuadra el
+            // domiciliario o el cajero como siempre. Con el formulario el cliente lo elige.
+            ajustar: ({ args, hilo = [] }) => quitarPagoNoDicho(args, hilo),
             anotar: ({ args, texto }) => {
                 const previa = String(args?.nota || '').trim();
                 const nota = (previa ? `${previa}. ${texto}` : texto).slice(0, 500);

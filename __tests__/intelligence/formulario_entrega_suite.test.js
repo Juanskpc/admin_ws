@@ -72,6 +72,7 @@ function montar({
     mesas = [],
     estado = 'ABIERTO',
     gate = { ejecutar: jest.fn().mockResolvedValue({ resultado: { numero_orden: 'ORD-900' } }) },
+    telefonoVerificado = '573000000000',
 } = {}) {
     jest.spyOn(pago, 'ultimoPedidoVivo').mockResolvedValue(null);
     jest.spyOn(pago, 'textosDePago').mockResolvedValue({ domicilio: 'DOM', local: 'LOCAL' });
@@ -85,7 +86,7 @@ function montar({
                 domicilioRango: { min: 4000, max: 9000 },
             }),
         },
-        identidad: { resolver: async () => ({ principal: { telefono_verificado: '573000000000' } }) },
+        identidad: { resolver: async () => ({ principal: { telefono_verificado: telefonoVerificado } }) },
         gate,
         ahora: () => new Date('2026-10-16T19:30:00-05:00'),
         estadoAtencion: async () => ({ estado }),
@@ -721,5 +722,91 @@ describe('4. el barrio dentro de la dirección o la nota (lo que deja el modelo)
     });
     it('solo nombres enteros: «Betanias» o «betaniaa» no cuentan', () => {
         expect(id('Conjunto Betanias casa 4')).toBeNull();
+    });
+});
+
+// Pregonchos, 2026-10-16: «quiero unas empanadas a domicilio» → el modelo pidió dirección y
+// teléfono por escrito, sin botón, y en el pedido siguiente supuso «Pago en efectivo».
+describe('9. el botón también cuando se pide la dirección, con teléfono, y el pago no se supone', () => {
+    const { pideLaDireccion, FLOW_JSON } = formularioEntrega;
+
+    test.each([
+        'Para mandártelas necesito dos cositas. Puedes contestarme todo junto 👇\n\n📍 La dirección, con el barrio o alguna indicación para llegar\n📱 Un número de contacto',
+        '¿Me compartes la dirección completa y un número de contacto para el domicilio?',
+        'Me faltan la dirección con barrio o indicación y un número de contacto para tomar tu domicilio.',
+        'Perfecto, quedo pendiente de la dirección y el número de contacto.',
+    ])('EL CASO: pide la dirección → botón (%p)', (texto) => {
+        expect(pideLaDireccion(texto)).toBe(true);
+    });
+
+    test.each([
+        '¿Confirmo tu pedido a nombre de Ana, para llevártelo a Cra 24 # 18-35? • 1 × Criollita — $15.500',
+        'Gracias, Angela. Ya tengo la dirección y el número 😊 ¿Qué te gustaría pedir?',
+        'La dirección es: Carrera 26 #4 Sur-96, avenida Mijitayo.',
+        'El valor exacto lo confirma el restaurante según la dirección.',
+        'Las empanadas valen $9.000.',
+    ])('no la pide → sin botón (%p)', (texto) => {
+        expect(pideLaDireccion(texto)).toBe(false);
+    });
+
+    test('el formulario lleva un teléfono opcional en el domicilio, y lo devuelve', () => {
+        const json = JSON.stringify(FLOW_JSON);
+        expect(json).toContain('"name":"telefono"');
+        expect(json).toContain('"telefono":"${form.telefono}"');
+        const tel = JSON.stringify(FLOW_JSON.screens[0].layout.children.find((c) => c.type === 'If'));
+        expect(tel).toContain('"required":false');
+    });
+
+    test('sin número visible, el teléfono del formulario va al pedido (sin preguntarlo aparte)', async () => {
+        const { flujo } = montar({ telefonoVerificado: null });
+        const c = chat(flujo);
+        await c.dice('#P12-4x1');
+        const d = await c.dice(formulario({ ...DOMICILIO_LAS_CUADRAS, telefono: '300 123 4567' }));
+        expect(c.tarea.nombre).toBe(confirmacion.TAREA);
+        expect(c.tarea.datos.args.cliente_telefono).toBe('3001234567');
+        expect(textoDe(d)).not.toMatch(/número de contacto/i);
+    });
+
+    test('con número visible, el del formulario no lo pisa', async () => {
+        const { flujo } = montar();
+        const c = chat(flujo);
+        await c.dice('#P12-4x1');
+        await c.dice(formulario({ ...DOMICILIO_LAS_CUADRAS, telefono: '300 123 4567' }));
+        expect(c.tarea.datos.args.cliente_telefono).toBeUndefined();
+    });
+
+    describe('la forma de pago que el cliente no dijo en ESTE pedido se quita', () => {
+        const ajustar = (args, hilo) => registry.obtener('tomar_pedido').confirmacion.ajustar({ args, hilo });
+        const ANTERIOR = [
+            { rol: 'cliente', texto: '📋 Formulario enviado\nEntrega: domicilio\nPago: Efectivo' },
+            { rol: 'asistente', texto: '¡Listo! Tu pedido quedó tomado. El número es ORD-0085' },
+        ];
+
+        test('EL CASO ORD-0088: «Pago en efectivo» del pedido anterior → fuera', () => {
+            const hilo = [...ANTERIOR, { rol: 'cliente', texto: 'Hola, quiero unas empanadas a la carrera 3e betania' }];
+            const r = ajustar({ items: [], nota: 'Pago en efectivo', tipo_entrega: 'DOMICILIO' }, hilo);
+            expect(r.nota).toBeUndefined();
+        });
+
+        test('se quita solo esa frase; el resto de la nota se queda', () => {
+            const hilo = [...ANTERIOR, { rol: 'cliente', texto: 'unas empanadas, sin ají' }];
+            const r = ajustar({ nota: 'Pago en efectivo. Sin ají. Barrio: Betania' }, hilo);
+            expect(r.nota).toBe('Sin ají. Barrio: Betania');
+        });
+
+        test.each(['pago con nequi', 'en efectivo', 'te transfiero', '📋 Formulario enviado\nPago: Nequi'])(
+            'si lo dijo en este pedido (%p) se respeta',
+            (dicho) => {
+                const hilo = [...ANTERIOR, { rol: 'cliente', texto: 'unas empanadas' }, { rol: 'cliente', texto: dicho }];
+                expect(ajustar({ nota: 'Pago: Nequi' }, hilo).nota).toBe('Pago: Nequi');
+            }
+        );
+
+        test('una nota sin pago, o sin chat con qué comprobar, no se toca', () => {
+            const args = { nota: 'Sin cebolla' };
+            expect(ajustar(args, [{ rol: 'cliente', texto: 'hola' }])).toBe(args);
+            const conPago = { nota: 'Pago en efectivo' };
+            expect(ajustar(conPago, [])).toBe(conPago);
+        });
     });
 });
