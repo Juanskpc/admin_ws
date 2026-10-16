@@ -136,6 +136,35 @@ con formulario y 5 escribiéndolo (prueba 8).
   con `scripts/evaluar.js respuestas_restaurante` antes de encenderlo en Zona Burger.
 - **Despliegue a todos (punto 9)**: sigue siendo un script por negocio.
 
+### 0.4 Pruebas reales del 2026-10-16 (mañana): el domicilio salía sin precio
+
+Desplegado en `4793988` (11:04), `6d4806d` (11:18), `ab10bf6` (11:35) y `64c5883` (11:47).
+
+1. **El asistente «se bloqueó»**: no era un cuelgue. Con 411 barrios (Pregonchos) el modelo solo ve
+   el precio por comuna, no supo cuánto valía Betania y llamó `pasar_a_persona`; el chat quedó en
+   `handoff_humano`. Además, **por chat el domicilio nunca se cobraba**: `tomar_pedido` solo
+   aceptaba `id_barrio`, que el modelo no ve. Ahora `tomar_pedido` y `consultar_info_negocio`
+   aceptan `barrio` por nombre y el servidor lo busca (`elegirBarrio`).
+2. **El modelo deja el barrio en otro campo** (ORD-0087 «Mz 1 cs 24, Corazón de jesus»; ORD-0085
+   «Barrio: Betania» en la nota): `barrioEnTexto` lo busca en la dirección y la nota. Solo un nombre
+   entero y único; el largo gana al corto que contiene; el mismo nombre en dos comunas solo con la
+   comuna escrita. Si no, $0 como antes y lo ajusta el cajero.
+3. **Sin botón cuando ya se sabe que es domicilio**: el modelo pide la dirección por escrito.
+   `pideLaDireccion` también pega el botón (182 de 2.935 mensajes reales de Zona Burger).
+4. **El formulario no tenía teléfono**: a un cliente sin número visible se le preguntaba aparte.
+   Campo **Teléfono** opcional en el domicilio. Cambia el Flow JSON: hay que volver a publicarlo
+   por negocio. Pregonchos ya está en el Flow `1102272205871954` (el `2064164927637856` queda
+   publicado y sin usar).
+5. **La forma de pago se suponía** (ORD-0088 llevó «Pago en efectivo» del pedido anterior): gancho
+   `confirmacion.ajustar` en `manejadorLlm`, sin modelo; `tomar_pedido` quita de la nota el pago que
+   el cliente no nombró en el pedido en curso (`pedidoEnCurso`).
+
+**Costo.** Nada de lo anterior llama al modelo: la búsqueda del barrio, el ajuste del pago y el
+botón son código. Sí crecen un poco las herramientas que ve el modelo (`barrio` en dos de ellas,
+~100 tokens por llamada, leídos de caché) y `como_usar_los_barrios` (~50 tokens, solo en negocios
+con barrios). Esa instrucción se reescribió para que el modelo **no** haga una segunda llamada a
+`consultar_info_negocio` antes de tomar el pedido: el resumen ya trae el valor.
+
 ---
 
 ## 1. Cómo se ve para el cliente
