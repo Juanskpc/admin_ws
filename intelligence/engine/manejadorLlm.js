@@ -280,6 +280,8 @@ function crearManejadorLlm({
         // funcione DENTRO del turno (ADR-019).
         let peticion = promptBuilder.construir(peticionBase);
         const turnosDelBucle = [...peticion.historial];
+        // Un formulario que la vertical ofreció para el dato que falta (ver `ejecutarSolicitud`).
+        let formularioOfrecido = null;
 
         for (let vuelta = 1; vuelta <= config.maxVueltas; vuelta += 1) {
             puerto.exigirSoporte(adaptador, peticion);
@@ -378,7 +380,7 @@ function crearManejadorLlm({
                 return {
                     pasos,
                     invocaciones,
-                    respuestas: [dicho],
+                    respuestas: [formularioOfrecido ? { texto: dicho, opciones: [formularioOfrecido] } : dicho],
                     variables: conversacion.variables || {},
                     resultado: 'resuelto',
                     nivel: 'llm',
@@ -440,8 +442,13 @@ function crearManejadorLlm({
                         // Para reconocer un pedido que el negocio ya le tomó A MANO a este cliente.
                         idNegocio,
                         telefono: quien.principal?.telefono_verificado ?? null,
+                        // Para que una vertical ofrezca un formulario solo donde el canal lo pinta.
+                        canal: conversacion.canal ?? null,
                     },
                 });
+                // La vertical pidió un dato al cliente y ofreció un formulario para darlo: el
+                // texto lo sigue escribiendo el modelo, el botón se le pega a esa respuesta.
+                if (salida.formulario) formularioOfrecido = salida.formulario;
 
                 // Una mutación que exige confirmación **termina el turno aquí**. No se le
                 // devuelve el control al modelo para que redacte la pregunta: la pregunta ya la
@@ -640,6 +647,7 @@ async function ejecutarSolicitud({
                 id: solicitada.id,
                 error: true,
                 contenido: comoResultado({ error: falta.codigo, mensaje: falta.mensaje }),
+                ...(falta.formulario ? { formulario: falta.formulario } : {}),
             };
         }
         try {

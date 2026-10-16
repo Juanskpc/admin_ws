@@ -41,6 +41,7 @@ const apiReal = require('./api');
 const ventanaReal = require('./ventana');
 const repositorio = require('../../engine/repositorio');
 const plantillas = require('../../core/plantillas');
+const mensajeCanonico = require('../../core/mensajeCanonico');
 const Audit = require('../../../app_core/helpers/auditHelper');
 const canalEmbeddedSignup = require('../../../app_core/whatsapp/canalEmbeddedSignup');
 const notificacionDao = require('../../../app_core/dao/notificacionDao');
@@ -169,6 +170,7 @@ function textoDeMensaje(mensaje) {
             return mensaje.text?.body ?? '';
         case 'interactive': {
             const i = mensaje.interactive || {};
+            if (i.type === 'nfm_reply') return textoDeFormulario(formularioDeMensaje(mensaje));
             return i.button_reply?.id ?? i.list_reply?.id ?? '';
         }
         case 'button':
@@ -181,6 +183,50 @@ function textoDeMensaje(mensaje) {
             // verdad (un comprobante de pago) es F8-B.
             return `[${mensaje.type}]`;
     }
+}
+
+/**
+ * Lo que el cliente llenó en un formulario (WhatsApp Flow), o `null` si el mensaje no es uno.
+ *
+ * Llega como `interactive.nfm_reply.response_json`: un JSON **en texto** con los campos del
+ * `payload` del botón final y el `flow_token` con que lo mandamos. Los campos vacíos (los de una
+ * sección que no se mostró) se quitan: no son algo que el cliente dijo.
+ */
+function formularioDeMensaje(mensaje) {
+    const r = mensaje?.interactive?.nfm_reply;
+    if (!r) return null;
+    let datos;
+    try {
+        datos = typeof r.response_json === 'string' ? JSON.parse(r.response_json) : r.response_json;
+    } catch {
+        return { campos: {}, token: null };
+    }
+    const { flow_token: token = null, ...resto } = datos || {};
+    const campos = {};
+    for (const [clave, valor] of Object.entries(resto)) {
+        const v = typeof valor === 'string' ? valor.trim() : valor;
+        if (v === '' || v == null || (Array.isArray(v) && v.length === 0)) continue;
+        campos[clave] = Array.isArray(v) ? v.join(', ') : String(v);
+    }
+    return { campos, token };
+}
+
+/**
+ * Un formulario respondido, escrito como texto.
+ *
+ * ## Por qué texto y no un objeto aparte
+ *
+ * Es la misma regla que con los botones: el canal traduce y el núcleo no sabe qué es un
+ * formulario. La vertical que lo ofreció reconoce el encabezado y lee las líneas `Campo: valor`;
+ * todo lo demás —la Bandeja, el Ledger, el modelo si el pedido ya no está abierto— ve lo que el
+ * cliente contestó, legible. Antes de esto (prueba del 2026-10-15) la respuesta llegaba vacía y
+ * `normalizarEntrada` la rechazaba con TEXTO_VACIO: los datos se perdían sin rastro.
+ */
+function textoDeFormulario(formulario) {
+    const lineas = Object.entries(formulario?.campos || {}).map(
+        ([clave, valor]) => `${clave.charAt(0).toUpperCase()}${clave.slice(1).replace(/_/g, ' ')}: ${valor}`
+    );
+    return [mensajeCanonico.ENCABEZADO_FORMULARIO, ...lineas].join('\n');
 }
 
 /**
@@ -322,6 +368,9 @@ function interpretarWebhook(cuerpo, { config = configReal } = {}) {
                         perfil_nombre: valor.contacts?.[0]?.profile?.name || null,
                         // La referencia al archivo, para que la Bandeja pueda mostrarlo (7 días).
                         ...(archivoDeMensaje(mensaje) ? { media: archivoDeMensaje(mensaje) } : {}),
+                        // Lo que llenó en un formulario, tal cual: el texto es para leerlo,
+                        // esto es para auditarlo.
+                        ...(formularioDeMensaje(mensaje) ? { formulario: formularioDeMensaje(mensaje) } : {}),
                     },
                 });
             }
@@ -762,6 +811,35 @@ function renderizar({ texto, opciones = [], plantilla = null }) {
         return { type: 'text', text: { preview_url: false, body: recortar(cuerpo, LIMITES.texto) } };
     }
 
+    // Un formulario (WhatsApp Flow) manda sobre las demás opciones: un mensaje solo puede llevar
+    // un tipo de acción. Quien lo ofrece deja el otro camino escrito en el texto, así que no se
+    // pierde nada que el cliente no pueda escribir. Va publicado (sin `mode: draft`).
+    const conFormulario = lista.find((o) => o.formulario?.flow_id);
+    if (conFormulario) {
+        const f = conFormulario.formulario;
+        return {
+            type: 'interactive',
+            interactive: {
+                type: 'flow',
+                body: { text: recortar(cuerpo, LIMITES.cuerpo) },
+                action: {
+                    name: 'flow',
+                    parameters: {
+                        flow_message_version: '3',
+                        flow_id: String(f.flow_id),
+                        flow_token: String(f.token || conFormulario.id),
+                        flow_cta: recortar(conFormulario.etiqueta ?? 'Abrir', LIMITES.tituloBoton),
+                        flow_action: 'navigate',
+                        flow_action_payload: {
+                            screen: String(f.pantalla),
+                            ...(f.datos ? { data: f.datos } : {}),
+                        },
+                    },
+                },
+            },
+        };
+    }
+
     // Un `detalle` (el precio, la duración) manda a lista aunque quepan en botones: un botón no
     // tiene dónde ponerlo y su título se recorta a 20 caracteres, que es exactamente donde moría
     // «Corte de cabello (30 min) — $35.000». Se pierde el toque directo del botón y se gana el
@@ -1006,6 +1084,8 @@ module.exports = {
     renderizar,
     renderizarPlantilla,
     textoDeMensaje,
+    formularioDeMensaje,
+    textoDeFormulario,
     silenciarPorHumano,
     EVENTOS_DESCONEXION,
     LIMITES,

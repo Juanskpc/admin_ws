@@ -53,6 +53,7 @@ const adiciones = require('./adiciones');
 const mesaPublicaService = require('../../../app_restaurante_api/services/mesaPublicaService');
 const datosCliente = require('./datosCliente');
 const pago = require('./pago');
+const formularioEntrega = require('./formularioEntrega');
 const Models = require('../../../app_core/models/conection');
 
 const VERTICAL = 'restaurante';
@@ -764,6 +765,16 @@ function pregunta(paso, datos, ctx) {
         case PASO_PEDIDO.NOMBRE:
             return { texto: '¿A nombre de quién lo dejo? 📝' };
         case PASO_PEDIDO.ENTREGA:
+            // Con el formulario encendido (solo WhatsApp, ver `formularioEntrega.js`), un botón
+            // que lo abre en vez de los dos de siempre: cómo lo recibe, barrio, dirección y pago de
+            // una vez. Las palabras siguen valiendo, por eso este paso las sigue leyendo.
+            if (ctx?.formularioEntrega) {
+                return formularioEntrega.pregunta({
+                    flowId: ctx.formularioEntrega,
+                    idConversacion: ctx.conversacion?.id_conversacion ?? null,
+                    conMesas: (ctx.mesas || []).length > 0,
+                });
+            }
             // Dos botones, y sin `detalle`: con detalle el canal lo pinta como una LISTA que hay
             // que desplegar, y una elección entre dos merece un toque, no un menú.
             //
@@ -1134,6 +1145,11 @@ function seguirPedido(ctx, { solicitarConfirmacion }) {
         };
     }
 
+    // El formulario de entrega respondido: trae varias respuestas a la vez y se lee entero,
+    // antes que nada que mire solo la última línea.
+    const formulario = formularioEntrega.leer(ctx.texto);
+    if (formulario) return aplicarFormulario(ctx, datos, formulario, { solicitarConfirmacion });
+
     if (!dicho) {
         const q = pregunta(datos.paso, datos, ctx);
         return {
@@ -1393,6 +1409,83 @@ function seguirPedido(ctx, { solicitarConfirmacion }) {
         apertura,
         solicitarConfirmacion,
     });
+}
+
+/**
+ * Lo que llegó en el formulario de entrega, aplicado al pedido abierto.
+ *
+ * Sirve en cualquier paso —el cliente puede abrir el formulario aunque ya se le haya preguntado
+ * otra cosa—, y lo que no traiga se sigue preguntando como siempre (`seguirOConfirmar`).
+ *
+ *  - **Entrega**: el id del formulario. Uno que no se reconozca no se supone: se repregunta.
+ *  - **Indicaciones** van pegadas a la dirección, que es lo que lee el domiciliario.
+ *  - **Pago** va en la nota del pedido: el pedido no tiene columna de forma de pago a la hora de
+ *    tomarlo (se elige al cobrar), y la nota es lo que caja y despacho ya leen.
+ *  - **Barrio**: si el negocio cobra por barrio, se resuelve con el mismo paso del barrio —un
+ *    nombre repetido se pregunta numerado, uno que no existe se repregunta—; si no, se pega a la
+ *    dirección.
+ */
+function aplicarFormulario(ctx, datos, formulario, { solicitarConfirmacion }) {
+    const ENTREGA_DEL_FORMULARIO = {
+        [formularioEntrega.ENTREGA.DOMICILIO]: ENTREGA.DOMICILIO,
+        [formularioEntrega.ENTREGA.RECOGER]: ENTREGA.RECOGER,
+        [formularioEntrega.ENTREGA.SERVIR]: ENTREGA.MESA,
+    };
+    const entrega =
+        ENTREGA_DEL_FORMULARIO[String(formulario.entrega || '').toLowerCase()] ||
+        leerEntrega(formulario.entrega || '');
+    const marca = paso('pedido_formulario_recibido', { campos: Object.keys(formulario) });
+
+    if (!entrega || (entrega === ENTREGA.MESA && (ctx.mesas || []).length === 0)) {
+        const q = pregunta(PASO_PEDIDO.ENTREGA, datos, ctx);
+        return {
+            pasos: [marca, paso('pedido_formulario_sin_entrega')],
+            respuestas: [{ ...q, texto: `Perdona, no me quedó claro cómo lo recibes 🙈 ${q.texto}` }],
+            variables: conMemoria(ctx.conversacion),
+            tarea: tareaPedido({ ...datos, paso: PASO_PEDIDO.ENTREGA }),
+            resultado: 'resuelto',
+            nivel: 'determinista',
+        };
+    }
+
+    const conLoDicho = { ...datos, repreguntas: 0, entrega };
+    delete conLoDicho.direccion_dudosa;
+    if (entrega === ENTREGA.MESA) conLoDicho.para_servir = true;
+    if (formulario.pago) {
+        conLoDicho.nota = [datos.nota, `Pago: ${formulario.pago}`].filter(Boolean).join('. ');
+    }
+
+    if (entrega === ENTREGA.DOMICILIO) {
+        const direccion = [formulario.direccion, formulario.indicaciones].filter(Boolean).join(' — ');
+        const porBarrio = Boolean(ctx?.barrios?.habilitado) && (ctx.barrios.barrios || []).length > 0;
+        if (direccion) {
+            conLoDicho.direccion =
+                formulario.barrio && !porBarrio ? `${direccion}, ${formulario.barrio}` : direccion;
+        }
+        // El barrio pasa por el paso de siempre, con lo que el cliente escribió como respuesta.
+        if (formulario.barrio && necesitaBarrio(conLoDicho, ctx)) {
+            const resultado = seguirPedido(
+                {
+                    ...ctx,
+                    texto: formulario.barrio,
+                    conversacion: {
+                        ...ctx.conversacion,
+                        tarea_datos: { ...conLoDicho, paso: PASO_PEDIDO.BARRIO },
+                    },
+                },
+                { solicitarConfirmacion }
+            );
+            return Promise.resolve(resultado).then((r) => ({ ...r, pasos: [marca, ...(r.pasos || [])] }));
+        }
+    } else {
+        // Quien no pide domicilio no deja dirección ni barrio, aunque los hubiera dicho antes.
+        delete conLoDicho.direccion;
+        delete conLoDicho.id_barrio;
+        delete conLoDicho.barrio_nombre;
+        delete conLoDicho.barrio_otro;
+    }
+
+    return seguirOConfirmar(ctx, conLoDicho, [marca], { apertura: '¡Anotado! ', solicitarConfirmacion });
 }
 
 /**
@@ -2189,6 +2282,7 @@ function crearFlujoRestaurante({
         resolverBarrio: (args) => barrioService.resolverBarrio(args),
         resolverMesa: (args) => mesaPublicaService.resolverMesa(args),
         resolverExclusiones: (args) => exclusiones.resolver(args),
+        formularioEntrega: (idNegocio) => formularioEntrega.flowIdDe(idNegocio),
     },
 } = {}) {
     /** Barrios y mesas en el contexto, para las preguntas y para leer el código de la carta. */
@@ -2206,6 +2300,11 @@ function crearFlujoRestaurante({
             console.warn(`[restaurante] no se pudieron leer las mesas: ${error.message}`);
             ctx.mesas = [];
         }
+        // El formulario de entrega solo existe en WhatsApp, y solo si el negocio lo encendió.
+        ctx.formularioEntrega =
+            ctx.conversacion?.canal === 'whatsapp' && catalogo.formularioEntrega
+                ? await catalogo.formularioEntrega(ctx.idNegocio)
+                : null;
         return ctx;
     }
 

@@ -141,19 +141,36 @@ function normalizarSalida(respuesta) {
         // canal que sí puede pintar filas pulsables lo ignora, que es la degradación de ADR-017
         // al revés: el canal usa lo que le sirve.
         const atajo = opcion?.atajo;
+        // `formulario` es la tercera evolución aditiva (2026-10-15, WhatsApp Flows): la opción
+        // abre un formulario del canal en vez de devolver su id. El núcleo solo dice CUÁL
+        // (`flow_id`, pantalla, datos); un canal que no tenga formularios pinta la opción como
+        // cualquier otra, y por eso quien la ofrece deja siempre el camino escrito en el texto.
+        const formulario = opcion?.formulario;
         return {
             id: String(id),
             etiqueta,
             ...(typeof detalle === 'string' && detalle.length > 0 ? { detalle } : {}),
             ...(atajo != null && String(atajo).length > 0 ? { atajo: String(atajo) } : {}),
+            ...(formulario && typeof formulario.flow_id === 'string' && formulario.flow_id
+                ? { formulario }
+                : {}),
         };
     });
 
     return { texto: bruto.texto, opciones };
 }
 
+/**
+ * La primera línea del texto en que un canal convierte un formulario respondido.
+ *
+ * Vive en el núcleo porque lo escribe el canal y lo lee la vertical, y ninguno de los dos debe
+ * depender del otro. Lo que sigue son líneas `Campo: valor` (ver `adaptador.textoDeFormulario`).
+ */
+const ENCABEZADO_FORMULARIO = '📋 Formulario enviado';
+
 module.exports = {
     DESVIO_MAXIMO_MS,
+    ENCABEZADO_FORMULARIO,
     MAX_TEXTO,
     sanearEnviadoEn,
     normalizarEntrada,

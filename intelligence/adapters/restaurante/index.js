@@ -63,6 +63,7 @@ const barrioService = require('../../../app_restaurante_api/services/barrioServi
 const exclusiones = require('./exclusiones');
 const adiciones = require('./adiciones');
 const pago = require('./pago');
+const formularioEntrega = require('./formularioEntrega');
 const mesaPublicaService = require('../../../app_restaurante_api/services/mesaPublicaService');
 const usuarioAsistenteDao = require('../../../app_core/dao/usuarioAsistenteDao');
 const Models = require('../../../app_core/models/conection');
@@ -337,6 +338,15 @@ function entregaSinDecir({ args, cliente = [], asistente = [], hilo = [] }) {
     const loDijo = cliente.some((t) => dicho.test(normalizarTexto(t)));
     const sePregunto = asistente.some((t) => /recog/.test(normalizarTexto(t)));
     return !(loDijo || sePregunto);
+}
+
+/** ¿El negocio tiene mesas? Decide si el formulario ofrece «Para servir». Sin base, no. */
+async function negocioTieneMesas(idNegocio) {
+    try {
+        return (await mesaPublicaService.listarPublicas(idNegocio)).length > 0;
+    } catch {
+        return false;
+    }
 }
 
 /**
@@ -1626,6 +1636,7 @@ function registrarCapacidades() {
                 idConversacion = null,
                 idNegocio = null,
                 telefono = null,
+                canal = null,
             }) => {
                 // Antes que nada: ¿este chat ya tomó un pedido hace poco —o se lo tomó el negocio
                 // a mano— y el cliente solo quiere cambiarle algo? Ver `pedidoQueYaSeTomo`.
@@ -1641,14 +1652,39 @@ function registrarCapacidades() {
                 // cada falta volvía sola y eran dos turnos («¿a nombre de quién?», y luego «¿para
                 // recoger, a domicilio…?») para lo que cabe en un mensaje. Zona Burger,
                 // 2026-10-07: siete mensajes para una salchipapa para recoger.
-                return loQueFalta({
-                    entrega: entregaSinDecir({ args, cliente, asistente, hilo }),
+                const sinEntrega = entregaSinDecir({ args, cliente, asistente, hilo });
+                const falta = loQueFalta({
+                    entrega: sinEntrega,
                     direccion:
                         args?.tipo_entrega === 'DOMICILIO' &&
                         args?.direccion != null &&
                         DIRECCION_DE_RELLENO.test(normalizarTexto(args.direccion).trim()),
                     nombre: NOMBRE_DE_RELLENO.test(normalizarTexto(args?.cliente_nombre ?? '').trim()),
                 });
+                // Falta saber cómo lo recibe y el negocio tiene el formulario de entrega: se
+                // ofrece junto a la pregunta (el botón lo pega el manejador a lo que escriba el
+                // modelo). Solo por WhatsApp, que es donde existe.
+                if (falta && sinEntrega && canal === 'whatsapp' && idNegocio) {
+                    const flowId = await formularioEntrega.flowIdDe(idNegocio);
+                    if (flowId) {
+                        return {
+                            ...falta,
+                            mensaje:
+                                'El cliente no ha dicho cómo quiere recibir el pedido. No lo elijas ' +
+                                'tú. Con tu respuesta va a salir un botón *Completar datos* que abre ' +
+                                'un formulario para eso (cómo lo recibe, barrio, dirección y pago). ' +
+                                'Escribe UN mensaje corto que le pida tocarlo, o escribirte ' +
+                                '*domicilio* o *recoger* si prefiere. No le pidas los datos uno por ' +
+                                'uno. Vuelve a llamar con lo que conteste. No le cuentes este error.',
+                            formulario: formularioEntrega.opcion({
+                                flowId,
+                                idConversacion,
+                                conMesas: await negocioTieneMesas(idNegocio),
+                            }),
+                        };
+                    }
+                }
+                return falta;
             },
             hecho: ({ resultado }) =>
                 resultado.suma_a_cuenta
