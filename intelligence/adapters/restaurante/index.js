@@ -67,7 +67,15 @@ const formularioEntrega = require('./formularioEntrega');
 const mesaPublicaService = require('../../../app_restaurante_api/services/mesaPublicaService');
 const usuarioAsistenteDao = require('../../../app_core/dao/usuarioAsistenteDao');
 const Models = require('../../../app_core/models/conection');
-const { enPesos, enlaceDelMenu, rangoEnPalabras, fraseDeApertura, resumenPorZona } = require('./flujo');
+const {
+    enPesos,
+    enlaceDelMenu,
+    rangoEnPalabras,
+    fraseDeApertura,
+    resumenPorZona,
+    elegirBarrio,
+    OTRO_BARRIO,
+} = require('./flujo');
 const contextoNegocio = require('../../core/contextoNegocio');
 
 const VERTICAL = 'restaurante';
@@ -894,6 +902,55 @@ async function leerDomicilioRango(idNegocio, transaction) {
     }
 }
 
+/**
+ * El barrio que el cliente NOMBRA, entre los del negocio, con el mismo buscador que el pedido de
+ * la carta (`elegirBarrio`). Devuelve `{ barrio }`, `{ ambiguos }` o `null`.
+ *
+ * Pregonchos, 2026-10-16: con 411 barrios el modelo solo recibe el precio por comuna, no sabía en
+ * cuál está Betania y pasó la conversación a una persona por el valor del domicilio. Y aunque
+ * hubiera sabido el precio, `tomar_pedido` solo aceptaba `id_barrio`, que el modelo nunca ve: un
+ * domicilio pedido por chat nunca llevaba su valor. El nombre lo da el modelo; el id y el precio
+ * los pone el servidor.
+ */
+async function barrioNombrado(idNegocio, texto) {
+    if (!texto || !String(texto).trim()) return null;
+    const { habilitado, barrios } = await barrioService
+        .listarPublico(idNegocio)
+        .catch(() => ({ habilitado: false, barrios: [] }));
+    if (!habilitado || barrios.length === 0) return null;
+    const r = elegirBarrio(String(texto), barrios);
+    if (!r || r === OTRO_BARRIO) return null;
+    if (r.ambiguos) return { ambiguos: r.ambiguos };
+    return { barrio: r };
+}
+
+/** Lo que `consultar_info_negocio` contesta sobre el barrio que nombró el cliente. */
+function domicilioAEseBarrio(texto, barrios) {
+    const nombre = (b) => (b.zona ? `${b.nombre} (${b.zona})` : b.nombre);
+    const r = elegirBarrio(String(texto), barrios);
+    if (r && r !== OTRO_BARRIO && !r.ambiguos) return { barrio: nombre(r), valor: precio(r.valor) };
+    if (r?.ambiguos) {
+        return {
+            hay_varios: r.ambiguos.map((b) => ({ barrio: nombre(b), valor: precio(b.valor) })),
+            que_hacer: 'Pregúntale cuál de estos es el suyo, con su valor.',
+        };
+    }
+    return {
+        no_esta: texto,
+        que_hacer:
+            'Ese barrio no está en la lista: pídele que lo escriba completo o con la comuna; si aun ' +
+            'así no aparece, di que el valor del domicilio lo confirma el restaurante y sigue con el pedido.',
+    };
+}
+
+/** El `id_barrio` del pedido: el que venga, o el del barrio nombrado si es uno solo. */
+async function idBarrioDelPedido(idNegocio, args) {
+    if (args.id_barrio) return args.id_barrio;
+    if (args.tipo_entrega !== 'DOMICILIO' || !args.barrio) return null;
+    const r = await barrioNombrado(idNegocio, args.barrio);
+    return r?.barrio?.id_barrio ?? null;
+}
+
 function registrarCapacidades() {
     registry.registrar({
         nombre: 'consultar_carta',
@@ -1192,9 +1249,18 @@ function registrarCapacidades() {
         vertical: VERTICAL,
         tipo: registry.TIPO.CONSULTA,
         feature: FEATURE.ASISTENTE_IA,
-        parametros: {},
+        parametros: {
+            barrio: {
+                tipo: 'string',
+                requerido: false,
+                max_longitud: 120,
+                descripcion:
+                    'El barrio que dijo el cliente, si pregunta cuánto vale el domicilio o pide a ' +
+                    'domicilio: devuelve el valor exacto para ese barrio en `domicilio_a_ese_barrio`.',
+            },
+        },
 
-        async ejecutar({ idNegocio, contexto }) {
+        async ejecutar({ idNegocio, args = {}, contexto }) {
             const ahora = new Date();
             const [{ estado }, proxima, bloques, metodos, domicilio, negocio] = await Promise.all([
                 horarioService.estadoDeAtencion({ idNegocio, ahora }),
@@ -1277,6 +1343,19 @@ function registrarCapacidades() {
                               valor: z.minimo === z.maximo ? precio(z.minimo) : `desde ${precio(z.minimo)}`,
                           }))
                         : undefined,
+                ...(barrios.length > 0
+                    ? {
+                          como_usar_los_barrios:
+                              'El valor del domicilio de un barrio lo sabes tú: vuelve a llamar esta ' +
+                              'herramienta con `barrio` y te da el exacto. Al tomar el pedido, pon el ' +
+                              'barrio en `barrio` de tomar_pedido y el sistema suma el domicilio. Si un ' +
+                              'barrio no aparece, di que el restaurante confirma el valor y sigue con el ' +
+                              'pedido; nunca pases a una persona solo por el valor del domicilio.',
+                      }
+                    : {}),
+                ...(barrios.length > 0 && args.barrio
+                    ? { domicilio_a_ese_barrio: domicilioAEseBarrio(args.barrio, barrios) }
+                    : {}),
                 tiempo_estimado_min: negocio.tiempo_estimado_min,
                 tiempo_estimado_max: negocio.tiempo_estimado_max,
                 // El de arriba es el de un DOMICILIO. Para recoger o comer en el local, este.
@@ -1422,11 +1501,12 @@ function registrarCapacidades() {
                     }
                 }
                 let domicilio = null;
-                if (args.tipo_entrega === 'DOMICILIO' && args.id_barrio) {
+                const idBarrio = await idBarrioDelPedido(idNegocio, args).catch(() => null);
+                if (args.tipo_entrega === 'DOMICILIO' && idBarrio) {
                     try {
                         const r = await barrioService.valorDomicilioDe({
                             idNegocio,
-                            idBarrio: args.id_barrio,
+                            idBarrio,
                         });
                         if (r.valor > 0) domicilio = { barrio: r.barrio.nombre, valor: r.valor };
                     } catch (_) {
@@ -1749,6 +1829,14 @@ function registrarCapacidades() {
             // sean de este negocio y calcula el valor del domicilio él mismo. Un precio que
             // venga en el mensaje no se lee en ningún sitio.
             id_barrio: { tipo: 'entero', requerido: false, min: 1 },
+            barrio: {
+                tipo: 'string',
+                requerido: false,
+                max_longitud: 120,
+                descripcion:
+                    'Si es domicilio, el nombre del barrio que dijo el cliente, tal cual («Betania», ' +
+                    '«San José comuna 1»). El sistema lo busca y suma el valor del domicilio.',
+            },
             id_mesa: { tipo: 'entero', requerido: false, min: 1 },
             // Obligatoria **solo si es domicilio**, y eso no lo sabe expresar el validador: la
             // comprueba `ejecutar`, que es quien ve los dos argumentos a la vez. Declararla
@@ -2030,11 +2118,14 @@ function registrarCapacidades() {
             // no existe, `ZONA_INVALIDA`. Sin barrio («Otro barrio») el valor es 0 y el cajero
             // lo ajusta al confirmar con el cliente. Con `permite_pago_domicilio` apagado,
             // `valorDomicilioDe` devuelve 0 y `crearOrden` lo vuelve a aplicar.
+            // Un barrio NOMBRADO («Betania») se busca igual que en la pregunta de confirmación,
+            // para que lo cobrado sea lo que el cliente vio. Si no se encuentra uno solo, sin valor.
             let valorDomicilio = 0;
-            if (esDomicilio && args.id_barrio) {
+            const idBarrio = esDomicilio ? await idBarrioDelPedido(idNegocio, args) : null;
+            if (esDomicilio && idBarrio) {
                 const r = await barrioService.valorDomicilioDe({
                     idNegocio,
-                    idBarrio: args.id_barrio,
+                    idBarrio,
                     transaction: contexto.transaction,
                 });
                 valorDomicilio = r.valor;

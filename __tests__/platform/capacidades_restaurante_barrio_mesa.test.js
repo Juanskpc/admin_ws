@@ -232,6 +232,70 @@ describe('domicilio por barrio', () => {
         expect(texto).toContain('Domicilio (TEST-Barrio Cobro)');
         expect(texto).toContain('4.500');
     });
+
+    // Pregonchos, 2026-10-16: por chat el modelo no ve ids de barrio; un domicilio pedido así no
+    // llevaba nunca su valor, y con muchos barrios pasó la conversación a una persona por el precio.
+    describe('el barrio NOMBRADO (lo que tiene el modelo)', () => {
+        beforeEach(() =>
+            sequelize.query(
+                `UPDATE general.gener_negocio SET permite_pago_domicilio = true WHERE id_negocio = :n;`,
+                { replacements: { n: idNegocio } }
+            )
+        );
+
+        it('tomar_pedido con `barrio` por nombre cobra el valor de la tabla, sin tildes ni mayúsculas', async () => {
+            const { resultado } = await pedir({ ...domicilio, barrio: 'test-barrio cobro' });
+            expect(Number((await ordenDe(resultado.numero_orden)).valor_domicilio)).toBe(4500);
+        });
+
+        it('la pregunta de confirmación lo enseña igual que con el id', async () => {
+            const texto = await registry.obtener('tomar_pedido').confirmacion.pregunta({
+                idNegocio,
+                args: {
+                    items: [{ id_producto: idProducto, cantidad: 1 }],
+                    cliente_nombre: 'Ana',
+                    ...domicilio,
+                    barrio: 'TEST-Barrio Cobro',
+                },
+            });
+            expect(texto).toContain('Domicilio (TEST-Barrio Cobro)');
+            expect(texto).not.toContain('no incluye el domicilio');
+        });
+
+        it('un barrio que no está no tumba el pedido: entra en 0 para que el cajero lo ajuste', async () => {
+            const { resultado } = await pedir({ ...domicilio, barrio: 'Un barrio que no existe' });
+            expect(Number((await ordenDe(resultado.numero_orden)).valor_domicilio)).toBe(0);
+        });
+
+        it('el nombre de un barrio de OTRO negocio no trae su precio', async () => {
+            const { resultado } = await pedir({ ...domicilio, barrio: 'TEST-Barrio Ajeno' });
+            expect(Number((await ordenDe(resultado.numero_orden)).valor_domicilio)).toBe(0);
+        });
+
+        it('si viene el id, manda el id', async () => {
+            await expect(pedir({ ...domicilio, id_barrio: idBarrioRival, barrio: 'TEST-Barrio Cobro' }))
+                .rejects.toMatchObject({ code: 'ZONA_INVALIDA' });
+        });
+
+        it('para recoger, el barrio nombrado no cobra domicilio', async () => {
+            const { resultado } = await pedir({ tipo_entrega: 'LLEVAR', barrio: 'TEST-Barrio Cobro' });
+            expect(Number((await ordenDe(resultado.numero_orden)).valor_domicilio)).toBe(0);
+        });
+
+        it('consultar_info_negocio con `barrio` da el valor exacto, y explica cómo usarlo', async () => {
+            const info = registry.obtener('consultar_info_negocio');
+            const r = await info.ejecutar({ idNegocio, args: { barrio: 'test-barrio cobro' }, contexto: {} });
+            expect(r.domicilio_a_ese_barrio).toMatchObject({ barrio: 'TEST-Barrio Cobro' });
+            expect(r.domicilio_a_ese_barrio.valor).toBe(4500);
+            expect(r.como_usar_los_barrios).toMatch(/nunca pases a una persona/);
+
+            const nada = await info.ejecutar({ idNegocio, args: { barrio: 'TEST-Barrio Ajeno' }, contexto: {} });
+            expect(nada.domicilio_a_ese_barrio.no_esta).toBe('TEST-Barrio Ajeno');
+
+            const sin = await info.ejecutar({ idNegocio, args: {}, contexto: {} });
+            expect(sin.domicilio_a_ese_barrio).toBeUndefined();
+        });
+    });
 });
 
 describe('pedido en el local (MESA)', () => {

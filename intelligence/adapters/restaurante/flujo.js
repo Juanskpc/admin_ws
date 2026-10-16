@@ -1597,7 +1597,7 @@ async function formularioConResumenEsperando(ctx, formulario) {
             'acaba de enviar el formulario de entrega con otros datos (arriba). Esa confirmación se ' +
             'DESCARTÓ: no se ha enviado nada. Vuelve a llamar la herramienta del pedido con TODO lo ' +
             'que estaba anotado y lo que dice el formulario: cómo lo recibe, y si es a domicilio el ' +
-            'barrio, la dirección y las indicaciones; la forma de pago va en la nota como «Pago: …». ' +
+            'barrio (en `barrio`), la dirección y las indicaciones; la forma de pago va en la nota como «Pago: …». ' +
             'Si es para recoger o para servir, sin dirección. Lo que estaba anotado: ' +
             `${JSON.stringify(args)}]`,
         pasos: [marca, paso('confirmacion_soltada_por_formulario')],
@@ -2676,7 +2676,7 @@ function crearFlujoRestaurante({
                 notaParaElModelo:
                     '[Nota del sistema, no del cliente: este mensaje es el formulario de entrega que ' +
                     'llenó el cliente. Úsalo para el pedido que está armando: llama la herramienta del ' +
-                    'pedido con esa entrega y, si es a domicilio, ese barrio y esa dirección (las ' +
+                    'pedido con esa entrega y, si es a domicilio, ese barrio (en `barrio`) y esa dirección (las ' +
                     'indicaciones van con la dirección); la forma de pago va en la nota como «Pago: …». ' +
                     'No le vuelvas a preguntar lo que ya llenó. Si en la conversación no hay ningún ' +
                     'pedido, pregúntale qué quiere pedir.]',
