@@ -45,9 +45,11 @@ async function getCategorias(req, res) {
 async function getProductos(req, res) {
     try {
         const idNegocio   = Number(req.query.id_negocio);
-        const idCategoria = Number(req.query.id_categoria);
-        if (!idNegocio || !idCategoria) {
-            return Respuesta.error(res, 'id_negocio e id_categoria requeridos', 400);
+        // Sin `id_categoria` se devuelve el catálogo entero: es lo que el POS carga una vez
+        // para poder buscar productos sin salir a la red en cada tecla.
+        const idCategoria = Number(req.query.id_categoria) || null;
+        if (!idNegocio) {
+            return Respuesta.error(res, 'id_negocio requerido', 400);
         }
 
         const ocultar = await adicionService.negocioPermiteAdiciones(idNegocio);
@@ -62,6 +64,7 @@ async function getProductos(req, res) {
             imagen_url:   p.imagen_url,
             icono:        p.icono,
             es_popular:   p.es_popular,
+            id_categoria: p.id_categoria,
             ingredientes: (p.ingredientes || []).map(pi => ({
                 id_producto_ingred: pi.id_producto_ingred,
                 id_ingrediente:     pi.ingrediente.id_ingrediente,

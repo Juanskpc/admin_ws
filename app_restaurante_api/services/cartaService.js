@@ -5,10 +5,20 @@ const adicionService = require('./adicionService');
  * cartaService — Lógica de negocio para el menú / carta del restaurante.
  */
 
+/**
+ * Texto comparable: sin tildes, en minúsculas y con espacios de verdad.
+ *
+ * Los teclados del móvil no escriben solo letras: la predicción mete espacios duros (U+00A0),
+ * separadores finos y marcas de ancho cero que a la vista son nada y al comparar son otro
+ * carácter. Sin limpiarlos, «pollo asado» tecleado en una tablet no coincide con el «pollo
+ * asado» que está guardado en la carta.
+ */
 function normalizeSearchText(value = '') {
     return String(value)
         .normalize('NFD')
         .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[\u200b-\u200d\ufeff\u00ad]/g, '')
+        .replace(/\s+/g, ' ')
         .toLowerCase()
         .trim();
 }
@@ -262,10 +272,22 @@ async function adjuntarRemovibles(idNegocio, categorias) {
 /**
  * Lista los productos de una categoría, con ingredientes.
  */
+/**
+ * Los productos vendibles de una categoría o, SIN `idCategoria`, los del negocio entero.
+ *
+ * El catálogo completo es el que el POS se trae para buscar en el propio equipo: así lo que
+ * se encuentra escribiendo es exactamente lo que se ve navegando por categorías —misma
+ * consulta y mismos filtros— y la búsqueda deja de depender de la red de la tablet.
+ */
 async function getProductosByCategoria(idNegocio, idCategoria) {
     return Models.CartaProducto.findAll({
-        where: { id_negocio: idNegocio, id_categoria: idCategoria, estado: 'A', disponible: true },
-        attributes: ['id_producto', 'nombre', 'descripcion', 'precio', 'imagen_url', 'icono', 'es_popular', 'es_adicion'],
+        where: {
+            id_negocio: idNegocio,
+            estado: 'A',
+            disponible: true,
+            ...(idCategoria ? { id_categoria: idCategoria } : {}),
+        },
+        attributes: ['id_producto', 'nombre', 'descripcion', 'precio', 'imagen_url', 'icono', 'es_popular', 'es_adicion', 'id_categoria'],
         include: [{
             model: Models.CartaProductoIngred,
             as: 'ingredientes',
