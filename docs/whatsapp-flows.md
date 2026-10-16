@@ -43,6 +43,52 @@ Lo que hay que saber:
 - Para dárselo a otro negocio con su propia WABA (Embedded Signup): mismo script; toma la WABA y
   el token del negocio de `numero_canal`.
 
+### 0.1 Despliegue y primera prueba real (2026-10-16, madrugada)
+
+| Hora | Qué |
+|---|---|
+| 00:11 | Respaldo `db_2026-10-16_0011.dump` (+ copia en R2) |
+| 00:12 | `75cd732` en el VPS, migración aplicada, servicio reiniciado |
+| 00:13 | Flow `2064164927637856` publicado en la WABA de EscalApp y Pregonchos encendido; el borrador de prueba `2371343120337306` borrado; scripts de prueba retirados del VPS |
+| 00:14–00:16 | **Nadie contestaba.** No era el código: los dos chats de prueba estaban en `handoff_humano` porque escribieron con el asistente **en pausa** (la pausa pasa a una persona todo chat que escribe; al reanudar, siguen con la persona hasta «Devolver al asistente» en la Bandeja). Se devolvieron desde la Bandeja |
+| 00:17 | El modelo preguntó **por su cuenta** «¿Las quieres para recoger, comer aquí o a domicilio?» **sin botón**: el formulario solo se pegaba cuando la capacidad devolvía la falta de entrega |
+| 00:22 | `cef2f6c`: si la respuesta final del modelo pregunta cómo lo recibe (`formularioEntrega.preguntaComoLoRecibe`) y el negocio lo tiene encendido, el botón va también (`manejadorLlm` → `formularioParaRespuesta`) |
+
+Pregonchos estaba **fuera de horario** (abre 5:00 AM): el formulario se ve, pero `tomar_pedido`
+no toma el pedido con el local cerrado. Para probar de noche hay que abrirle el horario.
+
+### 0.2 Pendiente para el 2026-10-16: suite amplia de pruebas, y después todos los negocios
+
+Decisión del dueño: **se va a encender en todos los negocios**, pero antes una batería amplia
+contra los errores que ya se pagaron con el asistente (auditorías de Zona Burger del 10-01 al
+10-14). La pregunta de si «afecta mucho»: el formulario **no cambia** lo que el asistente decide
+—el pedido sigue pasando por las mismas guardias, el «sí» y el Policy Gate—, pero **sí toca
+código común a todos los negocios** aunque esté apagado (`adaptador.renderizar`/`textoDeMensaje`,
+`manejadorLlm`, `seguirPedido`), y encendido abre caminos nuevos. Riesgo bajo, no cero. Casos a
+cubrir, con conversación completa y no solo funciones:
+
+1. **Guardias que no se pueden saltar** con el formulario: `ENTREGA_SIN_DECIR` (nunca suponer
+   recoger), `pregunta_abierta` (un «sí» tras una pregunta no ejecuta), «sí tras escribir el
+   cajero», «No veci» es un no, confirmación final obligatoria.
+2. **El formulario a destiempo**: respondido **después** de confirmar o con el pedido ya tomado;
+   un formulario viejo tocado en un pedido nuevo; respondido dos veces; respondido **sin tarea**
+   (va al modelo como texto: ¿llama bien a `tomar_pedido`?).
+3. **Mezclas**: el cliente escribe «domicilio» a mano **y** luego manda el formulario; manda el
+   formulario con «recoger» tras haber dado una dirección (se borra, comprobar el resumen);
+   «Para servir» con y sin mesas libres.
+4. **Barrio**: único, repetido (numerado), inexistente, «otro», con tildes/mayúsculas, negocio sin
+   barrios (va pegado a la dirección), ciudad entera por comunas.
+5. **El regex de `preguntaComoLoRecibe`**: falsos positivos («¿el domicilio a Las Cuadras cuánto
+   es o lo recojo?» dicho por el modelo en otro contexto) y negativos (variantes de redacción del
+   prompt `sistema.v15`). Medirlo con `scripts/evaluar.js respuestas_restaurante`.
+6. **Estados del negocio**: fuera de horario, caja cerrada, sin domiciliario, pausa, handoff.
+7. **Coexistencia (Zona Burger)**: el número vive también en la app del celular; comprobar que
+   el formulario se envía y que el eco del dueño no se confunde con una respuesta.
+8. **Costo**: mensajes por pedido con y sin formulario (hoy 6,9) en las mismas conversaciones.
+9. **Despliegue a todos**: correr el script por negocio (cada WABA tiene su Flow; Zona Burger con
+   su token de Embedded Signup) y decidir si hace falta un interruptor en Configuración en vez de
+   solo el script.
+
 ---
 
 ## 1. Cómo se ve para el cliente
