@@ -165,6 +165,47 @@ botón son código. Sí crecen un poco las herramientas que ve el modelo (`barri
 con barrios). Esa instrucción se reescribió para que el modelo **no** haga una segunda llamada a
 `consultar_info_negocio` antes de tomar el pedido: el resumen ya trae el valor.
 
+### 0.5 Pruebas con cómo escriben los clientes (2026-10-16, tarde)
+
+Se leyeron (solo lectura) los ~4.400 mensajes de clientes de Zona Burger desde el 2026-10-01 y se
+inventaron ejemplos con su estilo, sin copiar ninguno: `__tests__/_apoyo/direcciones_estilo_clientes.js`
+(direcciones, barrios del formulario, frases de pago, teléfonos) y
+`__tests__/intelligence/estilo_clientes.test.js` (163 pruebas, contra el catálogo de Pasto entero:
+555 lugares). Con el código de `64c5883` fallaban 33.
+
+**Lo que encontraron** (corregido en `flujo.js`, `claveBarrio` / `barrioEnTexto` / `soloComoConjunto`):
+
+- **Cobraba el domicilio de OTRO barrio** —lo grave—: «corazon de jesus 2» → Corazón de Jesús
+  (comuna 11) en vez de Corazón de Jesús II (comuna 10); «Alameda 2» → Alameda; «frente al centro
+  comercial» → barrio Centro; «Torres de san Luis» → San Luis, que es una vereda de La Laguna.
+- **No reconocía**: números donde el catálogo pone romanos («quito López 3», «chambu 2», «quito
+  lopez dos»), puntuación pegada («el.Prado», «B/la florida»), el barrio sin artículo tras
+  «barrio» («barrio pilar» → El Pilar), y dos lugares en la misma dirección («barrio centro atrás
+  de san Andresito»: gana el que va tras «barrio»).
+- **La nota perdía lo de la cocina**: «Pago en efectivo, sin cebolla» se borraba entera. Ahora se
+  quita solo la frase del pago (también «contra entrega», «al domiciliario», «con llave», «Nequi» suelto).
+
+Reglas que quedan: un nombre entero y único; el largo gana al corto que contiene; «Centro» solo
+con «barrio» delante; un nombre detrás de «torres / condominio / conjunto / hotel / edificio /
+mirador…» no cuenta salvo con «barrio» delante; ante la duda, $0 y lo ajusta el cajero.
+
+Además se corrió el buscador sobre las 256 direcciones reales de Zona Burger (en memoria, sin
+guardarlas): elige barrio en 134 y se revisaron a mano los casos de conjuntos y referencias.
+
+**Con el modelo real** (`intelligence/evaluacion/conversaciones/barrios_restaurante.json`, 9 casos;
+el negocio de evaluación local con los barrios de `scripts/fixtures/dev_zona_burger_eval_barrios.js`):
+
+| | barrios_restaurante | respuestas_restaurante (34) | costo de las 34 |
+|---|---|---|---|
+| Código de la mañana (`4793988`) | 2/9 | 34/34 | US$0,0152 |
+| Código nuevo | 9/9 (tres corridas) | 34/34 (dos de tres; la otra 33/34, ver abajo) | US$0,0150 |
+
+El fallo suelto de la batería general fue un barrio que no está en el catálogo: la instrucción le
+decía al modelo «pídele que lo escriba completo» y preguntó en vez de tomar el pedido (un mensaje
+más). Se cambió a «no se lo vuelvas a preguntar, sigue con el pedido». La evaluación también cazó
+que el modelo pasa `barrio: "San Luis"` sacado de «Torres de san Luis»: `tomar_pedido` lo descarta
+si en la dirección ese nombre solo es el de un conjunto.
+
 ---
 
 ## 1. Cómo se ve para el cliente

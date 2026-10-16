@@ -1647,35 +1647,43 @@ const MAX_OPCIONES_BARRIO = 8;
  * por el cliente un barrio equivocado es cobrarle un domicilio que no es.
  */
 function elegirBarrio(texto, barrios, opciones = null) {
-    const t = normalizar(texto).trim();
+    const t = claveBarrio(texto);
     if (!t) return null;
 
     // Contestando a «¿cuál de estos?»: por número («2») o por la zona («el de la comuna 1»).
     if (Array.isArray(opciones) && opciones.length > 0) {
         const pool = opciones.map((id) => barrios.find((b) => b.id_barrio === id)).filter(Boolean);
-        const numero = /^(?:el |la |opcion |numero )?(\d{1,2})\.?$/.exec(t);
+        const numero = /^(?:el |la |opcion |numero )?(\d{1,2})$/.exec(t);
         if (numero && pool[Number(numero[1]) - 1]) return pool[Number(numero[1]) - 1];
-        const porZona = pool.filter((b) => b.zona && contieneFrase(t, normalizar(b.zona)));
+        const porZona = pool.filter((b) => b.zona && contieneFrase(t, claveBarrio(b.zona)));
         if (porZona.length === 1) return porZona[0];
     }
 
     // «San José comuna 1»: el nombre y la zona en la misma frase.
     const conZona = barrios.filter(
-        (b) => b.zona && contieneFrase(t, normalizar(b.nombre)) && contieneFrase(t, normalizar(b.zona))
+        (b) => b.zona && contieneFrase(t, claveBarrio(b.nombre)) && contieneFrase(t, claveBarrio(b.zona))
     );
     if (conZona.length === 1) return conZona[0];
 
-    const exactos = barrios.filter((b) => normalizar(b.nombre).trim() === t);
+    // Sin «barrio» delante: «barrio betania» y «b/ betania» son «betania».
+    const sinPrefijo = t.replace(PREFIJO_BARRIO, '').trim() || t;
+    const exactos = barrios.filter((b) => claveBarrio(b.nombre) === sinPrefijo);
     if (exactos.length === 1) return exactos[0];
     if (exactos.length > 1) return { ambiguos: exactos };
     if (/^(otro|otra|ninguno|ninguna)\b|\b(no aparece|no esta|no sale|otro barrio)\b/.test(t)) {
         return OTRO_BARRIO;
     }
-    if (t.length < 3) return null;
-    const parciales = barrios.filter((b) => {
-        const n = normalizar(b.nombre).trim();
-        return n.includes(t) || t.includes(n);
+    if (sinPrefijo.length < 3) return null;
+    let parciales = barrios.filter((b) => {
+        const n = claveBarrio(b.nombre);
+        return n.includes(sinPrefijo) || contieneFrase(sinPrefijo, n);
     });
+    // «corazon de jesus 2» contiene a «Corazón De Jesús» y a «Corazón De Jesús II»: el que el
+    // cliente escribió entero gana. Elegir el corto era cobrar el domicilio de otra comuna.
+    const enteros = parciales.filter((b) => contieneFrase(sinPrefijo, claveBarrio(b.nombre)));
+    if (enteros.length > 0) parciales = soloLosMasLargos(enteros);
+    // «Torres de San Luis» en el campo del barrio es un conjunto, no la vereda San Luis.
+    parciales = parciales.filter((b) => !soloComoConjunto(texto, b));
     if (parciales.length === 1) return parciales[0];
     // Pocos candidatos: se le dan a elegir. Muchos («la»): mejor que lo escriba completo.
     if (parciales.length > 1 && parciales.length <= MAX_OPCIONES_BARRIO) return { ambiguos: parciales };
@@ -1694,23 +1702,98 @@ function elegirBarrio(texto, barrios, opciones = null) {
  * «Niño Jesús de Praga») cede ante el largo.
  */
 function barrioEnTexto(texto, barrios) {
-    const t = normalizar(texto || '');
-    if (!t.trim() || !Array.isArray(barrios) || barrios.length === 0) return null;
-    let hallados = barrios.filter((b) => contieneFrase(t, normalizar(b.nombre).trim()));
-    hallados = hallados.filter(
-        (b) =>
-            !hallados.some((o) => {
-                const corto = normalizar(b.nombre).trim();
-                const largo = normalizar(o.nombre).trim();
-                return largo.length > corto.length && largo.includes(corto);
-            })
-    );
+    const t = claveBarrio(texto);
+    if (!t || !Array.isArray(barrios) || barrios.length === 0) return null;
+    // ¿Va justo después de «barrio» (con o sin su artículo)?
+    const marcado = (b) => {
+        const sinArticulo = claveBarrio(b.nombre).replace(ARTICULO, '');
+        const escapado = sinArticulo.replace(/[.*+?^${}()|[\]\\]/g, (c) => '\\' + c);
+        return new RegExp(`(^|[^a-z0-9])${MARCA_BARRIO} (?:(?:el|la|los|las) )?${escapado}([^a-z0-9]|$)`).test(t);
+    };
+    let hallados = barrios.filter((b) => {
+        const n = claveBarrio(b.nombre);
+        // «Centro» suelto es un sitio («frente al centro comercial»), no el barrio: solo cuenta
+        // con «barrio» delante. Igual un nombre sin su artículo («barrio pilar» por «El Pilar»).
+        if (NOMBRES_DE_SITIO.has(n)) return marcado(b);
+        if (marcado(b)) return true;
+        // «Torres de San Luis», «Hotel casa Madrigal», «Condominio mirador de San Andrés»: el
+        // conjunto se llama como un barrio, pero no dice que esté en él (San Luis es una vereda de
+        // La Laguna). El cliente vería «Domicilio (San Luis)» y le parecería bien: no se elige.
+        return contieneFrase(t, n) && !nombreDeConjunto(t, n);
+    });
+    hallados = soloLosMasLargos(hallados);
     if (hallados.length > 1) {
-        const conZona = hallados.filter((b) => b.zona && contieneFrase(t, normalizar(b.zona)));
+        // «barrio centro atrás de san Andresito»: el que va después de «barrio» es el barrio.
+        const conMarca = hallados.filter(marcado);
+        if (conMarca.length > 0) hallados = conMarca;
+    }
+    if (hallados.length > 1) {
+        const conZona = hallados.filter((b) => b.zona && contieneFrase(t, claveBarrio(b.zona)));
         if (conZona.length > 0) hallados = conZona;
     }
     return hallados.length === 1 ? hallados[0] : null;
 }
+
+/** Quita los que son parte de otro nombre que también está («Praga» dentro de «Niño Jesús De Praga»). */
+function soloLosMasLargos(lista) {
+    return lista.filter((b) => {
+        const corto = claveBarrio(b.nombre);
+        return !lista.some((o) => {
+            const largo = claveBarrio(o.nombre);
+            return largo.length > corto.length && contieneFrase(largo, corto);
+        });
+    });
+}
+
+/**
+ * Cómo se compara un nombre de barrio: sin tildes, minúsculas, la puntuación como espacio y los
+ * números como cifras. El catálogo de Pasto dice «Quito López III», «Chambú II», «Tamasagra I», y
+ * los clientes escriben «quito López 3», «chambu 2», «quito lopez dos» (Zona Burger, 2026-10).
+ * «el.Prado» y «B/la florida» también (la barra y el punto separan palabras).
+ */
+const NUMERAL = { i: '1', ii: '2', iii: '3', iv: '4', v: '5', vi: '6', dos: '2', tres: '3', cuatro: '4', cinco: '5' };
+function claveBarrio(texto) {
+    return normalizar(texto || '')
+        .replace(/[^a-z0-9ñ]+/g, ' ')
+        .trim()
+        .split(' ')
+        .map((p) => NUMERAL[p] ?? p)
+        .join(' ');
+}
+/** Cómo marca un cliente que lo que sigue es el barrio («barrio», «b/», «brr», «Bsrrio»). */
+const MARCA_BARRIO = '(?:barrio|barrrio|bsrrio|brr|bario|b)';
+const PREFIJO_BARRIO = /^(?:barrio|barrrio|bsrrio|brr|bario|b)\s+/;
+const ARTICULO = /^(?:el|la|los|las)\s+/;
+/** ¿El nombre va como nombre de un conjunto, torre, hotel o edificio? (sobre `claveBarrio`). */
+const CONJUNTO = '(?:torres?|condominio|conjunto|edificio|edif|hotel|mirador|bosques|urbanizacion|ciudadela|residencias|unidad|apartamentos)';
+const UNION = '(?: (?:de|del|la|las|los|el|residencial|cerrado|casa|mirador))*';
+function nombreDeConjunto(t, n) {
+    const escapado = n.replace(/[.*+?^${}()|[\]\\]/g, (c) => '\\' + c);
+    return new RegExp(`(^|[^a-z0-9])${CONJUNTO}${UNION} ${escapado}([^a-z0-9]|$)`).test(t);
+}
+/**
+ * ¿En este texto el barrio solo aparece como nombre de un conjunto («Torres de San Luis») y nunca
+ * suelto ni con «barrio» delante? Lo usa también `tomar_pedido` con el `barrio` que pasa el modelo:
+ * con «Torres de san Luis» de dirección, el modelo mandó `barrio: "San Luis"` (evaluación del
+ * 2026-10-16) y se cobraba la vereda.
+ */
+function soloComoConjunto(texto, barrio) {
+    const t = claveBarrio(texto);
+    const n = claveBarrio(barrio?.nombre);
+    if (!t || !n || !nombreDeConjunto(t, n)) return false;
+    const escapado = n.replace(ARTICULO, '').replace(/[.*+?^${}()|[\]\\]/g, (c) => '\\' + c);
+    const conMarca = new RegExp(`(^|[^a-z0-9])${MARCA_BARRIO} (?:(?:el|la|los|las) )?${escapado}([^a-z0-9]|$)`);
+    if (conMarca.test(t)) return false;
+    // ¿Aparece también fuera del conjunto? Se quitan las menciones de conjunto y se vuelve a mirar.
+    const sinConjuntos = t.replace(
+        new RegExp(`(^|[^a-z0-9])${CONJUNTO}${UNION} ${n.replace(/[.*+?^${}()|[\]\\]/g, (c) => '\\' + c)}`, 'g'),
+        ' '
+    );
+    return !contieneFrase(sinConjuntos, n);
+}
+
+/** Nombres de barrio que también son un sitio cualquiera: solo valen con «barrio» delante. */
+const NOMBRES_DE_SITIO = new Set(['centro']);
 
 /** ¿La frase `aguja` aparece en `texto` como palabras enteras? («comuna 1» no está en «comuna 10»). */
 function contieneFrase(texto, aguja) {
@@ -3007,6 +3090,7 @@ module.exports = {
     leerEntrega,
     elegirBarrio,
     barrioEnTexto,
+    soloComoConjunto,
     resumenPorZona,
     elegirMesa,
     OTRO_BARRIO,

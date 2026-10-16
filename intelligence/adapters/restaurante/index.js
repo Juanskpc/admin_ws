@@ -75,6 +75,7 @@ const {
     resumenPorZona,
     elegirBarrio,
     barrioEnTexto,
+    soloComoConjunto,
     OTRO_BARRIO,
 } = require('./flujo');
 const contextoNegocio = require('../../core/contextoNegocio');
@@ -351,30 +352,65 @@ function entregaSinDecir({ args, cliente = [], asistente = [], hilo = [] }) {
 
 /** Cómo se nombra un medio de pago, sobre texto sin tildes. */
 const MEDIO_DE_PAGO = /\b(efectivo|nequi|daviplata|transferencia|transferir|transfiero|tarjeta|datafono|bancolombia|consignacion|consigno|pago|pagar|pagare|pago con|cancelo|cash|billete)\b/;
-/** La parte de una nota que dice cómo se paga: «Pago en efectivo», «Pago: Nequi», «paga con tarjeta». */
-const FRASE_DE_PAGO = /\b(pago|paga|pagara|pagar)\b\s*:?\s*(en|con|por)?\s*(efectivo|nequi|daviplata|transferencia|tarjeta|datafono|bancolombia)\b/i;
+/**
+ * La parte de una nota que dice cómo se paga, sobre texto sin tildes: «Pago en efectivo», «Pago:
+ * Nequi», «El cliente paga con tarjeta», «Paga al domiciliario en efectivo», «Pago contra entrega
+ * en efectivo», «Cancela por Nequi», «Pago con llave». Solo esa frase: lo que va al lado («sin
+ * cebolla») es de la cocina y se queda.
+ */
+const MEDIO = '(?:efectivo|nequi|daviplata|transferencia|tarjeta|datafono|bancolombia|llave(?: bre ?b)?)';
+const FRASE_DE_PAGO = new RegExp(
+    `(?:el cliente )?(?<![a-z])(?:pago|paga|pagara|pagar|cancela|cancelo)\\s*:?\\s*` +
+        `(?:(?:al domiciliario|contra ?entrega|en|con|por)\\s+)*${MEDIO}(?![a-z])`,
+    'g'
+);
+/** Una nota que es SOLO el medio («Nequi», «Efectivo.»). */
+const SOLO_MEDIO = new RegExp(`^\\s*${MEDIO}\\s*\\.?\\s*$`);
 
 /**
  * Quita de la nota la forma de pago si el cliente no habló de pagar en el pedido EN CURSO
  * (`pedidoEnCurso`). Lo que el cliente dijo antes de la última frontera es de otro pedido. Sin el
  * chat en orden no se toca nada: no hay con qué comprobarlo.
+ *
+ * Se trabaja sobre la nota sin tildes ni mayúsculas: el modelo la escribe, y lo que importa es lo
+ * que la cocina lee («sin cebolla»), no la ortografía de la frase que se quita.
  */
 function quitarPagoNoDicho(args, hilo) {
-    const nota = String(args?.nota || '');
+    const nota = normalizarTexto(args?.nota || '');
     if (!nota || !Array.isArray(hilo) || hilo.length === 0) return args;
-    if (!FRASE_DE_PAGO.test(normalizarTexto(nota))) return args;
+    const hayPago = SOLO_MEDIO.test(nota) || new RegExp(FRASE_DE_PAGO.source).test(nota);
+    if (!hayPago) return args;
     const loDijo = pedidoEnCurso(hilo).some(
         (m) => m.rol === 'cliente' && MEDIO_DE_PAGO.test(normalizarTexto(m.texto))
     );
     if (loDijo) return args;
-    const resto = nota
-        .split(/(?<=[.;])\s+|\s*[.;]\s*$/)
-        .map((s) => s.trim())
-        .filter((s) => s && !FRASE_DE_PAGO.test(normalizarTexto(s)))
-        .join(' ')
-        .trim();
+    const original = String(args.nota);
+    // Se busca sobre una copia letra a letra sin tildes ni mayúsculas, del MISMO largo, y se borra
+    // en el original lo que ocupa esa frase: así lo que queda conserva su ortografía («Sin ají»).
+    const plano = original
+        .split('')
+        .map((c) => {
+            const p = c.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+            return p.length === 1 ? p : c;
+        })
+        .join('');
+    let resto = '';
+    if (!SOLO_MEDIO.test(nota)) {
+        let desde = 0;
+        for (const m of plano.matchAll(new RegExp(FRASE_DE_PAGO.source, 'g'))) {
+            resto += original.slice(desde, m.index) + ' ';
+            desde = m.index + m[0].length;
+        }
+        resto = (resto + original.slice(desde))
+            // «Pago en efectivo, sin cebolla» → «, sin cebolla» → «sin cebolla».
+            .replace(/\s+([,.;:])/g, '$1')
+            .replace(/([,.;:])(?:\s*[,.;:])+/g, '$1')
+            .replace(/^[\s,.;:-]+|[\s,;:-]+$/g, '')
+            .replace(/\s{2,}/g, ' ')
+            .trim();
+    }
     const { nota: _quitada, ...sinNota } = args;
-    return resto ? { ...args, nota: resto } : sinNota;
+    return resto && /[a-z0-9]/i.test(resto) ? { ...args, nota: resto } : sinNota;
 }
 
 /** ¿El negocio tiene mesas? Decide si el formulario ofrece «Para servir». Sin base, no. */
@@ -952,9 +988,10 @@ function domicilioAEseBarrio(texto, barrios) {
     }
     return {
         no_esta: texto,
+        // Sin volver a preguntar: otra vuelta es otro mensaje, y el cajero ajusta el valor igual.
         que_hacer:
-            'Ese barrio no está en la lista: pídele que lo escriba completo o con la comuna; si aun ' +
-            'así no aparece, di que el valor del domicilio lo confirma el restaurante y sigue con el pedido.',
+            'Ese barrio no está en la lista: no se lo vuelvas a preguntar. Sigue con el pedido y di ' +
+            'que el valor del domicilio lo confirma el restaurante.',
     };
 }
 
@@ -971,7 +1008,11 @@ async function idBarrioDelPedido(idNegocio, args) {
     if (!habilitado || barrios.length === 0) return null;
     if (args.barrio) {
         const r = elegirBarrio(String(args.barrio), barrios);
-        if (r && r !== OTRO_BARRIO && !r.ambiguos) return r.id_barrio;
+        // El modelo saca el barrio de la dirección a su manera: si en la dirección ese nombre
+        // solo es el de un conjunto («Torres de san Luis»), no es el barrio.
+        if (r && r !== OTRO_BARRIO && !r.ambiguos && !soloComoConjunto(args.direccion || '', r)) {
+            return r.id_barrio;
+        }
     }
     const enTexto = barrioEnTexto(`${args.barrio || ''} . ${args.direccion || ''} . ${args.nota || ''}`, barrios);
     return enTexto?.id_barrio ?? null;

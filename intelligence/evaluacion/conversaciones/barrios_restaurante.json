@@ -1,0 +1,87 @@
+{
+  "suite": "barrios_restaurante",
+  "descripcion": "Domicilio con barrios (2026-10-16): lo que falló en las pruebas reales de Pregonchos con 411 barrios — el modelo pasó a persona por el precio, dejó el barrio en la dirección y supuso el pago. Mensajes inventados con el estilo de los clientes de Zona Burger. Necesita el negocio de evaluación con el catálogo de Pasto cargado y precio por comuna (Comuna N = $4.000 + N×500; ver docs/whatsapp-flows.md §0.5). Llama al modelo y cuesta dinero; las capacidades van en seco.",
+  "variables_en_todos": { "nombre": "Laura Gómez" },
+  "espera_en_todos": {
+    "no_invoca": ["pasar_a_persona"],
+    "no_menciona": ["confírmalo con", "comunícate con", "problema interno", "alguien del equipo"],
+    "max_caracteres": 900
+  },
+  "casos": [
+    {
+      "id": "barrio-al-final-de-la-direccion",
+      "historial": [
+        { "rol": "cliente", "texto": "Me regalas una criollita pequeña a domicilio porfa" },
+        { "rol": "asistente", "texto": "Para mandártela necesito dos cositas. Puedes contestarme todo junto 👇\n📍 La dirección, con el barrio o alguna indicación para llegar\n📱 Un número de contacto, para que el domiciliario te llame al llegar" }
+      ],
+      "mensaje": "Mz 14 casa 7 corazón de Jesús 3001234567",
+      "espera": { "pide_confirmacion": "tomar_pedido", "menciona_alguno": ["domicilio (corazón de jesús)"] }
+    },
+    {
+      "id": "barrio-con-numero-en-vez-de-romano",
+      "historial": [
+        { "rol": "cliente", "texto": "Una viciosa pequeña para domicilio" },
+        { "rol": "asistente", "texto": "Para mandártela necesito dos cositas. Puedes contestarme todo junto 👇\n📍 La dirección, con el barrio o alguna indicación para llegar\n📱 Un número de contacto, para que el domiciliario te llame al llegar" }
+      ],
+      "mensaje": "Mz39 casa 7 chambu 2 3001234568",
+      "espera": { "pide_confirmacion": "tomar_pedido", "menciona_alguno": ["domicilio (chambú ii)"] }
+    },
+    {
+      "id": "barrio-con-b-barra",
+      "historial": [
+        { "rol": "cliente", "texto": "Hola veci una criollita pequeña" },
+        { "rol": "asistente", "texto": "¿La quieres a domicilio, para recoger o para comer aquí?" }
+      ],
+      "mensaje": "Domicilio. Calle 12f n⁰ 4 -28 b/el pilar 3001234569",
+      "espera": { "pide_confirmacion": "tomar_pedido", "menciona_alguno": ["domicilio (el pilar)"] }
+    },
+    {
+      "id": "pregunta-el-precio-de-su-barrio",
+      "mensaje": "Cuánto vale el domicilio a betania?",
+      "espera": { "no_pide_confirmacion": true, "menciona_alguno": ["6.000", "6000"] }
+    },
+    {
+      "id": "pregunta-el-precio-de-un-barrio-repetido",
+      "mensaje": "Cuanto cobran el domi al barrio santa fe?",
+      "espera": { "no_pide_confirmacion": true, "menciona_alguno": ["santa fe i", "santa fe 1", "cuál", "cual", "6.000"] }
+    },
+    {
+      "id": "barrio-que-no-esta-no-se-pasa-a-persona",
+      "historial": [
+        { "rol": "cliente", "texto": "Una criollita pequeña a domicilio" },
+        { "rol": "asistente", "texto": "Para mandártela necesito dos cositas. Puedes contestarme todo junto 👇\n📍 La dirección, con el barrio o alguna indicación para llegar\n📱 Un número de contacto, para que el domiciliario te llame al llegar" }
+      ],
+      "mensaje": "Carrera 40 #14-25 barrio las palmeras del oriente 3001234570",
+      "espera": { "pide_confirmacion": "tomar_pedido" }
+    },
+    {
+      "id": "conjunto-con-nombre-de-vereda-no-cobra-la-vereda",
+      "historial": [
+        { "rol": "cliente", "texto": "Una criollita pequeña a domicilio" },
+        { "rol": "asistente", "texto": "Para mandártela necesito dos cositas. Puedes contestarme todo junto 👇\n📍 La dirección, con el barrio o alguna indicación para llegar\n📱 Un número de contacto, para que el domiciliario te llame al llegar" }
+      ],
+      "mensaje": "Torres de san Luis torre 10 apto 205 3001234571",
+      "espera": { "pide_confirmacion": "tomar_pedido", "no_menciona": ["domicilio (san luis"] }
+    },
+    {
+      "id": "pago-del-pedido-anterior-no-se-supone",
+      "historial": [
+        { "rol": "cliente", "texto": "Una criollita pequeña Mz 14 casa 7 corazón de Jesús 3001234567 Efectivo" },
+        { "rol": "asistente", "texto": "¡Listo! Tu pedido quedó tomado. El número es ORD-7100 — guárdalo para consultar cómo va." },
+        { "rol": "cliente", "texto": "Hola de nuevo" },
+        { "rol": "asistente", "texto": "👋 ¡Buenas noches! Te saluda *ZONA BURGER*. Aquí tienes la carta completa, con fotos y precios. O si prefieres, dime por aquí qué se te antoja y yo te lo anoto." }
+      ],
+      "mensaje": "Me regalas una viciosa pequeña a la misma dirección, Mz 14 casa 7 corazón de Jesús 3001234567",
+      "espera": { "pide_confirmacion": "tomar_pedido", "no_menciona": ["efectivo"], "menciona_alguno": ["domicilio (corazón de jesús)"] }
+    },
+    {
+      "id": "formulario-con-el-modelo",
+      "historial": [
+        { "rol": "cliente", "texto": "Quiero una criollita pequeña" },
+        { "rol": "asistente", "texto": "¿La quieres a domicilio, para recoger o para comer aquí?" }
+      ],
+      "mensaje": "📋 Formulario enviado\nEntrega: domicilio\nBarrio: Betania\nDireccion: Carrera 3e # 19 a 49\nTelefono: 3001234572\nPago: Nequi",
+      "espera": { "pide_confirmacion": "tomar_pedido", "menciona_alguno": ["domicilio (betania)"] }
+    }
+  ]
+}
