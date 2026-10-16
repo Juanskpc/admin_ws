@@ -23,8 +23,11 @@ const REPORT_TYPES = {
             { key: 'numero_orden', label: 'Orden', type: 'text' },
             { key: 'tipo_pedido', label: 'Tipo pedido', type: 'text' },
             { key: 'fecha_pedido', label: 'Fecha pedido', type: 'date' },
-            { key: 'mesa', label: 'Mesa', type: 'text' },
-            { key: 'responsable', label: 'Responsable', type: 'text' },
+            { key: 'mesa', label: 'Mesa / Domiciliario', type: 'text' },
+            // Dos personas y no una: quien toma el pedido y quien lo cobra suelen ser la
+            // misma, pero cuando no lo son es justo lo que el dueño viene a mirar.
+            { key: 'tomo_pedido', label: 'Tomó el pedido', type: 'text' },
+            { key: 'cobro', label: 'Cobró', type: 'text' },
             { key: 'metodo_pago', label: 'Forma de pago', type: 'text' },
             { key: 'total', label: 'Total', type: 'currency' },
         ],
@@ -241,7 +244,8 @@ function normalizeRows(tipo, rows) {
             ...row,
             tipo_pedido: row.tipo_pedido || 'MESA',
             mesa: row.mesa || 'No aplica',
-            responsable: row.responsable || 'No aplica',
+            tomo_pedido: row.tomo_pedido || 'No registrado',
+            cobro: row.cobro || 'Sin registro',
             total: toNumber(row.total),
             fecha_pedido: toNullableDate(row.fecha_pedido || row.fecha_cierre),
         }));
@@ -416,19 +420,40 @@ async function runVentasPeriodoQuery({ idNegocio, startDate, endDate, page, page
             CASE
                 WHEN o.tipo_pedido = 'MESA' AND m.id_mesa IS NOT NULL
                     THEN COALESCE(CONCAT(m.nombre, ' · #', m.numero::text), 'No aplica')
+                WHEN o.tipo_pedido = 'DOMICILIO' AND d.id_usuario IS NOT NULL
+                    THEN CONCAT('Dom. · ', TRIM(CONCAT(d.primer_nombre, ' ', d.primer_apellido)))
                 ELSE 'No aplica'
             END AS mesa,
-            CASE
-                WHEN o.tipo_pedido = 'DOMICILIO' THEN COALESCE(TRIM(CONCAT(d.primer_nombre, ' ', d.primer_apellido)), 'No aplica')
-                ELSE COALESCE(TRIM(CONCAT(u.primer_nombre, ' ', u.primer_apellido)), 'No aplica')
-            END AS responsable,
-            COALESCE(mp.nombre, 'Sin método') AS metodo_pago,
+            -- Quien TOMÓ el pedido: el dueño de la orden, siempre, también en domicilio.
+            COALESCE(NULLIF(TRIM(CONCAT(u.primer_nombre, ' ', u.primer_apellido)), ''), 'No registrado') AS tomo_pedido,
+            -- Quien COBRÓ: la firma del movimiento de caja, que es donde queda el cobro de
+            -- verdad. Un pedido cerrado sin movimiento (cortesía, ajuste) no tiene cajero.
+            COALESCE(NULLIF(TRIM(CONCAT(c.primer_nombre, ' ', c.primer_apellido)), ''), 'Sin registro') AS cobro,
+            -- Con multipago el pedido se cobró con varias formas: se nombran todas.
+            COALESCE(
+                (SELECT string_agg(DISTINCT COALESCE(mpp.nombre, 'Sin método'), ' + ')
+                   FROM restaurante.rest_pago_orden po
+                   LEFT JOIN restaurante.rest_metodo_pago mpp ON mpp.id_metodo_pago = po.id_metodo_pago
+                  WHERE po.id_orden = o.id_orden),
+                mp.nombre,
+                'Sin método'
+            ) AS metodo_pago,
             o.total
         FROM restaurante.pedid_orden o
         LEFT JOIN restaurante.rest_mesa m ON m.id_mesa = o.id_mesa
         LEFT JOIN general.gener_usuario u ON u.id_usuario = o.id_usuario
         LEFT JOIN general.gener_usuario d ON d.id_usuario = o.id_domiciliario
         LEFT JOIN restaurante.rest_metodo_pago mp ON mp.id_metodo_pago = o.id_metodo_pago
+        LEFT JOIN LATERAL (
+            SELECT uc.primer_nombre, uc.primer_apellido
+              FROM restaurante.rest_movimiento_caja mc
+              JOIN general.gener_usuario uc ON uc.id_usuario = mc.id_usuario
+             WHERE mc.id_orden = o.id_orden
+               AND mc.tipo = 'INGRESO'
+               AND mc.id_movimiento_anula IS NULL
+             ORDER BY mc.fecha DESC, mc.id_movimiento DESC
+             LIMIT 1
+        ) c ON TRUE
         WHERE o.id_negocio = $1
           AND o.estado = 'CERRADA'
           AND o.fecha_cierre >= $2::date::timestamp
@@ -1382,6 +1407,53 @@ async function getReporte({ idUsuario, idNegocio, tipo = 'ventas_periodo', fecha
     };
 }
 
+/**
+ * Los ingresos cobrados en el período, repartidos por forma de pago.
+ *
+ * Un pedido con multipago aporta a VARIAS formas: el reparto sale de `rest_pago_orden`
+ * cuando lo hay y, si no, del método único de la orden. La suma de las partes es, por
+ * construcción, el total cobrado del período.
+ */
+async function getDesglosePago(idNegocio, startDate, endDate) {
+    const query = `
+        WITH cerradas AS (
+            SELECT o.id_orden, o.total, o.id_metodo_pago
+              FROM restaurante.pedid_orden o
+             WHERE o.id_negocio = $1
+               AND o.estado = 'CERRADA'
+               AND o.fecha_cierre >= $2::date::timestamp
+               AND o.fecha_cierre < ($3::date + 1)::timestamp
+        ),
+        partes AS (
+            SELECT po.id_metodo_pago, po.valor, c.id_orden
+              FROM cerradas c
+              JOIN restaurante.rest_pago_orden po ON po.id_orden = c.id_orden
+            UNION ALL
+            SELECT c.id_metodo_pago, c.total AS valor, c.id_orden
+              FROM cerradas c
+             WHERE NOT EXISTS (
+                 SELECT 1 FROM restaurante.rest_pago_orden po WHERE po.id_orden = c.id_orden
+             )
+        )
+        SELECT COALESCE(mp.nombre, 'Sin método') AS metodo,
+               COUNT(DISTINCT partes.id_orden)::int AS ordenes,
+               COALESCE(SUM(partes.valor), 0)::numeric AS total
+          FROM partes
+          LEFT JOIN restaurante.rest_metodo_pago mp ON mp.id_metodo_pago = partes.id_metodo_pago
+         GROUP BY 1
+         ORDER BY 3 DESC, 1 ASC
+    `;
+
+    const { rows } = await Models.pool.query(query, [idNegocio, startDate, endDate]);
+    const total = rows.reduce((acc, r) => acc + toNumber(r.total), 0);
+    return rows.map((r) => ({
+        metodo: r.metodo,
+        ordenes: toNumber(r.ordenes),
+        total: toNumber(r.total),
+        participacion: total > 0 ? (toNumber(r.total) / total) * 100 : 0,
+    }));
+}
+
 async function getExportPayload({ idUsuario, idNegocio, tipo = 'ventas_periodo', fechaDesde, fechaHasta, idsProducto }) {
     if (!REPORT_TYPES[tipo]) {
         throw createHttpError('Tipo de reporte no soportado.', 422, 'REPORTE_TIPO_INVALIDO');
@@ -1418,7 +1490,10 @@ async function getExportPayload({ idUsuario, idNegocio, tipo = 'ventas_periodo',
     }
 
     const columns = columnsFor(tipo, { idsProducto: productos });
-    const resumen = mapResumenItems(tipo, reportResult.resumen || {}, rangoFechas).reduce((acc, item) => {
+    // Con tipo (`currency`, `number`…): el exportador necesita saber qué es cada cifra para
+    // darle formato. `resumen`, plano, se mantiene porque es el contrato que ya existía.
+    const resumenItems = mapResumenItems(tipo, reportResult.resumen || {}, rangoFechas);
+    const resumen = resumenItems.reduce((acc, item) => {
         acc[item.label] = item.value;
         return acc;
     }, {});
@@ -1442,6 +1517,12 @@ async function getExportPayload({ idUsuario, idNegocio, tipo = 'ventas_periodo',
             .map((p) => p.nombre).join(', ');
     }
 
+    // El reparto por forma de pago va en TODOS los reportes: sea cual sea el corte que se
+    // mire, «cuánto entró y en qué» es la misma pregunta del período.
+    const desglosePago = await getDesglosePago(
+        negocioContext.idNegocio, rangoFechas.startDate, rangoFechas.endDate,
+    );
+
     return {
         tipo,
         titulo: REPORT_TYPES[tipo].titulo,
@@ -1449,10 +1530,14 @@ async function getExportPayload({ idUsuario, idNegocio, tipo = 'ventas_periodo',
             id_negocio: negocioContext.idNegocio,
             nombre: negocioContext.negocioNombre,
         },
+        periodo: { desde: rangoFechas.startDate, hasta: rangoFechas.endDate },
         columns,
         rows,
         exportRows: buildExportRows(rows, columns),
         resumen,
+        resumenItems,
+        desglosePago,
+        totalIngresos: desglosePago.reduce((acc, d) => acc + d.total, 0),
     };
 }
 

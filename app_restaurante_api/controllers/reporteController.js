@@ -2,7 +2,9 @@ const { validationResult } = require('express-validator');
 
 const Respuesta = require('../../app_core/helpers/respuesta');
 const reporteService = require('../services/reporteService');
-const exportService = require('../../app_parqueadero_api/services/reporteExportService');
+// El exportador propio del restaurante: sabe el tipo de cada columna, así que puede dar
+// formato al dinero y a las fechas. El genérico del parqueadero volcaba el valor crudo.
+const exportService = require('../services/reporteExportService');
 
 function getErrorStatus(error) {
     return Number(error?.statusCode) || 500;
@@ -70,22 +72,29 @@ async function exportarReporte(req, res) {
         });
 
         const slugNegocio = buildSlugFromNegocio(payload.negocio.nombre);
+        // Se mandan las filas CRUDAS (no `exportRows`, que son texto ya aplanado) junto con la
+        // definición de las columnas: el exportador da el formato y, en el Excel, las cifras
+        // llegan como números que se pueden sumar.
         const exportOptions = {
             slugNegocio,
             tipoReporte: payload.tipo,
             titulo: payload.titulo,
-            columnas: payload.columns.map((column) => column.label),
-            kpis: payload.resumen,
+            nombreNegocio: payload.negocio.nombre,
+            periodo: payload.periodo,
+            columnas: payload.columns,
+            filas: payload.rows,
+            resumenItems: payload.resumenItems,
+            desglosePago: payload.desglosePago,
         };
 
         if (formato === 'pdf') {
-            const { buffer, filename } = await exportService.generarPDFBuffer(payload.exportRows, exportOptions);
+            const { buffer, filename } = await exportService.generarPDFBuffer(exportOptions);
             res.setHeader('Content-Type', 'application/pdf');
             res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
             return res.send(buffer);
         }
 
-        const { buffer, filename } = await exportService.generarXLSXBuffer(payload.exportRows, exportOptions);
+        const { buffer, filename } = await exportService.generarXLSXBuffer(exportOptions);
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
         res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
         return res.send(buffer);
