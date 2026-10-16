@@ -57,6 +57,26 @@ describe('el canal y el formulario', () => {
         expect(p.flow_action_payload.data.entregas.map((e) => e.id)).toEqual(['domicilio', 'recoger']);
     });
 
+    it('reconoce cuando el modelo pregunta por su cuenta cómo lo recibe', async () => {
+        // Producción, 2026-10-16: esta frase salió sin botón.
+        expect(
+            formularioEntrega.preguntaComoLoRecibe(
+                'Sí 😊 *Empanadas (x3)*, de carne con ají, a $9.000. ¿Las quieres para recoger, comer aquí o a domicilio?'
+            )
+        ).toBe(true);
+        expect(formularioEntrega.preguntaComoLoRecibe('¿Te lo llevamos a domicilio o pasas a recogerlo?')).toBe(true);
+        // Afirmaciones y preguntas de otra cosa, no.
+        expect(formularioEntrega.preguntaComoLoRecibe('El domicilio a Las Cuadras vale $4.000.')).toBe(false);
+        expect(formularioEntrega.preguntaComoLoRecibe('¿Cuánto vale el domicilio?')).toBe(false);
+        // Fuera de WhatsApp ni se consulta la base.
+        expect(
+            await formularioEntrega.paraRespuesta({
+                texto: '¿A domicilio o para recoger?',
+                conversacion: { canal: 'webchat', id_negocio: 12 },
+            })
+        ).toBeNull();
+    });
+
     it('con mesas el formulario ofrece también «Para servir»', () => {
         const o = formularioEntrega.opcion({ flowId: 'F1', idConversacion: 'c', conMesas: true });
         expect(o.formulario.datos.entregas.map((e) => e.id)).toContain('servir');

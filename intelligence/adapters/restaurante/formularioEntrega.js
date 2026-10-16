@@ -26,6 +26,7 @@
 'use strict';
 
 const Models = require('../../../app_core/models/conection');
+const mesaPublicaService = require('../../../app_restaurante_api/services/mesaPublicaService');
 const { ENCABEZADO_FORMULARIO } = require('../../core/mensajeCanonico');
 
 const PANTALLA = 'DATOS_ENTREGA';
@@ -205,6 +206,34 @@ function leer(texto) {
     return campos;
 }
 
+/**
+ * ¿Este texto del modelo le pregunta al cliente cómo recibe el pedido? Una pregunta que nombra el
+ * domicilio y la otra forma (recoger, llevar, aquí, servir). Prueba en producción del 2026-10-16:
+ * «¿Las quieres para recoger, comer aquí o a domicilio?» salió sin botón porque el modelo
+ * preguntó por su cuenta, antes de intentar tomar el pedido.
+ */
+function preguntaComoLoRecibe(texto) {
+    const t = sinTildes(texto);
+    return t.includes('?') && /domicilio/.test(t) && /(recog|llevar|aqui|servir)/.test(t);
+}
+
+/**
+ * La opción del formulario para pegar a una respuesta del modelo, o `null`. Solo por WhatsApp,
+ * solo si el negocio lo encendió y solo si la respuesta pregunta cómo lo recibe.
+ */
+async function paraRespuesta({ texto, conversacion }) {
+    if (conversacion?.canal !== 'whatsapp' || !preguntaComoLoRecibe(texto)) return null;
+    const flowId = await flowIdDe(conversacion.id_negocio);
+    if (!flowId) return null;
+    let conMesas = false;
+    try {
+        conMesas = (await mesaPublicaService.listarPublicas(conversacion.id_negocio)).length > 0;
+    } catch {
+        conMesas = false;
+    }
+    return opcion({ flowId, idConversacion: conversacion.id_conversacion, conMesas });
+}
+
 module.exports = {
     PANTALLA,
     ID_OPCION,
@@ -216,4 +245,6 @@ module.exports = {
     opcion,
     pregunta,
     leer,
+    preguntaComoLoRecibe,
+    paraRespuesta,
 };

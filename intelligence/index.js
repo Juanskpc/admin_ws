@@ -179,7 +179,11 @@ function montarEscalera({ adaptador = null, proveedor = null, modelo = null } = 
 
     puerto.registrarAdaptador(elegido.adaptador);
     const config = { ...CONFIG, modelo: elegido.modelo };
-    const llm = crearManejadorLlm({ adaptador: elegido.adaptador, config });
+    const llm = crearManejadorLlm({
+        adaptador: elegido.adaptador,
+        config,
+        formularioParaRespuesta: require('./adapters/restaurante/formularioEntrega').paraRespuesta,
+    });
 
     const etiqueta = `${elegido.adaptador.nombre}/${config.modelo}`;
     console.log(

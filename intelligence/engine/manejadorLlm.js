@@ -182,6 +182,9 @@ function crearManejadorLlm({
     repositorio = require('./repositorio'),
     config = CONFIG,
     ahora = () => new Date(),
+    // Un formulario del canal para pegar a la respuesta final del modelo, o `null` (ver
+    // `formularioEntrega.paraRespuesta`). Opcional: sin él, el modelo contesta solo con texto.
+    formularioParaRespuesta = null,
 } = {}) {
     if (!adaptador) {
         throw new Error(
@@ -377,6 +380,15 @@ function crearManejadorLlm({
                     };
                 }
 
+                // El modelo preguntó por su cuenta lo que un formulario recoge mejor (cómo lo
+                // recibe, sin haber intentado la capacidad): el botón también va.
+                if (!formularioOfrecido && formularioParaRespuesta) {
+                    try {
+                        formularioOfrecido = await formularioParaRespuesta({ texto: dicho, conversacion });
+                    } catch {
+                        formularioOfrecido = null;
+                    }
+                }
                 return {
                     pasos,
                     invocaciones,
