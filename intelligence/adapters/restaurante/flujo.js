@@ -39,6 +39,7 @@ const {
     esComando,
     esSaludo,
     saludoPorLaHora,
+    esAfirmacion,
     esAfirmacionConEntrega,
     esPeticionConQue,
 } = require('../../engine/texto');
@@ -1630,6 +1631,9 @@ function leerTelefono(texto) {
     return `${m[1]}${m[2]}${m[3]}`;
 }
 
+/** Cuánto vale un «sí» de más tras confirmar: el tiempo de tocar el segundo botón, no más. */
+const MINUTOS_SI_REPETIDO = 5;
+
 /** Lo que devuelve `elegirBarrio` cuando el cliente dice que su barrio no está en la lista. */
 const OTRO_BARRIO = Symbol('otro_barrio');
 
@@ -2574,6 +2578,30 @@ function crearFlujoRestaurante({
             idNegocio: Number(conversacion.id_negocio),
             ahora,
         };
+
+        // Un «sí» suelto justo después de tomar el pedido: no hay nada que confirmar. Zona Burger,
+        // 2026-10-16 19:25 (ORD-8360): el formulario volvió a enseñar el resumen con su botón, la
+        // clienta tocó los dos «Sí», el segundo fue al modelo y este pasó el chat a una persona —
+        // y el asistente se quedó mudo con ella. Se le dice que ya quedó, sin modelo.
+        const recien = conversacion.variables?.ultima_confirmacion;
+        if (
+            recien?.numero &&
+            !confirmacion.pendiente(conversacion) &&
+            esAfirmacion(texto) &&
+            ahora().getTime() - Date.parse(recien.en) < MINUTOS_SI_REPETIDO * 60 * 1000
+        ) {
+            return {
+                pasos: [paso('si_tras_confirmar', { numero: recien.numero })],
+                respuestas: [
+                    recien.capacidad === 'tomar_pedido'
+                        ? `¡Ya quedó! 👍 Tu pedido ${recien.numero} está tomado. Si quieres cambiarle algo, dímelo.`
+                        : `¡Ya quedó! 👍 (${recien.numero})`,
+                ],
+                variables: conMemoria(conversacion, { ultima_confirmacion: recien }),
+                resultado: 'resuelto',
+                nivel: 'determinista',
+            };
+        }
 
         // ⚠️ La confirmación pendiente manda sobre todo lo demás.
         //

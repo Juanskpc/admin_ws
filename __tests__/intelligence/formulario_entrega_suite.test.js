@@ -174,7 +174,7 @@ describe('1. guardias: el formulario nunca ejecuta nada solo', () => {
         const c = chat(flujo);
         await c.dice('#P12-4x1');
         await c.dice(formulario(DOMICILIO_LAS_CUADRAS));
-        c.humano_ultimo_en = new Date(Date.now() + 1000).toISOString();
+        c.humano_ultimo_en = '2026-10-16T19:30:01-05:00'; // tras el resumen, según el reloj fijo del flujo
         const d = await c.dice('si');
         expect(gate.ejecutar).not.toHaveBeenCalled();
         expect(decisiones(d)).toContain('confirmacion_si_tras_persona');
@@ -335,8 +335,10 @@ describe('2. a destiempo: el formulario llega con un resumen esperando el sí', 
     test('con el cajero recién escrito, el formulario igual no ejecuta y pone el reloj en hora', async () => {
         const { flujo, gate } = montar();
         const c = chat(flujo);
-        c.tarea = esperando(DOMICILIO, { preguntado_en: new Date(Date.now() - 60000).toISOString() });
-        c.humano_ultimo_en = new Date(Date.now() - 30000).toISOString();
+        // Relativo al reloj fijo del flujo (19:30), no al del PC: con la hora real la prueba fallaba
+        // pasadas las 19:30 de cualquier día.
+        c.tarea = esperando(DOMICILIO, { preguntado_en: '2026-10-16T19:29:00-05:00' });
+        c.humano_ultimo_en = '2026-10-16T19:29:30-05:00';
         await c.dice(formulario(DOMICILIO_LAS_CUADRAS));
         expect(gate.ejecutar).not.toHaveBeenCalled();
         expect(Date.parse(c.tarea.datos.preguntado_en)).toBeGreaterThan(Date.parse(c.humano_ultimo_en));
@@ -808,5 +810,56 @@ describe('9. el botón también cuando se pide la dirección, con teléfono, y e
             const conPago = { nota: 'Pago en efectivo' };
             expect(ajustar(conPago, [])).toBe(conPago);
         });
+    });
+});
+
+// Zona Burger, 2026-10-16 19:25 (ORD-8360): el formulario volvió a enseñar el resumen con su botón,
+// la clienta tocó los dos «Sí» y el segundo se fue al modelo, que pasó el chat a una persona.
+describe('10. un «sí» de más justo después de tomar el pedido', () => {
+    test('EL CASO: el segundo «sí» se contesta sin modelo y sin pasar a nadie', async () => {
+        const { flujo } = montar();
+        const c = chat(flujo);
+        await c.dice('#P12-4x1');
+        await c.dice(formulario({ ...DOMICILIO_LAS_CUADRAS, entrega: 'recoger' }));
+        expect(c.tarea.nombre).toBe(confirmacion.TAREA);
+        // El motor guarda las variables que devuelve cada turno: así llegan al siguiente.
+        let variables = {};
+        const dice = async (texto) => {
+            const d = await flujo({
+                conversacion: {
+                    id_conversacion: 'c1', id_negocio: 12, canal: 'whatsapp', id_externo: '573000000000',
+                    variables: { turnos: 2, nombre: 'Ana', ...variables }, humano_ultimo_en: null,
+                    tarea_actual: c.tarea?.nombre ?? null, tarea_datos: c.tarea?.datos ?? null,
+                },
+                mensajes: [{ contenido: texto }], turno: { id_turno: 't' }, texto, consumo: { costos: [] },
+            });
+            if (d.variables) variables = d.variables;
+            if (d.soltarTarea) c.tarea = null;
+            else if (d.tarea !== undefined) c.tarea = d.tarea;
+            return d;
+        };
+        const primero = await dice('si');
+        expect(textoDe(primero)).toContain('ORD-900');
+        expect(variables.ultima_confirmacion).toMatchObject({ capacidad: 'tomar_pedido', numero: 'ORD-900' });
+        const segundo = await dice('si');
+        expect(segundo.nivel).toBe('determinista');
+        expect(decisiones(segundo)).toContain('si_tras_confirmar');
+        expect(textoDe(segundo)).toContain('Tu pedido ORD-900 está tomado');
+        expect(segundo.estado).toBeUndefined(); // ni handoff
+    });
+
+    test('pasados unos minutos, o si no es un «sí», sigue el camino de siempre', async () => {
+        const { flujo } = montar();
+        const conversacion = (en) => ({
+            id_conversacion: 'c1', id_negocio: 12, canal: 'whatsapp', id_externo: '573000000000',
+            variables: { turnos: 2, ultima_confirmacion: { capacidad: 'tomar_pedido', en, numero: 'ORD-1' } },
+            humano_ultimo_en: null, tarea_actual: null, tarea_datos: null,
+        });
+        const turno = (texto, en) =>
+            flujo({ conversacion: conversacion(en), mensajes: [{ contenido: texto }], turno: { id_turno: 't' }, texto, consumo: { costos: [] } });
+        const viejo = await turno('si', '2026-10-16T19:00:00-05:00'); // 30 min antes del reloj fijo
+        expect(decisiones(viejo)).not.toContain('si_tras_confirmar');
+        const otraCosa = await turno('quiero otra criollita', '2026-10-16T19:29:00-05:00');
+        expect(decisiones(otraCosa)).not.toContain('si_tras_confirmar');
     });
 });

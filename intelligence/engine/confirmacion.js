@@ -411,9 +411,20 @@ async function resolver(ctx, { gate, registry = registryReal, ahora = () => new 
             texto,
             // El código de la cita se recuerda: sin `consultar_mis_citas` es la única forma de
             // que el asistente pueda tocarla después (ver la regla 3 de la FSM).
-            variables: sobre.resultado?.codigo_cita
-                ? { ...variables, ultima_cita: sobre.resultado.codigo_cita }
-                : variables,
+            //
+            // Y qué se acaba de confirmar, y cuándo: un segundo «sí» que llega detrás (Zona Burger,
+            // 2026-10-16: dos resúmenes con su botón, y el cliente tocó los dos) ya no tiene nada
+            // que confirmar. Sin esto iba al modelo, que lo pasaba a una persona y el chat se
+            // quedaba sin asistente. La vertical lo contesta sin modelo (`ultima_confirmacion`).
+            variables: {
+                ...variables,
+                ...(sobre.resultado?.codigo_cita ? { ultima_cita: sobre.resultado.codigo_cita } : {}),
+                ultima_confirmacion: {
+                    capacidad: datos.capacidad,
+                    en: ahora().toISOString(),
+                    numero: sobre.resultado?.numero_orden ?? sobre.resultado?.codigo_cita ?? null,
+                },
+            },
         });
     } catch (error) {
         ctx.invocaciones?.push({
