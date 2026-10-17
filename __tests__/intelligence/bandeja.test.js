@@ -804,3 +804,43 @@ describe('contestar desde el celular saca la conversación de «esperando respue
         expect(await unaFila(`SELECT atendida_en IS NOT NULL AS a FROM intelligence.conversacion WHERE id_conversacion = :c;`, { c: c.id_conversacion })).toEqual({ a: true });
     });
 });
+
+// ── Botones, formulario y respuestas tocadas (2026-10-16) ──────────────────────────────────
+// Zona Burger: el negocio miraba la Bandeja y no veía «Completar datos», «Sí, confirmo» ni lo que
+// el cliente llenó en el formulario: la pantalla solo recibía el texto.
+describe('botones y formulario en el detalle', () => {
+    test('trae los rótulos de los botones, el formulario campo a campo y si se contestó tocando', async () => {
+        const c = await nuevaConversacion({ idNegocio: negocioA });
+        const opciones = JSON.stringify([
+            { id: 'formulario_entrega', etiqueta: 'Completar datos', formulario: { flow_id: 'FLOW_SECRETO', token: 'entrega:x' } },
+            { id: 'si', etiqueta: 'Sí, confirmo' },
+        ]);
+        await sequelize.query(
+            `INSERT INTO intelligence.mensaje (id_conversacion, id_negocio, direccion, canal, contenido, opciones)
+             VALUES (:c, :n, 'saliente', 'whatsapp', '¿Cómo lo recibes?', CAST(:o AS jsonb));`,
+            { replacements: { c: c.id_conversacion, n: negocioA, o: opciones } }
+        );
+        await sequelize.query(
+            `INSERT INTO intelligence.mensaje (id_conversacion, id_negocio, direccion, canal, contenido, crudo) VALUES
+               (:c, :n, 'entrante', 'whatsapp', '📋 Formulario enviado', '{"tipo":"interactive","formulario":{"token":"entrega:x","campos":{"entrega":"domicilio","barrio":"Betania"}}}'::jsonb),
+               (:c, :n, 'entrante', 'whatsapp', 'si', '{"tipo":"interactive"}'::jsonb),
+               (:c, :n, 'entrante', 'whatsapp', 'si escrito', '{"tipo":"text"}'::jsonb);`,
+            { replacements: { c: c.id_conversacion, n: negocioA } }
+        );
+        const r = await llamar(Bandeja.detalleConversacion, { idUsuario: usuarioA, params: { id: c.id_conversacion } });
+        const ms = r.cuerpo.data.mensajes;
+        expect(ms.find((m) => m.contenido === '¿Cómo lo recibes?').botones).toEqual([
+            { etiqueta: 'Completar datos', formulario: true },
+            { etiqueta: 'Sí, confirmo', formulario: false },
+        ]);
+        expect(ms.find((m) => m.contenido === '📋 Formulario enviado')).toMatchObject({
+            formulario: { entrega: 'domicilio', barrio: 'Betania' },
+            de_boton: false,
+        });
+        expect(ms.find((m) => m.contenido === 'si').de_boton).toBe(true);
+        expect(ms.find((m) => m.contenido === 'si escrito').de_boton).toBe(false);
+        // El id del Flow y el token no salen al navegador.
+        expect(JSON.stringify(ms)).not.toContain('FLOW_SECRETO');
+        expect(JSON.stringify(ms)).not.toContain('entrega:x');
+    });
+});

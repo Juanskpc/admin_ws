@@ -389,7 +389,22 @@ async function detalleConversacion(req, res) {
                    END AS media,
                    -- Lo editó o lo borró quien lo escribió (el cliente o el negocio, desde WhatsApp).
                    COALESCE((crudo ->> 'editado')::boolean, false) AS editado,
-                   COALESCE((crudo ->> 'eliminado')::boolean, false) AS eliminado
+                   COALESCE((crudo ->> 'eliminado')::boolean, false) AS eliminado,
+                   -- Los botones que salieron con el mensaje (2026-10-16): sin esto la Bandeja
+                   -- solo pintaba el texto y el negocio no veía «Completar datos» ni «Sí, confirmo».
+                   -- Solo el rótulo y si abre el formulario: el token y el id del Flow no le sirven.
+                   CASE WHEN direccion = 'saliente' AND jsonb_typeof(opciones) = 'array'
+                             AND jsonb_array_length(opciones) > 0
+                        THEN (SELECT jsonb_agg(jsonb_build_object(
+                                         'etiqueta', o ->> 'etiqueta',
+                                         'formulario', (o ? 'formulario')))
+                                FROM jsonb_array_elements(opciones) o)
+                   END AS botones,
+                   -- El formulario de entrega que llenó el cliente, campo a campo.
+                   CASE WHEN direccion = 'entrante' THEN crudo -> 'formulario' -> 'campos' END AS formulario,
+                   -- Contestó tocando un botón (un «sí» tocado no es lo mismo que uno escrito).
+                   (direccion = 'entrante' AND crudo ->> 'tipo' = 'interactive'
+                        AND crudo -> 'formulario' IS NULL) AS de_boton
               FROM intelligence.mensaje
              WHERE id_conversacion = :id
              ORDER BY creado_en ASC;
