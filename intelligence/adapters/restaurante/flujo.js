@@ -2756,7 +2756,7 @@ function crearFlujoRestaurante({
                 };
             }
             await conIdentidad(ctx);
-            const decision = await confirmacion.resolver(ctx, { gate });
+            const decision = await confirmacion.resolver(ctx, { gate, ahora });
             return { ...decision, invocaciones: [...invocaciones, ...(decision.invocaciones || [])] };
         }
 

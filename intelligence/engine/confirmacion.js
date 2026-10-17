@@ -54,6 +54,12 @@ const TAREA = 'confirmar_mutacion';
 /** Cuánto vive un pendiente. 10 minutos: el orden de magnitud del hold. */
 const VIDA_MS = Number(process.env.CONFIRMACION_VIDA_MS) || 10 * 60 * 1000;
 
+/**
+ * Hasta cuándo un «sí» tardío a un pedido vuelve a enseñar el resumen en vez de soltarlo. Una hora:
+ * más tarde ya es otro momento del día y el cliente pide de nuevo.
+ */
+const VIDA_REPASO_MS = 60 * 60 * 1000;
+
 /** Cuántas veces se repregunta antes de soltar el tema. Una. */
 const MAX_REPREGUNTAS = 1;
 
@@ -66,6 +72,12 @@ const MAX_ANOTACIONES = 3;
  * pasó con Zona Burger el 2026-10-02) no le contesta nada a nadie.
  */
 const HABLA_DE_PRECIO = /\b(cobran|cobra|cobro|cobraron|cobrar|cobrarian|vale|valen|cuesta|cuestan|precio|valor|total|pago|pagar|cuanto|cuanta|demora|demoran|demoras|tarda|tardan|tiempo|tienpo)\b/;
+
+/**
+ * Dice CÓMO va a pagar, no pregunta cuánto: «Pago por Nequi», «pagaré en efectivo». Es un dato
+ * del pedido y va a la nota (Zona Burger, 2026-10-16: «Pago por Nequi» se repreguntó y se perdió).
+ */
+const DICE_COMO_PAGA = /^(?:(?:el |yo )?(?:pago|pagare|pagamos|pagaria|cancelo|cancelare)|voy a (?:pagar|cancelar)|(?:te|le|les) (?:pago|cancelo))\b.*\b(?:nequi|efectivo|transferencia|daviplata|tarjeta|datafono|bancolombia)\b/;
 
 /** Un mensaje que no es texto: el canal lo trae como `[image]`, `[audio]`, `[sticker]`… */
 const ES_MEDIA = /^\[(image|audio|video|sticker|document|location|contacts|unsupported)\]$/;
@@ -96,7 +108,7 @@ function lineasParaAnotar(texto, { afirma }) {
         const palabras = t.split(' ').filter(Boolean);
         if (palabras.length < 2 || palabras.length > 40) return false;
         if (l.includes('?') || (EMPIEZA_PREGUNTA.test(t) && !esPeticionConQue(t))) return false;
-        if (HABLA_DE_PRECIO.test(t)) return false;
+        if (HABLA_DE_PRECIO.test(t) && !DICE_COMO_PAGA.test(t)) return false;
         if (SOLO_ENTREGA.test(t) || (VA_EN_CAMINO.test(t) && palabras.length <= 6)) return false;
         if (esAfirmacion(l) || esNegacion(l) || esComando(l, COMANDO.CANCELAR)) return false;
         return true;
@@ -235,6 +247,39 @@ async function resolver(ctx, { gate, registry = registryReal, ahora = () => new 
     const variables = ctx.conversacion.variables || {};
 
     if (caducado(datos, ahora())) {
+        // Un PEDIDO que el cliente confirma tarde no se pierde: se le vuelve a enseñar el resumen,
+        // con los precios de ahora, y se espera su sí otra vez. Caducar sigue sin ejecutar nada
+        // (regla 3). Zona Burger, 2026-10-16: una clienta contestó «si» a los 12 minutos —estaba
+        // pagando por Nequi—, recibió «no hice nada» y el pedido no se hizo.
+        const esPedido = typeof registry.obtener(datos.capacidad)?.confirmacion?.anotar === 'function';
+        const preguntado = Date.parse(datos?.preguntado_en || '');
+        if (
+            esPedido &&
+            esAfirmacion(ctx.texto) &&
+            Number.isFinite(preguntado) &&
+            ahora().getTime() - preguntado <= VIDA_REPASO_MS
+        ) {
+            return {
+                pasos: [paso('confirmacion_repasada', { capacidad: datos.capacidad })],
+                respuestas: [
+                    {
+                        texto: `Pasó un rato, así que te lo repaso antes de enviarlo 👇\n\n${await textoDePregunta(
+                            datos.capacidad,
+                            datos.args,
+                            { registry, idNegocio: ctx.conversacion?.id_negocio ?? null }
+                        )}`,
+                        opciones: opcionesSiNo(),
+                    },
+                ],
+                variables,
+                tarea: {
+                    nombre: TAREA,
+                    datos: { ...datos, preguntado_en: ahora().toISOString(), repreguntas: 0 },
+                },
+                resultado: 'resuelto',
+                nivel: 'determinista',
+            };
+        }
         // El silencio no es un sí, y decirlo en voz alta importa: el cliente tiene que saber que
         // **no** se hizo, o se irá creyendo que su cita quedó cancelada.
         return cerrar({

@@ -101,7 +101,7 @@ describe('tomar_pedido: la entrega se mira en el pedido de ahora, y preguntar no
 describe('con un resumen esperando el sí', () => {
     afterEach(() => jest.restoreAllMocks());
 
-    function montar({ gate = { ejecutar: jest.fn() } } = {}) {
+    function montar({ gate = { ejecutar: jest.fn().mockResolvedValue({ resultado: { numero_orden: 'ORD-7877' } }) } } = {}) {
         jest.spyOn(pago, 'ultimoPedidoVivo').mockResolvedValue(null);
         jest.spyOn(pago, 'textosDePago').mockResolvedValue({ domicilio: 'DOM', local: 'LOCAL' });
         const flujo = crearFlujoRestaurante({

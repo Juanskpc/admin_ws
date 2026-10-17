@@ -413,6 +413,26 @@ function quitarPagoNoDicho(args, hilo) {
     return resto && /[a-z0-9]/i.test(resto) ? { ...args, nota: resto } : sinNota;
 }
 
+/**
+ * La forma de pago que el cliente marcó en el formulario de ESTE pedido va a la nota aunque el
+ * modelo no la copie. Zona Burger, 2026-10-16 (ORD-8372): el formulario llegó antes que el pedido,
+ * el asistente contestó «el pago por Nequi ya quedó registrado» y el pedido salió sin él.
+ */
+function ponerPagoDelFormulario(args, hilo) {
+    if (!args || !Array.isArray(hilo) || hilo.length === 0) return args;
+    const nota = normalizarTexto(args.nota || '');
+    if (nota && (SOLO_MEDIO.test(nota) || new RegExp(FRASE_DE_PAGO.source).test(nota))) return args;
+    let medio = null;
+    for (const m of pedidoEnCurso(hilo)) {
+        if (m.rol !== 'cliente') continue;
+        const campos = formularioEntrega.leer(m.texto);
+        if (campos?.pago) medio = campos.pago;
+    }
+    if (!medio) return args;
+    const previa = String(args.nota || '').trim();
+    return { ...args, nota: (previa ? `${previa}. Pago: ${medio}` : `Pago: ${medio}`).slice(0, 500) };
+}
+
 /** ¿El negocio tiene mesas? Decide si el formulario ofrece «Para servir». Sin base, no. */
 async function negocioTieneMesas(idNegocio) {
     try {
@@ -1785,7 +1805,7 @@ function registrarCapacidades() {
             // «Pago en efectivo» porque el cliente lo dijo en el pedido ANTERIOR. Devolvérselo para
             // que pregunte costaría otra vuelta y otro mensaje; se quita, y el pago lo cuadra el
             // domiciliario o el cajero como siempre. Con el formulario el cliente lo elige.
-            ajustar: ({ args, hilo = [] }) => quitarPagoNoDicho(args, hilo),
+            ajustar: ({ args, hilo = [] }) => ponerPagoDelFormulario(quitarPagoNoDicho(args, hilo), hilo),
             anotar: ({ args, texto }) => {
                 const previa = String(args?.nota || '').trim();
                 const nota = (previa ? `${previa}. ${texto}` : texto).slice(0, 500);
