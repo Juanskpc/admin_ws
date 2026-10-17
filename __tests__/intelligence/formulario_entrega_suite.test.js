@@ -174,7 +174,7 @@ describe('1. guardias: el formulario nunca ejecuta nada solo', () => {
         const c = chat(flujo);
         await c.dice('#P12-4x1');
         await c.dice(formulario(DOMICILIO_LAS_CUADRAS));
-        c.humano_ultimo_en = '2026-10-16T19:30:01-05:00'; // tras el resumen, según el reloj fijo del flujo
+        c.humano_ultimo_en = new Date(Date.now() + 1000).toISOString();
         const d = await c.dice('si');
         expect(gate.ejecutar).not.toHaveBeenCalled();
         expect(decisiones(d)).toContain('confirmacion_si_tras_persona');
