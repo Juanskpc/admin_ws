@@ -279,6 +279,24 @@ describe('domicilio por barrio', () => {
             expect(Number((await ordenDe(b.resultado.numero_orden)).valor_domicilio)).toBe(4500);
         });
 
+        it('EL CASO ORD-8351: el barrio que el modelo puso aparte va en la dirección del pedido', async () => {
+            // Zona Burger no cobra por barrio: el barrio no se usaba y la dirección llegó sin él.
+            await sequelize.query(
+                `UPDATE general.gener_negocio SET permite_pago_domicilio = false WHERE id_negocio = :n;`,
+                { replacements: { n: idNegocio } }
+            );
+            const { resultado } = await pedir({ tipo_entrega: 'DOMICILIO', direccion: 'Manzana J, casa 1. En la calle adoquinada', barrio: 'Quito López 3' });
+            expect((await ordenDe(resultado.numero_orden)).direccion_domicilio).toBe('Manzana J, casa 1. En la calle adoquinada, Quito López 3');
+            const texto = await registry.obtener('tomar_pedido').confirmacion.pregunta({
+                idNegocio,
+                args: { items: [{ id_producto: idProducto, cantidad: 1 }], cliente_nombre: 'Ana', tipo_entrega: 'DOMICILIO', direccion: 'Manzana J casa 1', barrio: 'Quito López 3' },
+            });
+            expect(texto).toContain('para llevártelo a Manzana J casa 1, Quito López 3?');
+            // Si ya está en la dirección, no se repite.
+            const otra = await pedir({ tipo_entrega: 'DOMICILIO', direccion: 'Mz 4 casa 2 Quito López 3', barrio: 'quito lópez 3' });
+            expect((await ordenDe(otra.resultado.numero_orden)).direccion_domicilio).toBe('Mz 4 casa 2 Quito López 3');
+        });
+
         it('si viene el id, manda el id', async () => {
             await expect(pedir({ ...domicilio, id_barrio: idBarrioRival, barrio: 'TEST-Barrio Cobro' }))
                 .rejects.toMatchObject({ code: 'ZONA_INVALIDA' });

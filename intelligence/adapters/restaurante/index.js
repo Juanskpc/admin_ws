@@ -968,6 +968,22 @@ async function leerDomicilioRango(idNegocio, transaction) {
 }
 
 /**
+ * La dirección con el barrio que el modelo puso aparte, si no está ya en ella.
+ *
+ * Zona Burger, 2026-10-16 18:33 (ORD-8351): «Manzana j casa 1 Quito López 3 En la calle
+ * adoquinada» → el modelo puso `barrio: "Quito López 3"` y lo QUITÓ de la dirección. El negocio no
+ * cobra por barrio, así que `barrio` no se usaba y el domiciliario recibió una dirección sin
+ * barrio. El barrio es para llegar, no solo para cobrar: va siempre en la dirección.
+ */
+function direccionConBarrio(args) {
+    const direccion = String(args?.direccion || '').trim();
+    const barrio = String(args?.barrio || '').trim();
+    if (!barrio || !direccion) return direccion;
+    if (normalizarTexto(direccion).includes(normalizarTexto(barrio))) return direccion;
+    return `${direccion.replace(/[\s,.;]+$/, '')}, ${barrio}`.slice(0, 300);
+}
+
+/**
  * Lo que `consultar_info_negocio` contesta sobre el barrio que nombró el cliente.
  *
  * Pregonchos, 2026-10-16: con 411 barrios el modelo solo recibe el precio por comuna, no sabía en
@@ -1591,7 +1607,7 @@ function registrarCapacidades() {
                         : `para tu mesa${nombreMesa ? ` (${nombreMesa})` : ''}`
                     : recoge
                       ? 'para recogerlo en el local'
-                      : `para llevártelo a ${args.direccion}`;
+                      : `para llevártelo a ${direccionConBarrio(args)}`;
                 const cabecera = `¿Confirmo tu pedido a nombre de ${args.cliente_nombre}, ${donde}?`;
 
                 /**
@@ -2110,7 +2126,7 @@ function registrarCapacidades() {
             // y `argumentos.js` mira uno cada vez. El error es tipado y habla el idioma del
             // cliente: quien lo va a leer es alguien pidiendo un almuerzo, no un programador.
             const esDomicilio = args.tipo_entrega === 'DOMICILIO';
-            const direccion = args.direccion ? String(args.direccion).trim() : null;
+            const direccion = args.direccion ? direccionConBarrio(args) : null;
             if (esDomicilio && !direccion) {
                 const e = new Error('Para llevártelo necesito la dirección.');
                 e.code = 'DIRECCION_REQUERIDA';
