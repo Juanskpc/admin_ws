@@ -346,10 +346,18 @@ async function cargarConversacionPermitida(idConversacion, idUsuario) {
     const [conversacion] = await Models.sequelize.query(
         `
         SELECT c.*, n.nombre AS negocio, n.reactivar_asistente_min,
-               pn.nombre_mostrado AS persona, pn.telefono_e164
+               -- El nombre como en la lista (por la persona, o por el teléfono del chat): sin el
+               -- segundo, la cabecera del chat abierto enseñaba el número dos veces mientras la
+               -- lista decía «Universal Streaming Col» (Zona Burger, 2026-10-16).
+               COALESCE(pn.nombre_mostrado, pt.nombre_mostrado) AS persona,
+               COALESCE(pn.telefono_e164, pt.telefono_e164) AS telefono_e164
           FROM intelligence.conversacion c
           LEFT JOIN general.gener_negocio n      ON n.id_negocio = c.id_negocio
           LEFT JOIN platform.persona_negocio pn  ON pn.id_persona_negocio = c.id_persona_negocio
+          LEFT JOIN platform.persona_negocio pt
+                 ON c.id_persona_negocio IS NULL
+                AND pt.id_negocio = c.id_negocio
+                AND pt.telefono_e164 = '+' || c.id_externo
          WHERE c.id_conversacion = :id;
         `,
         { replacements: { id: idConversacion }, ...SELECT }
